@@ -1,0 +1,104 @@
+"""Tests for the resource manager."""
+
+import asyncio
+import os
+import tempfile
+
+from taosmd.job_queue import JobQueue
+from taosmd.resource_manager import (
+    ResourceManager, ResourceSnapshot, _count_cpu_cores, _detect_npu,
+)
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def test_cpu_detection():
+    cores = _count_cpu_cores()
+    assert cores >= 1
+
+
+def test_npu_detection():
+    # Just verify it doesn't crash — result depends on hardware
+    npu = _detect_npu()
+    assert isinstance(npu, int)
+    assert npu >= 0
+
+
+def test_snapshot_properties():
+    snap = ResourceSnapshot()
+    snap.cpu_cores = 8
+    snap.npu_cores = 3
+    snap.gpu = {"name": "RTX 3060", "vram_mb": 12288, "count": 1}
+    snap.ollama_models = ["qwen3:4b"]
+
+    assert snap.has_gpu
+    assert snap.has_npu
+    assert snap.has_ollama
+    d = snap.to_dict()
+    assert d["cpu_cores"] == 8
+    assert d["npu_cores"] == 3
+
+
+def test_snapshot_no_hardware():
+    snap = ResourceSnapshot()
+    assert not snap.has_gpu
+    assert not snap.has_npu
+    assert not snap.has_ollama
+
+
+def test_refresh_updates_queue_limits():
+    async def run():
+        tmp = tempfile.mkdtemp()
+        q = JobQueue(os.path.join(tmp, "q.db"))
+        await q.init()
+
+        mgr = ResourceManager(job_queue=q, ollama_url="http://localhost:99999")
+        snap = await mgr.refresh()
+
+        # Should have set limits based on detected hardware
+        limits = await q.get_limits()
+        assert limits["cpu"] >= 1  # At least 1
+        assert limits["embed"] == 1  # Always 1
+        assert snap.cpu_cores >= 1
+
+        await q.close()
+    _run(run())
+
+
+def test_best_model_no_ollama():
+    async def run():
+        mgr = ResourceManager(ollama_url="http://localhost:99999")
+        result = await mgr.best_model_for_task("extract")
+        assert result == {}  # No models available
+
+        result = await mgr.best_model_for_task("embed")
+        assert result["model"] == "all-MiniLM-L6-v2"  # Embedding always available
+    _run(run())
+
+
+def test_can_accept_job():
+    async def run():
+        tmp = tempfile.mkdtemp()
+        q = JobQueue(os.path.join(tmp, "q.db"))
+        await q.init()
+
+        mgr = ResourceManager(job_queue=q)
+        await mgr.refresh()
+
+        # Force limit to 1 AFTER refresh (refresh may set it higher)
+        await q.set_limit("cpu", 1)
+
+        # No running jobs — should accept
+        assert await mgr.can_accept_job("cpu")
+
+        # Fill the slot
+        await q.enqueue("test", resource_type="cpu")
+        await q.dequeue()
+
+        # Now full — should reject
+        assert not await mgr.can_accept_job("cpu")
+
+        await q.close()
+    _run(run())
