@@ -18,6 +18,7 @@ from .reflect import InsightStore
 from .leases import LeaseManager
 from .mesh_sync import MeshSync
 from .session_catalog import SessionCatalog
+from .catalog_pipeline import CatalogPipeline
 
 __all__ = [
     # Core memory stack
@@ -56,4 +57,5 @@ __all__ = [
     "MeshSync",
     # Session catalog (timeline directory)
     "SessionCatalog",
+    "CatalogPipeline",
 ]
