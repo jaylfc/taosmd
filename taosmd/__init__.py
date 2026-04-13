@@ -23,6 +23,7 @@ from .retrieval import retrieve
 from .cross_encoder import CrossEncoderReranker
 from .backend import MemoryBackend
 from .taosmd_backend import TaOSmdBackend
+from .job_queue import JobQueue
 
 __all__ = [
     # Core memory stack
@@ -68,4 +69,6 @@ __all__ = [
     # Backend interface
     "MemoryBackend",
     "TaOSmdBackend",
+    # Job queue
+    "JobQueue",
 ]
