@@ -6,6 +6,7 @@ archive, and crystals into a common format for ranking and fusion.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -258,3 +259,174 @@ def _deduplicate(results: list[dict], threshold: float = 0.8) -> list[dict]:
         threshold,
     )
     return filtered
+
+
+# ---------------------------------------------------------------------------
+# Source query helpers
+# ---------------------------------------------------------------------------
+
+
+async def _query_source(name: str, source: object, query: str, limit: int) -> list[dict]:
+    """Query a single source and return adapted results.
+
+    Returns an empty list if the query raises an exception.
+    """
+    try:
+        if name == "vector":
+            raw = await source.search(query, limit=limit, hybrid=True)
+            return _adapt_vector(raw)
+        elif name == "kg":
+            words = [w for w in query.split() if len(w) > 2]
+            kg_results: list[dict] = []
+            for word in words:
+                try:
+                    rows = await source.query_entity(word)
+                    kg_results.extend(rows)
+                    if len(kg_results) >= limit:
+                        break
+                except Exception:
+                    pass
+            return _adapt_kg(kg_results[:limit])
+        elif name == "catalog":
+            raw = await source.search_topic(query, limit=limit)
+            return _adapt_catalog(raw)
+        elif name == "archive":
+            raw = await source.search_fts(query, limit=limit)
+            return _adapt_archive(raw)
+        elif name == "crystals":
+            raw = await source.search(query, limit=limit)
+            return _adapt_crystals(raw)
+        else:
+            logger.warning("_query_source: unknown source name %r", name)
+            return []
+    except Exception as exc:
+        logger.warning("_query_source: error querying %r: %s", name, exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+async def retrieve(
+    query: str,
+    strategy: str = "thorough",
+    memory_layers: list[str] | None = None,
+    sources: dict | None = None,
+    limit: int = 5,
+    reranker: object | None = None,
+) -> list[dict]:
+    """Retrieve relevant results from available memory sources.
+
+    Args:
+        query: The search query.
+        strategy: One of "thorough", "fast", "minimal", or "custom".
+        memory_layers: Source names to use in "custom" mode (e.g. ["vector", "kg"]).
+        sources: Dict of initialised store objects keyed by source name.
+            Recognised keys: "vector", "kg", "catalog", "archive", "crystals".
+            Missing keys mean that source is unavailable.
+        limit: Maximum number of results to return.
+        reranker: Optional CrossEncoderReranker instance. When provided and
+            ``reranker.available`` is True, used for thorough/custom reranking.
+
+    Returns:
+        List of normalised result dicts, sorted by relevance, length <= limit.
+    """
+    from taosmd.intent_classifier import classify_intent, get_search_strategy  # noqa: PLC0415
+
+    if sources is None:
+        sources = {}
+
+    fetch_limit = limit * 3
+
+    if strategy == "thorough":
+        strategy_info = get_search_strategy(query)
+        available = {k: v for k, v in sources.items()}
+
+        tasks = [
+            asyncio.create_task(_query_source(name, src, query, fetch_limit))
+            for name, src in available.items()
+        ]
+        results_per_source = await asyncio.gather(*tasks, return_exceptions=True)
+
+        ranked_lists: list[list[dict]] = []
+        for res in results_per_source:
+            if isinstance(res, Exception):
+                ranked_lists.append([])
+            else:
+                ranked_lists.append(res)
+
+        merged = _rrf_merge(ranked_lists, intent_primary=strategy_info.get("primary"))
+        results = _deduplicate(merged)
+
+        if reranker is not None and getattr(reranker, "available", False):
+            results = reranker.rerank(query, results, limit)
+
+        return results[:limit]
+
+    elif strategy == "fast":
+        strategy_info = get_search_strategy(query)
+        primary = strategy_info.get("primary")
+        secondary = strategy_info.get("secondary")
+
+        results: list[dict] = []
+
+        if primary and primary in sources:
+            results = await _query_source(primary, sources[primary], query, fetch_limit)
+        elif sources:
+            # Fall back to first available source
+            first_name, first_src = next(iter(sources.items()))
+            results = await _query_source(first_name, first_src, query, fetch_limit)
+
+        if len(results) < limit and secondary and secondary in sources:
+            secondary_results = await _query_source(secondary, sources[secondary], query, fetch_limit)
+            merged = _rrf_merge([results, secondary_results])
+            results = _deduplicate(merged)
+
+        return results[:limit]
+
+    elif strategy == "minimal":
+        strategy_info = get_search_strategy(query)
+        primary = strategy_info.get("primary")
+
+        results: list[dict] = []
+
+        if primary and primary in sources:
+            results = await _query_source(primary, sources[primary], query, fetch_limit)
+        elif sources:
+            first_name, first_src = next(iter(sources.items()))
+            results = await _query_source(first_name, first_src, query, fetch_limit)
+
+        return results[:limit]
+
+    elif strategy == "custom":
+        if memory_layers is None:
+            memory_layers = list(sources.keys())
+
+        filtered_sources = {k: v for k, v in sources.items() if k in memory_layers}
+        strategy_info = get_search_strategy(query)
+
+        tasks = [
+            asyncio.create_task(_query_source(name, src, query, fetch_limit))
+            for name, src in filtered_sources.items()
+        ]
+        results_per_source = await asyncio.gather(*tasks, return_exceptions=True)
+
+        ranked_lists: list[list[dict]] = []
+        for res in results_per_source:
+            if isinstance(res, Exception):
+                ranked_lists.append([])
+            else:
+                ranked_lists.append(res)
+
+        merged = _rrf_merge(ranked_lists, intent_primary=strategy_info.get("primary"))
+        results = _deduplicate(merged)
+
+        if reranker is not None and getattr(reranker, "available", False):
+            results = reranker.rerank(query, results, limit)
+
+        return results[:limit]
+
+    else:
+        raise ValueError(f"Unknown strategy {strategy!r}. Must be one of: thorough, fast, minimal, custom.")

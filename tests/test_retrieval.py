@@ -1,6 +1,8 @@
-"""Tests for taosmd.retrieval — source adapter normalisation."""
+"""Tests for taosmd.retrieval — source adapter normalisation and retrieve()."""
 
 from __future__ import annotations
+
+import asyncio
 
 from taosmd.retrieval import (
     _adapt_catalog,
@@ -8,7 +10,57 @@ from taosmd.retrieval import (
     _adapt_vector,
     _deduplicate,
     _rrf_merge,
+    retrieve,
 )
+
+
+# ---------------------------------------------------------------------------
+# Mock sources for retrieve() tests
+# ---------------------------------------------------------------------------
+
+
+class MockVectorMemory:
+    async def search(self, query, limit=5, hybrid=True, fusion="rrf"):
+        return [
+            {"id": 1, "text": "Jay created taOS", "similarity": 0.95, "metadata": {}, "created_at": 1744531200.0},
+            {"id": 2, "text": "taOS runs on Orange Pi", "similarity": 0.85, "metadata": {}, "created_at": 1744531200.0},
+        ]
+
+
+class MockKG:
+    async def query_entity(self, name, **kwargs):
+        if "jay" in name.lower():
+            return [{"subject_id": "jay", "predicate": "created", "object_id": "taos",
+                     "object_name": "taOS", "subject_name": "Jay", "direction": "outgoing",
+                     "confidence": 1.0, "id": "t1"}]
+        return []
+
+
+class MockCatalog:
+    async def search_topic(self, query, limit=5):
+        return [{"id": 1, "topic": "Working on taOS", "description": "Building memory system",
+                 "date": "2026-04-13", "start_str": "09:00", "end_str": "11:30", "category": "coding"}]
+
+
+class MockArchive:
+    async def search_fts(self, query, limit=20):
+        return [{"id": 1, "summary": "Discussed taOS architecture", "data_json": "{}",
+                 "event_type": "conversation", "timestamp": 1744531200.0}]
+
+
+class MockCrystals:
+    async def search(self, query, limit=10):
+        return [{"id": "c1", "narrative": "Built the memory pipeline", "session_id": "s1",
+                 "outcomes": "[]", "lessons": "[]"}]
+
+
+ALL_SOURCES = {
+    "vector": MockVectorMemory(),
+    "kg": MockKG(),
+    "catalog": MockCatalog(),
+    "archive": MockArchive(),
+    "crystals": MockCrystals(),
+}
 
 
 def test_adapt_vector():
@@ -246,3 +298,95 @@ def test_deduplicate_removes_near_duplicates():
     assert "1" in sources_ids, "Higher-scored near-duplicate should be kept"
     assert "2" not in sources_ids, "Lower-scored near-duplicate should be removed"
     assert "3" in sources_ids, "Unrelated result should be kept"
+
+
+# ---------------------------------------------------------------------------
+# retrieve() integration tests
+# ---------------------------------------------------------------------------
+
+
+def test_retrieve_thorough():
+    """Thorough mode queries all sources and returns fused results."""
+    results = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=ALL_SOURCES,
+        limit=5,
+    ))
+
+    assert isinstance(results, list)
+    assert len(results) <= 5
+
+    # Results should come from multiple sources — at least 2 distinct sources
+    sources_seen = {r["source"] for r in results}
+    assert len(sources_seen) >= 2, f"Expected multiple sources, got: {sources_seen}"
+
+    # Each result must have the normalised schema fields
+    for r in results:
+        assert "text" in r
+        assert "source" in r
+        assert "source_id" in r
+        assert "rank" in r
+        assert "source_score" in r
+        assert "metadata" in r
+        assert "rrf_score" in r
+
+
+def test_retrieve_fast():
+    """Fast mode returns results quickly from primary (and optionally secondary) source."""
+    results = asyncio.run(retrieve(
+        query="What did Jay build recently?",
+        strategy="fast",
+        sources=ALL_SOURCES,
+        limit=5,
+    ))
+
+    assert isinstance(results, list)
+    assert len(results) <= 5
+    assert len(results) > 0
+
+    for r in results:
+        assert "text" in r
+        assert "source" in r
+
+
+def test_retrieve_minimal():
+    """Minimal mode queries only the primary source."""
+    results = asyncio.run(retrieve(
+        query="What happened recently with taOS?",
+        strategy="minimal",
+        sources=ALL_SOURCES,
+        limit=5,
+    ))
+
+    assert isinstance(results, list)
+    assert len(results) <= 5
+    assert len(results) > 0
+
+    # Minimal mode: only one source type should appear
+    sources_seen = {r["source"] for r in results}
+    assert len(sources_seen) == 1, (
+        f"Minimal mode should use only one source, got: {sources_seen}"
+    )
+
+
+def test_retrieve_custom():
+    """Custom mode queries only the sources listed in memory_layers."""
+    results = asyncio.run(retrieve(
+        query="Jay created taOS",
+        strategy="custom",
+        memory_layers=["vector", "kg"],
+        sources=ALL_SOURCES,
+        limit=5,
+    ))
+
+    assert isinstance(results, list)
+    assert len(results) <= 5
+    assert len(results) > 0
+
+    # Only vector and kg results should appear
+    allowed_sources = {"vector", "kg"}
+    for r in results:
+        assert r["source"] in allowed_sources, (
+            f"Custom mode with memory_layers=['vector','kg'] returned source {r['source']!r}"
+        )
