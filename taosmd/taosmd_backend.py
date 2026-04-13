@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS agent_memory_config (
 _DEFAULTS: dict[str, Any] = {
     "default_strategy": "thorough",
     "processing_schedule": "0 2 * * *",
-    "enricher_model": "mistral-7b",
+    "enricher_model": "qwen3:4b",
     "crystallize_enabled": True,
     "secret_filter_mode": "redact",
     "retention_hot_threshold": 0.8,

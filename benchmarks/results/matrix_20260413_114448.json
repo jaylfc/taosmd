@@ -1,0 +1,57 @@
+{
+  "benchmark": "LongMemEval-S",
+  "top_k": 5,
+  "questions": 10,
+  "model": "all-MiniLM-L6-v2 (ONNX)",
+  "timestamp": "2026-04-13 11:44:48",
+  "results": {
+    "mempalace_match": {
+      "overall": 80.0,
+      "total": 8,
+      "questions": 10,
+      "time": 20.69882035255432,
+      "by_type": {
+        "single-session-user": {
+          "hits": 8,
+          "total": 10
+        }
+      }
+    },
+    "v01_hybrid": {
+      "overall": 100.0,
+      "total": 10,
+      "questions": 10,
+      "time": 19.439327478408813,
+      "by_type": {
+        "single-session-user": {
+          "hits": 10,
+          "total": 10
+        }
+      }
+    },
+    "v02_graph": {
+      "overall": 100.0,
+      "total": 10,
+      "questions": 10,
+      "time": 32.2747004032135,
+      "by_type": {
+        "single-session-user": {
+          "hits": 10,
+          "total": 10
+        }
+      }
+    },
+    "all_turns": {
+      "overall": 80.0,
+      "total": 8,
+      "questions": 10,
+      "time": 21.975518226623535,
+      "by_type": {
+        "single-session-user": {
+          "hits": 8,
+          "total": 10
+        }
+      }
+    }
+  }
+}
