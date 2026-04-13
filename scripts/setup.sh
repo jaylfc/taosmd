@@ -47,17 +47,81 @@ pip install -e . --quiet 2>/dev/null || pip3 install -e . --quiet
 # Install ONNX Runtime (for fast embeddings)
 pip install onnxruntime numpy --quiet 2>/dev/null || pip3 install onnxruntime numpy --quiet
 
-# Download embedding model
+# Ensure huggingface-cli is available
+if ! command -v huggingface-cli &>/dev/null; then
+    pip install huggingface-hub --quiet 2>/dev/null || pip3 install huggingface-hub --quiet
+fi
+
+# ================================================
+# 1. Embedding model (required — all platforms)
+# ================================================
 MODEL_DIR="$INSTALL_DIR/models/minilm-onnx"
 if [ -f "$MODEL_DIR/model.onnx" ]; then
     echo "✓ Embedding model already downloaded"
 else
-    echo "→ Downloading all-MiniLM-L6-v2 ONNX model (90MB)..."
-    if command -v huggingface-cli &>/dev/null; then
-        huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir "$MODEL_DIR" --quiet
+    echo "→ Downloading all-MiniLM-L6-v2 ONNX (90MB)..."
+    huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir "$MODEL_DIR" --quiet
+fi
+
+# ================================================
+# 2. LLM for fact extraction (platform-specific)
+# ================================================
+echo ""
+echo "→ Setting up LLM for fact extraction..."
+
+if [ "$PLATFORM" = "arm64" ] && [ -e "/sys/class/misc/mali0" ]; then
+    # RK3588 with NPU — use rkllama
+    echo "  RK3588 NPU detected"
+    if command -v rkllama_server &>/dev/null || [ -d "$HOME/rkllama" ]; then
+        echo "  ✓ rkllama already installed"
+        # Download Qwen3-4B for NPU extraction
+        RKLLM_DIR="$HOME/rkllama/models/qwen3-4b-chat"
+        if [ -d "$RKLLM_DIR" ] && ls "$RKLLM_DIR"/*.rkllm &>/dev/null 2>&1; then
+            echo "  ✓ Qwen3-4B RKLLM model already present"
+        else
+            echo "  → Downloading Qwen3-4B for NPU (4.6GB)..."
+            mkdir -p "$RKLLM_DIR"
+            huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
+                Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
+                --local-dir "$RKLLM_DIR" --quiet 2>/dev/null || echo "  ⚠ Download failed — install manually"
+        fi
     else
-        pip install huggingface-hub --quiet 2>/dev/null
-        huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir "$MODEL_DIR" --quiet
+        echo "  ⚠ rkllama not found. Install from: https://github.com/NotPunchnox/rkllama"
+        echo "    Then re-run this script to download NPU models"
+    fi
+elif [ "$HAS_NVIDIA" = true ]; then
+    # x86 with NVIDIA GPU — use Ollama
+    echo "  NVIDIA GPU detected — using Ollama"
+    if command -v ollama &>/dev/null; then
+        echo "  ✓ Ollama already installed"
+    else
+        echo "  → Installing Ollama..."
+        curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || echo "  ⚠ Ollama install failed — install manually from ollama.com"
+    fi
+    if command -v ollama &>/dev/null; then
+        if ollama list 2>/dev/null | grep -q "qwen2.5:3b"; then
+            echo "  ✓ Qwen2.5-3B model already pulled"
+        else
+            echo "  → Pulling Qwen2.5-3B for GPU extraction (~2GB)..."
+            ollama pull qwen2.5:3b 2>/dev/null || echo "  ⚠ Model pull failed — run: ollama pull qwen2.5:3b"
+        fi
+    fi
+else
+    # CPU-only — use Ollama with a small model
+    echo "  No GPU/NPU detected — using Ollama with CPU model"
+    if command -v ollama &>/dev/null; then
+        echo "  ✓ Ollama already installed"
+    else
+        echo "  → Installing Ollama..."
+        curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || echo "  ⚠ Ollama install failed — install manually from ollama.com"
+    fi
+    if command -v ollama &>/dev/null; then
+        if ollama list 2>/dev/null | grep -q "qwen2.5:1.5b"; then
+            echo "  ✓ Qwen2.5-1.5B model already pulled"
+        else
+            echo "  → Pulling Qwen2.5-1.5B for CPU extraction (~1GB)..."
+            ollama pull qwen2.5:1.5b 2>/dev/null || echo "  ⚠ Model pull failed — run: ollama pull qwen2.5:1.5b"
+        fi
     fi
 fi
 
