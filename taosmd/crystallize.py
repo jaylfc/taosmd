@@ -34,11 +34,13 @@ CREATE TABLE IF NOT EXISTS crystals (
     files_affected TEXT NOT NULL DEFAULT '[]',
     turn_count INTEGER NOT NULL DEFAULT 0,
     duration_seconds REAL NOT NULL DEFAULT 0,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    catalog_session_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_crystals_session ON crystals(session_id);
 CREATE INDEX IF NOT EXISTS idx_crystals_agent ON crystals(agent_name);
 CREATE INDEX IF NOT EXISTS idx_crystals_created ON crystals(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crystals_catalog ON crystals(catalog_session_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS crystals_fts USING fts5(
     narrative,
