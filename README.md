@@ -8,6 +8,53 @@
 
 Beats MemPalace (96.6%) and SuperMemory (81.6%) — running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
 
+## Getting Started
+
+### One-Line Setup
+
+> **Note:** Install scripts are new and awaiting full testing on clean environments. Please report issues.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash
+```
+
+This will:
+1. Clone the repo and install Python dependencies
+2. Download the all-MiniLM-L6-v2 ONNX embedding model (90MB)
+3. Install Ollama and pull Qwen3-4B for fact extraction + answering (2.6GB)
+4. On RK3588: download the NPU-optimised Qwen3-4B RKLLM model instead (4.6GB)
+5. Create the data directory and run a self-test
+
+### Manual Install
+
+```bash
+git clone https://github.com/jaylfc/taosmd.git
+cd taosmd
+pip install -e .
+
+# 1. Embedding model (required)
+huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir models/minilm-onnx
+
+# 2. LLM for fact extraction + answering (required)
+# Option A: x86 / ARM without NPU — use Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3:4b
+
+# Option B: Orange Pi / RK3588 with NPU — use rkllama
+# Install rkllama: https://github.com/NotPunchnox/rkllama
+huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
+  Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
+  --local-dir ~/.rkllama/models/qwen3-4b-chat
+```
+
+### Tell Your Agent
+
+If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste this:
+
+> Set up taOSmd as my memory system. Clone https://github.com/jaylfc/taosmd, run `scripts/setup.sh` to install everything (embedding model + Qwen3-4B LLM). It auto-detects your hardware (GPU, NPU, or CPU) and installs the right backend. After setup, use VectorMemory with embed_mode="onnx" and hybrid=True for search.
+
+---
+
 ## Benchmark Results
 
 | System | Recall@5 | Hardware | Cloud |
@@ -134,54 +181,9 @@ The 97.2% benchmark was achieved on this exact stack:
 | qmd-query-expansion 1.7B RKLLM | 2.4GB | Custom conversion |
 | Qwen3-4B RKLLM | 4.6GB | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) |
 
-## Getting Started
+## Platform-Specific Setup
 
-### One-Line Setup
-
-> **Note:** Install scripts are new and awaiting full testing on clean environments. Please report issues.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash
-```
-
-This will:
-1. Clone the repo and install Python dependencies
-2. Download the all-MiniLM-L6-v2 ONNX embedding model (90MB)
-3. Install Ollama and pull Qwen3-4B for fact extraction + answering (2.6GB)
-4. On RK3588: download the NPU-optimised Qwen3-4B RKLLM model instead (4.6GB)
-5. Create the data directory and run a self-test
-
-### Manual Install
-
-```bash
-git clone https://github.com/jaylfc/taosmd.git
-cd taosmd
-pip install -e .
-
-# 1. Embedding model (required)
-huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir models/minilm-onnx
-
-# 2. LLM for fact extraction + answering (required)
-# Option A: x86 / ARM without NPU — use Ollama
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen3:4b
-
-# Option B: Orange Pi / RK3588 with NPU — use rkllama
-# Install rkllama: https://github.com/NotPunchnox/rkllama
-huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
-  Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
-  --local-dir ~/.rkllama/models/qwen3-4b-chat
-```
-
-### Tell Your Agent
-
-If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste this:
-
-> Set up taOSmd as my memory system. Clone https://github.com/jaylfc/taosmd, run `scripts/setup.sh` to install everything (embedding model + Qwen3-4B LLM). It auto-detects your hardware (GPU, NPU, or CPU) and installs the right backend. After setup, use VectorMemory with embed_mode="onnx" and hybrid=True for search.
-
-### RK3588 NPU Setup (Orange Pi / Rock 5 / Radxa)
-
-For NPU-accelerated inference on Rockchip boards:
+### RK3588 NPU (Orange Pi / Rock 5 / Radxa)
 
 ```bash
 # Install rkllama (serves models on the NPU)
