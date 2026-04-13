@@ -95,22 +95,7 @@ async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
     await insights.close()
     print(" ✓")
 
-    # 8. Job Queue
-    print("  Setting up Job Queue...", end="", flush=True)
-    from taosmd.job_queue import JobQueue
-    jq = JobQueue(db_path=data_path / "job-queue.db")
-    await jq.init()
-    await jq.close()
-    print(" ✓")
-
-    # 9. Memory Settings (backend config)
-    print("  Setting up Memory Settings...", end="", flush=True)
-    from taosmd.taosmd_backend import TaOSmdBackend
-    backend = TaOSmdBackend(settings_db_path=data_path / "memory-settings.db")
-    await backend.get_settings()  # Initialises DB
-    print(" ✓")
-
-    # 10. Daily maintenance cron
+    # 8. Daily maintenance cron
     setup_cron = True
     if interactive:
         resp = input("\n  Install daily maintenance cron job? (compresses old archives) [Y/n]: ").strip().lower()
@@ -158,7 +143,6 @@ async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
     print(f"  Vectors:  {data_path}/vector-memory.db")
     print(f"  Catalog:  {data_path}/session-catalog.db")
     print(f"  Crystals: {data_path}/crystals.db")
-    print(f"  Jobs:     {data_path}/job-queue.db")
     print(f"  Config:   {config_path}")
 
 
