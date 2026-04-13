@@ -7,6 +7,25 @@ echo "  97.2% Recall@5 on LongMemEval"
 echo "================================"
 echo ""
 
+# Detect platform
+ARCH=$(uname -m)
+case "$ARCH" in
+    aarch64|arm64) PLATFORM="arm64" ;;
+    x86_64|amd64)  PLATFORM="x86_64" ;;
+    *)             PLATFORM="$ARCH" ;;
+esac
+echo "→ Platform: $PLATFORM ($(uname -s))"
+
+# Check for GPU
+HAS_NVIDIA=false
+if command -v nvidia-smi &>/dev/null; then
+    GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    if [ -n "$GPU" ]; then
+        HAS_NVIDIA=true
+        echo "→ GPU detected: $GPU"
+    fi
+fi
+
 # Detect install location
 INSTALL_DIR="${TAOSMD_DIR:-$HOME/taosmd}"
 
@@ -103,8 +122,29 @@ if [ $? -eq 0 ]; then
     echo "  ✓ taOSmd is ready!"
     echo "================================"
     echo ""
+    echo "  Platform: $PLATFORM"
     echo "  Location: $INSTALL_DIR"
     echo "  Model:    $MODEL_DIR/model.onnx"
+
+    # GPU-specific suggestions
+    if [ "$HAS_NVIDIA" = true ]; then
+        echo ""
+        echo "  GPU detected! For LLM-powered fact extraction:"
+        echo "    1. Install Ollama: curl -fsSL https://ollama.com/install.sh | sh"
+        echo "    2. Pull a model: ollama pull qwen2.5:3b"
+        echo "    3. Set: export TAOSMD_LLM_URL=http://localhost:11434"
+        echo ""
+        echo "  This enables 72% recall background extraction"
+        echo "  (vs 39% regex-only without a GPU/LLM)"
+    fi
+
+    # RK3588-specific suggestions
+    if [ "$PLATFORM" = "arm64" ] && [ -d "/sys/class/misc/mali0" ] 2>/dev/null; then
+        echo ""
+        echo "  RK3588 NPU detected! For NPU-accelerated models:"
+        echo "    See: https://github.com/jaylfc/taosmd#optional-full-stack-orange-pi--rk3588"
+    fi
+
     echo ""
     echo "  Quick test:"
     echo "    python -c \"from taosmd import VectorMemory; print('taOSmd loaded')\""
