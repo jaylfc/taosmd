@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .knowledge_graph import TemporalKnowledgeGraph
     from .archive import ArchiveStore
+    from .session_catalog import SessionCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +58,13 @@ class ContextAssembler:
         archive: ArchiveStore | None = None,
         qmd_base_url: str = "http://localhost:7832",
         http_client=None,
+        catalog: SessionCatalog | None = None,
     ):
         self._kg = kg
         self._archive = archive
         self._qmd_url = qmd_base_url
         self._http = http_client
+        self._catalog = catalog
 
     # ------------------------------------------------------------------
     # L0: Identity
@@ -166,6 +169,19 @@ class ContextAssembler:
 
         # Sort archival by importance descending
         archival_scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Catalog session context for timeline queries
+        if self._catalog and project:
+            try:
+                catalog_results = await self._catalog.search_topic(project, limit=3)
+                for r in catalog_results:
+                    text = f"[{r.get('date', '')} {r.get('start_str', '')}-{r.get('end_str', '')}] {r['topic']}"
+                    if r.get("description"):
+                        text += f": {r['description']}"
+                    archival_scored.append((0.5, text))
+            except Exception:
+                pass
+
         archival_parts = [text for _, text in archival_scored]
 
         # Build output respecting budgets
@@ -221,6 +237,18 @@ class ContextAssembler:
                         parts.append(f"{word} {r['predicate']} {obj}")
                 except Exception:
                     pass
+
+        # Catalog search for timeline-relevant content
+        if self._catalog:
+            try:
+                catalog_results = await self._catalog.search_topic(query, limit=3)
+                for r in catalog_results:
+                    ctx = await self._catalog.get_session_context(r["id"], max_lines=10)
+                    if ctx and ctx.get("content_lines"):
+                        summary = " ".join(ctx["content_lines"][:5])[:300]
+                        parts.append(f"[session:{r.get('date','')} {r.get('start_str','')}] {summary}")
+            except Exception:
+                pass
 
         # QMD semantic search
         if self._http and self._qmd_url:
