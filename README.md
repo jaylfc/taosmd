@@ -51,7 +51,7 @@ huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
 
 If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste this:
 
-> Set up taOSmd as my memory system. Clone https://github.com/jaylfc/taosmd, run `scripts/setup.sh` to install everything (embedding model + Qwen3-4B LLM). It auto-detects your hardware (GPU, NPU, or CPU) and installs the right backend. After setup, use VectorMemory with embed_mode="onnx" and hybrid=True for search.
+> Set up taOSmd as my memory system. Clone https://github.com/jaylfc/taosmd, run `scripts/setup.sh` to install everything (embedding model, Qwen3-4B LLM, and data stores). It auto-detects your hardware and installs the right backend. The setup creates the knowledge graph, vector memory, zero-loss archive (daily conversation transcripts, tool calls, decisions — kept indefinitely), and a daily compression cron job. After setup, use VectorMemory with embed_mode="onnx" and hybrid=True for search. Record every conversation turn with Archive.record() for zero-loss recall.
 
 ---
 

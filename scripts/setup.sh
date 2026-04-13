@@ -114,8 +114,13 @@ else
     fi
 fi
 
-# Create data directory
-mkdir -p "$INSTALL_DIR/data"
+# ================================================
+# 3. Initialise data stores + zero-loss archive
+# ================================================
+echo ""
+echo "→ Setting up data stores (KG, vectors, archive, history)..."
+cd "$INSTALL_DIR"
+python -m taosmd.auto_setup --yes 2>&1 | sed 's/^/  /'
 
 # Run self-test
 echo ""
