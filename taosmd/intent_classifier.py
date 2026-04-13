@@ -18,6 +18,7 @@ INTENT_PREFERENCE = "preference"   # "What does Jay prefer?", "How do I usually.
 INTENT_TECHNICAL = "technical"     # "How does X work?", "Explain the architecture"
 INTENT_EXPLORATORY = "exploratory" # "Tell me about X", "Find anything about Y"
 INTENT_RELATIONAL = "relational"   # "What does X depend on?", "Who manages Y?"
+INTENT_TIMELINE = "timeline"       # "What was I working on Monday?", "Show my sessions"
 
 # Search strategies per intent
 SEARCH_STRATEGIES = {
@@ -25,6 +26,7 @@ SEARCH_STRATEGIES = {
         "primary": "kg",        # Search KG first — structured facts
         "secondary": "archive", # Then archive for context
         "tertiary": "qmd",     # QMD last
+        "catalog_weight": 0.0,
         "kg_weight": 1.0,
         "archive_weight": 0.3,
         "qmd_weight": 0.2,
@@ -33,6 +35,7 @@ SEARCH_STRATEGIES = {
         "primary": "archive",   # Search archive first — recent events
         "secondary": "kg",
         "tertiary": "qmd",
+        "catalog_weight": 0.0,
         "kg_weight": 0.3,
         "archive_weight": 1.0,
         "qmd_weight": 0.2,
@@ -41,6 +44,7 @@ SEARCH_STRATEGIES = {
         "primary": "kg",        # Preferences are structured in KG
         "secondary": "archive",
         "tertiary": "qmd",
+        "catalog_weight": 0.0,
         "kg_weight": 1.0,
         "archive_weight": 0.5,
         "qmd_weight": 0.1,
@@ -49,6 +53,7 @@ SEARCH_STRATEGIES = {
         "primary": "qmd",       # Technical docs are in vector store
         "secondary": "kg",
         "tertiary": "archive",
+        "catalog_weight": 0.0,
         "kg_weight": 0.5,
         "archive_weight": 0.3,
         "qmd_weight": 1.0,
@@ -57,6 +62,7 @@ SEARCH_STRATEGIES = {
         "primary": "qmd",       # Broad search needs semantic matching
         "secondary": "kg",
         "tertiary": "archive",
+        "catalog_weight": 0.0,
         "kg_weight": 0.7,
         "archive_weight": 0.5,
         "qmd_weight": 1.0,
@@ -65,9 +71,19 @@ SEARCH_STRATEGIES = {
         "primary": "kg",        # Relationships are in the KG
         "secondary": "archive",
         "tertiary": "qmd",
+        "catalog_weight": 0.0,
         "kg_weight": 1.0,
         "archive_weight": 0.2,
         "qmd_weight": 0.1,
+    },
+    INTENT_TIMELINE: {
+        "primary": "catalog",   # Session catalog for activity timeline
+        "secondary": "archive",
+        "tertiary": "qmd",
+        "catalog_weight": 1.0,
+        "archive_weight": 0.7,
+        "kg_weight": 0.3,
+        "qmd_weight": 0.2,
     },
 }
 
@@ -123,13 +139,22 @@ INTENT_PATTERNS = {
         r"\bwho (?:manages|owns|runs)\b",
         r"\bwhat.*\buse(?:s|d)?\b",
     ],
+    INTENT_TIMELINE: [
+        r"\bwhat (?:was I|were we) (?:working|doing)\b",
+        r"\bshow (?:me )?(?:my )?(?:sessions?|activity|timeline)\b",
+        r"\bwhat (?:happened|did I do)\b",
+        r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b.*\b(?:session|work|activity|morning|afternoon|evening)\b",
+        r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d",
+        r"\bthis week'?s?\s+(?:activity|sessions?|work)\b",
+        r"\blast (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    ],
 }
 
 
 def classify_intent(query: str) -> str:
     """Classify a query's intent for optimal retrieval strategy.
 
-    Returns one of: factual, recent, preference, technical, exploratory, relational.
+    Returns one of: factual, recent, preference, technical, exploratory, relational, timeline.
     """
     query_lower = query.lower().strip()
 
@@ -137,7 +162,7 @@ def classify_intent(query: str) -> str:
     scores: dict[str, int] = {intent: 0 for intent in INTENT_PATTERNS}
 
     # Temporal/recency signals get a 2x boost since they're highly specific
-    boost = {INTENT_RECENT: 2, INTENT_PREFERENCE: 2}
+    boost = {INTENT_RECENT: 2, INTENT_PREFERENCE: 2, INTENT_TIMELINE: 2}
     for intent, patterns in INTENT_PATTERNS.items():
         for pattern in patterns:
             if re.search(pattern, query_lower):
