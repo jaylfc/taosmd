@@ -256,6 +256,19 @@ If taOSmd is useful to you:
 
 MIT
 
+## Dependencies & Acknowledgements
+
+**Core taOSmd (the 97.2% benchmark) is fully self-contained** — it uses only standard packages (SQLite, numpy, ONNX Runtime) plus the MiniLM embedding model. No external servers or forked repos needed.
+
+**Optional integrations for the full taOS stack:**
+
+| Component | Source | Notes |
+|-----------|--------|-------|
+| QMD (reranking + query expansion) | [jaylfc/qmd](https://github.com/jaylfc/qmd) (fork) | Adds rkllama NPU backend and `qmd serve` mode. Upstream [tobi/qmd](https://github.com/tobi/qmd) doesn't have NPU support yet. |
+| rkllama (NPU model serving) | [NotPunchnox/rkllama](https://github.com/NotPunchnox/rkllama) | Upstream with minor patches for rerank endpoint |
+| ONNX MiniLM | [onnx-models/all-MiniLM-L6-v2-onnx](https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx) | Standard pre-exported model |
+| Qwen3-4B RKLLM | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) | Community RK3588 conversion |
+
 ## Credits
 
 Built by [jaylfc](https://github.com/jaylfc). Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
