@@ -53,7 +53,6 @@ Archive JSONL (read-only, source of truth)
 | topic | TEXT | LLM-generated or heuristic topic |
 | description | TEXT | LLM-generated session description |
 | category | TEXT | One of: coding, debugging, research, planning, conversation, configuration, deployment, testing, documentation, brainstorming, review, maintenance, other |
-| agent_name | TEXT | Agent that ran this session (nullable for user sessions) |
 | archive_file | TEXT | Path to source archive JSONL |
 | line_start | INTEGER | First line in archive for this session |
 | line_end | INTEGER | Last line in archive for this session |
@@ -99,13 +98,11 @@ data/sessions/           (gitignored, regenerable)
 
 The existing `crystals` table in `crystallize.py` gets a new column: `catalog_session_id INTEGER` (FK to sessions.id). The crystallizer's entry point accepts a catalog session ID and reads from the split file instead of requiring raw conversation turns.
 
-## Multi-Agent Handling
+## Agent Isolation
 
-A single day's archive can contain interleaved events from multiple agents. The splitter:
+Each agent has its own isolated memory instance — its own archive directory, its own catalog database, its own vector store. There is no multi-agent interleaving to handle. The splitter processes a single agent's archive at a time. The user's personal archive is a separate instance.
 
-1. Groups events by `agent_name` first
-2. Detects session boundaries within each agent's event stream independently
-3. Cross-agent sessions (inter-agent communication events) get tagged with both agent names in a `related_agents` JSON field
+This matches taOS's architecture: agents run in isolated containers, memory lives on the host per-agent via `dbPath` routing, and frameworks are swappable components that don't touch the memory layer directly.
 
 ## Processing Tiers
 
