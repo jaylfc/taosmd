@@ -134,21 +134,41 @@ All systems tested on the same benchmark (LongMemEval-S, 500 questions) with the
 
 ```
 taOSmd Memory Stack (v0.2):
+
+Memory Layers:
 ├── Temporal Knowledge Graph    — structured facts with validity windows
-├── Vector Memory               — hybrid search with RRF fusion (ONNX MiniLM)
+├── Vector Memory               — hybrid search (semantic + keyword boost, ONNX MiniLM or Nomic)
 ├── Zero-Loss Archive           — append-only JSONL, FTS5 full-text search
 ├── Session Catalog             — LLM-derived timeline directory over archives
-├── Memory Extractor            — regex (15ms) + LLM (17s on NPU)
+└── Crystal Store               — compressed session digests with lessons
+
+Processing Pipeline:
+├── Memory Extractor            — regex (15ms) + LLM fact extraction (qwen3:4b)
+├── Session Splitter            — 30-min gap heuristic, per-session split files
+├── Session Enricher            — LLM topic/description/category (tiered: 1=heuristic, 2=4B, 3=9B+)
+├── Session Crystallizer        — narrative digests, outcomes, lessons → KG
+└── Secret Filtering            — 17 regex patterns, auto-redact on all ingest paths
+
+Retrieval:
+├── Parallel Fan-Out            — query all layers simultaneously (thorough mode)
 ├── Query Expansion             — entity extraction + temporal resolution
-├── Intent Classifier           — route queries to optimal memory layer
-├── Context Assembler           — core/archival split, token-budgeted L0-L3
+├── Intent Classifier           — routes to optimal layer, weights RRF merge
+├── Cross-Encoder Reranker      — ms-marco-MiniLM ONNX second-stage reranking
 ├── Graph Expansion             — BFS traversal from search results through KG
-├── Retention Scoring           — Ebbinghaus decay with hot/warm/cold tiers
-├── Session Crystallization     — LLM session digests with lesson extraction
-├── Cross-Memory Reflection     — cluster-then-synthesize insights from KG
-├── Secret Filtering            — 17 regex patterns, auto-redact on ingest
+└── Context Assembler           — core/archival split, token-budgeted L0-L3
+
+Scheduling:
+├── Job Queue                   — priority scheduling, per-resource concurrency limits
+├── Resource Manager            — dynamic hardware discovery, cluster-aware limits
+├── Worker Heartbeat Registry   — workers report capabilities, offline detection
+├── Gaming Detector             — auto-yield when fullscreen game/app detected
+├── Migration Policies          — auto upgrade/downgrade between Pi NPU and GPU workers
+└── Retention Scoring           — Ebbinghaus decay with hot/warm/cold tiers
+
+Multi-Device:
 ├── Multi-Agent Leases          — TTL exclusive locks for memory operations
-└── Mesh Sync                   — LWW delta replication across workers
+├── Mesh Sync                   — LWW delta replication across workers
+└── Backend Abstraction         — pluggable memory backends (taOSmd default)
 ```
 
 ## Quick Start
