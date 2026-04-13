@@ -162,3 +162,76 @@ class TestSplitter:
         assert len(sessions) == 2, (
             f"Expected 2 sessions after two runs, got {len(sessions)}"
         )
+
+
+class TestEnricher:
+
+    def setup_method(self, method):
+        import tempfile
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+
+    def teardown_method(self, method):
+        self._tmpdir.cleanup()
+
+    def _catalog_with_split(self):
+        """Return an initialised catalog that has already been split for 2025-04-13."""
+        cat = _make_catalog(self.tmp)
+        _run(cat.init())
+        events = _make_five_events()
+        _write_archive(self.tmp / "archive", events)
+        cat.split_day("2025-04-13")
+        return cat
+
+    def test_enrich_session_heuristic_fallback(self):
+        """enrich_session() with an unreachable LLM should keep tier=1 and the
+        original heuristic topic derived from the first event summary."""
+        cat = self._catalog_with_split()
+        sessions = _run(cat.lookup_date("2025-04-13"))
+        session_id = sessions[0]["id"]
+        original_topic = sessions[0]["topic"]
+
+        # Use an invalid port so httpx fails immediately
+        result = _run(
+            cat.enrich_session(
+                session_id,
+                llm_url="http://localhost:99999",
+                model="test-model",
+                tier=2,
+            )
+        )
+        _run(cat.close())
+
+        assert result is not None
+        assert result["tier"] == 1, (
+            f"Expected tier=1 after fallback, got {result['tier']}"
+        )
+        assert result["topic"] == original_topic, (
+            f"Expected original topic to be preserved, got {result['topic']!r}"
+        )
+
+    def test_enrich_updates_fts(self):
+        """_update_enrichment() should update the FTS index so that
+        search_topic() can find the new topic text."""
+        cat = self._catalog_with_split()
+        sessions = _run(cat.lookup_date("2025-04-13"))
+        session_id = sessions[0]["id"]
+
+        _run(
+            cat._update_enrichment(
+                session_id,
+                topic="ONNX embedding fixes",
+                description="Fixed ONNX embedding pipeline for batch inference.",
+                category="debugging",
+                tier=2,
+            )
+        )
+
+        results = _run(cat.search_topic("ONNX embedding"))
+        _run(cat.close())
+
+        assert len(results) >= 1, "Expected at least one FTS hit for 'ONNX embedding'"
+        ids = [r["id"] for r in results]
+        assert session_id in ids, (
+            f"session_id {session_id} not found in FTS results: {ids}"
+        )

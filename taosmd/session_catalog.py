@@ -26,6 +26,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 SESSION_GAP_THRESHOLD = 1800  # 30 minutes
@@ -465,6 +467,172 @@ class SessionCatalog:
             "categories": {r["category"]: r["n"] for r in categories},
             "last_split_date": last_split["value"] if last_split else None,
         }
+
+    # ------------------------------------------------------------------
+    # LLM Enrichment
+    # ------------------------------------------------------------------
+
+    async def enrich_session(
+        self,
+        session_id: int,
+        llm_url: str,
+        model: str,
+        tier: int = 2,
+    ) -> dict | None:
+        """Enrich a catalog session with LLM-generated topic/description/category.
+
+        Reads the session's split file via get_session_context(), sends the
+        content to the Ollama API, then updates the catalog entry and FTS index.
+
+        Falls back to keeping the existing heuristic results if the LLM is
+        unreachable or returns an unparseable response.
+
+        Args:
+            session_id: primary key of the session to enrich.
+            llm_url:    base URL of the Ollama server (e.g. "http://localhost:11434").
+            model:      model name to use for generation.
+            tier:       tier to set on success (default 2 = LLM-enriched).
+
+        Returns:
+            Updated session dict, or None if session_id is not found.
+        """
+        ctx = await self.get_session_context(session_id)
+        if ctx is None:
+            return None
+
+        content_lines = ctx.get("archive_lines") or []
+        content = "\n".join(content_lines)
+
+        try:
+            topic, description, category = await self._llm_enrich(
+                content, llm_url, model
+            )
+            if category not in SESSION_CATEGORIES:
+                category = "other"
+            await self._update_enrichment(session_id, topic, description, category, tier)
+        except Exception as exc:
+            logger.warning(
+                "LLM enrichment failed for session %s, keeping heuristic: %s",
+                session_id,
+                exc,
+            )
+
+        return await self.get_session(session_id)
+
+    async def _llm_enrich(
+        self,
+        content: str,
+        llm_url: str,
+        model: str,
+    ) -> tuple[str, str, str]:
+        """Send session content to the Ollama API and parse the response.
+
+        Args:
+            content:  raw JSONL lines joined as a string.
+            llm_url:  base URL of the Ollama server.
+            model:    model name for generation.
+
+        Returns:
+            (topic, description, category) tuple.
+
+        Raises:
+            httpx.HTTPError / Exception on network or parse failure.
+        """
+        categories_str = ", ".join(SESSION_CATEGORIES)
+        prompt = (
+            f"You are analyzing a memory session log.\n"
+            f"Given the following session events, provide:\n"
+            f"TOPIC: a short topic phrase (5-10 words)\n"
+            f"DESCRIPTION: one sentence describing what happened\n"
+            f"CATEGORY: one category from this list: {categories_str}\n\n"
+            f"Respond in exactly this format:\n"
+            f"TOPIC: <topic>\n"
+            f"DESCRIPTION: <description>\n"
+            f"CATEGORY: <category>\n\n"
+            f"Session content:\n{content[:3000]}"
+        )
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{llm_url}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.2, "num_predict": 150},
+                },
+            )
+            response.raise_for_status()
+            text = response.json()["response"]
+
+        return self._parse_enrichment(text)
+
+    def _parse_enrichment(self, text: str) -> tuple[str, str, str]:
+        """Parse an LLM response into (topic, description, category).
+
+        Expected format:
+            TOPIC: <topic>
+            DESCRIPTION: <description>
+            CATEGORY: <category>
+
+        Raises:
+            ValueError if any required field is missing.
+        """
+        topic = description = category = None
+        for line in text.splitlines():
+            line = line.strip()
+            if line.upper().startswith("TOPIC:"):
+                topic = line[6:].strip()
+            elif line.upper().startswith("DESCRIPTION:"):
+                description = line[12:].strip()
+            elif line.upper().startswith("CATEGORY:"):
+                category = line[9:].strip().lower()
+
+        if not topic:
+            raise ValueError("LLM response missing TOPIC field")
+        if not description:
+            raise ValueError("LLM response missing DESCRIPTION field")
+        if not category:
+            raise ValueError("LLM response missing CATEGORY field")
+
+        return topic, description, category
+
+    async def _update_enrichment(
+        self,
+        session_id: int,
+        topic: str,
+        description: str,
+        category: str,
+        tier: int,
+    ) -> None:
+        """Update sessions row and FTS index with enriched values.
+
+        Deletes the old FTS entry and inserts a fresh one to keep the index
+        consistent with the sessions table.
+
+        Args:
+            session_id:  primary key of the session.
+            topic:       enriched topic string.
+            description: enriched description string.
+            category:    enriched category string.
+            tier:        tier value to set on the sessions row.
+        """
+        self._conn.execute(
+            """UPDATE sessions
+               SET topic = ?, description = ?, category = ?, tier = ?
+               WHERE id = ?""",
+            (topic, description, category, tier, session_id),
+        )
+        # Rebuild FTS row: delete old entry, insert fresh one
+        self._conn.execute(
+            "DELETE FROM catalog_fts WHERE rowid = ?",
+            (session_id,),
+        )
+        self._conn.execute(
+            "INSERT INTO catalog_fts (rowid, topic, description, category) VALUES (?, ?, ?, ?)",
+            (session_id, topic, description, category),
+        )
+        self._conn.commit()
 
     # ------------------------------------------------------------------
     # Helpers
