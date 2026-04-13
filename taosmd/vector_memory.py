@@ -194,7 +194,7 @@ class VectorMemory:
         query: str,
         limit: int = 5,
         hybrid: bool = True,
-        fusion: str = "rrf",
+        fusion: str = "boost",
     ) -> list[dict]:
         """Semantic search with optional hybrid fusion.
 
