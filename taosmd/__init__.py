@@ -25,6 +25,8 @@ from .backend import MemoryBackend
 from .taosmd_backend import TaOSmdBackend
 from .job_queue import JobQueue
 from .resource_manager import ResourceManager
+from .job_worker import JobWorker
+from .gaming_detector import GamingDetector
 
 __all__ = [
     # Core memory stack
@@ -72,5 +74,7 @@ __all__ = [
     "TaOSmdBackend",
     # Job queue + resource management
     "JobQueue",
+    "JobWorker",
     "ResourceManager",
+    "GamingDetector",
 ]

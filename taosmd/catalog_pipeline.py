@@ -4,6 +4,12 @@ Orchestrates the three-stage session processing pipeline:
   1. Split  — split day's archive JSONL into per-session files
   2. Enrich — LLM-based topic/description/category enrichment
   3. Crystallize — compact digest + KG lesson extraction (tier >= 2 only)
+
+Optionally integrates with the job queue and resource manager for
+resource-constrained devices (Pi with multiple agents). When a queue
+is provided, enrichment and crystallization jobs go through it instead
+of running inline. When no queue is provided, the pipeline runs
+synchronously as before.
 """
 
 from __future__ import annotations
@@ -13,7 +19,7 @@ import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -21,11 +27,21 @@ from taosmd.session_catalog import SessionCatalog
 from taosmd.crystallize import CrystalStore
 from taosmd.knowledge_graph import TemporalKnowledgeGraph
 
+if TYPE_CHECKING:
+    from taosmd.job_queue import JobQueue
+    from taosmd.resource_manager import ResourceManager
+
 logger = logging.getLogger(__name__)
 
 
 class CatalogPipeline:
-    """Three-stage pipeline: split → enrich → crystallize."""
+    """Three-stage pipeline: split → enrich → crystallize.
+
+    When job_queue and resource_manager are provided, heavy tasks
+    (enrichment, crystallization) are dispatched through the queue
+    with resource-aware scheduling. The resource manager auto-selects
+    the best available model and hardware for each job.
+    """
 
     def __init__(
         self,
@@ -35,6 +51,8 @@ class CatalogPipeline:
         crystals_db: str | Path,
         kg_db: str | Path,
         llm_url: str = "http://localhost:11434",
+        job_queue: JobQueue | None = None,
+        resource_manager: ResourceManager | None = None,
     ):
         self._archive_dir = Path(archive_dir)
         self._sessions_dir = Path(sessions_dir)
@@ -42,6 +60,8 @@ class CatalogPipeline:
         self._crystals_db = Path(crystals_db)
         self._kg_db = Path(kg_db)
         self._llm_url = llm_url
+        self._queue = job_queue
+        self._rm = resource_manager
 
         self.catalog = SessionCatalog(
             db_path=self._catalog_db,
@@ -62,12 +82,27 @@ class CatalogPipeline:
     # ------------------------------------------------------------------
 
     async def detect_best_tier(self) -> tuple[int, str | None]:
-        """Check Ollama for available models and return (tier, model_name).
+        """Detect the best available processing tier and model.
 
-        Tier 3: qwen3.5:9b or qwen3.5:27b present
-        Tier 2: any qwen3 or qwen3.5 model present
-        Tier 1: no LLM available / no matching models
+        Uses the resource manager if available (checks cluster workers too),
+        otherwise falls back to direct Ollama query.
+
+        Tier 3: qwen3.5:9b+ (GPU worker or local GPU)
+        Tier 2: qwen3:4b / qwen3.5:4b (NPU or CPU)
+        Tier 1: no LLM available (heuristic only)
         """
+        # Try resource manager first — it knows about cluster workers
+        if self._rm:
+            recommendation = await self._rm.best_model_for_task("enrich")
+            if recommendation:
+                model = recommendation["model"]
+                lower = model.lower()
+                if "9b" in lower or "27b" in lower:
+                    return (3, model)
+                elif "qwen" in lower:
+                    return (2, model)
+
+        # Fallback: direct Ollama query
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{self._llm_url}/api/tags")
@@ -79,13 +114,11 @@ class CatalogPipeline:
 
         models = [m["name"] for m in data.get("models", [])]
 
-        # Tier 3: preferred large models
         for name in models:
             lower = name.lower()
             if "qwen3.5:9b" in lower or "qwen3.5:27b" in lower:
                 return (3, name)
 
-        # Tier 2: any qwen3 / qwen3.5
         for name in models:
             lower = name.lower()
             if lower.startswith("qwen3") or lower.startswith("qwen3.5"):
@@ -133,27 +166,43 @@ class CatalogPipeline:
         sessions = await self.catalog.lookup_date(date)
         enriched_count = 0
         enrich_errors = []
+        enrich_queued = 0
 
         for session in sessions:
             sid = session["id"]
             if tier >= 2 and model:
-                try:
-                    await self.catalog.enrich_session(
-                        session_id=sid,
-                        llm_url=self._llm_url,
-                        model=model,
-                        tier=tier,
+                if self._queue:
+                    # Queue the enrichment job for resource-aware scheduling
+                    from taosmd.job_queue import JOB_ENRICH, RESOURCE_NPU, RESOURCE_GPU, Priority
+                    resource = RESOURCE_GPU if tier == 3 else RESOURCE_NPU
+                    await self._queue.enqueue(
+                        JOB_ENRICH,
+                        payload={"session_id": sid, "model": model, "tier": tier,
+                                 "llm_url": self._llm_url, "catalog_db": str(self._catalog_db)},
+                        priority=Priority.NORMAL,
+                        resource_type=resource,
+                        estimated_seconds=5,
                     )
-                    enriched_count += 1
-                except Exception as exc:
-                    logger.warning("Enrich failed for session %s: %s", sid, exc)
-                    enrich_errors.append({"session_id": sid, "error": str(exc)})
+                    enrich_queued += 1
+                else:
+                    # Inline enrichment (no queue — synchronous)
+                    try:
+                        await self.catalog.enrich_session(
+                            session_id=sid,
+                            llm_url=self._llm_url,
+                            model=model,
+                            tier=tier,
+                        )
+                        enriched_count += 1
+                    except Exception as exc:
+                        logger.warning("Enrich failed for session %s: %s", sid, exc)
+                        enrich_errors.append({"session_id": sid, "error": str(exc)})
             else:
-                # Tier 1: no LLM, count as "enriched" with heuristic
                 enriched_count += 1
 
         result["enrich"] = {
             "enriched": enriched_count,
+            "queued": enrich_queued,
             "tier": tier,
             "model": model,
             "errors": enrich_errors,
@@ -161,63 +210,85 @@ class CatalogPipeline:
 
         # --- Stage 3: Crystallize ---
         if tier >= 2 and not skip_crystallize and model:
-            cs = CrystalStore(db_path=self._crystals_db)
-            await cs.init()
-            kg = TemporalKnowledgeGraph(db_path=self._kg_db)
-            await kg.init()
-
             crystallized_count = 0
+            crystal_queued = 0
             crystal_errors = []
 
-            sessions_fresh = await self.catalog.lookup_date(date)
-            for session in sessions_fresh:
-                sid = session["id"]
-                try:
-                    ctx = await self.catalog.get_session_context(sid)
-                    if ctx is None:
-                        continue
+            if self._queue:
+                # Queue crystallization jobs
+                from taosmd.job_queue import JOB_CRYSTALLIZE, RESOURCE_GPU, RESOURCE_NPU, Priority
+                resource = RESOURCE_GPU if tier == 3 else RESOURCE_NPU
 
-                    content_lines = ctx.get("archive_lines") or []
-                    turns = []
-                    for line in content_lines:
-                        if not line:
+                sessions_fresh = await self.catalog.lookup_date(date)
+                for session in sessions_fresh:
+                    await self._queue.enqueue(
+                        JOB_CRYSTALLIZE,
+                        payload={"session_id": session["id"], "model": model,
+                                 "llm_url": self._llm_url,
+                                 "crystals_db": str(self._crystals_db),
+                                 "kg_db": str(self._kg_db),
+                                 "catalog_db": str(self._catalog_db)},
+                        priority=Priority.BACKGROUND,
+                        resource_type=resource,
+                        estimated_seconds=10,
+                    )
+                    crystal_queued += 1
+
+                result["crystallize"] = {"queued": crystal_queued}
+            else:
+                # Inline crystallization (no queue)
+                cs = CrystalStore(db_path=self._crystals_db)
+                await cs.init()
+                kg = TemporalKnowledgeGraph(db_path=self._kg_db)
+                await kg.init()
+
+                sessions_fresh = await self.catalog.lookup_date(date)
+                for session in sessions_fresh:
+                    sid = session["id"]
+                    try:
+                        ctx = await self.catalog.get_session_context(sid)
+                        if ctx is None:
                             continue
-                        try:
-                            event = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        summary = event.get("summary") or (
-                            event.get("data", {}) or {}
-                        ).get("content", "")
-                        turns.append(
-                            {
+
+                        content_lines = ctx.get("archive_lines") or []
+                        turns = []
+                        for line in content_lines:
+                            if not line:
+                                continue
+                            try:
+                                event = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            summary = event.get("summary") or (
+                                event.get("data", {}) or {}
+                            ).get("content", "")
+                            turns.append({
                                 "role": "user",
                                 "content": summary,
                                 "timestamp": event.get("timestamp", time.time()),
-                            }
-                        )
+                            })
 
-                    if turns:
-                        await cs.crystallize(
-                            session_id=str(sid),
-                            turns=turns,
-                            llm_url=self._llm_url,
-                            model=model,
-                            kg=kg,
-                        )
-                        crystallized_count += 1
+                        if turns:
+                            await cs.crystallize(
+                                session_id=str(sid),
+                                turns=turns,
+                                llm_url=self._llm_url,
+                                model=model,
+                                kg=kg,
+                            )
+                            crystallized_count += 1
 
-                except Exception as exc:
-                    logger.warning("Crystallize failed for session %s: %s", sid, exc)
-                    crystal_errors.append({"session_id": sid, "error": str(exc)})
+                    except Exception as exc:
+                        logger.warning("Crystallize failed for session %s: %s", sid, exc)
+                        crystal_errors.append({"session_id": sid, "error": str(exc)})
 
-            await cs.close()
-            await kg.close()
+                await cs.close()
+                await kg.close()
 
-            result["crystallize"] = {
-                "crystallized": crystallized_count,
-                "errors": crystal_errors,
-            }
+                result["crystallize"] = {
+                    "crystallized": crystallized_count,
+                    "errors": crystal_errors,
+                }
         else:
             result["crystallize"] = {
                 "crystallized": 0,
