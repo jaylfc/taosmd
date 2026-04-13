@@ -1,0 +1,307 @@
+"""Catalog Pipeline Orchestrator (taOSmd).
+
+Orchestrates the three-stage session processing pipeline:
+  1. Split  — split day's archive JSONL into per-session files
+  2. Enrich — LLM-based topic/description/category enrichment
+  3. Crystallize — compact digest + KG lesson extraction (tier >= 2 only)
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from taosmd.session_catalog import SessionCatalog
+from taosmd.crystallize import CrystalStore
+from taosmd.knowledge_graph import TemporalKnowledgeGraph
+
+logger = logging.getLogger(__name__)
+
+
+class CatalogPipeline:
+    """Three-stage pipeline: split → enrich → crystallize."""
+
+    def __init__(
+        self,
+        archive_dir: str | Path,
+        sessions_dir: str | Path,
+        catalog_db: str | Path,
+        crystals_db: str | Path,
+        kg_db: str | Path,
+        llm_url: str = "http://localhost:11434",
+    ):
+        self._archive_dir = Path(archive_dir)
+        self._sessions_dir = Path(sessions_dir)
+        self._catalog_db = Path(catalog_db)
+        self._crystals_db = Path(crystals_db)
+        self._kg_db = Path(kg_db)
+        self._llm_url = llm_url
+
+        self.catalog = SessionCatalog(
+            db_path=self._catalog_db,
+            archive_dir=self._archive_dir,
+            sessions_dir=self._sessions_dir,
+        )
+
+    async def init(self) -> None:
+        """Initialise the SessionCatalog."""
+        await self.catalog.init()
+
+    async def close(self) -> None:
+        """Close the SessionCatalog."""
+        await self.catalog.close()
+
+    # ------------------------------------------------------------------
+    # Tier detection
+    # ------------------------------------------------------------------
+
+    async def detect_best_tier(self) -> tuple[int, str | None]:
+        """Check Ollama for available models and return (tier, model_name).
+
+        Tier 3: qwen3.5:9b or qwen3.5:27b present
+        Tier 2: any qwen3 or qwen3.5 model present
+        Tier 1: no LLM available / no matching models
+        """
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{self._llm_url}/api/tags")
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            logger.debug("Ollama not reachable: %s", exc)
+            return (1, None)
+
+        models = [m["name"] for m in data.get("models", [])]
+
+        # Tier 3: preferred large models
+        for name in models:
+            lower = name.lower()
+            if "qwen3.5:9b" in lower or "qwen3.5:27b" in lower:
+                return (3, name)
+
+        # Tier 2: any qwen3 / qwen3.5
+        for name in models:
+            lower = name.lower()
+            if lower.startswith("qwen3") or lower.startswith("qwen3.5"):
+                return (2, name)
+
+        return (1, None)
+
+    # ------------------------------------------------------------------
+    # Stage runner
+    # ------------------------------------------------------------------
+
+    async def index_day(
+        self,
+        date: str,
+        force: bool = False,
+        skip_crystallize: bool = False,
+    ) -> dict[str, Any]:
+        """Run all 3 stages for one day.
+
+        Args:
+            date: YYYY-MM-DD
+            force: force re-split even if entries already exist
+            skip_crystallize: skip stage 3 even when tier >= 2
+
+        Returns:
+            dict with keys date, split, enrich, crystallize, total_time
+        """
+        t0 = time.time()
+        result: dict[str, Any] = {
+            "date": date,
+            "split": {},
+            "enrich": {},
+            "crystallize": {},
+            "total_time": 0.0,
+        }
+
+        # --- Stage 1: Split ---
+        split_result = self.catalog.split_day(date, force=force)
+        result["split"] = split_result
+        sessions_created = split_result.get("sessions_created", 0)
+
+        # --- Stage 2: Enrich ---
+        tier, model = await self.detect_best_tier()
+
+        sessions = await self.catalog.lookup_date(date)
+        enriched_count = 0
+        enrich_errors = []
+
+        for session in sessions:
+            sid = session["id"]
+            if tier >= 2 and model:
+                try:
+                    await self.catalog.enrich_session(
+                        session_id=sid,
+                        llm_url=self._llm_url,
+                        model=model,
+                        tier=tier,
+                    )
+                    enriched_count += 1
+                except Exception as exc:
+                    logger.warning("Enrich failed for session %s: %s", sid, exc)
+                    enrich_errors.append({"session_id": sid, "error": str(exc)})
+            else:
+                # Tier 1: no LLM, count as "enriched" with heuristic
+                enriched_count += 1
+
+        result["enrich"] = {
+            "enriched": enriched_count,
+            "tier": tier,
+            "model": model,
+            "errors": enrich_errors,
+        }
+
+        # --- Stage 3: Crystallize ---
+        if tier >= 2 and not skip_crystallize and model:
+            cs = CrystalStore(db_path=self._crystals_db)
+            await cs.init()
+            kg = TemporalKnowledgeGraph(db_path=self._kg_db)
+            await kg.init()
+
+            crystallized_count = 0
+            crystal_errors = []
+
+            sessions_fresh = await self.catalog.lookup_date(date)
+            for session in sessions_fresh:
+                sid = session["id"]
+                try:
+                    ctx = await self.catalog.get_session_context(sid)
+                    if ctx is None:
+                        continue
+
+                    content_lines = ctx.get("archive_lines") or []
+                    turns = []
+                    for line in content_lines:
+                        if not line:
+                            continue
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        summary = event.get("summary") or (
+                            event.get("data", {}) or {}
+                        ).get("content", "")
+                        turns.append(
+                            {
+                                "role": "user",
+                                "content": summary,
+                                "timestamp": event.get("timestamp", time.time()),
+                            }
+                        )
+
+                    if turns:
+                        await cs.crystallize(
+                            session_id=str(sid),
+                            turns=turns,
+                            llm_url=self._llm_url,
+                            model=model,
+                            kg=kg,
+                        )
+                        crystallized_count += 1
+
+                except Exception as exc:
+                    logger.warning("Crystallize failed for session %s: %s", sid, exc)
+                    crystal_errors.append({"session_id": sid, "error": str(exc)})
+
+            await cs.close()
+            await kg.close()
+
+            result["crystallize"] = {
+                "crystallized": crystallized_count,
+                "errors": crystal_errors,
+            }
+        else:
+            result["crystallize"] = {
+                "crystallized": 0,
+                "skipped": True,
+                "reason": "tier < 2" if tier < 2 else "skip_crystallize=True",
+            }
+
+        result["total_time"] = round(time.time() - t0, 3)
+        return result
+
+    # ------------------------------------------------------------------
+    # Convenience methods
+    # ------------------------------------------------------------------
+
+    async def index_yesterday(self) -> dict[str, Any]:
+        """Convenience for cron: index yesterday's date."""
+        yesterday = (datetime.now(tz=timezone.utc) - timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        )
+        return await self.index_day(yesterday)
+
+    async def index_range(
+        self,
+        start_date: str,
+        end_date: str,
+        force: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Index all dates in an inclusive range.
+
+        Args:
+            start_date: YYYY-MM-DD
+            end_date:   YYYY-MM-DD
+            force:      force re-split for each day
+
+        Returns:
+            List of per-day result dicts.
+        """
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+        results = []
+        current = start
+        while current <= end:
+            day_str = current.strftime("%Y-%m-%d")
+            result = await self.index_day(day_str, force=force)
+            results.append(result)
+            current += timedelta(days=1)
+
+        return results
+
+    async def rebuild(self) -> list[dict[str, Any]]:
+        """Find all archive files by globbing and index each date with force=True.
+
+        Returns:
+            List of per-day result dicts.
+        """
+        archive_files = sorted(self._archive_dir.glob("**/*.jsonl"))
+        archive_files += sorted(self._archive_dir.glob("**/*.jsonl.gz"))
+
+        dates_seen: set[str] = set()
+        results = []
+
+        for path in archive_files:
+            # Expect structure: archive_dir/YYYY/MM/DD.jsonl[.gz]
+            parts = path.parts
+            try:
+                # Walk up from filename to get year/month/day
+                day_part = path.stem  # "DD" (strip .jsonl or .jsonl from .gz)
+                if day_part.endswith(".jsonl"):
+                    day_part = day_part[:-6]
+                month_part = path.parent.name
+                year_part = path.parent.parent.name
+                date_str = f"{year_part}-{month_part}-{day_part}"
+                # Validate
+                datetime.strptime(date_str, "%Y-%m-%d")
+            except (ValueError, IndexError):
+                logger.warning("Skipping unrecognised archive path: %s", path)
+                continue
+
+            if date_str in dates_seen:
+                continue
+            dates_seen.add(date_str)
+
+            result = await self.index_day(date_str, force=True)
+            results.append(result)
+
+        return results
