@@ -273,23 +273,55 @@ class ResourceManager:
             await self._queue.set_limit("cpu", 1)
             await self._queue.set_limit("npu", min(npu_limit, 1))
 
+    # Approximate RAM requirements per model (MB) for CPU inference
+    # GPU/NPU have separate VRAM so this only matters for CPU workers
+    MODEL_RAM_MB = {
+        "qwen3.5:0.8b": 800,
+        "qwen3.5:2b": 2000,
+        "qwen3:4b": 3300,
+        "qwen3.5:4b": 3400,
+        "qwen3.5:9b": 6600,
+        "qwen3.5:27b": 17000,
+    }
+
+    def _model_fits_in_ram(self, model: str, available_mb: int) -> bool:
+        """Check if a model fits in available RAM (for CPU inference)."""
+        for name, required in self.MODEL_RAM_MB.items():
+            if name in model.lower():
+                # Need model + 1GB headroom for OS/agents
+                return available_mb > (required + 1024)
+        # Unknown model — assume it fits if >4GB available
+        return available_mb > 4096
+
     async def best_model_for_task(self, task_type: str) -> dict:
         """Recommend the best available model for a task type.
 
+        Checks RAM availability for CPU models, VRAM for GPU models.
         Returns {model, resource_type, location} or empty dict if none available.
         """
         snap = await self.get_snapshot()
 
         if task_type in ("extract", "enrich", "crystallize"):
-            # LLM tasks — prefer GPU > NPU > CPU
-            for model in snap.ollama_models:
-                if "qwen3.5:9b" in model and snap.has_gpu:
-                    return {"model": model, "resource_type": "gpu", "location": "local"}
-                if "qwen3.5:4b" in model:
-                    return {"model": model, "resource_type": "gpu" if snap.has_gpu else "cpu", "location": "local"}
-                if "qwen3:4b" in model:
-                    resource = "npu" if snap.has_npu else ("gpu" if snap.has_gpu else "cpu")
-                    return {"model": model, "resource_type": resource, "location": "local"}
+            # Preference order: GPU (no RAM constraint) > NPU > CPU (RAM check)
+            # Sort models by size descending — try the best first
+            preferred_order = ["qwen3.5:27b", "qwen3.5:9b", "qwen3.5:4b", "qwen3:4b", "qwen3.5:2b", "qwen3.5:0.8b"]
+
+            for preferred in preferred_order:
+                for model in snap.ollama_models:
+                    if preferred not in model.lower():
+                        continue
+
+                    if snap.has_gpu:
+                        # GPU — VRAM handles model, RAM doesn't matter
+                        return {"model": model, "resource_type": "gpu", "location": "local"}
+                    elif snap.has_npu and "4b" in preferred:
+                        # NPU — only supports 4B models currently
+                        return {"model": model, "resource_type": "npu", "location": "local"}
+                    elif self._model_fits_in_ram(model, snap.ram_available_mb):
+                        # CPU — check if model fits in available RAM
+                        return {"model": model, "resource_type": "cpu", "location": "local"}
+                    else:
+                        logger.debug("Model %s needs too much RAM (%dMB available)", model, snap.ram_available_mb)
 
             # Check cluster workers for LLM capability
             for worker in snap.cluster_workers:
