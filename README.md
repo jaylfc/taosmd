@@ -146,13 +146,22 @@ python benchmarks/longmemeval_recall.py
 python benchmarks/longmemeval_granularity.py
 ```
 
+## Support
+
+If taOSmd is useful to you:
+
+- **Star this repo** — it helps others find it
+- **Donate:** [Buy Me a Coffee](https://buymeacoffee.com/jaylfc)
+- **Contact:** [GitHub](https://github.com/jaylfc)
+- **Hardware donations/loans:** We test on real hardware. If you have spare SBCs, GPUs, or dev boards and want to help expand compatibility, reach out.
+
 ## License
 
 MIT
 
 ## Credits
 
-Built by [JAN LABS](https://github.com/jaylfc). Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
+Built by [jaylfc](https://github.com/jaylfc). Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
 
 Benchmark dataset: [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025)
 Embedding model: [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
