@@ -292,7 +292,7 @@ If taOSmd is useful to you:
 
 - **Star this repo** — it helps others find it
 - **Donate:** [Buy Me a Coffee](https://buymeacoffee.com/jaylfc)
-- **Contact:** [GitHub](https://github.com/jaylfc)
+- **Contact:** jaylfc25@gmail.com
 - **Hardware donations/loans:** We test on real hardware. If you have spare SBCs, GPUs, or dev boards and want to help expand compatibility, reach out.
 
 ## License
