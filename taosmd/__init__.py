@@ -21,6 +21,8 @@ from .session_catalog import SessionCatalog
 from .catalog_pipeline import CatalogPipeline
 from .retrieval import retrieve
 from .cross_encoder import CrossEncoderReranker
+from .backend import MemoryBackend
+from .taosmd_backend import TaOSmdBackend
 
 __all__ = [
     # Core memory stack
@@ -63,4 +65,7 @@ __all__ = [
     # Retrieval pipeline
     "retrieve",
     "CrossEncoderReranker",
+    # Backend interface
+    "MemoryBackend",
+    "TaOSmdBackend",
 ]
