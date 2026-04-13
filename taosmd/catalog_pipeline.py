@@ -71,33 +71,56 @@ class CatalogPipeline:
     async def detect_best_tier(self) -> tuple[int, str | None]:
         """Detect the best available processing tier and model.
 
-        Uses the resource manager if available (checks cluster workers too),
-        otherwise falls back to direct Ollama query.
+        Checks Ollama first (GPU/CPU), then rkllama/qmd (NPU).
 
         Tier 3: qwen3.5:9b+ (GPU worker or local GPU)
         Tier 2: qwen3:4b / qwen3.5:4b (NPU or CPU)
         Tier 1: no LLM available (heuristic only)
         """
+        # Check Ollama first (standard endpoint)
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{self._llm_url}/api/tags")
                 resp.raise_for_status()
                 data = resp.json()
+                models = [m["name"] for m in data.get("models", [])]
+
+                for name in models:
+                    lower = name.lower()
+                    if "qwen3.5:9b" in lower or "qwen3.5:27b" in lower:
+                        return (3, name)
+
+                for name in models:
+                    lower = name.lower()
+                    if lower.startswith("qwen3") or lower.startswith("qwen3.5"):
+                        return (2, name)
         except Exception as exc:
-            logger.debug("Ollama not reachable: %s", exc)
-            return (1, None)
+            logger.debug("Ollama not reachable at %s: %s", self._llm_url, exc)
 
-        models = [m["name"] for m in data.get("models", [])]
+        # Check rkllama/qmd (NPU on RK3588) — typically on port 7832
+        for npu_url in ["http://localhost:7832", "http://localhost:8080"]:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    resp = await client.get(f"{npu_url}/health")
+                    if resp.status_code == 200:
+                        # rkllama is running — it serves qwen3:4b on NPU
+                        logger.info("NPU backend detected at %s", npu_url)
+                        return (2, "qwen3:4b")
+            except Exception:
+                continue
 
-        for name in models:
-            lower = name.lower()
-            if "qwen3.5:9b" in lower or "qwen3.5:27b" in lower:
-                return (3, name)
-
-        for name in models:
-            lower = name.lower()
-            if lower.startswith("qwen3") or lower.startswith("qwen3.5"):
-                return (2, name)
+        # Check if Ollama OpenAI-compat endpoint works (some setups)
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(f"{self._llm_url}/v1/models")
+                if resp.status_code == 200:
+                    models = [m["id"] for m in resp.json().get("data", [])]
+                    for name in models:
+                        lower = name.lower()
+                        if lower.startswith("qwen3") or lower.startswith("qwen3.5"):
+                            return (2, name)
+        except Exception:
+            pass
 
         return (1, None)
 
