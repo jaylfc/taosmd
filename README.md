@@ -135,18 +135,66 @@ All models run locally. No cloud APIs, no external dependencies. The NPU models 
 | qmd-query-expansion 1.7B RKLLM | 2.4GB | Custom conversion |
 | Qwen3-4B RKLLM | 4.6GB | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) |
 
-## Installation
+## Getting Started
+
+### One-Line Setup
+
+> **Note:** Install scripts are new and awaiting full testing on clean environments. Please report issues.
 
 ```bash
-pip install taosmd
+curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash
 ```
 
-Or from source:
+This will:
+1. Clone the repo and install dependencies
+2. Download the all-MiniLM-L6-v2 ONNX model (90MB)
+3. Create the data directory structure
+4. Run a quick self-test to verify everything works
+
+### Manual Install
 
 ```bash
 git clone https://github.com/jaylfc/taosmd.git
 cd taosmd
 pip install -e .
+
+# Download the embedding model
+huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir models/minilm-onnx
+```
+
+### Tell Your Agent
+
+If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste this:
+
+> Set up taOSmd as my memory system. Clone https://github.com/jaylfc/taosmd, install it, download the MiniLM ONNX model from huggingface (onnx-models/all-MiniLM-L6-v2-onnx) into models/minilm-onnx/, then run the self-test with `python -m taosmd.selftest`. Use the VectorMemory with embed_mode="onnx" and hybrid=True for search.
+
+### Optional: Full Stack (Orange Pi / RK3588)
+
+For the complete setup with NPU-accelerated LLM extraction:
+
+```bash
+# Install rkllama for NPU models (RK3588 only)
+# See: https://github.com/NotPunchnox/rkllama
+
+# Download NPU models
+huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
+  Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
+  --local-dir ~/.rkllama/models/qwen3-4b-chat
+
+# The LLM enables background fact extraction (72% recall)
+# Without it, regex extraction still works (39% recall, 15ms)
+```
+
+### Optional: GPU Worker (x86 + NVIDIA)
+
+For faster LLM extraction and QA answering:
+
+```bash
+# On your GPU machine
+ollama pull qwen2.5:3b
+
+# Point taOSmd at the GPU worker
+export TAOSMD_LLM_URL=http://<gpu-machine>:11434
 ```
 
 ## API
