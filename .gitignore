@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+data/
+*.rknn
+*.rkllm
+models/minilm-onnx/model.onnx
+.env
+*.log

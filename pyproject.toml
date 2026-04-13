@@ -1,0 +1,20 @@
+[project]
+name = "taosmd"
+version = "0.1.0"
+description = "Framework-agnostic AI memory system. 97.2% Recall@5 on LongMemEval-S."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "onnxruntime",
+    "numpy",
+    "transformers",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+local = ["sentence-transformers"]
+
+[project.urls]
+Homepage = "https://github.com/jaylfc/taosmd"
+Repository = "https://github.com/jaylfc/taosmd"
