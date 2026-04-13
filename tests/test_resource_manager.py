@@ -106,6 +106,45 @@ def test_migration_worker_joins():
     _run(run())
 
 
+def test_yield_and_reclaim():
+    async def run():
+        tmp = tempfile.mkdtemp()
+        q = JobQueue(os.path.join(tmp, "q.db"))
+        await q.init()
+
+        mgr = ResourceManager(job_queue=q, ollama_url="http://localhost:99999")
+        await mgr.refresh()
+
+        # Full power — CPU should use all cores
+        limits = await q.get_limits()
+        full_cpu = limits["cpu"]
+        assert full_cpu >= 1
+
+        # Yield — throttle everything
+        result = await mgr.yield_resources()
+        assert result["cpu"] == 1
+        assert result["gpu"] == 0
+        assert mgr.is_yielded
+
+        limits = await q.get_limits()
+        assert limits["cpu"] == 1
+        assert limits["gpu"] == 0
+
+        # Refresh should NOT override yielded limits
+        await mgr.refresh()
+        limits = await q.get_limits()
+        assert limits["cpu"] == 1  # Still throttled
+
+        # Reclaim — back to full power
+        result = await mgr.reclaim_resources()
+        assert not mgr.is_yielded
+        limits = await q.get_limits()
+        assert limits["cpu"] == full_cpu  # Back to full
+
+        await q.close()
+    _run(run())
+
+
 def test_migration_worker_disconnects():
     async def run():
         mgr = ResourceManager(ollama_url="http://localhost:99999")

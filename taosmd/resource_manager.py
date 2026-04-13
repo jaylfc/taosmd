@@ -177,6 +177,41 @@ class ResourceManager:
         self._prev_snapshot: ResourceSnapshot | None = None
         self._worker_busy_since: dict[str, float] = {}  # worker_name → timestamp
         self._worker_idle_since: dict[str, float] = {}  # worker_name → timestamp
+        self._yielded: bool = False  # True when user has claimed the machine
+
+    # ------------------------------------------------------------------
+    # Yield mode — user wants the machine back
+    # ------------------------------------------------------------------
+
+    async def yield_resources(self) -> dict:
+        """User is actively using this machine. Throttle worker to background.
+
+        Reduces all limits to minimum: 1 CPU core, no GPU, no NPU.
+        Called from system tray icon or taOS desktop toggle.
+        """
+        self._yielded = True
+        if self._queue:
+            await self._queue.set_limit("cpu", 1)
+            await self._queue.set_limit("gpu", 0)
+            await self._queue.set_limit("npu", 0)
+            await self._queue.set_limit("embed", 1)  # Keep 1 for lightweight queries
+        logger.info("Resources yielded — worker throttled to background mode")
+        return {"mode": "yielded", "cpu": 1, "gpu": 0, "npu": 0}
+
+    async def reclaim_resources(self) -> dict:
+        """User is done. Worker reclaims all available resources.
+
+        Triggers a fresh hardware probe to set limits based on actual hardware.
+        """
+        self._yielded = False
+        snap = await self.refresh()  # Re-probe and apply full limits
+        limits = await self._queue.get_limits() if self._queue else {}
+        logger.info("Resources reclaimed — worker at full capacity")
+        return {"mode": "full", **limits}
+
+    @property
+    def is_yielded(self) -> bool:
+        return self._yielded
 
     async def refresh(self) -> ResourceSnapshot:
         """Probe all resources and update the snapshot."""
@@ -212,11 +247,16 @@ class ResourceManager:
 
     async def _apply_limits(self, snap: ResourceSnapshot) -> None:
         """Calculate and apply concurrency limits based on discovered resources."""
-        # CPU: allow half the cores for memory jobs (leave rest for agents/OS)
-        cpu_limit = max(1, snap.cpu_cores // 2)
+        # If user has yielded, don't override throttled limits
+        if self._yielded:
+            return
+
+        # Full power mode — use all available resources
+        # CPU: all cores available (worker is greedy by default)
+        cpu_limit = max(1, snap.cpu_cores)
         await self._queue.set_limit("cpu", cpu_limit)
 
-        # NPU: all cores available (memory tasks are their primary purpose)
+        # NPU: all cores available
         npu_limit = snap.npu_cores if snap.npu_cores > 0 else 0
         await self._queue.set_limit("npu", npu_limit)
 
