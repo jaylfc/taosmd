@@ -117,13 +117,12 @@ The 97.2% benchmark was achieved on this exact stack:
 | **Embedding (alt)** | Qwen3-Embedding-0.6B | NPU-accelerated embedding | rkllama on RK3588 NPU |
 | **Reranker** | Qwen3-Reranker-0.6B | Result reranking | rkllama on RK3588 NPU |
 | **Query Expansion** | qmd-query-expansion 1.7B | Search query enrichment | rkllama on RK3588 NPU |
-| **LLM (extraction)** | Qwen3-4B | Background fact extraction (72% recall) | rkllama on RK3588 NPU (17s/turn) |
-| **LLM (answering)** | Qwen2.5-3B | QA from recalled context | Ollama on RTX 3060 (optional GPU worker) |
+| **LLM (extraction + answering)** | Qwen3-4B | Fact extraction (72% recall) + QA from context | rkllama on RK3588 NPU (17s/turn) |
 | **Vector Store** | SQLite + numpy | Cosine similarity search | CPU |
 | **Full-Text Search** | SQLite FTS5 | Keyword search over archive | CPU |
 | **Knowledge Graph** | SQLite | Temporal entity-relationship triples | CPU |
 
-All models run locally. No cloud APIs, no external dependencies. The NPU models are served via [rkllama](https://github.com/NotPunchnox/rkllama) on port 8080. The ONNX embedding model requires no server — it loads directly in-process.
+**Everything runs on the Pi. No external server needed.** The Qwen3-4B handles both fact extraction and question answering on the NPU. The ONNX embedding model runs in-process on the CPU. An optional GPU worker (e.g. Fedora with RTX 3060) can accelerate LLM tasks ~10x but is not required — the Pi is fully self-contained.
 
 ### Model Files
 
