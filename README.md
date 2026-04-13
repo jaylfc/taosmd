@@ -107,6 +107,34 @@ Or download directly from [HuggingFace](https://huggingface.co/sentence-transfor
 - Fedora x86_64 (RTX 3060) — GPU worker for LLM extraction
 - Should work on any Linux system with Python 3.10+
 
+## Reference Setup (Orange Pi 5 Plus)
+
+The 97.2% benchmark was achieved on this exact stack:
+
+| Component | Model | Purpose | Runtime |
+|-----------|-------|---------|---------|
+| **Embedding** | all-MiniLM-L6-v2 (22M params) | Semantic vector search | ONNX Runtime on ARM CPU (0.3ms/embed) |
+| **Embedding (alt)** | Qwen3-Embedding-0.6B | NPU-accelerated embedding | rkllama on RK3588 NPU |
+| **Reranker** | Qwen3-Reranker-0.6B | Result reranking | rkllama on RK3588 NPU |
+| **Query Expansion** | qmd-query-expansion 1.7B | Search query enrichment | rkllama on RK3588 NPU |
+| **LLM (extraction)** | Qwen3-4B | Background fact extraction (72% recall) | rkllama on RK3588 NPU (17s/turn) |
+| **LLM (answering)** | Qwen2.5-3B | QA from recalled context | Ollama on RTX 3060 (optional GPU worker) |
+| **Vector Store** | SQLite + numpy | Cosine similarity search | CPU |
+| **Full-Text Search** | SQLite FTS5 | Keyword search over archive | CPU |
+| **Knowledge Graph** | SQLite | Temporal entity-relationship triples | CPU |
+
+All models run locally. No cloud APIs, no external dependencies. The NPU models are served via [rkllama](https://github.com/NotPunchnox/rkllama) on port 8080. The ONNX embedding model requires no server — it loads directly in-process.
+
+### Model Files
+
+| Model | Size | Source |
+|-------|------|--------|
+| all-MiniLM-L6-v2 ONNX | 90MB | [onnx-models/all-MiniLM-L6-v2-onnx](https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx) |
+| Qwen3-Embedding-0.6B RKLLM | 935MB | Pre-installed with rkllama |
+| Qwen3-Reranker-0.6B RKLLM | 935MB | Pre-installed with rkllama |
+| qmd-query-expansion 1.7B RKLLM | 2.4GB | Custom conversion |
+| Qwen3-4B RKLLM | 4.6GB | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) |
+
 ## Installation
 
 ```bash
