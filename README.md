@@ -145,10 +145,11 @@ curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.
 ```
 
 This will:
-1. Clone the repo and install dependencies
-2. Download the all-MiniLM-L6-v2 ONNX model (90MB)
-3. Create the data directory structure
-4. Run a quick self-test to verify everything works
+1. Clone the repo and install Python dependencies
+2. Download the all-MiniLM-L6-v2 ONNX embedding model (90MB)
+3. Install Ollama and pull Qwen3-4B for fact extraction + answering (2.6GB)
+4. On RK3588: download the NPU-optimised Qwen3-4B RKLLM model instead (4.6GB)
+5. Create the data directory and run a self-test
 
 ### Manual Install
 
@@ -157,40 +158,48 @@ git clone https://github.com/jaylfc/taosmd.git
 cd taosmd
 pip install -e .
 
-# Download the embedding model
+# 1. Embedding model (required)
 huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir models/minilm-onnx
+
+# 2. LLM for fact extraction + answering (required)
+# Option A: x86 / ARM without NPU — use Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3:4b
+
+# Option B: Orange Pi / RK3588 with NPU — use rkllama
+# Install rkllama: https://github.com/NotPunchnox/rkllama
+huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
+  Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
+  --local-dir ~/.rkllama/models/qwen3-4b-chat
 ```
 
 ### Tell Your Agent
 
 If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste this:
 
-> Set up taOSmd as my memory system. Clone https://github.com/jaylfc/taosmd, install it, download the MiniLM ONNX model from huggingface (onnx-models/all-MiniLM-L6-v2-onnx) into models/minilm-onnx/, then run the self-test with `python -m taosmd.selftest`. Use the VectorMemory with embed_mode="onnx" and hybrid=True for search.
+> Set up taOSmd as my memory system. Clone https://github.com/jaylfc/taosmd, run `scripts/setup.sh` to install everything (embedding model + Qwen3-4B LLM). It auto-detects your hardware (GPU, NPU, or CPU) and installs the right backend. After setup, use VectorMemory with embed_mode="onnx" and hybrid=True for search.
 
-### Optional: Full Stack (Orange Pi / RK3588)
+### RK3588 NPU Setup (Orange Pi / Rock 5 / Radxa)
 
-For the complete setup with NPU-accelerated LLM extraction:
+For NPU-accelerated inference on Rockchip boards:
 
 ```bash
-# Install rkllama for NPU models (RK3588 only)
+# Install rkllama (serves models on the NPU)
 # See: https://github.com/NotPunchnox/rkllama
 
-# Download NPU models
+# The setup script handles this automatically, or manually:
 huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
   Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
   --local-dir ~/.rkllama/models/qwen3-4b-chat
-
-# The LLM enables background fact extraction (72% recall)
-# Without it, regex extraction still works (39% recall, 15ms)
 ```
 
 ### Optional: GPU Worker (x86 + NVIDIA)
 
-For faster LLM extraction and QA answering:
+Not required — the Pi is fully self-contained. A GPU worker gives ~10x speed on LLM tasks:
 
 ```bash
 # On your GPU machine
-ollama pull qwen2.5:3b
+ollama pull qwen3:4b  # Same model as the Pi — same quality
 
 # Point taOSmd at the GPU worker
 export TAOSMD_LLM_URL=http://<gpu-machine>:11434
