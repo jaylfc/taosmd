@@ -89,26 +89,14 @@ if [ "$PLATFORM" = "arm64" ] && [ -e "/sys/class/misc/mali0" ]; then
         echo "  ⚠ rkllama not found. Install from: https://github.com/NotPunchnox/rkllama"
         echo "    Then re-run this script to download NPU models"
     fi
-elif [ "$HAS_NVIDIA" = true ]; then
-    # x86 with NVIDIA GPU — use Ollama
-    echo "  NVIDIA GPU detected — using Ollama"
-    if command -v ollama &>/dev/null; then
-        echo "  ✓ Ollama already installed"
-    else
-        echo "  → Installing Ollama..."
-        curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || echo "  ⚠ Ollama install failed — install manually from ollama.com"
-    fi
-    if command -v ollama &>/dev/null; then
-        if ollama list 2>/dev/null | grep -q "qwen2.5:3b"; then
-            echo "  ✓ Qwen2.5-3B model already pulled"
-        else
-            echo "  → Pulling Qwen2.5-3B for GPU extraction (~2GB)..."
-            ollama pull qwen2.5:3b 2>/dev/null || echo "  ⚠ Model pull failed — run: ollama pull qwen2.5:3b"
-        fi
-    fi
 else
-    # CPU-only — use Ollama with a small model
-    echo "  No GPU/NPU detected — using Ollama with CPU model"
+    # x86 (GPU or CPU) — use Ollama with the same Qwen3 4B model as the Pi
+    # We use the exact same model to guarantee the same quality benchmarks
+    if [ "$HAS_NVIDIA" = true ]; then
+        echo "  NVIDIA GPU detected — Qwen3 4B will run fast on GPU"
+    else
+        echo "  CPU-only — Qwen3 4B will run slower but same quality as Pi NPU"
+    fi
     if command -v ollama &>/dev/null; then
         echo "  ✓ Ollama already installed"
     else
@@ -116,11 +104,12 @@ else
         curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || echo "  ⚠ Ollama install failed — install manually from ollama.com"
     fi
     if command -v ollama &>/dev/null; then
-        if ollama list 2>/dev/null | grep -q "qwen2.5:1.5b"; then
-            echo "  ✓ Qwen2.5-1.5B model already pulled"
+        if ollama list 2>/dev/null | grep -q "qwen3:4b"; then
+            echo "  ✓ Qwen3-4B model already pulled"
         else
-            echo "  → Pulling Qwen2.5-1.5B for CPU extraction (~1GB)..."
-            ollama pull qwen2.5:1.5b 2>/dev/null || echo "  ⚠ Model pull failed — run: ollama pull qwen2.5:1.5b"
+            echo "  → Pulling Qwen3-4B for fact extraction (~2.6GB)..."
+            echo "    (Same model as the Pi NPU benchmark — guarantees identical quality)"
+            ollama pull qwen3:4b 2>/dev/null || echo "  ⚠ Model pull failed — run: ollama pull qwen3:4b"
         fi
     fi
 fi
