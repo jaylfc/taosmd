@@ -27,6 +27,7 @@ from .job_queue import JobQueue
 from .resource_manager import ResourceManager
 from .job_worker import JobWorker
 from .gaming_detector import GamingDetector
+from .worker_heartbeat import WorkerRegistry
 
 __all__ = [
     # Core memory stack
@@ -77,4 +78,5 @@ __all__ = [
     "JobWorker",
     "ResourceManager",
     "GamingDetector",
+    "WorkerRegistry",
 ]

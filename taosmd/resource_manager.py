@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .worker_heartbeat import WorkerRegistry
+
 if TYPE_CHECKING:
     from .job_queue import JobQueue
 
@@ -160,6 +162,7 @@ class ResourceManager:
     def __init__(
         self,
         job_queue: JobQueue | None = None,
+        worker_registry: WorkerRegistry | None = None,
         ollama_url: str = "http://localhost:11434",
         controller_url: str = "",
         refresh_interval: int = 60,
@@ -167,6 +170,7 @@ class ResourceManager:
         idle_upgrade_delay: int = 600,
     ):
         self._queue = job_queue
+        self._registry = worker_registry
         self._ollama_url = ollama_url
         self._controller_url = controller_url
         self._refresh_interval = refresh_interval
@@ -221,7 +225,12 @@ class ResourceManager:
         snap.gpu = _detect_gpu()
         snap.ram_available_mb = _get_available_ram_mb()
         snap.ollama_models = await _check_ollama_models(self._ollama_url)
-        snap.cluster_workers = await _check_cluster_workers(self._controller_url)
+
+        # Get cluster workers from registry (preferred) or controller API (fallback)
+        if self._registry:
+            snap.cluster_workers = await self._registry.for_resource_manager()
+        else:
+            snap.cluster_workers = await _check_cluster_workers(self._controller_url)
 
         self._snapshot = snap
         self._last_refresh = time.time()
