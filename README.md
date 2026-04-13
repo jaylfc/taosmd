@@ -75,6 +75,17 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 | single-session-assistant | 94.6% (53/56) |
 | single-session-preference | 90.0% (27/30) |
 
+### Retrieval Granularity Comparison (100 questions each)
+
+| Strategy | Recall@5 | Speed |
+|----------|----------|-------|
+| User-turns only, hybrid (default) | **99.0%** | 2.1s/q |
+| Full session, hybrid | 97.0% | 2.3s/q |
+| Turn-level, hybrid | 97.0% | 14.6s/q |
+| Turn-level, raw semantic | 93.0% | 15.8s/q |
+| User-turns only, raw semantic | 92.0% | 2.0s/q |
+| Full session, raw semantic | 83.0% | 2.2s/q |
+
 ## Architecture
 
 ```
