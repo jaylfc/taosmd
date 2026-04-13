@@ -102,19 +102,32 @@ class VectorMemory:
             self._conn.close()
             self._conn = None
 
-    async def embed(self, text: str) -> list[float]:
-        """Get embedding vector."""
+    async def embed(self, text: str, task: str = "search_document") -> list[float]:
+        """Get embedding vector.
+
+        Args:
+            text: Text to embed.
+            task: Task prefix for models that support it (e.g., nomic-embed).
+                  "search_document" for indexing, "search_query" for queries.
+                  Ignored by models that don't use prefixes (MiniLM).
+        """
         if self._embed_mode == "onnx" and self._onnx_session is not None:
-            return self._embed_onnx(text)
+            return self._embed_onnx(text, task)
         if self._embed_mode == "local" and self._local_model is not None:
             return self._embed_local(text)
         return await self._embed_qmd(text)
 
-    def _embed_onnx(self, text: str) -> list[float]:
+    def _embed_onnx(self, text: str, task: str = "search_document") -> list[float]:
         """Embed using ONNX Runtime (fast CPU inference, no PyTorch)."""
         import numpy as np
         try:
-            inputs = self._onnx_tokenizer(text[:512], return_tensors="np", padding=True, truncation=True)
+            # Add task prefix for models that use it (nomic-embed)
+            # Detected by checking if the model config mentions "nomic" or has task_type support
+            embed_text = text[:512]
+            if self._onnx_path and "nomic" in str(self._onnx_path).lower():
+                embed_text = f"{task}: {embed_text}"
+
+            inputs = self._onnx_tokenizer(embed_text, return_tensors="np", padding=True, truncation=True)
             feed = {
                 "input_ids": inputs["input_ids"].astype(np.int64),
                 "attention_mask": inputs["attention_mask"].astype(np.int64),
@@ -177,7 +190,7 @@ class VectorMemory:
         from .secret_filter import redact_secrets
         text, _ = redact_secrets(text)
 
-        embedding = await self.embed(text)
+        embedding = await self.embed(text, task="search_document")
         if not embedding:
             return -1
 
@@ -205,7 +218,7 @@ class VectorMemory:
 
         When hybrid=False, fusion mode is ignored and pure semantic is used.
         """
-        query_emb = await self.embed(query)
+        query_emb = await self.embed(query, task="search_query")
         if not query_emb:
             return []
 
