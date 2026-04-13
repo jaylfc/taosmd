@@ -9,7 +9,7 @@ from .context_assembler import ContextAssembler
 from .browsing_history import BrowsingHistoryStore as BrowsingHistory
 
 # v0.2.0 — retrieval & processing
-from .retention import retention_score, classify_tier, score_and_tier, find_near_duplicates
+from .retention import retention_score, classify_tier, score_and_tier, find_near_duplicates, composite_score
 from .secret_filter import redact_secrets, contains_secrets, filter_text
 from .query_expansion import expand_query_fast, expand_query_llm, extract_entities_regex
 from .graph_expansion import expand_from_results, format_expanded_context
@@ -19,6 +19,7 @@ from .session_catalog import SessionCatalog
 from .catalog_pipeline import CatalogPipeline
 from .retrieval import retrieve
 from .cross_encoder import CrossEncoderReranker
+from .access_tracker import AccessTracker
 from .preference_extractor import extract_preferences
 from .temporal_boost import temporal_rerank
 
@@ -56,6 +57,8 @@ __all__ = [
     "classify_tier",
     "score_and_tier",
     "find_near_duplicates",
+    "composite_score",
+    "AccessTracker",
     "redact_secrets",
     "contains_secrets",
     "filter_text",
