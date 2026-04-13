@@ -19,6 +19,8 @@ from .leases import LeaseManager
 from .mesh_sync import MeshSync
 from .session_catalog import SessionCatalog
 from .catalog_pipeline import CatalogPipeline
+from .retrieval import retrieve
+from .cross_encoder import CrossEncoderReranker
 
 __all__ = [
     # Core memory stack
@@ -58,4 +60,7 @@ __all__ = [
     # Session catalog (timeline directory)
     "SessionCatalog",
     "CatalogPipeline",
+    # Retrieval pipeline
+    "retrieve",
+    "CrossEncoderReranker",
 ]

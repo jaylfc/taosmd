@@ -351,6 +351,7 @@ class ContextAssembler:
         system_info: dict | None = None,
         depth: str = "standard",  # "minimal" | "standard" | "deep" | "auto"
         max_total_tokens: int = 1800,
+        retrieval_results: list[dict] | None = None,  # NEW
     ) -> dict:
         """Assemble the full context from all layers.
 
@@ -385,7 +386,17 @@ class ContextAssembler:
         layers["l1"] = await self.assemble_l1(user_name, agent_name, project, max_tokens=kg_budget)
 
         if depth in ("standard", "deep"):
-            layers["l2"] = await self.assemble_l2(query, agent_name, max_tokens=max(archive_budget, qmd_budget))
+            if retrieval_results is not None:
+                # Use pre-retrieved results instead of querying sources
+                parts = []
+                for r in retrieval_results[:10]:
+                    text = r.get("text", "")[:200]
+                    source = r.get("source", "unknown")
+                    parts.append(f"[{source}] {text}")
+                l2_text = "Relevant context:\n" + "\n".join(f"- {p}" for p in parts) if parts else ""
+                layers["l2"] = truncate_to_tokens(l2_text, max(archive_budget, qmd_budget))
+            else:
+                layers["l2"] = await self.assemble_l2(query, agent_name, max_tokens=max(archive_budget, qmd_budget))
         else:
             layers["l2"] = ""
 
