@@ -6,7 +6,7 @@
 
 **Framework-agnostic AI memory system. 97.2% Recall@5 on LongMemEval-S.**
 
-Beats MemPalace (96.6%) and SuperMemory (81.6%) — running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies.
+Beats MemPalace (96.6%) and SuperMemory (81.6%) — running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
 
 ## Benchmark Results
 
