@@ -168,3 +168,93 @@ def _adapt_crystals(results: list[dict]) -> list[dict]:
             }
         )
     return adapted
+
+
+def _rrf_merge(
+    ranked_lists: list[list[dict]],
+    intent_primary: str | None = None,
+    k: int = 60,
+    intent_boost: float = 1.5,
+) -> list[dict]:
+    """Merge multiple ranked result lists using Reciprocal Rank Fusion.
+
+    Each input list contains normalised result dicts with "text", "source",
+    "source_id", "rank", "source_score", and "metadata" fields.
+
+    Args:
+        ranked_lists: List of ranked result lists to merge.
+        intent_primary: Source name to boost (e.g. "vector"). If set, results
+            from that source have their RRF score multiplied by intent_boost.
+        k: RRF constant (default 60).
+        intent_boost: Multiplier applied to the primary source's scores.
+
+    Returns:
+        Single merged list sorted by rrf_score descending, with an added
+        "rrf_score" field on each result dict.
+    """
+    rrf_scores: dict[str, float] = {}
+    result_by_key: dict[str, dict] = {}
+
+    for ranked_list in ranked_lists:
+        for result in ranked_list:
+            key = f"{result['source']}:{result['source_id']}"
+            score = 1.0 / (k + result["rank"])
+            if intent_primary is not None and result["source"] == intent_primary:
+                score *= intent_boost
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + score
+            if key not in result_by_key:
+                result_by_key[key] = result
+
+    merged = []
+    for key, score in rrf_scores.items():
+        entry = dict(result_by_key[key])
+        entry["rrf_score"] = score
+        merged.append(entry)
+
+    merged.sort(key=lambda x: x["rrf_score"], reverse=True)
+    logger.debug("_rrf_merge: %d results from %d lists", len(merged), len(ranked_lists))
+    return merged
+
+
+def _deduplicate(results: list[dict], threshold: float = 0.8) -> list[dict]:
+    """Remove near-duplicate results by Jaccard word-set similarity.
+
+    Compares each pair of results on the "text" field. When similarity
+    >= threshold, the result with the lower rrf_score is dropped. Uses an
+    O(n^2) approach; n is expected to be small (<100 results).
+
+    Args:
+        results: List of normalised result dicts (should have "rrf_score").
+        threshold: Jaccard similarity threshold above which results are
+            considered duplicates (default 0.8).
+
+    Returns:
+        Filtered list with near-duplicates removed.
+    """
+    to_remove: set[int] = set()
+
+    for i in range(len(results)):
+        if i in to_remove:
+            continue
+        words_i = set(results[i]["text"].lower().split())
+        for j in range(i + 1, len(results)):
+            if j in to_remove:
+                continue
+            words_j = set(results[j]["text"].lower().split())
+            union = words_i | words_j
+            if not union:
+                continue
+            jaccard = len(words_i & words_j) / len(union)
+            if jaccard >= threshold:
+                score_i = results[i].get("rrf_score", 0.0)
+                score_j = results[j].get("rrf_score", 0.0)
+                to_remove.add(j if score_i >= score_j else i)
+
+    filtered = [r for idx, r in enumerate(results) if idx not in to_remove]
+    logger.debug(
+        "_deduplicate: kept %d/%d results (threshold=%.2f)",
+        len(filtered),
+        len(results),
+        threshold,
+    )
+    return filtered

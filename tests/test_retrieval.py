@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from taosmd.retrieval import _adapt_catalog, _adapt_kg, _adapt_vector
+from taosmd.retrieval import (
+    _adapt_catalog,
+    _adapt_kg,
+    _adapt_vector,
+    _deduplicate,
+    _rrf_merge,
+)
 
 
 def test_adapt_vector():
@@ -122,3 +128,121 @@ def test_adapt_catalog():
     assert "Deep work" in second["text"]
     assert "10:00" in second["text"]
     assert second["rank"] == 1
+
+
+def _make_result(source: str, source_id: str, rank: int, text: str = "some text") -> dict:
+    return {
+        "text": text,
+        "source": source,
+        "source_id": source_id,
+        "rank": rank,
+        "source_score": 1.0,
+        "metadata": {},
+    }
+
+
+def test_rrf_merge_two_sources():
+    # "shared" appears in both lists under different sources but same source_id
+    list_a = [
+        _make_result("vector", "1", 0, "memory about taOS"),
+        _make_result("vector", "2", 1, "another vector result"),
+    ]
+    list_b = [
+        _make_result("kg", "1", 0, "knowledge graph fact"),
+        _make_result("kg", "3", 1, "second kg result"),
+    ]
+
+    merged = _rrf_merge([list_a, list_b])
+
+    # Result is sorted by rrf_score descending
+    scores = [r["rrf_score"] for r in merged]
+    assert scores == sorted(scores, reverse=True)
+
+    # All results are present (4 unique source:source_id combos)
+    assert len(merged) == 4
+
+    # Each result has an rrf_score field
+    for r in merged:
+        assert "rrf_score" in r
+        assert r["rrf_score"] > 0
+
+    # Rank-0 results from both lists should share the two highest scores
+    top_two_scores = scores[:2]
+    rank0_keys = {"vector:1", "kg:1"}
+    top_two_keys = {f"{r['source']}:{r['source_id']}" for r in merged[:2]}
+    assert top_two_keys == rank0_keys, (
+        f"Expected top-2 to be rank-0 results, got {top_two_keys}"
+    )
+    # Their scores should be higher than rank-1 results
+    rank1_score = next(
+        r["rrf_score"] for r in merged if r["source"] == "vector" and r["source_id"] == "2"
+    )
+    assert all(s > rank1_score for s in top_two_scores)
+
+
+def test_rrf_intent_boost():
+    list_a = [_make_result("vector", "10", 0)]
+    list_b = [_make_result("kg", "20", 0)]
+
+    # Boost vector results
+    merged_boosted = _rrf_merge([list_a, list_b], intent_primary="vector", intent_boost=2.0)
+    merged_plain = _rrf_merge([list_a, list_b])
+
+    vector_boosted = next(r for r in merged_boosted if r["source"] == "vector")
+    vector_plain = next(r for r in merged_plain if r["source"] == "vector")
+
+    kg_boosted = next(r for r in merged_boosted if r["source"] == "kg")
+    kg_plain = next(r for r in merged_plain if r["source"] == "kg")
+
+    # Vector score should be doubled
+    assert abs(vector_boosted["rrf_score"] - vector_plain["rrf_score"] * 2.0) < 1e-9
+
+    # KG score should be unaffected
+    assert abs(kg_boosted["rrf_score"] - kg_plain["rrf_score"]) < 1e-9
+
+    # Boosted vector should rank first
+    assert merged_boosted[0]["source"] == "vector"
+
+
+def test_deduplicate_removes_near_duplicates():
+    results = [
+        {
+            "text": "Jay created taOS on Orange Pi",
+            "source": "vector",
+            "source_id": "1",
+            "rank": 0,
+            "source_score": 0.9,
+            "metadata": {},
+            "rrf_score": 0.02,
+        },
+        {
+            "text": "Jay created taOS on the Orange Pi 5 Plus",
+            "source": "vector",
+            "source_id": "2",
+            "rank": 1,
+            "source_score": 0.85,
+            "metadata": {},
+            "rrf_score": 0.015,
+        },
+        {
+            "text": "Completely unrelated result about Python",
+            "source": "kg",
+            "source_id": "3",
+            "rank": 0,
+            "source_score": 0.7,
+            "metadata": {},
+            "rrf_score": 0.01,
+        },
+    ]
+
+    filtered = _deduplicate(results, threshold=0.6)
+
+    # Should keep 2 results: one from the near-duplicate pair (higher rrf_score)
+    # and the unrelated result
+    assert len(filtered) == 2
+
+    # The surviving near-duplicate should be the one with higher rrf_score
+    sources_ids = {r["source_id"] for r in filtered}
+    assert "1" in sources_ids, "Higher-scored near-duplicate should be kept"
+    assert "2" not in sources_ids, "Lower-scored near-duplicate should be removed"
+    assert "3" in sources_ids, "Unrelated result should be kept"
