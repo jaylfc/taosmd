@@ -173,6 +173,10 @@ class VectorMemory:
 
     async def add(self, text: str, metadata: dict | None = None) -> int:
         """Add a text passage with its embedding. Returns row ID."""
+        # Redact secrets before storage
+        from .secret_filter import redact_secrets
+        text, _ = redact_secrets(text)
+
         embedding = await self.embed(text)
         if not embedding:
             return -1
@@ -185,11 +189,21 @@ class VectorMemory:
         self._conn.commit()
         return cursor.lastrowid
 
-    async def search(self, query: str, limit: int = 5, hybrid: bool = True) -> list[dict]:
-        """Semantic search with optional hybrid keyword boosting.
+    async def search(
+        self,
+        query: str,
+        limit: int = 5,
+        hybrid: bool = True,
+        fusion: str = "rrf",
+    ) -> list[dict]:
+        """Semantic search with optional hybrid fusion.
 
-        When hybrid=True, boosts results that contain exact keywords from
-        the query (similar to MemPalace's hybrid scoring approach).
+        Fusion modes:
+          "rrf"   — Reciprocal Rank Fusion across semantic + keyword ranked lists (default)
+          "boost" — Legacy additive keyword boost (0.3 * keyword_overlap)
+          "none"  — Pure semantic cosine similarity (MemPalace-equivalent)
+
+        When hybrid=False, fusion mode is ignored and pure semantic is used.
         """
         query_emb = await self.embed(query)
         if not query_emb:
@@ -240,15 +254,47 @@ class VectorMemory:
             # Dot product = cosine similarity (both normalised)
             similarities = emb_norms @ query_norm
 
-            # Hybrid keyword boost
-            if hybrid and keywords:
+            if hybrid and keywords and fusion == "rrf":
+                # Reciprocal Rank Fusion: combine semantic and keyword ranked lists
+                # RRF score = sum(1 / (k + rank)) across lists, k=60 (standard)
+                rrf_k = 60
+                n = len(ids)
+
+                # Semantic ranking
+                semantic_ranks = np.argsort(np.argsort(-similarities))  # rank 0 = best
+
+                # Keyword ranking: score by keyword overlap ratio
+                keyword_scores = np.zeros(n, dtype=np.float32)
+                for i, text in enumerate(texts):
+                    text_lower = text.lower()
+                    keyword_scores[i] = sum(1 for kw in keywords if kw in text_lower) / max(len(keywords), 1)
+                keyword_ranks = np.argsort(np.argsort(-keyword_scores))
+
+                # RRF fusion
+                rrf_scores = (1.0 / (rrf_k + semantic_ranks)) + (1.0 / (rrf_k + keyword_ranks))
+
+                top_indices = np.argsort(rrf_scores)[::-1][:limit]
+                return [
+                    {
+                        "id": ids[i],
+                        "text": texts[i],
+                        "similarity": round(float(similarities[i]), 4),
+                        "rrf_score": round(float(rrf_scores[i]), 6),
+                        "metadata": json.loads(metas[i]),
+                        "created_at": created[i],
+                    }
+                    for i in top_indices
+                ]
+
+            elif hybrid and keywords and fusion == "boost":
+                # Legacy additive keyword boost
                 for i, text in enumerate(texts):
                     text_lower = text.lower()
                     keyword_hits = sum(1 for kw in keywords if kw in text_lower)
                     boost = keyword_hits / len(keywords) * 0.3
                     similarities[i] = min(1.0, similarities[i] + boost)
 
-            # Get top-k indices
+            # Pure semantic or boost mode — sort by similarity
             top_indices = np.argsort(similarities)[::-1][:limit]
 
             return [

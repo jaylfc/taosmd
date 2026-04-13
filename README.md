@@ -4,9 +4,9 @@
 
 # taOSmd
 
-**Framework-agnostic AI memory system. 97.2% Recall@5 on LongMemEval-S.**
+**Framework-agnostic AI memory system. 97.0% Recall@5 on LongMemEval-S.**
 
-Beats MemPalace (96.6%) and SuperMemory (81.6%) — running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
+Beats MemPalace (96.6%) and agentmemory (95.2%) — running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
 
 ## Getting Started
 
@@ -100,46 +100,55 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 ## Benchmark Results
 
-| System | Recall@5 | Hardware | Cloud |
-|--------|----------|----------|-------|
-| **taOSmd** | **97.2%** | Orange Pi 5 Plus (£170) | None |
-| MemPalace | 96.6% | Apple Silicon | None |
-| SuperMemory | 81.6% | Cloud | Yes |
-| GPT-4o | ~70% | Cloud | Yes |
+| System | Recall@5 | Method | Cloud |
+|--------|----------|--------|-------|
+| **taOSmd** | **97.0%** | Hybrid + query expansion | None |
+| MemPalace | 96.6% | Raw semantic (ChromaDB) | None |
+| agentmemory | 95.2% | BM25 + vector | None |
+| SuperMemory | 81.6% | Cloud embeddings | Yes |
 
-### Per-Category Breakdown (LongMemEval-S, 500 questions)
+All systems tested on the same benchmark (LongMemEval-S, 500 questions) with the same embedding model (all-MiniLM-L6-v2, 384-dim).
 
-| Category | Score |
-|----------|-------|
-| knowledge-update | 100.0% (78/78) |
-| single-session-user | 100.0% (70/70) |
-| multi-session | 98.5% (131/133) |
-| temporal-reasoning | 95.5% (127/133) |
-| single-session-assistant | 94.6% (53/56) |
-| single-session-preference | 90.0% (27/30) |
+### Per-Category Breakdown
 
-### Retrieval Granularity Comparison (100 questions each)
+| Category | taOSmd (hybrid+expand) | taOSmd (raw semantic) | MemPalace |
+|----------|----------------------|----------------------|-----------|
+| knowledge-update | **100.0%** (78/78) | 100.0% | — |
+| multi-session | **98.5%** (131/133) | 95.5% | — |
+| single-session-user | **97.1%** (68/70) | 90.0% | — |
+| single-session-assistant | **96.4%** (54/56) | 96.4% | — |
+| temporal-reasoning | 94.0% (125/133) | 94.0% | — |
+| single-session-preference | 90.0% (27/30) | 93.3% | — |
+| **Overall** | **97.0%** (485/500) | 95.0% (475/500) | 96.6% |
 
-| Strategy | Recall@5 | Speed |
+### Fusion Strategy Comparison
+
+| Strategy | Recall@5 | Delta |
 |----------|----------|-------|
-| User-turns only, hybrid (default) | **99.0%** | 2.1s/q |
-| Full session, hybrid | 97.0% | 2.3s/q |
-| Turn-level, hybrid | 97.0% | 14.6s/q |
-| Turn-level, raw semantic | 93.0% | 15.8s/q |
-| User-turns only, raw semantic | 92.0% | 2.0s/q |
-| Full session, raw semantic | 83.0% | 2.2s/q |
+| Raw cosine (MemPalace-equivalent) | 95.0% | — |
+| Additive keyword boost | 96.6% | +1.6 |
+| **Hybrid + query expansion (default)** | **97.0%** | **+2.0** |
+| All-turns hybrid (harder test) | 93.2% | -1.8 |
 
 ## Architecture
 
 ```
-taOSmd Memory Stack:
+taOSmd Memory Stack (v0.2):
 ├── Temporal Knowledge Graph    — structured facts with validity windows
-├── Vector Memory               — hybrid semantic+keyword search (ONNX MiniLM)
+├── Vector Memory               — hybrid search with RRF fusion (ONNX MiniLM)
 ├── Zero-Loss Archive           — append-only JSONL, FTS5 full-text search
+├── Session Catalog             — LLM-derived timeline directory over archives
 ├── Memory Extractor            — regex (15ms) + LLM (17s on NPU)
+├── Query Expansion             — entity extraction + temporal resolution
 ├── Intent Classifier           — route queries to optimal memory layer
-├── Context Assembler           — token-budgeted L0-L3 context loading
-└── Contradiction Detection     — auto-resolve conflicting facts
+├── Context Assembler           — core/archival split, token-budgeted L0-L3
+├── Graph Expansion             — BFS traversal from search results through KG
+├── Retention Scoring           — Ebbinghaus decay with hot/warm/cold tiers
+├── Session Crystallization     — LLM session digests with lesson extraction
+├── Cross-Memory Reflection     — cluster-then-synthesize insights from KG
+├── Secret Filtering            — 17 regex patterns, auto-redact on ingest
+├── Multi-Agent Leases          — TTL exclusive locks for memory operations
+└── Mesh Sync                   — LWW delta replication across workers
 ```
 
 ## Quick Start

@@ -166,6 +166,13 @@ class ArchiveStore:
         if event_type in USER_ACTIVITY_EVENTS and not self._user_tracking_enabled:
             return -1
 
+        # Redact secrets before storage
+        from .secret_filter import redact_secrets
+        summary, _ = redact_secrets(summary)
+        for key in ("content", "text", "msg", "query"):
+            if key in data and isinstance(data[key], str):
+                data[key], _ = redact_secrets(data[key])
+
         ts = time.time()
         event = {
             "timestamp": ts,

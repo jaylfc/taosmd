@@ -1,14 +1,19 @@
 """Context Window Assembler (taOSmd).
 
-Inspired by MemPalace's L0-L3 layer system and Letta's virtual context memory.
-Assembles the optimal context for an agent's LLM call by pulling from multiple
-memory layers based on relevance and token budget.
+Inspired by MemPalace's L0-L3 layer system and Letta's virtual context memory,
+with a core/archival split inspired by agentmemory.
 
 Layers:
   L0: Identity — who is the agent, who is the user (~100 tokens, always loaded)
   L1: Active facts — current KG facts about the user + project (~200 tokens)
+      Split into CORE (pinned, always present) and ARCHIVAL (paged by retention score)
   L2: Relevant memories — semantic search results from recent context (~500 tokens)
   L3: Deep recall — archive search, full KG traversal (on-demand, ~1000 tokens)
+
+Core/Archival Split:
+  Core memories (pinned=True) always get 30% of the L1 budget.
+  Archival memories are scored by retention and paged by score * recency.
+  When core exceeds its budget, lowest-scored core items are auto-demoted.
 
 Total context budget is configurable. Each layer has a soft token limit.
 """
@@ -21,8 +26,8 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tinyagentos.temporal_knowledge_graph import TemporalKnowledgeGraph
-    from tinyagentos.archive import ArchiveStore
+    from .knowledge_graph import TemporalKnowledgeGraph
+    from .archive import ArchiveStore
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +96,7 @@ class ContextAssembler:
         return truncate_to_tokens(text, max_tokens)
 
     # ------------------------------------------------------------------
-    # L1: Active Knowledge Graph Facts
+    # L1: Active Knowledge Graph Facts (with core/archival split)
     # ------------------------------------------------------------------
 
     async def assemble_l1(
@@ -100,33 +105,80 @@ class ContextAssembler:
         agent_name: str | None = None,
         project: str | None = None,
         max_tokens: int = 200,
+        pinned_entities: list[str] | None = None,
     ) -> str:
-        """Current facts from the knowledge graph. ~200 tokens."""
+        """Current facts from the knowledge graph with core/archival split.
+
+        Core facts (from pinned_entities or user/agent) get 30% of budget
+        and are always included. Remaining facts are archival, scored by
+        importance (hit_rate) * recency and paged within the remaining budget.
+        """
         if not self._kg:
             return ""
 
-        parts = []
-        entities_to_query = []
-        if user_name:
-            entities_to_query.append(user_name)
-        if agent_name:
-            entities_to_query.append(agent_name)
-        if project:
-            entities_to_query.append(project)
+        core_budget = int(max_tokens * 0.3)
+        archival_budget = max_tokens - core_budget
 
-        for entity in entities_to_query:
+        # Core entities: pinned + user + agent (always loaded)
+        core_entities = list(pinned_entities or [])
+        if user_name and user_name not in core_entities:
+            core_entities.append(user_name)
+        if agent_name and agent_name not in core_entities:
+            core_entities.append(agent_name)
+
+        # Archival entities: project and anything else
+        archival_entities = []
+        if project and project not in core_entities:
+            archival_entities.append(project)
+
+        # Assemble core facts
+        core_parts = []
+        for entity in core_entities:
             try:
                 results = await self._kg.query_entity(entity, direction="outgoing")
-                for r in results[:5]:  # Top 5 facts per entity
-                    parts.append(f"{entity} {r['predicate']} {r.get('object_name', '?')}")
+                for r in results[:5]:
+                    core_parts.append(f"{entity} {r['predicate']} {r.get('object_name', '?')}")
             except Exception:
                 pass
 
-        if not parts:
-            return ""
+        # Assemble archival facts, scored by importance
+        archival_scored = []
+        for entity in archival_entities:
+            try:
+                results = await self._kg.query_entity(entity, direction="outgoing")
+                for r in results:
+                    importance = r.get("importance", 0)
+                    text = f"{entity} {r['predicate']} {r.get('object_name', '?')}"
+                    archival_scored.append((importance, text))
+            except Exception:
+                pass
 
-        text = "Known facts:\n" + "\n".join(f"- {p}" for p in parts)
-        return truncate_to_tokens(text, max_tokens)
+        # Also gather archival from core entities beyond their top 5
+        for entity in core_entities:
+            try:
+                results = await self._kg.query_entity(entity, direction="outgoing")
+                for r in results[5:]:  # Beyond the core top-5
+                    importance = r.get("importance", 0)
+                    text = f"{entity} {r['predicate']} {r.get('object_name', '?')}"
+                    archival_scored.append((importance, text))
+            except Exception:
+                pass
+
+        # Sort archival by importance descending
+        archival_scored.sort(key=lambda x: x[0], reverse=True)
+        archival_parts = [text for _, text in archival_scored]
+
+        # Build output respecting budgets
+        sections = []
+        if core_parts:
+            core_text = "Core facts:\n" + "\n".join(f"- {p}" for p in core_parts)
+            sections.append(truncate_to_tokens(core_text, core_budget))
+
+        if archival_parts:
+            arch_text = "Known facts:\n" + "\n".join(f"- {p}" for p in archival_parts)
+            sections.append(truncate_to_tokens(arch_text, archival_budget))
+
+        return "\n".join(sections) if sections else ""
 
     # ------------------------------------------------------------------
     # L2: Relevant Recent Context
@@ -285,7 +337,7 @@ class ContextAssembler:
 
         # Intent-aware depth selection
         if depth == "auto":
-            from tinyagentos.intent_classifier import get_search_strategy
+            from .intent_classifier import get_search_strategy
             strategy = get_search_strategy(query)
             intent = strategy["intent"]
             # Adjust token budgets based on intent weights
