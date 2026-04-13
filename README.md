@@ -49,9 +49,52 @@ huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
 
 ### Tell Your Agent
 
-If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste this:
+If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste this into your conversation or CLAUDE.md / AGENTS.md:
 
-> Set up taOSmd as my memory system. Clone https://github.com/jaylfc/taosmd, run `scripts/setup.sh` to install everything (embedding model, Qwen3-4B LLM, and data stores). It auto-detects your hardware and installs the right backend. The setup creates the knowledge graph, vector memory, zero-loss archive (daily conversation transcripts, tool calls, decisions — kept indefinitely), and a daily compression cron job. After setup, use VectorMemory with embed_mode="onnx" and hybrid=True for search. Record every conversation turn with Archive.record() for zero-loss recall.
+> **Set up taOSmd as my persistent memory system.**
+>
+> 1. Clone https://github.com/jaylfc/taosmd and run `scripts/setup.sh` — it installs everything (embedding model, Qwen3-4B LLM, data stores, daily archive compression cron).
+>
+> 2. After setup, integrate taOSmd into your workflow:
+>
+> **Store facts you learn about me:**
+> ```python
+> from taosmd import KnowledgeGraph
+> kg = KnowledgeGraph("~/.taosmd/knowledge-graph.db")
+> await kg.init()
+> await kg.add_triple("User", "prefers", "local models")
+> ```
+>
+> **Archive every conversation turn (zero-loss — never summarise, never delete):**
+> ```python
+> from taosmd import Archive
+> archive = Archive(archive_dir="~/.taosmd/archive", index_path="~/.taosmd/archive-index.db")
+> await archive.init()
+> await archive.record("conversation", {"role": "user", "content": message}, summary=message[:80])
+> ```
+>
+> **Search my history when I ask about something:**
+> ```python
+> from taosmd import VectorMemory
+> vmem = VectorMemory("~/.taosmd/vector-memory.db", embed_mode="onnx", onnx_path="<taosmd-dir>/models/minilm-onnx")
+> await vmem.init()
+> results = await vmem.search("What did I say about Docker?", hybrid=True)
+> ```
+>
+> **Extract facts automatically from our conversations:**
+> ```python
+> from taosmd.memory_extractor import process_conversation_turn
+> await process_conversation_turn(message, agent_name="assistant", kg=kg, archive=archive)
+> ```
+>
+> **Before answering, check what you know about me:**
+> ```python
+> facts = await kg.query_entity("User")
+> history = await archive.search_fts("relevant topic")
+> similar = await vmem.search("the question", hybrid=True)
+> ```
+>
+> The archive is append-only and kept forever. Every conversation, tool call, decision, and error should be recorded. Old archives are compressed to gzip daily at 3 AM. The knowledge graph tracks structured facts with temporal validity — update facts when they change, don't delete them.
 
 ---
 
