@@ -163,13 +163,20 @@ class ResourceManager:
         ollama_url: str = "http://localhost:11434",
         controller_url: str = "",
         refresh_interval: int = 60,
+        contention_threshold: int = 30,
+        idle_upgrade_delay: int = 600,
     ):
         self._queue = job_queue
         self._ollama_url = ollama_url
         self._controller_url = controller_url
         self._refresh_interval = refresh_interval
+        self._contention_threshold = contention_threshold  # Seconds of busy GPU before downgrade
+        self._idle_upgrade_delay = idle_upgrade_delay  # Seconds of idle GPU before upgrade back (10 min)
         self._last_refresh: float = 0
         self._snapshot: ResourceSnapshot | None = None
+        self._prev_snapshot: ResourceSnapshot | None = None
+        self._worker_busy_since: dict[str, float] = {}  # worker_name → timestamp
+        self._worker_idle_since: dict[str, float] = {}  # worker_name → timestamp
 
     async def refresh(self) -> ResourceSnapshot:
         """Probe all resources and update the snapshot."""
@@ -259,6 +266,119 @@ class ResourceManager:
             return {"model": "all-MiniLM-L6-v2", "resource_type": resource, "location": "local"}
 
         return {}
+
+    # ------------------------------------------------------------------
+    # Migration policies
+    # ------------------------------------------------------------------
+
+    async def evaluate_migration(self) -> dict | None:
+        """Evaluate whether memory pipeline should migrate to a different device.
+
+        Checks for:
+          - GPU worker became available → upgrade to larger model
+          - GPU worker disconnected → fallback to local NPU/CPU
+          - GPU worker busy (high utilisation) → fallback to local
+          - GPU worker idle after contention → upgrade back
+
+        Returns a migration action dict or None if no migration needed:
+          {action: "upgrade"|"downgrade", from_model: ..., to_model: ...,
+           from_location: ..., to_location: ..., reason: str}
+        """
+        snap = await self.get_snapshot(force_refresh=True)
+        prev = self._prev_snapshot
+
+        if not prev:
+            self._prev_snapshot = snap
+            return None
+
+        # Check for GPU worker changes
+        prev_gpu_workers = {w.get("name"): w for w in prev.cluster_workers if w.get("gpu")}
+        curr_gpu_workers = {w.get("name"): w for w in snap.cluster_workers if w.get("gpu")}
+
+        # New GPU worker appeared → upgrade opportunity
+        new_workers = set(curr_gpu_workers.keys()) - set(prev_gpu_workers.keys())
+        if new_workers:
+            worker_name = next(iter(new_workers))
+            worker = curr_gpu_workers[worker_name]
+            self._prev_snapshot = snap
+            return {
+                "action": "upgrade",
+                "to_model": self._best_worker_model(worker),
+                "to_location": f"worker:{worker_name}",
+                "from_location": "local",
+                "reason": f"GPU worker '{worker_name}' joined cluster",
+            }
+
+        # GPU worker disappeared → must downgrade
+        lost_workers = set(prev_gpu_workers.keys()) - set(curr_gpu_workers.keys())
+        if lost_workers:
+            worker_name = next(iter(lost_workers))
+            self._prev_snapshot = snap
+            fallback = await self.best_model_for_task("extract")
+            return {
+                "action": "downgrade",
+                "to_model": fallback.get("model", "qwen3:4b"),
+                "to_location": fallback.get("location", "local"),
+                "from_location": f"worker:{worker_name}",
+                "reason": f"GPU worker '{worker_name}' disconnected",
+            }
+
+        # GPU worker busy (utilisation > 80%) → consider downgrade
+        for name, worker in curr_gpu_workers.items():
+            utilisation = worker.get("gpu_utilisation", 0)
+            if utilisation > 80:
+                # Check if it's been busy for more than the contention threshold
+                busy_since = self._worker_busy_since.get(name)
+                now = time.time()
+                if busy_since is None:
+                    self._worker_busy_since[name] = now
+                elif now - busy_since > self._contention_threshold:
+                    self._prev_snapshot = snap
+                    fallback = await self.best_model_for_task("extract")
+                    return {
+                        "action": "downgrade",
+                        "to_model": fallback.get("model", "qwen3:4b"),
+                        "to_location": "local",
+                        "from_location": f"worker:{name}",
+                        "reason": f"GPU worker '{name}' busy for >{self._contention_threshold}s (utilisation {utilisation}%)",
+                    }
+            else:
+                # Worker not busy — clear the busy timer
+                self._worker_busy_since.pop(name, None)
+
+        # GPU worker became idle after being busy → upgrade back
+        for name, worker in curr_gpu_workers.items():
+            utilisation = worker.get("gpu_utilisation", 0)
+            idle_since = self._worker_idle_since.get(name)
+            if utilisation < 20:
+                now = time.time()
+                if idle_since is None:
+                    self._worker_idle_since[name] = now
+                elif now - idle_since > self._idle_upgrade_delay:
+                    self._worker_idle_since.pop(name, None)
+                    self._prev_snapshot = snap
+                    return {
+                        "action": "upgrade",
+                        "to_model": self._best_worker_model(worker),
+                        "to_location": f"worker:{name}",
+                        "from_location": "local",
+                        "reason": f"GPU worker '{name}' idle for >{self._idle_upgrade_delay}s, upgrading back",
+                    }
+            else:
+                self._worker_idle_since.pop(name, None)
+
+        self._prev_snapshot = snap
+        return None
+
+    def _best_worker_model(self, worker: dict) -> str:
+        """Pick the best model from a worker's available models."""
+        models = worker.get("models", [])
+        # Prefer larger models
+        for preferred in ["qwen3.5:27b", "qwen3.5:9b", "qwen3.5:4b", "qwen3:4b"]:
+            for m in models:
+                if preferred in m:
+                    return m
+        return models[0] if models else "qwen3:4b"
 
     async def can_accept_job(self, resource_type: str) -> bool:
         """Quick check: is there capacity for a new job of this resource type?"""

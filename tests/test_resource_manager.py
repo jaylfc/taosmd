@@ -78,6 +78,76 @@ def test_best_model_no_ollama():
     _run(run())
 
 
+def test_migration_worker_joins():
+    async def run():
+        mgr = ResourceManager(ollama_url="http://localhost:99999")
+        # First refresh — establishes baseline (no prev)
+        mgr._snapshot = ResourceSnapshot()
+        mgr._prev_snapshot = None
+
+        action = await mgr.evaluate_migration()
+        assert action is None  # No prev snapshot yet
+
+        # Simulate: GPU worker appears
+        mgr._prev_snapshot = ResourceSnapshot()  # Empty
+        snap = ResourceSnapshot()
+        snap.cluster_workers = [{"name": "fedora", "gpu": True, "models": ["qwen3.5:9b"]}]
+        mgr._snapshot = snap
+        mgr._last_refresh = 0
+
+        async def mock_snap(force_refresh=False):
+            return snap
+        mgr.get_snapshot = mock_snap
+
+        action = await mgr.evaluate_migration()
+        assert action is not None
+        assert action["action"] == "upgrade"
+        assert "fedora" in action["to_location"]
+    _run(run())
+
+
+def test_migration_worker_disconnects():
+    async def run():
+        mgr = ResourceManager(ollama_url="http://localhost:99999")
+
+        prev = ResourceSnapshot()
+        prev.cluster_workers = [{"name": "fedora", "gpu": True, "models": ["qwen3.5:9b"]}]
+        mgr._prev_snapshot = prev
+
+        curr = ResourceSnapshot()
+        curr.cluster_workers = []
+        mgr._snapshot = curr
+
+        async def mock_snap(force_refresh=False):
+            return curr
+        mgr.get_snapshot = mock_snap
+
+        action = await mgr.evaluate_migration()
+        assert action is not None
+        assert action["action"] == "downgrade"
+        assert "disconnected" in action["reason"]
+    _run(run())
+
+
+def test_no_migration_when_stable():
+    async def run():
+        mgr = ResourceManager(ollama_url="http://localhost:99999")
+
+        snap = ResourceSnapshot()
+        snap.cluster_workers = [{"name": "fedora", "gpu": True, "models": ["qwen3.5:9b"], "gpu_utilisation": 50}]
+        mgr._prev_snapshot = ResourceSnapshot()
+        mgr._prev_snapshot.cluster_workers = list(snap.cluster_workers)
+        mgr._snapshot = snap
+
+        async def mock_snap(force_refresh=False):
+            return snap
+        mgr.get_snapshot = mock_snap
+
+        action = await mgr.evaluate_migration()
+        assert action is None
+    _run(run())
+
+
 def test_can_accept_job():
     async def run():
         tmp = tempfile.mkdtemp()
