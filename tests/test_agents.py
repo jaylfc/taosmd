@@ -13,6 +13,7 @@ from taosmd.agents import (
     AgentRegistry,
     InvalidAgentNameError,
     LIBRARIAN_TASKS,
+    FANOUT_LEVELS,
 )
 
 
@@ -305,3 +306,113 @@ def test_legacy_record_without_librarian_field(registry, tmp_path):
     lib = registry.get_librarian("legacy-bob")
     assert lib["enabled"] is True
     assert set(lib["tasks"].keys()) == set(LIBRARIAN_TASKS)
+
+
+# --- fanout config ----------------------------------------------------------
+
+
+def test_default_librarian_includes_fanout_block(registry):
+    registry.register_agent("alice")
+    lib = registry.get_librarian("alice")
+    assert "fanout" in lib
+    assert lib["fanout"]["default"] == "low"
+    assert lib["fanout"]["auto_scale"] is True
+
+
+def test_set_librarian_patches_fanout_level(registry):
+    registry.register_agent("alice")
+    lib = registry.set_librarian("alice", fanout="med")
+    assert lib["fanout"]["default"] == "med"
+    # Other fanout sub-key untouched
+    assert lib["fanout"]["auto_scale"] is True
+    # Persisted
+    assert registry.get_librarian("alice")["fanout"]["default"] == "med"
+
+
+def test_set_librarian_patches_fanout_auto_scale(registry):
+    registry.register_agent("alice")
+    lib = registry.set_librarian("alice", fanout_auto_scale=False)
+    assert lib["fanout"]["auto_scale"] is False
+    # Fanout level untouched
+    assert lib["fanout"]["default"] == "low"
+    # Persisted
+    assert registry.get_librarian("alice")["fanout"]["auto_scale"] is False
+
+
+def test_set_librarian_unknown_fanout_level_raises(registry):
+    registry.register_agent("alice")
+    with pytest.raises(ValueError, match="unknown fanout level"):
+        registry.set_librarian("alice", fanout="ultra")
+
+
+# --- effective_fanout -------------------------------------------------------
+
+
+def test_effective_fanout_pi_worker_returns_low(registry):
+    # Pi-class: no GPU, no turboquant — should stay at default (low = K=3)
+    registry.register_agent("alice")
+    k = registry.effective_fanout("alice", worker_capabilities={"gpu_vram_gb": 0, "turboquant": False})
+    assert k == FANOUT_LEVELS["low"]
+    assert k == 3
+
+
+def test_effective_fanout_no_caps_returns_low(registry):
+    # No caps at all — should stay at default (low = K=3)
+    registry.register_agent("alice")
+    k = registry.effective_fanout("alice", worker_capabilities=None)
+    assert k == FANOUT_LEVELS["low"]
+
+
+def test_effective_fanout_gpu_worker_bumps_tier(registry):
+    # GPU worker with TurboQuant + ≥12 GB VRAM: low → med (K=10)
+    registry.register_agent("alice")
+    k = registry.effective_fanout("alice", worker_capabilities={"gpu_vram_gb": 12, "turboquant": True})
+    assert k == FANOUT_LEVELS["med"]
+    assert k == 10
+
+
+def test_effective_fanout_auto_scale_off_no_bump(registry):
+    # Even with a capable GPU worker, auto_scale=False keeps the configured level
+    registry.register_agent("alice")
+    registry.set_librarian("alice", fanout_auto_scale=False)
+    k = registry.effective_fanout("alice", worker_capabilities={"gpu_vram_gb": 16, "turboquant": True})
+    assert k == FANOUT_LEVELS["low"]
+    assert k == 3
+
+
+def test_effective_fanout_high_baseline_no_over_scale(registry):
+    # high + GPU worker should not exceed high (K=20)
+    registry.register_agent("alice")
+    registry.set_librarian("alice", fanout="high")
+    k = registry.effective_fanout("alice", worker_capabilities={"gpu_vram_gb": 24, "turboquant": True})
+    assert k == FANOUT_LEVELS["high"]
+    assert k == 20
+
+
+def test_legacy_record_without_fanout_defaults_to_low(registry, tmp_path):
+    # Librarian record that predates the fanout key should auto-populate it.
+    legacy = {
+        "agents": [
+            {
+                "name": "old-agent",
+                "display_name": "Old Agent",
+                "created_at": 1700000000,
+                "last_ingest_at": 0,
+                "total_chunks": 0,
+                "librarian": {
+                    "enabled": True,
+                    "model": None,
+                    "tasks": {t: True for t in LIBRARIAN_TASKS},
+                    # no "fanout" key — simulates a record saved before this feature
+                },
+            }
+        ]
+    }
+    (tmp_path / "agents.json").write_text(json.dumps(legacy))
+    lib = registry.get_librarian("old-agent")
+    assert "fanout" in lib
+    assert lib["fanout"]["default"] == "low"
+    assert lib["fanout"]["auto_scale"] is True
+    # effective_fanout should still resolve correctly
+    k = registry.effective_fanout("old-agent")
+    assert k == FANOUT_LEVELS["low"]

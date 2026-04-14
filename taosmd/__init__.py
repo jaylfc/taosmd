@@ -34,6 +34,7 @@ from .agents import (
     AgentNotFoundError,
     InvalidAgentNameError,
     LIBRARIAN_TASKS,
+    FANOUT_LEVELS,
     register_agent,
     list_agents,
     agent_exists,
@@ -43,6 +44,7 @@ from .agents import (
     get_librarian,
     set_librarian,
     is_task_enabled,
+    effective_fanout,
 )
 from . import prompts
 
@@ -101,6 +103,8 @@ __all__ = [
     "get_librarian",
     "set_librarian",
     "is_task_enabled",
+    "effective_fanout",
+    "FANOUT_LEVELS",
     # Librarian prompts
     "prompts",
 ]

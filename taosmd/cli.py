@@ -18,6 +18,7 @@ from .agents import (
     AgentRegistry,
     InvalidAgentNameError,
     LIBRARIAN_TASKS,
+    FANOUT_LEVELS,
 )
 
 
@@ -92,6 +93,8 @@ def _librarian_set(
     clear_model: bool,
     enable_tasks: list[str],
     disable_tasks: list[str],
+    fanout: str | None = None,
+    fanout_auto_scale: bool | None = None,
 ) -> int:
     tasks: dict[str, bool] = {}
     for t in enable_tasks:
@@ -105,6 +108,8 @@ def _librarian_set(
             model=model,
             tasks=tasks or None,
             clear_model=clear_model,
+            fanout=fanout,
+            fanout_auto_scale=fanout_auto_scale,
         )
     except AgentNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -187,6 +192,27 @@ def main(argv: list[str] | None = None) -> int:
         "--disable", action="append", default=[], metavar="TASK",
         help="Disable a specific task. Repeat for multiple.",
     )
+    set_p.add_argument(
+        "--fanout",
+        choices=list(FANOUT_LEVELS),
+        default=None,
+        metavar="LEVEL",
+        help=(
+            "Fan-out retrieval level: off (K=1), low (K=3), med (K=10), high (K=20). "
+            "Low is safe on Pi-class hardware; high suits GPU workers with large context."
+        ),
+    )
+    set_p.add_argument(
+        "--auto-scale",
+        dest="fanout_auto_scale",
+        choices=["on", "off"],
+        default=None,
+        metavar="on|off",
+        help=(
+            "Auto-scale fanout tier on workers with GPU + TurboQuant + ≥12 GB VRAM. "
+            "When on, low→med and med→high automatically on capable workers."
+        ),
+    )
 
     args = parser.parse_args(argv)
     registry = AgentRegistry(args.data_dir)
@@ -211,6 +237,11 @@ def main(argv: list[str] | None = None) -> int:
                 enabled = True
             elif args.enabled_off:
                 enabled = False
+            fanout_auto_scale: bool | None = None
+            if args.fanout_auto_scale == "on":
+                fanout_auto_scale = True
+            elif args.fanout_auto_scale == "off":
+                fanout_auto_scale = False
             return _librarian_set(
                 registry,
                 args.name,
@@ -219,6 +250,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.clear_model,
                 args.enable,
                 args.disable,
+                fanout=args.fanout,
+                fanout_auto_scale=fanout_auto_scale,
             )
 
     parser.print_help()

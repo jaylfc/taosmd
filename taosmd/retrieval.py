@@ -316,6 +316,8 @@ async def retrieve(
     sources: dict | None = None,
     limit: int = 5,
     reranker: object | None = None,
+    agent: str | None = None,
+    worker_capabilities: dict | None = None,
 ) -> list[dict]:
     """Retrieve relevant results from available memory sources.
 
@@ -326,9 +328,17 @@ async def retrieve(
         sources: Dict of initialised store objects keyed by source name.
             Recognised keys: "vector", "kg", "catalog", "archive", "crystals".
             Missing keys mean that source is unavailable.
-        limit: Maximum number of results to return.
+        limit: Maximum number of results to return. When *agent* is supplied,
+            this is overridden by ``effective_fanout(agent, worker_capabilities)``
+            so the per-agent fan-out setting controls the per-layer K.
         reranker: Optional CrossEncoderReranker instance. When provided and
             ``reranker.available`` is True, used for thorough/custom reranking.
+        agent: Registered agent name. When given, ``effective_fanout`` is
+            called to resolve the per-layer K from the agent's librarian
+            fanout config and the supplied worker capabilities.
+        worker_capabilities: Dict describing the runtime worker, passed through
+            to ``effective_fanout``. Recognised keys: ``gpu_vram_gb`` (float)
+            and ``turboquant`` (bool). Pass ``None`` for Pi-class workers.
 
     Returns:
         List of normalised result dicts, sorted by relevance, length <= limit.
@@ -337,6 +347,11 @@ async def retrieve(
 
     if sources is None:
         sources = {}
+
+    # Resolve effective K from per-agent fanout config when an agent is given.
+    if agent is not None:
+        from taosmd.agents import effective_fanout as _effective_fanout  # noqa: PLC0415
+        limit = _effective_fanout(agent, worker_capabilities)
 
     fetch_limit = limit * 3
 

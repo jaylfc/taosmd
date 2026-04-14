@@ -56,6 +56,24 @@ LIBRARIAN_TASKS = (
     "query_expansion",
 )
 
+# Fan-out levels map to the integer K passed to each retrieval layer.
+# off  — single-result pass (K=1); essentially disables fan-out.
+# low  — conservative multi-doc (K=3); safe on Pi NPU with 8K context.
+# med  — moderate fan-out (K=10); suits GPU workers or large-context models.
+# high — extended reasoning (K=20); use only when context window allows.
+FANOUT_LEVELS: dict[str, int] = {"off": 1, "low": 3, "med": 10, "high": 20}
+
+_FANOUT_ORDER = ["off", "low", "med", "high"]
+
+
+def _default_fanout() -> dict:
+    return {
+        # Opt-in level — low keeps latency safe on Pi-class hardware by default.
+        "default": "low",
+        # When True, auto-bumps one tier on workers with GPU + TurboQuant + ≥12GB VRAM.
+        "auto_scale": True,
+    }
+
 
 def _default_librarian() -> dict:
     return {
@@ -65,7 +83,22 @@ def _default_librarian() -> dict:
         # install can run different models per agent.
         "model": None,
         "tasks": {t: True for t in LIBRARIAN_TASKS},
+        "fanout": _default_fanout(),
     }
+
+
+def _ensure_fanout(lib: dict) -> dict:
+    """Back-fill the fanout block on records that predate it."""
+    if "fanout" not in lib:
+        lib["fanout"] = _default_fanout()
+    else:
+        # Ensure both sub-keys are present (partial legacy records).
+        fo = lib["fanout"]
+        if "default" not in fo:
+            fo["default"] = "low"
+        if "auto_scale" not in fo:
+            fo["auto_scale"] = True
+    return lib
 
 
 @dataclass
@@ -89,13 +122,14 @@ class AgentRecord:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AgentRecord":
+        raw_lib = data.get("librarian") or _default_librarian()
         return cls(
             name=data["name"],
             display_name=data.get("display_name", data["name"]),
             created_at=int(data.get("created_at", 0)),
             last_ingest_at=int(data.get("last_ingest_at", 0)),
             total_chunks=int(data.get("total_chunks", 0)),
-            librarian=data.get("librarian") or _default_librarian(),
+            librarian=_ensure_fanout(raw_lib),
         )
 
 
@@ -244,10 +278,12 @@ class AgentRegistry:
 
         Older records may have been saved before the librarian field
         existed — those get the default config back so callers don't
-        need a back-compat branch.
+        need a back-compat branch. Records saved before the fanout block
+        was added get it auto-populated.
         """
         agent = self.get_agent(name)
-        return agent.get("librarian") or _default_librarian()
+        lib = agent.get("librarian") or _default_librarian()
+        return _ensure_fanout(lib)
 
     def set_librarian(
         self,
@@ -257,6 +293,8 @@ class AgentRegistry:
         model: str | None = None,
         tasks: dict[str, bool] | None = None,
         clear_model: bool = False,
+        fanout: str | None = None,
+        fanout_auto_scale: bool | None = None,
     ) -> dict:
         """Patch an agent's librarian config. Returns the updated config.
 
@@ -266,6 +304,10 @@ class AgentRegistry:
           Pass ``clear_model=True`` to revert to the install default.
         - ``tasks``: dict of per-task switches. Keys must come from
           :data:`LIBRARIAN_TASKS`. Unknown keys raise ValueError.
+        - ``fanout``: fan-out level — one of ``off | low | med | high``.
+          Controls the per-layer top-K used during retrieval.
+        - ``fanout_auto_scale``: when True the resolver bumps the fanout
+          level one tier up on workers with GPU + TurboQuant + ≥12 GB VRAM.
         """
         if tasks is not None:
             unknown = set(tasks) - set(LIBRARIAN_TASKS)
@@ -274,11 +316,17 @@ class AgentRegistry:
                     f"unknown librarian task(s): {sorted(unknown)}. "
                     f"Valid tasks: {LIBRARIAN_TASKS}"
                 )
+        if fanout is not None and fanout not in FANOUT_LEVELS:
+            raise ValueError(
+                f"unknown fanout level {fanout!r}. "
+                f"Valid levels: {list(FANOUT_LEVELS)}"
+            )
 
         data = self._read()
         for a in data["agents"]:
             if a["name"] == name:
                 lib = a.get("librarian") or _default_librarian()
+                lib = _ensure_fanout(lib)
                 if enabled is not None:
                     lib["enabled"] = bool(enabled)
                 if clear_model:
@@ -290,6 +338,10 @@ class AgentRegistry:
                     lib_tasks = lib.get("tasks") or {t: True for t in LIBRARIAN_TASKS}
                     lib_tasks.update({k: bool(v) for k, v in tasks.items()})
                     lib["tasks"] = lib_tasks
+                if fanout is not None:
+                    lib["fanout"]["default"] = fanout
+                if fanout_auto_scale is not None:
+                    lib["fanout"]["auto_scale"] = bool(fanout_auto_scale)
                 a["librarian"] = lib
                 self._write(data)
                 return lib
@@ -311,6 +363,54 @@ class AgentRegistry:
         if not lib.get("enabled", True):
             return False
         return bool(lib.get("tasks", {}).get(task, True))
+
+    def effective_fanout(
+        self,
+        name: str,
+        worker_capabilities: dict | None = None,
+    ) -> int:
+        """Resolve the retrieval fan-out K for an agent.
+
+        Reads ``librarian.fanout.default`` and returns its integer K.
+        If ``librarian.fanout.auto_scale`` is True **and** the supplied
+        *worker_capabilities* dict signals a capable GPU worker
+        (``gpu_vram_gb >= 12`` **and** ``turboquant == True``), the tier
+        is bumped up by one step (low→med, med→high). The ceiling is
+        ``high``; calling with a ``high`` baseline + GPU worker stays at
+        ``high``.
+
+        Args:
+            name: Registered agent name.
+            worker_capabilities: Optional dict with keys:
+                - ``gpu_vram_gb`` (float/int) — VRAM in GB (default 0)
+                - ``turboquant`` (bool) — whether TurboQuant is active (default False)
+
+        Returns:
+            Integer K (1, 3, 10, or 20).
+        """
+        try:
+            lib = self.get_librarian(name)
+        except AgentNotFoundError:
+            return FANOUT_LEVELS["low"]
+
+        fo = lib.get("fanout") or _default_fanout()
+        level = fo.get("default", "low")
+        if level not in FANOUT_LEVELS:
+            level = "low"
+
+        if fo.get("auto_scale", True) and worker_capabilities is not None:
+            caps = worker_capabilities
+            has_capable_gpu = (
+                caps.get("gpu_vram_gb", 0) >= 12
+                and caps.get("turboquant", False)
+            )
+            if has_capable_gpu:
+                current_idx = _FANOUT_ORDER.index(level)
+                # Bump one tier; clamp at the top.
+                bumped_idx = min(current_idx + 1, len(_FANOUT_ORDER) - 1)
+                level = _FANOUT_ORDER[bumped_idx]
+
+        return FANOUT_LEVELS[level]
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +474,8 @@ def set_librarian(
     model: str | None = None,
     tasks: dict[str, bool] | None = None,
     clear_model: bool = False,
+    fanout: str | None = None,
+    fanout_auto_scale: bool | None = None,
 ) -> dict:
     return _registry().set_librarian(
         name,
@@ -381,11 +483,35 @@ def set_librarian(
         model=model,
         tasks=tasks,
         clear_model=clear_model,
+        fanout=fanout,
+        fanout_auto_scale=fanout_auto_scale,
     )
 
 
 def is_task_enabled(name: str, task: str) -> bool:
     return _registry().is_task_enabled(name, task)
+
+
+def effective_fanout(
+    agent_name: str,
+    worker_capabilities: dict | None = None,
+) -> int:
+    """Resolve the retrieval fan-out K for an agent given its worker capabilities.
+
+    Returns the integer K. Reads ``librarian.fanout.default``; if
+    ``librarian.fanout.auto_scale`` is True AND the worker reports
+    GPU + TurboQuant + ≥12 GB VRAM, bumps up one tier (low→med, med→high).
+
+    Args:
+        agent_name: Registered agent name.
+        worker_capabilities: Optional dict with keys ``gpu_vram_gb`` and
+            ``turboquant``. Pass ``None`` (or omit) for Pi-class workers with
+            no GPU information.
+
+    Returns:
+        Integer K (1, 3, 10, or 20).
+    """
+    return _registry().effective_fanout(agent_name, worker_capabilities)
 
 
 __all__ = [
@@ -395,6 +521,7 @@ __all__ = [
     "AgentNotFoundError",
     "InvalidAgentNameError",
     "LIBRARIAN_TASKS",
+    "FANOUT_LEVELS",
     "register_agent",
     "list_agents",
     "agent_exists",
@@ -405,4 +532,5 @@ __all__ = [
     "get_librarian",
     "set_librarian",
     "is_task_enabled",
+    "effective_fanout",
 ]
