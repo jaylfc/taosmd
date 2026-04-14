@@ -33,13 +33,18 @@ from .agents import (
     AgentExistsError,
     AgentNotFoundError,
     InvalidAgentNameError,
+    LIBRARIAN_TASKS,
     register_agent,
     list_agents,
     agent_exists,
     get_agent,
     delete_agent,
     ensure_agent,
+    get_librarian,
+    set_librarian,
+    is_task_enabled,
 )
+from . import prompts
 
 __all__ = [
     # Core memory layers
@@ -86,10 +91,16 @@ __all__ = [
     "AgentExistsError",
     "AgentNotFoundError",
     "InvalidAgentNameError",
+    "LIBRARIAN_TASKS",
     "register_agent",
     "list_agents",
     "agent_exists",
     "get_agent",
     "delete_agent",
     "ensure_agent",
+    "get_librarian",
+    "set_librarian",
+    "is_task_enabled",
+    # Librarian prompts
+    "prompts",
 ]

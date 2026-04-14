@@ -12,6 +12,7 @@ from taosmd.agents import (
     AgentNotFoundError,
     AgentRegistry,
     InvalidAgentNameError,
+    LIBRARIAN_TASKS,
 )
 
 
@@ -213,3 +214,94 @@ def test_atomic_write_does_not_leave_tmp_files(registry, tmp_path):
     registry.register_agent("bob")
     # Tmp file should be cleaned up by the atomic rename
     assert not (tmp_path / "agents.json.tmp").exists()
+
+
+# --- librarian config -------------------------------------------------------
+
+
+def test_register_seeds_default_librarian(registry):
+    registry.register_agent("alice")
+    lib = registry.get_librarian("alice")
+    assert lib["enabled"] is True
+    assert lib["model"] is None
+    assert set(lib["tasks"].keys()) == set(LIBRARIAN_TASKS)
+    assert all(lib["tasks"].values())
+
+
+def test_get_librarian_missing_agent_raises(registry):
+    with pytest.raises(AgentNotFoundError):
+        registry.get_librarian("nobody")
+
+
+def test_set_librarian_master_switch(registry):
+    registry.register_agent("alice")
+    lib = registry.set_librarian("alice", enabled=False)
+    assert lib["enabled"] is False
+    # Persisted across reads
+    assert registry.get_librarian("alice")["enabled"] is False
+
+
+def test_set_librarian_model_override_and_clear(registry):
+    registry.register_agent("alice")
+    registry.set_librarian("alice", model="ollama:qwen3:4b")
+    assert registry.get_librarian("alice")["model"] == "ollama:qwen3:4b"
+    registry.set_librarian("alice", clear_model=True)
+    assert registry.get_librarian("alice")["model"] is None
+
+
+def test_set_librarian_per_task_toggles(registry):
+    registry.register_agent("alice")
+    registry.set_librarian("alice", tasks={"reflect": False, "crystallise": False})
+    lib = registry.get_librarian("alice")
+    assert lib["tasks"]["reflect"] is False
+    assert lib["tasks"]["crystallise"] is False
+    # Other tasks untouched
+    assert lib["tasks"]["fact_extraction"] is True
+
+
+def test_set_librarian_unknown_task_rejected(registry):
+    registry.register_agent("alice")
+    with pytest.raises(ValueError):
+        registry.set_librarian("alice", tasks={"hallucinate_more": True})
+
+
+def test_is_task_enabled_master_off_overrides_per_task(registry):
+    registry.register_agent("alice")
+    # Per-task is on by default but master is off → must be False
+    registry.set_librarian("alice", enabled=False)
+    assert registry.is_task_enabled("alice", "fact_extraction") is False
+    # Master back on, per-task off → False
+    registry.set_librarian("alice", enabled=True, tasks={"fact_extraction": False})
+    assert registry.is_task_enabled("alice", "fact_extraction") is False
+    # Both on → True
+    registry.set_librarian("alice", tasks={"fact_extraction": True})
+    assert registry.is_task_enabled("alice", "fact_extraction") is True
+
+
+def test_is_task_enabled_unknown_agent(registry):
+    assert registry.is_task_enabled("nobody", "fact_extraction") is False
+
+
+def test_is_task_enabled_unknown_task(registry):
+    registry.register_agent("alice")
+    assert registry.is_task_enabled("alice", "not_a_real_task") is False
+
+
+def test_legacy_record_without_librarian_field(registry, tmp_path):
+    # Simulate an older agents.json written before the librarian field
+    # existed. Reading it should return the default config.
+    legacy = {
+        "agents": [
+            {
+                "name": "legacy-bob",
+                "display_name": "Legacy Bob",
+                "created_at": 1700000000,
+                "last_ingest_at": 0,
+                "total_chunks": 0,
+            }
+        ]
+    }
+    (tmp_path / "agents.json").write_text(json.dumps(legacy))
+    lib = registry.get_librarian("legacy-bob")
+    assert lib["enabled"] is True
+    assert set(lib["tasks"].keys()) == set(LIBRARIAN_TASKS)
