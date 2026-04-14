@@ -43,6 +43,31 @@ class InvalidAgentNameError(ValueError):
     """Raised when a name fails the ``NAME_RE`` check."""
 
 
+# Librarian config — controls the LLM enrichment passes for an agent.
+# All tasks default ON for new agents on capable installs; the on/off
+# switches let users disable enrichment per-agent on resource-constrained
+# hardware or when they don't need it for a particular agent.
+LIBRARIAN_TASKS = (
+    "fact_extraction",
+    "preference_extraction",
+    "crystallise",
+    "reflect",
+    "catalog_enrichment",
+    "query_expansion",
+)
+
+
+def _default_librarian() -> dict:
+    return {
+        "enabled": True,
+        # Provider:model string (e.g. "ollama:qwen3:4b") or None to use the
+        # taosmd install default. Per-agent override lives here so a single
+        # install can run different models per agent.
+        "model": None,
+        "tasks": {t: True for t in LIBRARIAN_TASKS},
+    }
+
+
 @dataclass
 class AgentRecord:
     name: str
@@ -50,6 +75,7 @@ class AgentRecord:
     created_at: int
     last_ingest_at: int = 0
     total_chunks: int = 0
+    librarian: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +84,7 @@ class AgentRecord:
             "created_at": self.created_at,
             "last_ingest_at": self.last_ingest_at,
             "total_chunks": self.total_chunks,
+            "librarian": self.librarian or _default_librarian(),
         }
 
     @classmethod
@@ -68,6 +95,7 @@ class AgentRecord:
             created_at=int(data.get("created_at", 0)),
             last_ingest_at=int(data.get("last_ingest_at", 0)),
             total_chunks=int(data.get("total_chunks", 0)),
+            librarian=data.get("librarian") or _default_librarian(),
         )
 
 
@@ -139,6 +167,7 @@ class AgentRegistry:
             name=name,
             display_name=display_name or name,
             created_at=int(time.time()),
+            librarian=_default_librarian(),
         )
         if existing_idx is not None:
             data["agents"][existing_idx] = record.to_dict()
@@ -208,6 +237,81 @@ class AgentRegistry:
                 return dict(a)
         raise AgentNotFoundError(f"agent {name!r} is not registered")
 
+    # ----- librarian config --------------------------------------------
+
+    def get_librarian(self, name: str) -> dict:
+        """Return the librarian config for an agent.
+
+        Older records may have been saved before the librarian field
+        existed — those get the default config back so callers don't
+        need a back-compat branch.
+        """
+        agent = self.get_agent(name)
+        return agent.get("librarian") or _default_librarian()
+
+    def set_librarian(
+        self,
+        name: str,
+        *,
+        enabled: bool | None = None,
+        model: str | None = None,
+        tasks: dict[str, bool] | None = None,
+        clear_model: bool = False,
+    ) -> dict:
+        """Patch an agent's librarian config. Returns the updated config.
+
+        - ``enabled``: master on/off switch. When False, every LLM
+          enrichment task is skipped regardless of per-task settings.
+        - ``model``: provider:model override (e.g. "ollama:qwen3:4b").
+          Pass ``clear_model=True`` to revert to the install default.
+        - ``tasks``: dict of per-task switches. Keys must come from
+          :data:`LIBRARIAN_TASKS`. Unknown keys raise ValueError.
+        """
+        if tasks is not None:
+            unknown = set(tasks) - set(LIBRARIAN_TASKS)
+            if unknown:
+                raise ValueError(
+                    f"unknown librarian task(s): {sorted(unknown)}. "
+                    f"Valid tasks: {LIBRARIAN_TASKS}"
+                )
+
+        data = self._read()
+        for a in data["agents"]:
+            if a["name"] == name:
+                lib = a.get("librarian") or _default_librarian()
+                if enabled is not None:
+                    lib["enabled"] = bool(enabled)
+                if clear_model:
+                    lib["model"] = None
+                elif model is not None:
+                    lib["model"] = model
+                if tasks is not None:
+                    # Preserve unset tasks; only patch the keys provided.
+                    lib_tasks = lib.get("tasks") or {t: True for t in LIBRARIAN_TASKS}
+                    lib_tasks.update({k: bool(v) for k, v in tasks.items()})
+                    lib["tasks"] = lib_tasks
+                a["librarian"] = lib
+                self._write(data)
+                return lib
+        raise AgentNotFoundError(f"agent {name!r} is not registered")
+
+    def is_task_enabled(self, name: str, task: str) -> bool:
+        """Convenience check used by enrichment call paths.
+
+        Returns True when both the master enabled flag and the per-task
+        flag are on. Unknown agents and unknown tasks return False (a
+        wrong name shouldn't accidentally enable everything).
+        """
+        if task not in LIBRARIAN_TASKS:
+            return False
+        try:
+            lib = self.get_librarian(name)
+        except AgentNotFoundError:
+            return False
+        if not lib.get("enabled", True):
+            return False
+        return bool(lib.get("tasks", {}).get(task, True))
+
 
 # ---------------------------------------------------------------------------
 # Module-level convenience wrappers around a default registry rooted at
@@ -259,12 +363,38 @@ def update_stats(
     return _registry().update_stats(name, last_ingest_at=last_ingest_at, total_chunks=total_chunks)
 
 
+def get_librarian(name: str) -> dict:
+    return _registry().get_librarian(name)
+
+
+def set_librarian(
+    name: str,
+    *,
+    enabled: bool | None = None,
+    model: str | None = None,
+    tasks: dict[str, bool] | None = None,
+    clear_model: bool = False,
+) -> dict:
+    return _registry().set_librarian(
+        name,
+        enabled=enabled,
+        model=model,
+        tasks=tasks,
+        clear_model=clear_model,
+    )
+
+
+def is_task_enabled(name: str, task: str) -> bool:
+    return _registry().is_task_enabled(name, task)
+
+
 __all__ = [
     "AgentRegistry",
     "AgentRecord",
     "AgentExistsError",
     "AgentNotFoundError",
     "InvalidAgentNameError",
+    "LIBRARIAN_TASKS",
     "register_agent",
     "list_agents",
     "agent_exists",
@@ -272,4 +402,7 @@ __all__ = [
     "delete_agent",
     "ensure_agent",
     "update_stats",
+    "get_librarian",
+    "set_librarian",
+    "is_task_enabled",
 ]

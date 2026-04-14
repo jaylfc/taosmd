@@ -17,6 +17,7 @@ from .agents import (
     AgentNotFoundError,
     AgentRegistry,
     InvalidAgentNameError,
+    LIBRARIAN_TASKS,
 )
 
 
@@ -61,6 +62,60 @@ def _agent_add(registry: AgentRegistry, name: str, display_name: str, clobber: b
     return 0
 
 
+def _librarian_show(registry: AgentRegistry, name: str, json_out: bool) -> int:
+    try:
+        lib = registry.get_librarian(name)
+    except AgentNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if json_out:
+        print(json.dumps(lib, indent=2))
+        return 0
+    enabled = "ON" if lib.get("enabled", True) else "OFF"
+    model = lib.get("model") or "(install default)"
+    print(f"Agent:      {name}")
+    print(f"Librarian:  {enabled}")
+    print(f"Model:      {model}")
+    print("Tasks:")
+    tasks = lib.get("tasks", {})
+    for t in LIBRARIAN_TASKS:
+        state = "on " if tasks.get(t, True) else "off"
+        print(f"  [{state}] {t}")
+    return 0
+
+
+def _librarian_set(
+    registry: AgentRegistry,
+    name: str,
+    enabled: bool | None,
+    model: str | None,
+    clear_model: bool,
+    enable_tasks: list[str],
+    disable_tasks: list[str],
+) -> int:
+    tasks: dict[str, bool] = {}
+    for t in enable_tasks:
+        tasks[t] = True
+    for t in disable_tasks:
+        tasks[t] = False
+    try:
+        lib = registry.set_librarian(
+            name,
+            enabled=enabled,
+            model=model,
+            tasks=tasks or None,
+            clear_model=clear_model,
+        )
+    except AgentNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(lib, indent=2))
+    return 0
+
+
 def _agent_rm(registry: AgentRegistry, name: str, drop_data: bool) -> int:
     try:
         registry.delete_agent(name, drop_data=drop_data)
@@ -98,6 +153,41 @@ def main(argv: list[str] | None = None) -> int:
     rm_p.add_argument("name")
     rm_p.add_argument("--drop-data", action="store_true", help="Also delete the agent's index files")
 
+    # ----- librarian subcommands -------------------------------------------
+    lib_p = sub.add_parser("librarian", help="Per-agent librarian (LLM enrichment) controls")
+    lib_sub = lib_p.add_subparsers(dest="librarian_cmd", required=True)
+
+    show_p = lib_sub.add_parser("show", help="Show an agent's librarian config")
+    show_p.add_argument("name")
+    show_p.add_argument("--json", action="store_true")
+
+    set_p = lib_sub.add_parser("set", help="Patch an agent's librarian config")
+    set_p.add_argument("name")
+    set_p.add_argument(
+        "--on", dest="enabled_on", action="store_true",
+        help="Master switch ON (LLM enrichment runs)",
+    )
+    set_p.add_argument(
+        "--off", dest="enabled_off", action="store_true",
+        help="Master switch OFF (only verbatim archive + vector + keyword)",
+    )
+    set_p.add_argument(
+        "--model", default=None,
+        help="provider:model override (e.g. ollama:qwen3:4b)",
+    )
+    set_p.add_argument(
+        "--clear-model", action="store_true",
+        help="Revert to the install default model",
+    )
+    set_p.add_argument(
+        "--enable", action="append", default=[], metavar="TASK",
+        help=f"Enable a specific task. Repeat for multiple. Tasks: {', '.join(LIBRARIAN_TASKS)}",
+    )
+    set_p.add_argument(
+        "--disable", action="append", default=[], metavar="TASK",
+        help="Disable a specific task. Repeat for multiple.",
+    )
+
     args = parser.parse_args(argv)
     registry = AgentRegistry(args.data_dir)
 
@@ -108,6 +198,28 @@ def main(argv: list[str] | None = None) -> int:
             return _agent_add(registry, args.name, args.display_name, args.clobber)
         if args.agent_cmd == "rm":
             return _agent_rm(registry, args.name, args.drop_data)
+
+    if args.cmd == "librarian":
+        if args.librarian_cmd == "show":
+            return _librarian_show(registry, args.name, args.json)
+        if args.librarian_cmd == "set":
+            if args.enabled_on and args.enabled_off:
+                print("error: --on and --off are mutually exclusive", file=sys.stderr)
+                return 2
+            enabled: bool | None = None
+            if args.enabled_on:
+                enabled = True
+            elif args.enabled_off:
+                enabled = False
+            return _librarian_set(
+                registry,
+                args.name,
+                enabled,
+                args.model,
+                args.clear_model,
+                args.enable,
+                args.disable,
+            )
 
     parser.print_help()
     return 1

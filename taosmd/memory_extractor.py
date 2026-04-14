@@ -146,42 +146,30 @@ def extract_facts_from_text(text: str) -> list[dict]:
 # LLM-based extraction (higher quality, optional)
 # ------------------------------------------------------------------
 
-EXTRACTION_PROMPT = """You are a fact extractor. Extract structured knowledge from the text below.
-
-For each fact, output a JSON object with:
-- "subject": the entity doing or being something (a person, tool, project, agent, hardware)
-- "predicate": the relationship (uses, created, prefers, runs_on, has, monitors, works_on, manages, supports, depends_on, is_a)
-- "object": what the subject relates to
-- "type": one of fact, preference, decision, event, discovery
-
-Rules:
-- Only extract claims that are clearly stated, not implied
-- Subject and object must be specific named entities, not pronouns (skip "it", "they", "this")
-- Keep subject and object short (1-5 words each)
-- One fact per relationship — "Jay uses Python and React" becomes TWO facts
-- Include temporal facts when mentioned ("moved to X", "switched from Y to Z")
-
-Text:
-{text}
-
-Return ONLY a valid JSON array. No markdown, no explanation:"""
-
-
 async def extract_facts_with_llm(
     text: str,
     llm_url: str,
     http_client,
+    *,
+    agent_name: str = "default",
+    model: str = "default",
 ) -> list[dict]:
-    """Extract facts using an LLM for higher quality. Falls back to pattern matching."""
+    """Extract facts using an LLM for higher quality. Falls back to pattern matching.
+
+    The prompt comes from :mod:`taosmd.prompts` so every LLM call across
+    the library shares the same librarian persona and "never invent"
+    rules. Pass ``agent_name`` so the persona binds to the right shelf.
+    """
     if not llm_url:
         return extract_facts_from_text(text)
 
+    from .prompts import extraction_prompt
     try:
         resp = await http_client.post(
             f"{llm_url}/v1/chat/completions",
             json={
-                "model": "default",
-                "messages": [{"role": "user", "content": EXTRACTION_PROMPT.format(text=text[:2000])}],
+                "model": model,
+                "messages": [{"role": "user", "content": extraction_prompt(text, agent_name=agent_name)}],
                 "temperature": 0,
                 "max_tokens": 500,
             },
