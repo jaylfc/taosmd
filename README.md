@@ -8,6 +8,34 @@
 
 Beats MemPalace (96.6%) and agentmemory (95.2%) — running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
 
+---
+
+## Why this exists
+
+Most memory systems try to recreate human thinking. They embed, they index, they retrieve, and they call it "cognition" because that sounds better than "we built a vector database". The brain is hard, so they reach for it as a metaphor and hope nobody asks where the reasoning is supposed to come from.
+
+A few years in, **MemPalace** stepped sideways. Instead of a brain, a building — a palace of rooms where memories sit on shelves you can walk past. That's a real improvement. The metaphor is concrete. You can picture the kitchen and remember what you cooked.
+
+But a building is still one person's mind, just dressed up. When a human needs to remember something they didn't personally experience, they don't walk through their own house. They go outside. They go to the **library**.
+
+The library is the biggest thing humans ever built for memory. Not the brain, not the palace — the library. One species figured out that putting verbatim records on shelves, organised by subject, indexed by a card catalogue, maintained by a librarian who actually knows where everything is, beats any individual brain by orders of magnitude. The library is how we got from "I remember my grandmother's recipe" to "I can read what Marcus Aurelius wrote on a Tuesday in 175 AD".
+
+**taosmd is the library.**
+
+There is a librarian. She sits at the desk and watches every conversation that passes through. She takes it down word for word — no paraphrasing, no summary that loses the joke, no compression that flattens the nuance. The transcript is the truth, and the truth is what gets shelved.
+
+Then she does the work nobody wants to do. She breaks the day into chapters, stories, articles, recurring serials. She logs the date, the participants, the subject, the cross-references to earlier conversations on the same theme. She writes it all down in her directory so she knows where to put her hand on any of it.
+
+When you ask the agent something, the librarian helps. Vector search picks the candidate shelves, keyword search confirms the title, the temporal graph tells her which version is the current one, and the archive proves what was actually said. No single component is doing magic. They're all doing one job each, the way a real library does: stacks, catalogue, reference desk, archive.
+
+Uncertainty is her specialty. If the agent isn't sure, it asks her, and she'll either find the source, find an earlier conversation that contradicts the claim, or admit nobody's said anything about it before. She doesn't make things up. She points at the page.
+
+Everything is time-stamped. Everything is on a shelf. Nothing is ever lost.
+
+That's the difference. We didn't dress up a vector database as a brain. We built a library.
+
+---
+
 ## Getting Started
 
 ### One-Line Setup
