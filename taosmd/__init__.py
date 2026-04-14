@@ -27,6 +27,20 @@ from .temporal_boost import temporal_rerank
 from .backend import MemoryBackend
 from .taosmd_backend import TaOSmdBackend
 
+# Agent registry — multi-agent isolation on a single taosmd install
+from .agents import (
+    AgentRegistry,
+    AgentExistsError,
+    AgentNotFoundError,
+    InvalidAgentNameError,
+    register_agent,
+    list_agents,
+    agent_exists,
+    get_agent,
+    delete_agent,
+    ensure_agent,
+)
+
 __all__ = [
     # Core memory layers
     "KnowledgeGraph",
@@ -67,4 +81,15 @@ __all__ = [
     # Backend interface
     "MemoryBackend",
     "TaOSmdBackend",
+    # Agent registry
+    "AgentRegistry",
+    "AgentExistsError",
+    "AgentNotFoundError",
+    "InvalidAgentNameError",
+    "register_agent",
+    "list_agents",
+    "agent_exists",
+    "get_agent",
+    "delete_agent",
+    "ensure_agent",
 ]
