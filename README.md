@@ -38,7 +38,28 @@ That's the difference. We didn't dress up a vector database as a brain. We built
 
 ## Getting Started
 
-### One-Line Setup
+### Let your agent install it
+
+The cleanest way to install taosmd is to ask your agent to do it. Paste this message into Claude Code, Cursor, your OpenClaw shell, whatever:
+
+> Please install taosmd as my memory system. The repo is github.com/jaylfc/taosmd.
+>
+> 1. Read the README so you understand what you're installing.
+> 2. Run the install script: `curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash`. Report any errors and stop if it fails.
+> 3. Register yourself as an agent so you have your own isolated index. Pick a stable agent name (lowercase, no spaces) — the same name you'll use every time you call the librarian. If I have multiple agents in this framework, ask me what to name this one before registering.
+> 4. Verify the install: call `taosmd.search("hello", agent="<your-name>")` — it should return an empty result, not an error.
+> 5. Append the "Memory — taosmd" rules block from `docs/agent-rules.md` in the repo to my agent file (CLAUDE.md / system prompt / AGENTS.md — whatever your framework reads every turn). Replace `<your-agent-name>` with the name you registered as.
+> 6. Confirm it's installed and tell me your agent name so I know how to refer to your memory.
+>
+> Don't summarise the repo or paraphrase the rules. Copy them verbatim — the wording is the contract.
+
+The agent will pull the repo, run the install, register itself, append the per-turn rules block to its own instruction file, and verify everything works. After that, every turn it runs it'll check the librarian when it's uncertain — see [docs/agent-rules.md](docs/agent-rules.md) for the rules block it installs.
+
+**Multiple agents in one framework?** Same install message works. The agent will ask you to name it before registering, so each agent gets its own shelf. The taosmd service itself stays as one process; only the per-agent indexes are separate.
+
+**Inside taOS?** Don't use this — taOS provisions taosmd automatically when you deploy an agent, and the rules block is baked into the agent template. This install path is for standalone framework users.
+
+### One-Line Setup (manual)
 
 > **Note:** Install scripts are new and awaiting full testing on clean environments. Please report issues.
 
