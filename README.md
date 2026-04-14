@@ -55,7 +55,7 @@ The cleanest way to install taosmd is to ask your agent to do it. Paste this mes
 
 The agent will pull the repo, run the install, register itself, append the per-turn rules block to its own instruction file, and verify everything works. After that, every turn it runs it'll check the librarian when it's uncertain — see [docs/agent-rules.md](docs/agent-rules.md) for the rules block it installs.
 
-**Multiple agents in one framework?** Same install message works. The agent will ask you to name it before registering, so each agent gets its own shelf. The taosmd service itself stays as one process; only the per-agent indexes are separate.
+**Multiple agents in one framework?** Same install message works. The agent will ask you to name it before registering, so each agent gets its own shelf. The taosmd service itself stays as one process; only the per-agent indexes are separate. See [docs/multi-agent.md](docs/multi-agent.md) for the full naming convention, cross-agent reads, migration scenarios, and a five-agent worked example.
 
 **Inside taOS?** Don't use this — taOS provisions taosmd automatically when you deploy an agent, and the rules block is baked into the agent template. This install path is for standalone framework users.
 
