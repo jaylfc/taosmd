@@ -32,6 +32,12 @@ Uncertainty is her specialty. If the agent isn't sure, it asks her, and she'll e
 
 Everything is time-stamped. Everything is on a shelf. Nothing is ever lost.
 
+**What about dreaming?** A few systems have started calling their consolidation pass "dreaming" — [OpenClaw's dreaming](https://docs.openclaw.ai/concepts/dreaming) is the cleanest example. The idea is good: take the day's signals, score them, promote the durable ones to long-term memory. It's their version of the librarian shelving the day's events.
+
+The catch is the dream rewrites itself. Snippets get scored, gated, redacted, summarised into a `MEMORY.md`. What didn't make the cut, and what the original wording actually was, is gone. The bit that survives is the bit the dreamer thought worth keeping at 3am.
+
+I don't know about you, but I can never remember my dreams. So I built a robot librarian who never sleeps instead. The verbatim transcript goes into the zero-loss archive **first**. The librarian crystallises whatever's worth crystallising — but the original is still on the shelf, byte for byte, never overwritten. Disagree with how she summarised today? Walk over to the archive and read what was actually said. The dream and the source are both there.
+
 That's the difference. We didn't dress up a vector database as a brain. We built a library.
 
 ---
