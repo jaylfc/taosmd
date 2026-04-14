@@ -22,6 +22,20 @@ from .catalog_pipeline import CatalogPipeline
 from .retrieval import retrieve
 from .cross_encoder import CrossEncoderReranker
 
+# Agent registry — multi-agent isolation on a single taosmd install
+from .agents import (
+    AgentRegistry,
+    AgentExistsError,
+    AgentNotFoundError,
+    InvalidAgentNameError,
+    register_agent,
+    list_agents,
+    agent_exists,
+    get_agent,
+    delete_agent,
+    ensure_agent,
+)
+
 __all__ = [
     # Core memory stack
     "KnowledgeGraph",
@@ -63,4 +77,15 @@ __all__ = [
     # Retrieval pipeline
     "retrieve",
     "CrossEncoderReranker",
+    # Agent registry
+    "AgentRegistry",
+    "AgentExistsError",
+    "AgentNotFoundError",
+    "InvalidAgentNameError",
+    "register_agent",
+    "list_agents",
+    "agent_exists",
+    "get_agent",
+    "delete_agent",
+    "ensure_agent",
 ]
