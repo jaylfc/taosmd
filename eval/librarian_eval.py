@@ -489,7 +489,10 @@ async def eval_axis_c(
             context_texts = all_turn_texts[:context_end]
 
             retrieved = await runner(query, context_texts, ledger)
-            correct = any(session.early_fact.lower() in r.lower() for r in retrieved)
+            # Match against the verbatim turn text, not the summary description.
+            # early_fact is a human-readable label; the actual content is the turn.
+            early_fact_text = all_turn_texts[session.early_fact_turn]
+            correct = early_fact_text in retrieved
             recall = 1.0 if correct else 0.0
 
             if lag_k in recall_by_k:
