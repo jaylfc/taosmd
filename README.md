@@ -177,7 +177,7 @@ events = await archive.search_fts("hello")
 
 ## Key Features
 
-- **97.2% Recall@5** on LongMemEval-S benchmark (SOTA)
+- **97.0% Recall@5** on LongMemEval-S benchmark (SOTA)
 - **Zero cloud dependencies** — runs entirely on local hardware
 - **Framework-agnostic** — HTTP API works with any agent framework
 - **Hybrid search** — semantic similarity + keyword overlap boosting
@@ -219,7 +219,7 @@ Or download directly from [HuggingFace](https://huggingface.co/sentence-transfor
 
 ## Reference Setup (Orange Pi 5 Plus)
 
-The 97.2% benchmark was achieved on this exact stack:
+The 97.0% benchmark was achieved on this exact stack:
 
 | Component | Model | Purpose | Runtime |
 |-----------|-------|---------|---------|
@@ -310,7 +310,7 @@ MIT
 
 ## Dependencies & Acknowledgements
 
-**Core taOSmd (the 97.2% benchmark) is fully self-contained** — it uses only standard packages (SQLite, numpy, ONNX Runtime) plus the MiniLM embedding model. No external servers or forked repos needed.
+**Core taOSmd (the 97.0% benchmark) is fully self-contained** — it uses only standard packages (SQLite, numpy, ONNX Runtime) plus the MiniLM embedding model. No external servers or forked repos needed.
 
 **Optional integrations for the full taOS stack:**
 
