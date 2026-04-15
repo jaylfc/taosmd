@@ -193,29 +193,84 @@ class TokenLedger:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Shared setup: build an in-memory VectorMemory + optional CrossEncoder
+# Shared setup: singleton ONNX embedder + lightweight in-memory search
 # ---------------------------------------------------------------------------
 
 ONNX_PATH = str(Path(__file__).parent.parent / "models" / "minilm-onnx")
 CE_PATH    = str(Path(__file__).parent.parent / "models" / "cross-encoder-onnx")
 
+# Module-level singletons — loaded once, reused across all scenarios
+_ONNX_SESSION = None
+_ONNX_TOKENIZER = None
+_CROSS_ENCODER = None
 
-async def _build_vmem(context_texts: list[str], tmpdir: str) -> object:
-    """Ingest context_texts into a fresh in-memory VectorMemory, return it."""
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    from taosmd import VectorMemory  # noqa
 
-    db_path = Path(tmpdir) / f"vmem_{id(context_texts)}.db"
-    vm = VectorMemory(
-        db_path=str(db_path),
-        embed_mode="onnx",
-        onnx_path=ONNX_PATH,
-    )
-    await vm.init()
+def _get_onnx():
+    """Load ONNX session + tokenizer once; return (session, tokenizer)."""
+    global _ONNX_SESSION, _ONNX_TOKENIZER
+    if _ONNX_SESSION is None:
+        import onnxruntime as ort
+        from transformers import AutoTokenizer  # noqa
+        logger.info("Loading ONNX embedding model (once)...")
+        _ONNX_SESSION = ort.InferenceSession(
+            f"{ONNX_PATH}/model.onnx",
+            providers=["CPUExecutionProvider"],
+        )
+        _ONNX_TOKENIZER = AutoTokenizer.from_pretrained(ONNX_PATH)
+        logger.info("ONNX model ready.")
+    return _ONNX_SESSION, _ONNX_TOKENIZER
+
+
+def _embed(text: str) -> list[float]:
+    """Embed a single text using the cached ONNX session."""
+    import numpy as np
+    session, tokenizer = _get_onnx()
+    inputs = tokenizer(text[:512], return_tensors="np", padding=True, truncation=True, max_length=128)
+    feed = {
+        "input_ids": inputs["input_ids"].astype(np.int64),
+        "attention_mask": inputs["attention_mask"].astype(np.int64),
+    }
+    if any(inp.name == "token_type_ids" for inp in session.get_inputs()):
+        feed["token_type_ids"] = np.zeros_like(inputs["input_ids"], dtype=np.int64)
+    outputs = session.run(None, feed)
+    output_names = [o.name for o in session.get_outputs()]
+    if "sentence_embedding" in output_names:
+        idx = output_names.index("sentence_embedding")
+        vec = outputs[idx][0].tolist()
+    else:
+        out = outputs[0]
+        mask = inputs["attention_mask"][..., None].astype(np.float32)
+        vec = ((out * mask).sum(1)[0] / (mask.sum(1)[0] + 1e-9)).tolist()
+    norm = sum(v * v for v in vec) ** 0.5
+    return [v / norm for v in vec] if norm > 0 else vec
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    return sum(x * y for x, y in zip(a, b))
+
+
+def _search_in_memory(query: str, context_texts: list[str], limit: int = 5) -> list[str]:
+    """Embed query + texts, return top-limit texts by cosine similarity."""
+    q_vec = _embed(query)
+    scored = []
     for text in context_texts:
-        await vm.add(text)
-    return vm
+        t_vec = _embed(text)
+        scored.append((_cosine(q_vec, t_vec), text))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [t for _, t in scored[:limit]]
+
+
+def _get_cross_encoder():
+    global _CROSS_ENCODER
+    if _CROSS_ENCODER is None:
+        try:
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from taosmd.cross_encoder import CrossEncoderReranker  # noqa
+            ce = CrossEncoderReranker(model_path=CE_PATH)
+            _CROSS_ENCODER = ce if getattr(ce, "available", False) else False
+        except Exception:
+            _CROSS_ENCODER = False
+    return _CROSS_ENCODER if _CROSS_ENCODER else None
 
 
 def _load_cross_encoder() -> object | None:
@@ -231,45 +286,24 @@ async def run_vector_only(
     query: str,
     context_texts: list[str],
     ledger: TokenLedger,
-    *,
-    _tmpdir: str = "/tmp/taosmd_eval",
 ) -> list[str]:
-    """Vector-only config: pure embedding similarity, no rerank, no KG."""
-    import tempfile
-    Path(_tmpdir).mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=_tmpdir) as d:
-        vm = await _build_vmem(context_texts, d)
-        try:
-            results = await vm.search(query, limit=5, hybrid=False)
-            return [r["text"] for r in results]
-        finally:
-            await vm.close()
+    """Vector-only config: pure ONNX cosine similarity, single model load."""
+    return _search_in_memory(query, context_texts, limit=5)
 
 
 async def run_full_pipeline(
     query: str,
     context_texts: list[str],
     ledger: TokenLedger,
-    *,
-    _tmpdir: str = "/tmp/taosmd_eval",
 ) -> list[str]:
-    """Full pipeline: embedding + hybrid search + cross-encoder rerank (no LLM)."""
-    import tempfile
-    Path(_tmpdir).mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=_tmpdir) as d:
-        vm = await _build_vmem(context_texts, d)
-        ce = _load_cross_encoder()
-        try:
-            results = await vm.search(query, limit=15, hybrid=True)
-            texts = [r["text"] for r in results]
-            if ce is not None:
-                # Rerank: rebuild normalised dicts for reranker
-                normed = [{"text": t, "rrf_score": 1.0 / (i + 1)} for i, t in enumerate(texts)]
-                reranked = ce.rerank(query, normed, 5)
-                return [r["text"] for r in reranked]
-            return texts[:5]
-        finally:
-            await vm.close()
+    """Full pipeline: ONNX embedding + cross-encoder rerank (no LLM calls)."""
+    candidates = _search_in_memory(query, context_texts, limit=15)
+    ce = _get_cross_encoder()
+    if ce is not None:
+        normed = [{"text": t, "rrf_score": 1.0 / (i + 1)} for i, t in enumerate(candidates)]
+        reranked = ce.rerank(query, normed, 5)
+        return [r["text"] for r in reranked]
+    return candidates[:5]
 
 
 async def run_full_plus_librarian(
@@ -279,38 +313,31 @@ async def run_full_plus_librarian(
     *,
     llm_url: str = "http://localhost:11434",
     model: str = "gemma4:e2b",
-    _tmpdir: str = "/tmp/taosmd_eval",
 ) -> list[str]:
-    """Full+librarian config: full pipeline + LLM query expansion + verification tagging.
+    """Full+librarian config: ONNX search + cross-encoder + LLM query expansion.
 
-    Adds:
-    - query_expansion_prompt via LLM (expands to 1-3 rewrites, merged via RRF)
-    - verification_prompt tagged on top-3 (scores adjusted where LLM verdict available)
-    LLM calls are token-ledgered.
+    Adds LLM query expansion via query_expansion_prompt. Expanded queries
+    are merged with the original, deduped, then reranked. Token cost ledgered.
     """
-    import tempfile, httpx
-    from taosmd.prompts import query_expansion_prompt, verification_prompt  # noqa
-
-    Path(_tmpdir).mkdir(parents=True, exist_ok=True)
+    import httpx
+    from taosmd.prompts import query_expansion_prompt  # noqa
 
     async def _llm(prompt: str) -> str:
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=45.0) as client:
                 resp = await client.post(
                     f"{llm_url}/api/generate",
                     json={"model": model, "prompt": prompt, "stream": False},
                 )
                 data = resp.json()
                 text = data.get("response", "")
-                # Rough token estimate: 1 token ≈ 4 chars
                 ledger.record("query_expansion", len(prompt) // 4 + len(text) // 4)
                 return text
         except Exception:
             return ""
 
     # Step 1: LLM query expansion
-    exp_prompt = query_expansion_prompt(query, agent_name="eval")
-    exp_text = await _llm(exp_prompt)
+    exp_text = await _llm(query_expansion_prompt(query, agent_name="eval"))
     extra_queries = [query]
     try:
         import json as _json
@@ -319,31 +346,22 @@ async def run_full_plus_librarian(
     except Exception:
         pass
 
-    with tempfile.TemporaryDirectory(dir=_tmpdir) as d:
-        vm = await _build_vmem(context_texts, d)
-        ce = _load_cross_encoder()
-        try:
-            # Step 2: Search with all queries, merge
-            all_results: list[dict] = []
-            seen: set[str] = set()
-            for q in extra_queries:
-                for r in await vm.search(q, limit=10, hybrid=True):
-                    if r["text"] not in seen:
-                        seen.add(r["text"])
-                        all_results.append(r)
+    # Step 2: Search with all queries, dedupe by text
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for q in extra_queries:
+        for t in _search_in_memory(q, context_texts, limit=10):
+            if t not in seen:
+                seen.add(t)
+                candidates.append(t)
 
-            # Step 3: Rerank
-            texts = [r["text"] for r in all_results]
-            if ce is not None:
-                normed = [{"text": t, "rrf_score": 1.0 / (i + 1)} for i, t in enumerate(texts)]
-                reranked = ce.rerank(query, normed, 5)
-                texts = [r["text"] for r in reranked]
-            else:
-                texts = texts[:5]
-
-            return texts
-        finally:
-            await vm.close()
+    # Step 3: Rerank
+    ce = _get_cross_encoder()
+    if ce is not None:
+        normed = [{"text": t, "rrf_score": 1.0 / (i + 1)} for i, t in enumerate(candidates)]
+        reranked = ce.rerank(query, normed, 5)
+        return [r["text"] for r in reranked]
+    return candidates[:5]
 
 
 _PIPELINE_RUNNERS = {
