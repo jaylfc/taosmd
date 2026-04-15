@@ -179,6 +179,20 @@ All systems tested on the same benchmark (LongMemEval-S, 500 questions) with the
 | **Hybrid + query expansion (default)** | **97.0%** | **+2.0** |
 | All-turns hybrid (harder test) | 93.2% | -1.8 |
 
+### Librarian Layer — Vocabulary-Gap Benchmark
+
+The Librarian adds LLM-assisted query expansion on top of the vector + cross-encoder stack. We measure its effect with a purpose-built three-axis harness on long-horizon sessions (60 turns, fact buried at turn 5).
+
+**Axis C — vocabulary-gap coherence** (2026-04-15, gemma4:e2b 5B, Fedora host):
+
+| Config | Composite | recall@lag25 | recall@lag50 |
+|--------|-----------|-------------|-------------|
+| Vector-only | 0.752 | 30% | 30% |
+| Full pipeline (+ cross-encoder) | 0.752 | 30% | 30% |
+| **Full + Librarian** | **0.810** | **45%** | **55%** |
+
+**+15.4% on the vocabulary-gap axis.** The cross-encoder alone adds nothing when the target fact is excluded from its candidate pool — only the Librarian's expansion bridges category→specific-name gaps (e.g. query: *"code editor"*, fact: *"Neovim lua config done"*). Axis A/B fixtures are being redesigned for a more complete composite in the next benchmark cycle.
+
 ## Architecture
 
 ```
