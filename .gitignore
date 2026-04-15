@@ -9,3 +9,4 @@ data/
 models/minilm-onnx/model.onnx
 .env
 *.log
+eval/reports/

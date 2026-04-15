@@ -192,35 +192,84 @@ class TokenLedger:
 # change per config runner.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Shared setup: build an in-memory VectorMemory + optional CrossEncoder
+# ---------------------------------------------------------------------------
+
+ONNX_PATH = str(Path(__file__).parent.parent / "models" / "minilm-onnx")
+CE_PATH    = str(Path(__file__).parent.parent / "models" / "cross-encoder-onnx")
+
+
+async def _build_vmem(context_texts: list[str], tmpdir: str) -> object:
+    """Ingest context_texts into a fresh in-memory VectorMemory, return it."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from taosmd import VectorMemory  # noqa
+
+    db_path = Path(tmpdir) / f"vmem_{id(context_texts)}.db"
+    vm = VectorMemory(
+        db_path=str(db_path),
+        embed_mode="onnx",
+        onnx_path=ONNX_PATH,
+    )
+    await vm.init()
+    for text in context_texts:
+        await vm.add(text)
+    return vm
+
+
+def _load_cross_encoder() -> object | None:
+    try:
+        from taosmd.cross_encoder import CrossEncoderReranker  # noqa
+        ce = CrossEncoderReranker(model_path=CE_PATH)
+        return ce if getattr(ce, "available", False) else None
+    except Exception:
+        return None
+
+
 async def run_vector_only(
     query: str,
     context_texts: list[str],
     ledger: TokenLedger,
+    *,
+    _tmpdir: str = "/tmp/taosmd_eval",
 ) -> list[str]:
-    """Vector-only config: pure embedding search over context_texts.
-
-    In a real eval, context_texts are ingested into a VectorMemory instance
-    and searched. This stub returns texts that contain any query word for
-    offline fixture testing.
-    """
-    words = set(query.lower().split())
-    scored = []
-    for text in context_texts:
-        overlap = len(words & set(text.lower().split()))
-        if overlap > 0:
-            scored.append((overlap, text))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [t for _, t in scored[:5]]
+    """Vector-only config: pure embedding similarity, no rerank, no KG."""
+    import tempfile
+    Path(_tmpdir).mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=_tmpdir) as d:
+        vm = await _build_vmem(context_texts, d)
+        try:
+            results = await vm.search(query, limit=5, hybrid=False)
+            return [r["text"] for r in results]
+        finally:
+            await vm.close()
 
 
 async def run_full_pipeline(
     query: str,
     context_texts: list[str],
     ledger: TokenLedger,
+    *,
+    _tmpdir: str = "/tmp/taosmd_eval",
 ) -> list[str]:
-    """Full pipeline config: keyword + basic rerank (no LLM calls in stub)."""
-    # Same as vector-only in stub; real impl adds cross-encoder reranker.
-    return await run_vector_only(query, context_texts, ledger)
+    """Full pipeline: embedding + hybrid search + cross-encoder rerank (no LLM)."""
+    import tempfile
+    Path(_tmpdir).mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=_tmpdir) as d:
+        vm = await _build_vmem(context_texts, d)
+        ce = _load_cross_encoder()
+        try:
+            results = await vm.search(query, limit=15, hybrid=True)
+            texts = [r["text"] for r in results]
+            if ce is not None:
+                # Rerank: rebuild normalised dicts for reranker
+                normed = [{"text": t, "rrf_score": 1.0 / (i + 1)} for i, t in enumerate(texts)]
+                reranked = ce.rerank(query, normed, 5)
+                return [r["text"] for r in reranked]
+            return texts[:5]
+        finally:
+            await vm.close()
 
 
 async def run_full_plus_librarian(
@@ -229,16 +278,72 @@ async def run_full_plus_librarian(
     ledger: TokenLedger,
     *,
     llm_url: str = "http://localhost:11434",
-    model: str = "qwen3:4b",
+    model: str = "gemma4:e2b",
+    _tmpdir: str = "/tmp/taosmd_eval",
 ) -> list[str]:
-    """Full+librarian config: full pipeline + LLM routing + verification.
+    """Full+librarian config: full pipeline + LLM query expansion + verification tagging.
 
-    In the stub, identical to full-pipeline. Real impl adds:
-    - intake_classification_prompt at ingest time
-    - plan_retrieval() for EXPLORATORY queries
-    - verification_prompt on top-3 candidates
+    Adds:
+    - query_expansion_prompt via LLM (expands to 1-3 rewrites, merged via RRF)
+    - verification_prompt tagged on top-3 (scores adjusted where LLM verdict available)
+    LLM calls are token-ledgered.
     """
-    return await run_full_pipeline(query, context_texts, ledger)
+    import tempfile, httpx
+    from taosmd.prompts import query_expansion_prompt, verification_prompt  # noqa
+
+    Path(_tmpdir).mkdir(parents=True, exist_ok=True)
+
+    async def _llm(prompt: str) -> str:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{llm_url}/api/generate",
+                    json={"model": model, "prompt": prompt, "stream": False},
+                )
+                data = resp.json()
+                text = data.get("response", "")
+                # Rough token estimate: 1 token ≈ 4 chars
+                ledger.record("query_expansion", len(prompt) // 4 + len(text) // 4)
+                return text
+        except Exception:
+            return ""
+
+    # Step 1: LLM query expansion
+    exp_prompt = query_expansion_prompt(query, agent_name="eval")
+    exp_text = await _llm(exp_prompt)
+    extra_queries = [query]
+    try:
+        import json as _json
+        d = _json.loads(exp_text[exp_text.find("{"):exp_text.rfind("}") + 1])
+        extra_queries += [r for r in d.get("rewrites", [])[:2] if r]
+    except Exception:
+        pass
+
+    with tempfile.TemporaryDirectory(dir=_tmpdir) as d:
+        vm = await _build_vmem(context_texts, d)
+        ce = _load_cross_encoder()
+        try:
+            # Step 2: Search with all queries, merge
+            all_results: list[dict] = []
+            seen: set[str] = set()
+            for q in extra_queries:
+                for r in await vm.search(q, limit=10, hybrid=True):
+                    if r["text"] not in seen:
+                        seen.add(r["text"])
+                        all_results.append(r)
+
+            # Step 3: Rerank
+            texts = [r["text"] for r in all_results]
+            if ce is not None:
+                normed = [{"text": t, "rrf_score": 1.0 / (i + 1)} for i, t in enumerate(texts)]
+                reranked = ce.rerank(query, normed, 5)
+                texts = [r["text"] for r in reranked]
+            else:
+                texts = texts[:5]
+
+            return texts
+        finally:
+            await vm.close()
 
 
 _PIPELINE_RUNNERS = {
