@@ -20,6 +20,10 @@ list/remove agents.
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 import json
 import re
 import shutil
@@ -50,10 +54,12 @@ class InvalidAgentNameError(ValueError):
 LIBRARIAN_TASKS = (
     "fact_extraction",
     "preference_extraction",
+    "intake_classification",
     "crystallise",
     "reflect",
     "catalog_enrichment",
     "query_expansion",
+    "verification",
 )
 
 
@@ -313,6 +319,35 @@ class AgentRegistry:
         return bool(lib.get("tasks", {}).get(task, True))
 
 
+
+def run_if_enabled(agent_name: str, task: str, fn, *args, fallback=None, **kw):
+    """Invoke fn only when the task is enabled for this agent; else return fallback.
+
+    Designed to be the single gate point in orchestrators (catalog_pipeline,
+    retrieval). Extractors stay pure — they do not check agent config.
+
+    Usage:
+        result = run_if_enabled(agent, fact_extraction, extract_facts, text,
+                                 fallback=[])
+
+    Args:
+        agent_name: Registered agent name (or "" for anonymous installs).
+        task: One of LIBRARIAN_TASKS.
+        fn: Callable to invoke when enabled.
+        *args: Positional args for fn.
+        fallback: Value to return when task is disabled. Defaults to None.
+        **kw: Keyword args for fn.
+
+    Returns:
+        fn(*args, **kw) when enabled, else fallback.
+    """
+    if not is_task_enabled(agent_name, task):
+        logger.debug(
+            "run_if_enabled: task=%r agent=%r disabled", task, agent_name
+        )
+        return fallback
+    return fn(*args, **kw)
+
 # ---------------------------------------------------------------------------
 # Module-level convenience wrappers around a default registry rooted at
 # ./data — matches the rest of taosmd which assumes ./data unless told
@@ -405,4 +440,5 @@ __all__ = [
     "get_librarian",
     "set_librarian",
     "is_task_enabled",
+    "run_if_enabled",
 ]

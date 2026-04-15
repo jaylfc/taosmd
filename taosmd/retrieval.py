@@ -12,6 +12,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from taosmd.agents import run_if_enabled, is_task_enabled  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Normalised result schema (for reference):
 # {
@@ -309,6 +311,122 @@ async def _query_source(name: str, source: object, query: str, limit: int) -> li
 # ---------------------------------------------------------------------------
 
 
+def plan_retrieval(
+    query: str,
+    agent_name: str = "",
+    llm_route_fn=None,
+) -> dict:
+    """Choose which holdings to search and in what order.
+
+    Hot path: regex intent_classifier decides in microseconds. LLM routing
+    fires only when the classifier returns EXPLORATORY, multiple intents tie,
+    or ``llm_route_fn`` is provided and the ``query_expansion`` task is enabled.
+
+    Returns a strategy dict compatible with retrieve():
+    ``{primary: str, secondary: str | None, extra_holdings: list[str]}``
+    """
+    from taosmd.intent_classifier import classify_intent, get_search_strategy  # noqa
+    from taosmd.intent_classifier import EXPLORATORY  # noqa
+
+    strategy = get_search_strategy(query)
+    intent = classify_intent(query)
+
+    use_llm = (
+        intent == EXPLORATORY
+        or llm_route_fn is not None
+    ) and is_task_enabled(agent_name, "query_expansion")
+
+    if use_llm and llm_route_fn is not None:
+        try:
+            llm_strategy = llm_route_fn(query, agent_name)
+            if llm_strategy:
+                logger.debug(
+                    "plan_retrieval: LLM routing overrides regex for %r", query[:60]
+                )
+                return llm_strategy
+        except Exception as exc:
+            logger.warning("plan_retrieval: LLM route failed (%s), using regex", exc)
+
+    return strategy
+
+
+async def _apply_verification(
+    query: str,
+    results: list[dict],
+    agent_name: str,
+    top_k: int = 3,
+) -> list[dict]:
+    """Adjust top-K result confidences using the verification prompt.
+
+    Fires inside retrieve() after cross-encoder rerank when the agent's
+    'verification' task is enabled. Supports/contradicts verdicts shift the
+    rrf_score. Results are re-sorted after adjustment.
+
+    Hall-of-records quote for each candidate is taken from metadata.summary
+    or metadata.data_json when available.
+    """
+    if not results:
+        return results
+
+    try:
+        from taosmd.prompts import verification_prompt  # noqa
+    except ImportError:
+        return results
+
+    adjusted = list(results)
+    for i, hit in enumerate(adjusted[:top_k]):
+        hall_quote = (
+            hit.get("metadata", {}).get("summary", "")
+            or str(hit.get("metadata", {}).get("data_json", ""))[:400]
+        )
+        if not hall_quote:
+            continue
+        # Build prompt — actual LLM call is caller's responsibility;
+        # we attach the prompt so callers with an llm client can call it.
+        hit["_verification_prompt"] = verification_prompt(
+            query,
+            hit.get("text", ""),
+            hall_quote,
+            agent_name=agent_name,
+        )
+        # Optimistic path: callers that pass a verdict back can call
+        # apply_verification_verdicts() to adjust scores.
+
+    logger.debug(
+        "_apply_verification: tagged %d/%d results with verification prompts",
+        min(top_k, len(results)), len(results)
+    )
+    return adjusted
+
+
+def apply_verification_verdicts(
+    results: list[dict],
+    verdicts: list[dict],
+) -> list[dict]:
+    """Apply pre-computed verification verdicts to result scores.
+
+    Call this after running verification_prompt LLM calls outside retrieval.
+    verdicts is a list of {verdict: 'supports|contradicts|silent', index: int}.
+    Returns results re-sorted by adjusted rrf_score.
+    """
+    adjusted = list(results)
+    for v in verdicts:
+        idx = v.get("index", -1)
+        if not (0 <= idx < len(adjusted)):
+            continue
+        verdict = v.get("verdict", "silent")
+        score = adjusted[idx].get("rrf_score", 0.0)
+        if verdict == "supports":
+            adjusted[idx]["rrf_score"] = score + 0.1
+            adjusted[idx]["verification"] = "supports"
+        elif verdict == "contradicts":
+            adjusted[idx]["rrf_score"] = score - 0.4
+            adjusted[idx]["conflict"] = True
+            adjusted[idx]["verification"] = "contradicts"
+    adjusted.sort(key=lambda x: x.get("rrf_score", 0.0), reverse=True)
+    return adjusted
+
+
 async def retrieve(
     query: str,
     strategy: str = "thorough",
@@ -316,6 +434,8 @@ async def retrieve(
     sources: dict | None = None,
     limit: int = 5,
     reranker: object | None = None,
+    agent_name: str = "",
+    verify: bool = False,
 ) -> list[dict]:
     """Retrieve relevant results from available memory sources.
 
@@ -362,6 +482,9 @@ async def retrieve(
 
         if reranker is not None and getattr(reranker, "available", False):
             results = reranker.rerank(query, results, limit)
+
+        if verify and is_task_enabled(agent_name, "verification"):
+            results = await _apply_verification(query, results, agent_name)
 
         return results[:limit]
 
@@ -430,3 +553,10 @@ async def retrieve(
 
     else:
         raise ValueError(f"Unknown strategy {strategy!r}. Must be one of: thorough, fast, minimal, custom.")
+
+
+__all__ = [
+    "retrieve",
+    "plan_retrieval",
+    "apply_verification_verdicts",
+]

@@ -319,6 +319,391 @@ Text:
 JSON:"""
 
 
+
+def intake_classification_prompt(
+    session_text: str,
+    taxonomy_json: str,
+    *,
+    agent_name: str = "default",
+) -> str:
+    """First-pass triage. Assigns session a ranked list of (project, topic, subtopic) labels.
+
+    Runs once per session before any other enrichment. Taxonomy paths that already
+    exist in the agent's taxonomy.json are shown marked as confirmed or pending;
+    the model is instructed to reuse existing paths before coining new ones.
+    """
+    return f"""{persona_for(agent_name)}
+
+Task: File this session under the right project / topic / subtopic.
+
+Where this output goes: the Reading Room directory for {agent_name}. Sessions
+are filed here forever. A wrong path corrupts search results for every future
+query that filters by project or topic. Be conservative: an existing path that
+is close enough is always better than a new path that is slightly more precise.
+
+Existing taxonomy (confirmed paths preferred, pending paths acceptable if
+clearly relevant, coin new paths only when none fit):
+{taxonomy_json}
+
+Rules for labels:
+- Return up to 3 labels with weights summing to 1.0.
+- Primary label (highest weight) is the primary filing.
+- Reuse an existing path unless no existing path fits.
+- Pending paths are shown — prefer confirmed paths.
+- New paths (`is_new_path: true`) are a commitment; only coin one when you
+  can quote a line from the session that names the project or topic explicitly.
+- If you cannot quote a supporting line for the primary label, return `labels: []`.
+  The session will still be indexed under the heuristic category.
+
+Output ONLY a JSON object:
+{{
+  "labels": [
+    {{"project": str, "topic": str, "subtopic": str, "weight": float, "is_new_path": bool}}
+  ],
+  "rationale_quote": "<verbatim line from the session supporting the primary label>"
+}}
+
+Quality bar:
+- Weights sum to 1.0 across all labels (± 0.01 rounding tolerance).
+- Every non-new path's project+topic+subtopic appears verbatim in the taxonomy.
+- rationale_quote is a substring of the session text (or empty string if labels: []).
+- No label coins a new path without a rationale_quote that names it explicitly.
+
+Session (first 4000 chars):
+{session_text[:4000]}
+
+JSON:"""
+
+
+def routing_prompt(query: str, *, agent_name: str = "default") -> str:
+    """LLM-backed query router. Fires only when regex intent classifier is uncertain.
+
+    Normal path: intent_classifier returns a single intent. This fires only when
+    (a) the classifier returns EXPLORATORY, (b) multiple intents tie below threshold,
+    or (c) the caller explicitly requests LLM routing.
+
+    Output goes to retrieval.plan_retrieval() to select which holdings to query
+    and in what order.
+    """
+    return f"""{persona_for(agent_name)}
+
+Task: Decide which holdings to search for this query. You may pick multiple.
+Weights must sum to 1.0.
+
+Where this output goes: the retrieval planner for {agent_name}. Your weights
+determine which holdings are searched and with what priority. A wrong routing
+sends the agent to the wrong shelf and it comes back empty.
+
+Holdings:
+- hall       — verbatim transcript search (exact quotes, FTS5)
+- stacks     — semantic similarity search (fuzzy, embedding-based)
+- catalogue  — structured fact triples (subject-predicate-object)
+- reading-room — session directory (topic/date timeline lookups)
+- digests    — compressed session summaries
+- reference  — synthesised patterns and insights (lossiest)
+
+Also predict the expected form of the answer so the assembler can pick the
+right response template.
+
+Output ONLY a JSON object:
+{{
+  "holdings": [
+    {{"name": str, "weight": float, "reason": "<one phrase>"}}
+  ],
+  "expected_form": "fact | quote | summary | timeline | pattern"
+}}
+
+Rules:
+- Weights sum to 1.0.
+- Prefer catalogue for "is X true" / preference / fact questions.
+- Prefer hall for "what exact words" / "did the user say" questions.
+- Prefer reading-room + digests for "what did we work on" / date range questions.
+- Prefer reference for "what patterns" / "overall" questions.
+- Prefer stacks when the query is vague or topic-based.
+- If unsure, split evenly between stacks and catalogue (0.5 / 0.5).
+
+Query:
+{query}
+
+JSON:"""
+
+
+def verification_prompt(
+    query: str,
+    candidate_text: str,
+    hall_quote: str,
+    *,
+    agent_name: str = "default",
+) -> str:
+    """Retrieval-time verifier. Checks a candidate answer against a Hall of Records quote.
+
+    Fires inside retrieve() after cross-encoder rerank, applied to top-K results.
+    Used to adjust confidence scores before returning results to the caller.
+
+    Shared verdict schema with contradiction_check_prompt:
+      {"verdict": "supports | contradicts | silent", "quote": str, "note": str}
+    """
+    return f"""{persona_for(agent_name)}
+
+Task: Is this candidate answer supported by, contradicted by, or unaddressed
+by the verbatim Hall of Records quote below?
+
+Where this output goes: the retrieval confidence scorer for {agent_name}.
+- `supports`    → +0.1 confidence bonus on the candidate.
+- `contradicts` → -0.4 confidence penalty; candidate is flagged `conflict: true`.
+- `silent`      → no change.
+
+Do not reason about plausibility, prior knowledge, or what seems likely.
+Base your verdict ONLY on the quote below. If the quote does not mention
+the fact either way, the answer is `silent`.
+
+Output ONLY a JSON object:
+{{"verdict": "supports | contradicts | silent", "quote": "<verbatim substring of the evidence>", "note": "<one sentence>"}}
+
+Rules:
+- quote must be a substring of the Hall of Records evidence below.
+- `silent` verdicts return an empty string for quote.
+- Do not return `supports` when the quote is about a different subject.
+- Temporal scope matters: "Jay prefers X as of 2025" does not contradict
+  "Jay preferred Y in 2023" — those are different validity windows.
+
+Query: {query}
+
+Candidate answer:
+{candidate_text[:800]}
+
+Hall of Records evidence:
+{hall_quote[:600]}
+
+JSON:"""
+
+
+def contradiction_check_prompt(
+    new_triple: str,
+    existing_triples: list[str],
+    *,
+    agent_name: str = "default",
+) -> str:
+    """Ingest-time contradiction checker. Fires before filing a new Card Catalogue triple.
+
+    Compares a new triple against semantically-close existing ones.
+    Shared verdict schema with verification_prompt.
+
+    Action on verdict:
+    - contradicts → existing triple gets superseded_by = new_id; conflict_reason stored.
+    - supports    → drop new triple (duplicate), increment confirmation_count on old.
+    - silent      → file new triple normally.
+    """
+    existing_block = "\n".join(f"  - {t}" for t in existing_triples[:20])
+    return f"""{persona_for(agent_name)}
+
+Task: Does this new Card Catalogue triple contradict any existing one?
+
+Where this output goes: the Card Catalogue ingest gate for {agent_name}.
+- `contradicts` → the old card is superseded (not deleted) and a conflict_reason
+  is stored. A wrong `contradicts` verdict silences a true fact until someone
+  investigates the supersede chain.
+- `supports`    → the new triple is dropped as a duplicate, and the old card's
+  confirmation_count is incremented. A wrong `supports` verdict silently drops
+  a fact update.
+- `silent`      → the new triple is filed normally. A missed contradiction
+  allows two conflicting facts to coexist.
+
+Conservative rule: when genuinely uncertain between `contradicts` and `silent`,
+return `silent`. Better to store both facts than to silently suppress one.
+
+Two triples contradict when they cannot BOTH be true at the same time for the
+same subject. Examples:
+- "Jay prefers Python" and "Jay prefers Go" CONTRADICT (same moment, same choice).
+- "Jay prefers Python" and "Jay knows Go" DO NOT contradict (orthogonal claims).
+- Temporal facts with non-overlapping validity windows DO NOT contradict —
+  they are history, not conflict.
+
+Output ONLY a JSON object:
+{{"verdict": "supports | contradicts | silent", "quote": "<exact phrase from existing that conflicts>", "note": "<one sentence explanation>"}}
+
+New triple:
+  {new_triple}
+
+Existing triples (same subject or close predicate):
+{existing_block}
+
+JSON:"""
+
+
+def disambiguation_prompt(
+    query: str,
+    candidates: list[str],
+    *,
+    agent_name: str = "default",
+) -> str:
+    """Selects between near-identical retrieval candidates when scores are within 0.05.
+
+    Only fires when the caller opts in via retrieve(disambiguate=True).
+    Returns -1 when genuinely ambiguous; caller returns all candidates with
+    needs_user_disambiguation: true.
+    """
+    candidate_block = "\n".join(f"[{i}] {c[:300]}" for i, c in enumerate(candidates))
+    return f"""{persona_for(agent_name)}
+
+Task: Given this query and these near-identical retrieval candidates, pick
+the one that most directly answers the query.
+
+Where this output goes: the retrieval tie-breaker for {agent_name}.
+- A correct pick surfaces the most relevant result.
+- Returning -1 (genuinely ambiguous) passes the decision to the user, which
+  is always preferable to guessing wrong.
+
+Output ONLY a JSON object:
+{{"choice_index": int, "reason": "<one sentence>"}}
+
+Use -1 for `choice_index` if the candidates are genuinely equally relevant
+and you cannot distinguish them based on the query — let the user decide.
+Do not pick a candidate just to avoid returning -1.
+
+Query: {query}
+
+Candidates:
+{candidate_block}
+
+JSON:"""
+
+
+def citation_format_prompt(
+    source_text: str,
+    hit_metadata: dict,
+    *,
+    agent_name: str = "default",
+) -> str:
+    """Formats a retrieval hit into a citable reference.
+
+    Called by ContextAssembler.format_citation(hit) when the consumer
+    requests formatted output. Falls back to a deterministic template
+    after two consecutive failures where quote is not a substring of source.
+    """
+    holding = hit_metadata.get("source", "unknown")
+    ts = hit_metadata.get("metadata", {}).get("created_at", "")
+    return f"""{persona_for(agent_name)}
+
+Task: Format this retrieval hit as a citable reference.
+
+Where this output goes: the citation shown to the end user alongside the
+answer. The quote field must be verbatim — the user may look it up in the
+Hall of Records. An invented quote is a fabrication.
+
+Output ONLY a JSON object:
+{{"quote": "<exact verbatim substring of the source text>", "attribution": str, "confidence": float}}
+
+Rules:
+- quote MUST be a substring of the source text below. No paraphrase.
+- attribution format: "{holding.capitalize()}, {ts}" — use the holding name and
+  timestamp. If timestamp is missing, omit it.
+- confidence in [0, 1]: how well does this hit answer the implied question?
+  Use 0.0–0.4 for tangential matches, 0.5–0.7 for partial, 0.8–1.0 for direct.
+- If you cannot extract a verbatim quote, return quote: "" and confidence: 0.1.
+
+Source text:
+{source_text[:800]}
+
+JSON:"""
+
+
+def redaction_prompt(text: str, *, agent_name: str = "default") -> str:
+    """LLM-backed secret detector. Runs AFTER regex secret_filter, not instead of it.
+
+    Catches novel secrets regex misses: custom tokens, PII in prose,
+    access codes embedded in sentences.
+
+    Quality bar: false positives are worse than false negatives.
+    Only flag a span if removing it would not change the meaning of the
+    surrounding sentence (the span is a standalone secret, not a content word).
+
+    Redaction applies to Stacks, Digests, and Reference Desk only.
+    The Hall of Records is NEVER modified — the original text is archived verbatim.
+    """
+    return f"""{persona_for(agent_name)}
+
+Task: Find character spans that look like secrets or sensitive data.
+
+Where this output goes: the redaction layer for {agent_name}'s indexed copies
+(Stacks, Digests, Reference Desk). The Hall of Records keeps the original.
+Spans flagged here are replaced with [REDACTED:<reason>] in the indexed copies.
+
+Output ONLY a JSON object:
+{{"spans": [{{"start": int, "end": int, "reason": "<short description>"}}]}}
+
+What counts as a secret here:
+- API keys, bearer tokens, passwords, private keys, secrets in any format.
+- Full credit card or bank account numbers.
+- PII: full names combined with SSN, DOB, or address; medical record numbers.
+- Custom secrets (e.g. "token: abc123xyz", "key: xxxxxx") even if not standard format.
+
+What does NOT count:
+- Normal sentences that happen to contain the word "key" or "secret".
+- Public identifiers: GitHub usernames, repo names, email addresses unless
+  combined with a password or credential.
+- Technical terms, function names, or variable names.
+
+Quality bar (false positives are worse than false negatives):
+- Only flag a span if removing it would not change the meaning of the
+  surrounding sentence.
+- When uncertain, return empty spans rather than redacting valid content.
+- Empty spans is the right answer when no secrets are present.
+
+Text:
+{text[:3000]}
+
+JSON:"""
+
+
+def cross_reference_prompt(
+    cards: list[dict],
+    *,
+    agent_name: str = "default",
+) -> str:
+    """Nightly batch: finds see-also edges between Card Catalogue cards sharing a subject.
+
+    Output edges are stored in the card_edges table and used by retrieval to
+    expand a hit — if you hit card A, card B is attached as context.
+
+    Not called at ingest time. Runs in a nightly batch over clusters of cards
+    with the same subject entity.
+    """
+    card_block = "\n".join(
+        f"[{c.get('id', i)}] {c.get('subject','?')} [{c.get('predicate','?')}] {c.get('object','?')}"
+        for i, c in enumerate(cards[:40])
+    )
+    return f"""{persona_for(agent_name)}
+
+Task: Find see-also edges between Card Catalogue cards for {agent_name}.
+
+Where this output goes: the card_edges table. Edges expand retrieval hits —
+card A returns card B as additional context. An over-enthusiastic linker
+floods every result with noise. Be conservative: only link cards that would
+genuinely help each other's context.
+
+Two cards are see-also when understanding one requires or is enriched by
+the other, for the same subject. Examples:
+- "Jay prefers dark mode" see-also "Jay uses VS Code" — editor setup context.
+- "Jay prefers Python" see-also "Jay avoids Java" — language preference cluster.
+- "Jay prefers Python" NOT see-also "Jay lives in London" — unrelated facts.
+
+Output ONLY a JSON object:
+{{"edges": [
+  {{"from": "<card_id>", "to": "<card_id>", "relation": "see-also", "reason": "<one phrase>"}}
+]}}
+
+Rules:
+- from/to values must be card IDs from the list below.
+- Only add an edge when it genuinely helps retrieval context.
+- Empty edges is the right answer when no meaningful connections exist.
+- Do not add edges just because cards share a subject — that's redundant.
+
+Cards:
+{card_block}
+
+JSON:"""
+
 __all__ = [
     "LIBRARIAN_PERSONA",
     "persona_for",
@@ -328,4 +713,12 @@ __all__ = [
     "reflection_prompt",
     "query_expansion_prompt",
     "preference_extraction_prompt",
+    "intake_classification_prompt",
+    "routing_prompt",
+    "verification_prompt",
+    "contradiction_check_prompt",
+    "disambiguation_prompt",
+    "citation_format_prompt",
+    "redaction_prompt",
+    "cross_reference_prompt",
 ]
