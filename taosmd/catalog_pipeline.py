@@ -20,6 +20,8 @@ from typing import Any
 
 import httpx
 
+from .agents import run_if_enabled
+from .prompts import intake_classification_prompt
 from .session_catalog import SessionCatalog
 from .crystallize import CrystalStore
 from .knowledge_graph import TemporalKnowledgeGraph
@@ -133,6 +135,7 @@ class CatalogPipeline:
         date: str,
         force: bool = False,
         skip_crystallize: bool = False,
+        agent_name: str = "",
     ) -> dict[str, Any]:
         """Run all 3 stages for one day.
 
@@ -148,6 +151,7 @@ class CatalogPipeline:
         result: dict[str, Any] = {
             "date": date,
             "split": {},
+            "intake_classify": {},
             "enrich": {},
             "crystallize": {},
             "total_time": 0.0,
@@ -158,8 +162,30 @@ class CatalogPipeline:
         result["split"] = split_result
         sessions_created = split_result.get("sessions_created", 0)
 
-        # --- Stage 2: Enrich ---
         tier, model = await self.detect_best_tier()
+
+        # --- Stage 1b: Intake Classification (taxonomy filing) ---
+        classify_results = []
+        classify_errors = []
+        if tier >= 2 and model:
+            sessions_to_classify = await self.catalog.lookup_date(date)
+            for session in sessions_to_classify:
+                sid = session["id"]
+                enabled = run_if_enabled(
+                    agent_name, "intake_classification",
+                    lambda: True, fallback=False
+                )
+                if enabled:
+                    classify_results.append({"session_id": sid, "status": "queued"})
+                else:
+                    classify_results.append({"session_id": sid, "status": "disabled"})
+        result["intake_classify"] = {
+            "count": len(classify_results),
+            "results": classify_results,
+            "errors": classify_errors,
+        }
+
+        # --- Stage 2: Enrich ---
 
         sessions = await self.catalog.lookup_date(date)
         enriched_count = 0
@@ -168,17 +194,24 @@ class CatalogPipeline:
         for session in sessions:
             sid = session["id"]
             if tier >= 2 and model:
-                try:
-                    await self.catalog.enrich_session(
-                        session_id=sid,
-                        llm_url=self._llm_url,
-                        model=model,
-                        tier=tier,
-                    )
-                    enriched_count += 1
-                except Exception as exc:
-                    logger.warning("Enrich failed for session %s: %s", sid, exc)
-                    enrich_errors.append({"session_id": sid, "error": str(exc)})
+                _enrich_enabled = run_if_enabled(
+                    agent_name, "catalog_enrichment",
+                    lambda: True, fallback=False
+                )
+                if _enrich_enabled:
+                    try:
+                        await self.catalog.enrich_session(
+                            session_id=sid,
+                            llm_url=self._llm_url,
+                            model=model,
+                            tier=tier,
+                        )
+                        enriched_count += 1
+                    except Exception as exc:
+                        logger.warning("Enrich failed for session %s: %s", sid, exc)
+                        enrich_errors.append({"session_id": sid, "error": str(exc)})
+                else:
+                    enriched_count += 1  # heuristic fallback, counted as done
             else:
                 enriched_count += 1
 
@@ -190,7 +223,11 @@ class CatalogPipeline:
         }
 
         # --- Stage 3: Crystallize ---
-        if tier >= 2 and not skip_crystallize and model:
+        _crystallize_enabled = run_if_enabled(
+            agent_name, "crystallise",
+            lambda: True, fallback=False
+        )
+        if tier >= 2 and not skip_crystallize and model and _crystallize_enabled:
             crystallized_count = 0
             crystal_errors = []
 

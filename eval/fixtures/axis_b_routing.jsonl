@@ -1,0 +1,200 @@
+{"id": "B-factual-00", "query": "What Recall@5 does taosmd achieve?", "bucket": "factual", "expected_answer": "97.0"}
+{"id": "B-factual-01", "query": "How many tests does taosmd have?", "bucket": "factual", "expected_answer": "74"}
+{"id": "B-factual-02", "query": "How many modules does taosmd have?", "bucket": "factual", "expected_answer": "22"}
+{"id": "B-factual-03", "query": "What embedding model does taosmd use?", "bucket": "factual", "expected_answer": "MiniLM"}
+{"id": "B-factual-04", "query": "What vector dimension does taosmd use?", "bucket": "factual", "expected_answer": "384"}
+{"id": "B-factual-05", "query": "What is the default LLM for taosmd enrichment?", "bucket": "factual", "expected_answer": "qwen3:4b"}
+{"id": "B-factual-06", "query": "What port does the taOSmd API run on?", "bucket": "factual", "expected_answer": "9001"}
+{"id": "B-factual-07", "query": "What benchmark dataset is used for evaluation?", "bucket": "factual", "expected_answer": "LongMemEval"}
+{"id": "B-factual-08", "query": "How many questions are in LongMemEval-S?", "bucket": "factual", "expected_answer": "500"}
+{"id": "B-factual-09", "query": "What is the archive format in taosmd?", "bucket": "factual", "expected_answer": "JSONL"}
+{"id": "B-factual-10", "query": "What FTS version does taosmd use?", "bucket": "factual", "expected_answer": "FTS5"}
+{"id": "B-factual-11", "query": "What ranking algorithm does taosmd use for fusion?", "bucket": "factual", "expected_answer": "RRF"}
+{"id": "B-factual-12", "query": "What is the RRF constant k in taosmd?", "bucket": "factual", "expected_answer": "60"}
+{"id": "B-factual-13", "query": "What model family does the cross-encoder use?", "bucket": "factual", "expected_answer": "MiniLM"}
+{"id": "B-factual-14", "query": "How many holdings does the Librarian manage?", "bucket": "factual", "expected_answer": "six"}
+{"id": "B-factual-15", "query": "What is the Hall of Records?", "bucket": "factual", "expected_answer": "verbatim transcripts"}
+{"id": "B-factual-16", "query": "What is the Stacks in taosmd?", "bucket": "factual", "expected_answer": "vector memory"}
+{"id": "B-factual-17", "query": "What is the Card Catalogue?", "bucket": "factual", "expected_answer": "knowledge graph"}
+{"id": "B-factual-18", "query": "What is the Reading Room?", "bucket": "factual", "expected_answer": "session catalog"}
+{"id": "B-factual-19", "query": "What are Digests in taosmd?", "bucket": "factual", "expected_answer": "session summaries"}
+{"id": "B-factual-20", "query": "What language is taosmd written in?", "bucket": "factual", "expected_answer": "Python"}
+{"id": "B-factual-21", "query": "What SQLite extension does taosmd use for full-text search?", "bucket": "factual", "expected_answer": "FTS5"}
+{"id": "B-factual-22", "query": "What is the confidence threshold for returning results?", "bucket": "factual", "expected_answer": "0.6"}
+{"id": "B-factual-23", "query": "What model does the NPU backend use?", "bucket": "factual", "expected_answer": "qwen3:4b"}
+{"id": "B-factual-24", "query": "What is the name of the benchmark that beats MemPalace?", "bucket": "factual", "expected_answer": "LongMemEval-S"}
+{"id": "B-factual-25", "query": "What does taosmd stand for?", "bucket": "factual", "expected_answer": "taOS memory daemon"}
+{"id": "B-factual-26", "query": "How many exports does taosmd expose?", "bucket": "factual", "expected_answer": "30"}
+{"id": "B-factual-27", "query": "What is the nightly cron time for archive compression?", "bucket": "factual", "expected_answer": "3 AM"}
+{"id": "B-factual-28", "query": "What eval KPI target for the Librarian?", "bucket": "factual", "expected_answer": "15 percent"}
+{"id": "B-factual-29", "query": "What token cost limit for Librarian?", "bucket": "factual", "expected_answer": "3x"}
+{"id": "B-factual-30", "query": "What is the embedding latency on CPU?", "bucket": "factual", "expected_answer": "0.3ms"}
+{"id": "B-factual-31", "query": "What is the minimum confidence to return a result?", "bucket": "factual", "expected_answer": "0.6"}
+{"id": "B-factual-32", "query": "What is the verification confidence bonus?", "bucket": "factual", "expected_answer": "0.1"}
+{"id": "B-factual-33", "query": "What is the verification contradiction penalty?", "bucket": "factual", "expected_answer": "0.4"}
+{"id": "B-factual-34", "query": "How many Axis A scenarios are in the eval fixture?", "bucket": "factual", "expected_answer": "50"}
+{"id": "B-factual-35", "query": "How many Axis B queries are in the eval fixture?", "bucket": "factual", "expected_answer": "200"}
+{"id": "B-factual-36", "query": "How many Axis C sessions are in the eval fixture?", "bucket": "factual", "expected_answer": "20"}
+{"id": "B-factual-37", "query": "What is the pending path promotion threshold?", "bucket": "factual", "expected_answer": "3 uses"}
+{"id": "B-factual-38", "query": "What does RRF stand for?", "bucket": "factual", "expected_answer": "Reciprocal Rank Fusion"}
+{"id": "B-factual-39", "query": "What Python version does taosmd require?", "bucket": "factual", "expected_answer": "3.10"}
+{"id": "B-factual-40", "query": "What is the max agent name length?", "bucket": "factual", "expected_answer": "63"}
+{"id": "B-factual-41", "query": "What regex does agent names must match?", "bucket": "factual", "expected_answer": "[a-z][a-z0-9_-]"}
+{"id": "B-factual-42", "query": "What is the default archive path?", "bucket": "factual", "expected_answer": "~/.taosmd/archive"}
+{"id": "B-factual-43", "query": "What is the crystal store database name?", "bucket": "factual", "expected_answer": "crystals.db"}
+{"id": "B-factual-44", "query": "What is the knowledge graph database name?", "bucket": "factual", "expected_answer": "knowledge-graph.db"}
+{"id": "B-factual-45", "query": "What is the agent registry filename?", "bucket": "factual", "expected_answer": "agents.json"}
+{"id": "B-factual-46", "query": "What ordering algorithm does taosmd use for deduplication?", "bucket": "factual", "expected_answer": "Jaccard"}
+{"id": "B-factual-47", "query": "What Jaccard threshold is used for deduplication?", "bucket": "factual", "expected_answer": "0.8"}
+{"id": "B-factual-48", "query": "What is the intake classification stage?", "bucket": "factual", "expected_answer": "taxonomy filing"}
+{"id": "B-factual-49", "query": "What is the card_edges table used for?", "bucket": "factual", "expected_answer": "see-also cross-references"}
+{"id": "B-pref-00", "query": "Does Jay prefer Python or Go?", "bucket": "preference", "expected_answer": "Python"}
+{"id": "B-pref-01", "query": "Does Jay prefer dark mode or light mode?", "bucket": "preference", "expected_answer": "dark"}
+{"id": "B-pref-02", "query": "Does Jay prefer Docker or Incus containers?", "bucket": "preference", "expected_answer": "Incus"}
+{"id": "B-pref-03", "query": "Does Jay prefer Neovim or VS Code?", "bucket": "preference", "expected_answer": "Neovim"}
+{"id": "B-pref-04", "query": "Does Jay prefer FastAPI or Flask?", "bucket": "preference", "expected_answer": "FastAPI"}
+{"id": "B-pref-05", "query": "Does Jay prefer SQLite or PostgreSQL?", "bucket": "preference", "expected_answer": "SQLite"}
+{"id": "B-pref-06", "query": "Does Jay prefer Tailscale or WireGuard?", "bucket": "preference", "expected_answer": "Tailscale"}
+{"id": "B-pref-07", "query": "Does Jay prefer pytest or unittest?", "bucket": "preference", "expected_answer": "pytest"}
+{"id": "B-pref-08", "query": "Does Jay prefer zsh or bash?", "bucket": "preference", "expected_answer": "zsh"}
+{"id": "B-pref-09", "query": "Does Jay prefer feature branches or trunk-based?", "bucket": "preference", "expected_answer": "feature branches"}
+{"id": "B-pref-10", "query": "Does Jay prefer Kagi or Google?", "bucket": "preference", "expected_answer": "Kagi"}
+{"id": "B-pref-11", "query": "Does Jay prefer Logseq or Obsidian?", "bucket": "preference", "expected_answer": "Logseq"}
+{"id": "B-pref-12", "query": "Does Jay prefer Matrix or Discord?", "bucket": "preference", "expected_answer": "Matrix"}
+{"id": "B-pref-13", "query": "Does Jay prefer Vaultwarden or Bitwarden?", "bucket": "preference", "expected_answer": "Vaultwarden"}
+{"id": "B-pref-14", "query": "Does Jay prefer Proxmox or DigitalOcean?", "bucket": "preference", "expected_answer": "Proxmox"}
+{"id": "B-pref-15", "query": "Does Jay prefer gemma4:e2b or qwen3:4b for local inference?", "bucket": "preference", "expected_answer": "gemma4:e2b"}
+{"id": "B-pref-16", "query": "Does Jay prefer Rust or Go for CLI tools?", "bucket": "preference", "expected_answer": "Rust"}
+{"id": "B-pref-17", "query": "Does Jay prefer 2-space or 4-space indentation?", "bucket": "preference", "expected_answer": "2-space"}
+{"id": "B-pref-18", "query": "Does Jay prefer OpenClaw or Hermes?", "bucket": "preference", "expected_answer": "OpenClaw"}
+{"id": "B-pref-19", "query": "Does Jay prefer Iosevka or JetBrains Mono?", "bucket": "preference", "expected_answer": "Iosevka"}
+{"id": "B-pref-20", "query": "Does Jay prefer ROCm or CUDA?", "bucket": "preference", "expected_answer": "ROCm"}
+{"id": "B-pref-21", "query": "Does Jay prefer GitHub Issues or plain text tracking?", "bucket": "preference", "expected_answer": "GitHub Issues"}
+{"id": "B-pref-22", "query": "Does Jay like emergent or fixed taxonomy?", "bucket": "preference", "expected_answer": "emergent"}
+{"id": "B-pref-23", "query": "Does Jay prefer MiniLM or nomic for embeddings?", "bucket": "preference", "expected_answer": "MiniLM"}
+{"id": "B-pref-24", "query": "Does Jay prefer self-hosted or cloud services?", "bucket": "preference", "expected_answer": "self-hosted"}
+{"id": "B-pref-25", "query": "Does Jay prefer async or sync code patterns?", "bucket": "preference", "expected_answer": "async"}
+{"id": "B-pref-26", "query": "Does Jay prefer strict type annotations?", "bucket": "preference", "expected_answer": "yes"}
+{"id": "B-pref-27", "query": "Does Jay prefer verbose or concise commit messages?", "bucket": "preference", "expected_answer": "concise"}
+{"id": "B-pref-28", "query": "Does Jay prefer local models or cloud models?", "bucket": "preference", "expected_answer": "local"}
+{"id": "B-pref-29", "query": "Does Jay prefer RRF or BM25 for fusion?", "bucket": "preference", "expected_answer": "RRF"}
+{"id": "B-pref-30", "query": "Does Jay prefer append-only or mutable archives?", "bucket": "preference", "expected_answer": "append-only"}
+{"id": "B-pref-31", "query": "Does Jay prefer ONNX or PyTorch for inference?", "bucket": "preference", "expected_answer": "ONNX"}
+{"id": "B-pref-32", "query": "Does Jay prefer ARM or x86 for edge compute?", "bucket": "preference", "expected_answer": "ARM"}
+{"id": "B-pref-33", "query": "Does Jay prefer Pi NPU or GPU for inference?", "bucket": "preference", "expected_answer": "NPU"}
+{"id": "B-pref-34", "query": "Does Jay prefer Tailscale or ZeroTier?", "bucket": "preference", "expected_answer": "Tailscale"}
+{"id": "B-pref-35", "query": "Does Jay prefer SQLite or Redis?", "bucket": "preference", "expected_answer": "SQLite"}
+{"id": "B-pref-36", "query": "Does Jay prefer atomic file writes or in-place writes?", "bucket": "preference", "expected_answer": "atomic"}
+{"id": "B-pref-37", "query": "Does Jay prefer JSON or YAML for config?", "bucket": "preference", "expected_answer": "JSON"}
+{"id": "B-pref-38", "query": "Does Jay prefer pip or conda for Python packages?", "bucket": "preference", "expected_answer": "pip"}
+{"id": "B-pref-39", "query": "Does Jay prefer structured logging or print statements?", "bucket": "preference", "expected_answer": "structured logging"}
+{"id": "B-pref-40", "query": "Does Jay prefer horizontal or vertical scaling?", "bucket": "preference", "expected_answer": "vertical"}
+{"id": "B-pref-41", "query": "Does Jay prefer monorepo or multi-repo?", "bucket": "preference", "expected_answer": "multi-repo"}
+{"id": "B-pref-42", "query": "Does Jay prefer fish or zsh?", "bucket": "preference", "expected_answer": "zsh"}
+{"id": "B-pref-43", "query": "Does Jay prefer Jellyfin or Plex?", "bucket": "preference", "expected_answer": "Jellyfin"}
+{"id": "B-pref-44", "query": "Does Jay prefer Portainer or CLI for container management?", "bucket": "preference", "expected_answer": "CLI"}
+{"id": "B-pref-45", "query": "Does Jay prefer dark terminal themes?", "bucket": "preference", "expected_answer": "yes"}
+{"id": "B-pref-46", "query": "Does Jay prefer streaming or batch LLM inference?", "bucket": "preference", "expected_answer": "streaming"}
+{"id": "B-pref-47", "query": "Does Jay prefer headless or GUI servers?", "bucket": "preference", "expected_answer": "headless"}
+{"id": "B-pref-48", "query": "Does Jay prefer edge AI or cloud AI?", "bucket": "preference", "expected_answer": "edge"}
+{"id": "B-pref-49", "query": "Does Jay prefer open-source or proprietary tools?", "bucket": "preference", "expected_answer": "open-source"}
+{"id": "B-temporal-00", "query": "When was the RRF regression fix cherry-picked?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-01", "query": "When did the Fedora benchmark reach 97.0%?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-02", "query": "When did Jay start benchmarking LongMemEval-S?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-03", "query": "When was taosmd first extracted from tinyagentos?", "bucket": "temporal", "expected_answer": "2026"}
+{"id": "B-temporal-04", "query": "When was the AGENTS.md file created?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-05", "query": "When was gemma4:e2b pulled on Fedora?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-06", "query": "When was Ollama updated to 0.20.7?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-07", "query": "When was the Librarian design spec written?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-08", "query": "When was the last LongMemEval benchmark run?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-09", "query": "When did taosmd beat MemPalace?", "bucket": "temporal", "expected_answer": "2026"}
+{"id": "B-temporal-10", "query": "When was the feat/librarian-controls branch created?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-11", "query": "When were the 8 new prompts added?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-12", "query": "When was the catalog_pipeline refactored?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-13", "query": "When was the session_catalog schema migrated?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-14", "query": "When was the eval harness created?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-15", "query": "When did the embed-compare screen start?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-16", "query": "When was the bench screen killed?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-17", "query": "When was the card_edges table added?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-18", "query": "When did Jay add run_if_enabled to agents.py?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-19", "query": "When was LIBRARIAN_TASKS extended?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-20", "query": "When did the combo-queue benchmark get killed?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-21", "query": "When was the Pi NPU fanout benchmark planned?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-22", "query": "When was issue #3 filed?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-23", "query": "When were issues #6-13 filed?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-24", "query": "When did the repo reach 31 tests?", "bucket": "temporal", "expected_answer": "before April 2026"}
+{"id": "B-temporal-25", "query": "When did the repo reach 74 tests?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-26", "query": "When was the README updated with 97.0%?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-27", "query": "When was Mem0 added to the competitor table?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-28", "query": "When was the multi-agent docs section written?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-29", "query": "When was the vector-only phase confirmed at 97.0%?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-30", "query": "When was the dreaming paragraph added to README?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-31", "query": "When was the Hall of Records concept named?", "bucket": "temporal", "expected_answer": "2026"}
+{"id": "B-temporal-32", "query": "When was the Reference Desk holding added?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-33", "query": "When was the taxonomy.json format specified?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-34", "query": "When was the routing_disagreements log added?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-35", "query": "When was the token ledger spec written?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-36", "query": "When did the session catalogue pipeline get the agent_name param?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-37", "query": "When was the FTS5 extended with taxonomy columns?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-38", "query": "When did Jay upgrade Ollama?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-39", "query": "When did Jay pull gemma4:e2b?", "bucket": "temporal", "expected_answer": "April 15 2026"}
+{"id": "B-temporal-40", "query": "When was the cross-encoder ONNX subdir fixed?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-41", "query": "When did the main Fedora bench start?", "bucket": "temporal", "expected_answer": "April 13 2026"}
+{"id": "B-temporal-42", "query": "When did the Fedora bench finish?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-43", "query": "When was the agent registry CLI added?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-44", "query": "When was the 3 AM cron time set?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-45", "query": "When was the composite scoring feature added?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-46", "query": "When was the NPU backend detection added?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-47", "query": "When was the access tracker module added?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-temporal-48", "query": "When was the browsing history module added?", "bucket": "temporal", "expected_answer": "2026"}
+{"id": "B-temporal-49", "query": "When was the first LongMemEval-S run completed?", "bucket": "temporal", "expected_answer": "April 2026"}
+{"id": "B-pattern-00", "query": "What patterns emerge in Jay's tool preferences?", "bucket": "pattern", "expected_answer": "open-source self-hosted"}
+{"id": "B-pattern-01", "query": "What is Jay's overall approach to AI inference?", "bucket": "pattern", "expected_answer": "local edge NPU"}
+{"id": "B-pattern-02", "query": "What theme runs through Jay's architecture decisions?", "bucket": "pattern", "expected_answer": "standalone library"}
+{"id": "B-pattern-03", "query": "What pattern is visible in Jay's database choices?", "bucket": "pattern", "expected_answer": "SQLite"}
+{"id": "B-pattern-04", "query": "What drives Jay's hardware choices?", "bucket": "pattern", "expected_answer": "ARM edge compute"}
+{"id": "B-pattern-05", "query": "What is the recurring theme in taosmd's design?", "bucket": "pattern", "expected_answer": "archive-first"}
+{"id": "B-pattern-06", "query": "What pattern describes Jay's benchmark approach?", "bucket": "pattern", "expected_answer": "real datasets"}
+{"id": "B-pattern-07", "query": "What is the general philosophy of the taosmd archive?", "bucket": "pattern", "expected_answer": "never delete never summarise"}
+{"id": "B-pattern-08", "query": "What pattern unifies Jay's migration decisions?", "bucket": "pattern", "expected_answer": "self-hosted over cloud"}
+{"id": "B-pattern-09", "query": "What is the overall taOS product vision?", "bucket": "pattern", "expected_answer": "personal AI operating system"}
+{"id": "B-pattern-10", "query": "What pattern recurs in Jay's LLM model choices?", "bucket": "pattern", "expected_answer": "small models edge inference"}
+{"id": "B-pattern-11", "query": "What drives taosmd's retrieval design?", "bucket": "pattern", "expected_answer": "hybrid semantic keyword"}
+{"id": "B-pattern-12", "query": "What is the Librarian's key design invariant?", "bucket": "pattern", "expected_answer": "never edit the Hall"}
+{"id": "B-pattern-13", "query": "What pattern describes Jay's commit style?", "bucket": "pattern", "expected_answer": "small focused commits"}
+{"id": "B-pattern-14", "query": "What theme connects taosmd's six holdings?", "bucket": "pattern", "expected_answer": "source of truth hierarchy"}
+{"id": "B-pattern-15", "query": "What is Jay's general stance on feature flags?", "bucket": "pattern", "expected_answer": "task enabled flags"}
+{"id": "B-pattern-16", "query": "What pattern appears in taosmd's error handling?", "bucket": "pattern", "expected_answer": "silent skip with log"}
+{"id": "B-pattern-17", "query": "What drives the taxonomy design?", "bucket": "pattern", "expected_answer": "emergent from usage"}
+{"id": "B-pattern-18", "query": "What recurring principle guides the KG design?", "bucket": "pattern", "expected_answer": "supersede not delete"}
+{"id": "B-pattern-19", "query": "What is the broad goal of the eval harness?", "bucket": "pattern", "expected_answer": "librarian cost justification"}
+{"id": "B-pattern-20", "query": "What pattern is visible in Jay's deployment choices?", "bucket": "pattern", "expected_answer": "LXC containers"}
+{"id": "B-pattern-21", "query": "What is the dominant theme in taosmd's retrieval pipeline?", "bucket": "pattern", "expected_answer": "rerank after merge"}
+{"id": "B-pattern-22", "query": "What drives the agent registry design?", "bucket": "pattern", "expected_answer": "isolation and naming"}
+{"id": "B-pattern-23", "query": "What is the overarching goal of the Librarian layer?", "bucket": "pattern", "expected_answer": "memory never fails"}
+{"id": "B-pattern-24", "query": "What pattern is visible in Jay's testing philosophy?", "bucket": "pattern", "expected_answer": "integration over mocks"}
+{"id": "B-pattern-25", "query": "What theme connects the six prompt types?", "bucket": "pattern", "expected_answer": "cite the source"}
+{"id": "B-pattern-26", "query": "What recurring design choice appears in taosmd's writes?", "bucket": "pattern", "expected_answer": "atomic file ops"}
+{"id": "B-pattern-27", "query": "What is the overall competitive strategy for taosmd?", "bucket": "pattern", "expected_answer": "beat SOTA on recall"}
+{"id": "B-pattern-28", "query": "What pattern unifies Jay's infrastructure decisions?", "bucket": "pattern", "expected_answer": "Orange Pi cluster"}
+{"id": "B-pattern-29", "query": "What is the high-level taOS business model?", "bucket": "pattern", "expected_answer": "Umbrel-style app store"}
+{"id": "B-pattern-30", "query": "What drives the branching strategy?", "bucket": "pattern", "expected_answer": "dev branch for unverified"}
+{"id": "B-pattern-31", "query": "What is the recurring approach to schema changes?", "bucket": "pattern", "expected_answer": "migration not rebuild"}
+{"id": "B-pattern-32", "query": "What pattern appears in the nightly pipeline?", "bucket": "pattern", "expected_answer": "split enrich crystallize"}
+{"id": "B-pattern-33", "query": "What is the overall philosophy of the Crystal Store?", "bucket": "pattern", "expected_answer": "digest not replacement"}
+{"id": "B-pattern-34", "query": "What drives the fan-out design?", "bucket": "pattern", "expected_answer": "K nearest sessions"}
+{"id": "B-pattern-35", "query": "What recurring principle guides the Reference Desk?", "bucket": "pattern", "expected_answer": "cite the cards"}
+{"id": "B-pattern-36", "query": "What is the broad approach to cross-agent isolation?", "bucket": "pattern", "expected_answer": "per-agent indexes"}
+{"id": "B-pattern-37", "query": "What theme connects taosmd's streaming decisions?", "bucket": "pattern", "expected_answer": "async everywhere"}
+{"id": "B-pattern-38", "query": "What pattern is visible in Jay's documentation style?", "bucket": "pattern", "expected_answer": "no AI attribution"}
+{"id": "B-pattern-39", "query": "What is the general stance on breaking changes?", "bucket": "pattern", "expected_answer": "semver dev branch"}
+{"id": "B-pattern-40", "query": "What drives the composite scoring formula?", "bucket": "pattern", "expected_answer": "signal diversity"}
+{"id": "B-pattern-41", "query": "What theme connects the three eval axes?", "bucket": "pattern", "expected_answer": "where retrieval fails"}
+{"id": "B-pattern-42", "query": "What pattern appears in taosmd's fallback strategy?", "bucket": "pattern", "expected_answer": "heuristic over silence"}
+{"id": "B-pattern-43", "query": "What is the high-level goal of the knowledge pipeline?", "bucket": "pattern", "expected_answer": "structured from raw"}
+{"id": "B-pattern-44", "query": "What recurring element appears in all prompt templates?", "bucket": "pattern", "expected_answer": "persona per agent"}
+{"id": "B-pattern-45", "query": "What drives the session splitting logic?", "bucket": "pattern", "expected_answer": "gap-based segmentation"}
+{"id": "B-pattern-46", "query": "What is the broad design principle of run_if_enabled?", "bucket": "pattern", "expected_answer": "extractor stays pure"}
+{"id": "B-pattern-47", "query": "What pattern connects all memory layer writes?", "bucket": "pattern", "expected_answer": "hall first always"}
+{"id": "B-pattern-48", "query": "What is the overall principle behind confidence scoring?", "bucket": "pattern", "expected_answer": "source beats plausibility"}
+{"id": "B-pattern-49", "query": "What theme unifies taosmd's public API?", "bucket": "pattern", "expected_answer": "simple search and ingest"}

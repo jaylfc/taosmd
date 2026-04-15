@@ -87,8 +87,22 @@ CREATE VIRTUAL TABLE IF NOT EXISTS catalog_fts USING fts5(
     topic,
     description,
     category,
+    primary_project,
+    primary_topic,
+    primary_subtopic,
     tokenize='porter unicode61'
 );
+
+CREATE TABLE IF NOT EXISTS card_edges (
+    id INTEGER PRIMARY KEY,
+    from_card INTEGER NOT NULL,
+    to_card INTEGER NOT NULL,
+    relation TEXT NOT NULL,
+    reason TEXT DEFAULT '',
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_card_edges_from ON card_edges(from_card);
 """
 
 
@@ -130,6 +144,27 @@ class SessionCatalog:
         self._conn = sqlite3.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._conn.commit()
+        # Taxonomy columns — safe no-op if already present
+        _taxonomy_cols = [
+            "ALTER TABLE sessions ADD COLUMN primary_project TEXT DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN primary_topic TEXT DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN primary_subtopic TEXT DEFAULT ''",
+            "ALTER TABLE sessions ADD COLUMN labels_json TEXT DEFAULT '[]'",
+            "ALTER TABLE sessions ADD COLUMN classified_at REAL DEFAULT 0",
+        ]
+        for _sql in _taxonomy_cols:
+            try:
+                self._conn.execute(_sql)
+            except Exception:
+                pass  # column already exists
+        try:
+            self._conn.execute(
+                'CREATE INDEX IF NOT EXISTS idx_sessions_path '
+                'ON sessions(primary_project, primary_topic, primary_subtopic)'
+            )
+        except Exception:
+            pass
         self._conn.commit()
 
     async def close(self) -> None:
