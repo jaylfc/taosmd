@@ -18,6 +18,9 @@ local = ["sentence-transformers"]
 [tool.setuptools.packages.find]
 include = ["taosmd*"]
 
+[project.scripts]
+taosmd = "taosmd.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/jaylfc/taosmd"
 Repository = "https://github.com/jaylfc/taosmd"

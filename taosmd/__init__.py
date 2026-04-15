@@ -26,6 +26,20 @@ from .taosmd_backend import TaOSmdBackend
 from .job_queue import JobQueue
 from .resource_manager import ResourceManager
 
+# Agent registry — multi-agent isolation on a single taosmd install
+from .agents import (
+    AgentRegistry,
+    AgentExistsError,
+    AgentNotFoundError,
+    InvalidAgentNameError,
+    register_agent,
+    list_agents,
+    agent_exists,
+    get_agent,
+    delete_agent,
+    ensure_agent,
+)
+
 __all__ = [
     # Core memory stack
     "KnowledgeGraph",
@@ -73,4 +87,15 @@ __all__ = [
     # Job queue + resource management
     "JobQueue",
     "ResourceManager",
+    # Agent registry
+    "AgentRegistry",
+    "AgentExistsError",
+    "AgentNotFoundError",
+    "InvalidAgentNameError",
+    "register_agent",
+    "list_agents",
+    "agent_exists",
+    "get_agent",
+    "delete_agent",
+    "ensure_agent",
 ]

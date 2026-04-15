@@ -8,9 +8,64 @@
 
 Beats MemPalace (96.6%) and agentmemory (95.2%) — running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
 
+---
+
+## Why this exists
+
+Most memory systems try to recreate human thinking. They embed, they index, they retrieve, and they call it "cognition" because that sounds better than "we built a vector database". The brain is hard, so they reach for it as a metaphor and hope nobody asks where the reasoning is supposed to come from.
+
+A few years in, **MemPalace** stepped sideways. Instead of a brain, a building — a palace of rooms where memories sit on shelves you can walk past. That's a real improvement. The metaphor is concrete. You can picture the kitchen and remember what you cooked.
+
+But a building is still one person's mind, just dressed up. When a human needs to remember something they didn't personally experience, they don't walk through their own house. They go outside. They go to the **library**.
+
+The library is the biggest thing humans ever built for memory. Not the brain, not the palace — the library. One species figured out that putting verbatim records on shelves, organised by subject, indexed by a card catalogue, maintained by a librarian who actually knows where everything is, beats any individual brain by orders of magnitude. The library is how we got from "I remember my grandmother's recipe" to "I can read what Marcus Aurelius wrote on a Tuesday in 175 AD".
+
+**taosmd is the library.**
+
+There is a librarian. She sits at the desk and watches every conversation that passes through. She takes it down word for word — no paraphrasing, no summary that loses the joke, no compression that flattens the nuance. The transcript is the truth, and the truth is what gets shelved.
+
+Then she does the work nobody wants to do. She breaks the day into chapters, stories, articles, recurring serials. She logs the date, the participants, the subject, the cross-references to earlier conversations on the same theme. She writes it all down in her directory so she knows where to put her hand on any of it.
+
+When you ask the agent something, the librarian helps. Vector search picks the candidate shelves, keyword search confirms the title, the temporal graph tells her which version is the current one, and the archive proves what was actually said. No single component is doing magic. They're all doing one job each, the way a real library does: stacks, catalogue, reference desk, archive.
+
+Uncertainty is her specialty. If the agent isn't sure, it asks her, and she'll either find the source, find an earlier conversation that contradicts the claim, or admit nobody's said anything about it before. She doesn't make things up. She points at the page.
+
+Everything is time-stamped. Everything is on a shelf. Nothing is ever lost.
+
+**What about dreaming?** A few systems have started calling their consolidation pass "dreaming" — [OpenClaw's dreaming](https://docs.openclaw.ai/concepts/dreaming) is the cleanest example. The idea is good: take the day's signals, score them, promote the durable ones to long-term memory. It's their version of the librarian shelving the day's events.
+
+The catch is the dream rewrites itself. Snippets get scored, gated, redacted, summarised into a `MEMORY.md`. What didn't make the cut, and what the original wording actually was, is gone. The bit that survives is the bit the dreamer thought worth keeping at 3am.
+
+I don't know about you, but I can never remember my dreams. So I built a robot librarian who never sleeps instead. The verbatim transcript goes into the zero-loss archive **first**. The librarian crystallises whatever's worth crystallising — but the original is still on the shelf, byte for byte, never overwritten. Disagree with how she summarised today? Walk over to the archive and read what was actually said. The dream and the source are both there.
+
+That's the difference. We didn't dress up a vector database as a brain. We built a library.
+
+---
+
 ## Getting Started
 
-### One-Line Setup
+### Let your agent install it
+
+The cleanest way to install taosmd is to ask your agent to do it. Paste this message into Claude Code, Cursor, your OpenClaw shell, whatever:
+
+> Please install taosmd as my memory system. The repo is github.com/jaylfc/taosmd.
+>
+> 1. Read the README so you understand what you're installing.
+> 2. Run the install script: `curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash`. Report any errors and stop if it fails.
+> 3. Register yourself as an agent so you have your own isolated index. Pick a stable agent name (lowercase, no spaces) — the same name you'll use every time you call the librarian. If I have multiple agents in this framework, ask me what to name this one before registering.
+> 4. Verify the install: call `taosmd.search("hello", agent="<your-name>")` — it should return an empty result, not an error.
+> 5. Append the "Memory — taosmd" rules block from `docs/agent-rules.md` in the repo to my agent file (CLAUDE.md / system prompt / AGENTS.md — whatever your framework reads every turn). Replace `<your-agent-name>` with the name you registered as.
+> 6. Confirm it's installed and tell me your agent name so I know how to refer to your memory.
+>
+> Don't summarise the repo or paraphrase the rules. Copy them verbatim — the wording is the contract.
+
+The agent will pull the repo, run the install, register itself, append the per-turn rules block to its own instruction file, and verify everything works. After that, every turn it runs it'll check the librarian when it's uncertain — see [docs/agent-rules.md](docs/agent-rules.md) for the rules block it installs.
+
+**Multiple agents in one framework?** Same install message works. The agent will ask you to name it before registering, so each agent gets its own shelf. The taosmd service itself stays as one process; only the per-agent indexes are separate. See [docs/multi-agent.md](docs/multi-agent.md) for the full naming convention, cross-agent reads, migration scenarios, and a five-agent worked example.
+
+**Inside taOS?** Don't use this — taOS provisions taosmd automatically when you deploy an agent, and the rules block is baked into the agent template. This install path is for standalone framework users.
+
+### One-Line Setup (manual)
 
 > **Note:** Install scripts are new and awaiting full testing on clean environments. Please report issues.
 
