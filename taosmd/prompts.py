@@ -260,8 +260,19 @@ JSON:"""
 
 
 def query_expansion_prompt(query: str, *, agent_name: str = "default") -> str:
-    """LLM-assisted query expansion. Returns entities + paraphrases."""
-    return f"""{persona_for(agent_name)}
+    """LLM-assisted query expansion. Returns entities + paraphrases.
+
+    Uses a retrieval-focused persona rather than the closed-world librarian
+    persona. Query expansion is a vocabulary task, not a fact task: the model
+    should freely use its knowledge of synonyms, related terms, and common
+    phrasings to generate rewrites that will surface relevant stored text.
+    """
+    return f"""You are a retrieval query expansion assistant. Your job is to
+generate alternative phrasings that help a semantic search engine find
+relevant text. Use your full vocabulary knowledge — synonyms, related
+technical terms, common abbreviations, and specific examples of the
+category being asked about. The goal is to catch phrasings the user
+might have said when they first mentioned the topic.
 
 Task: Expand this query for retrieval.
 
@@ -275,10 +286,13 @@ Output ONLY a JSON object:
 
 Rules:
 - Entities are proper nouns and key concepts found in the query.
-- Rewrites are 1-3 alternative phrasings that preserve the meaning.
+- Rewrites are 1-3 alternative phrasings that include specific examples
+  or synonyms for the category (e.g. "code editor" → include specific
+  editor names the user might have mentioned; "database" → include
+  specific DB names). Concrete is better than generic.
 - A rewrite that changes the question is worse than no rewrite. Stop
   at 3.
-- Empty arrays if the query is already as concrete as it can be.
+- Empty arrays only if the query is already maximally specific.
 
 Query:
 {query}

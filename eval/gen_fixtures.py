@@ -383,7 +383,15 @@ VOCAB_PAIRS = [
 ]
 
 
-def build_session(pair: dict, rng: random.Random, base_ts: float) -> dict:
+def build_session(
+    pair: dict, rng: random.Random, base_ts: float, *, n_distractors: int = 8
+) -> dict:
+    """Build one 60-turn session.
+
+    n_distractors: how many of the 8 distractors to use (each appears twice).
+    Default 8 → 16 distractor turns; use 6 → 12 distractor turns (fact at
+    rank 13 in a limit-15 cosine search, letting the cross-encoder see it).
+    """
     turns = []
     ts = base_ts
 
@@ -396,15 +404,17 @@ def build_session(pair: dict, rng: random.Random, base_ts: float) -> dict:
     turns.append({"role": "user", "content": pair["fact_turn"], "timestamp": ts})
     ts += 30
 
-    # Turns 6-21: 8 distractors × 2, shuffled (assistant role)
-    distractor_pool = pair["distractors"] * 2
+    # Distractor block: n_distractors × 2 turns, shuffled (assistant role)
+    distractors_used = pair["distractors"][:n_distractors]
+    distractor_pool = distractors_used * 2
     rng.shuffle(distractor_pool)
     for d in distractor_pool:
         turns.append({"role": "assistant", "content": d, "timestamp": ts})
         ts += 30
 
-    # Turns 22-59: generic filler (assistant role)
-    for _ in range(38):
+    # Remaining turns: generic filler (assistant role) to reach 60 total
+    n_filler = 60 - len(turns)
+    for _ in range(n_filler):
         turns.append({"role": "assistant", "content": rng.choice(GENERIC_FILLERS), "timestamp": ts})
         ts += 30
 
@@ -429,6 +439,14 @@ def main():
     parser = argparse.ArgumentParser(description="Generate axis_c eval fixtures.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out-dir", default="eval/fixtures")
+    parser.add_argument(
+        "--distractors",
+        type=int,
+        default=8,
+        choices=range(1, 9),
+        metavar="N",
+        help="Distractors per session (1-8, each appears twice). Default 8.",
+    )
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
@@ -438,7 +456,7 @@ def main():
     base_ts = 1729280000.0
     sessions = []
     for i, pair in enumerate(VOCAB_PAIRS):
-        session = build_session(pair, rng, base_ts + i * 7200)
+        session = build_session(pair, rng, base_ts + i * 7200, n_distractors=args.distractors)
         sessions.append(session)
 
     with open(out_path, "w") as f:
