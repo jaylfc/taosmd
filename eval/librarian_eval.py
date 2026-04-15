@@ -67,11 +67,12 @@ class AxisAScenario:
 
 @dataclass
 class AxisBQuery:
-    """Single query with a bucket label and expected answer."""
+    """Single query with a context pool and expected answer."""
     id: str
     query: str
     bucket: str           # factual | preference | temporal | pattern
     expected_answer: str
+    context: list = field(default_factory=list)  # retrieval pool; old fixtures without this field get []
 
 
 @dataclass
@@ -143,6 +144,9 @@ def _load_axis_b() -> list[AxisBQuery]:
             if not line:
                 continue
             d = json.loads(line)
+            # Forward-compat: old fixtures without 'context' key get a trivial pool
+            # so they still run (and will score 1.0, signalling they need regeneration).
+            d.setdefault("context", [d.get("expected_answer", "")])
             queries.append(AxisBQuery(**d))
     return queries
 
@@ -446,7 +450,7 @@ async def eval_axis_b(
 
     for q in queries:
         t0 = time.monotonic()
-        retrieved = await runner(q.query, [q.expected_answer], ledger)
+        retrieved = await runner(q.query, q.context, ledger)
         latency = (time.monotonic() - t0) * 1000
 
         correct = any(q.expected_answer.lower() in r.lower() for r in retrieved)

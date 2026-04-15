@@ -383,6 +383,193 @@ VOCAB_PAIRS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Axis A — staleness data (one entry per VOCAB_PAIR id)
+#
+# stale_fact_turn: the OLD entry in the context, uses category keyword so
+#   cosine search ranks it ABOVE the new fact (which uses the specific name).
+# stale_answer: substring of stale_fact_turn used to detect stale returns.
+# ---------------------------------------------------------------------------
+
+STALE_FACTS: dict[str, dict] = {
+    "C-00": {
+        "stale_answer": "Ubuntu",
+        "stale_fact_turn": "Jay: Running Ubuntu operating system for years — apt, familiar, rock-solid base.",
+    },
+    "C-01": {
+        "stale_answer": "VS Code",
+        "stale_fact_turn": "Jay: VS Code has been my main code editor — extensions and IntelliSense are solid.",
+    },
+    "C-02": {
+        "stale_answer": "unittest",
+        "stale_fact_turn": "Jay: unittest test runner in the project — standard library, zero extra deps.",
+    },
+    "C-03": {
+        "stale_answer": "Flask",
+        "stale_fact_turn": "Jay: Flask web framework serving the API — lightweight, simple routing, proven.",
+    },
+    "C-04": {
+        "stale_answer": "Obsidian",
+        "stale_fact_turn": "Jay: Obsidian note-taking app for the knowledge base — markdown vaults, good plugin ecosystem.",
+    },
+    "C-05": {
+        "stale_answer": "Google",
+        "stale_fact_turn": "Jay: Google search engine as the daily driver — works for almost everything.",
+    },
+    "C-06": {
+        "stale_answer": "Docker",
+        "stale_fact_turn": "Jay: Docker container runtime — compose files, registry pulls, familiar tooling.",
+    },
+    "C-07": {
+        "stale_answer": "WireGuard",
+        "stale_fact_turn": "Jay: WireGuard VPN solution — manual key exchange, reliable tunnels.",
+    },
+    "C-08": {
+        "stale_answer": "1Password",
+        "stale_fact_turn": "Jay: 1Password password manager — family plan, browser extension, solid UX.",
+    },
+    "C-09": {
+        "stale_answer": "Prometheus",
+        "stale_fact_turn": "Jay: Prometheus monitoring tool — scrape configs, alertmanager, battle-tested.",
+    },
+    "C-10": {
+        "stale_answer": "bash",
+        "stale_fact_turn": "Jay: bash shell — universal, works everywhere, POSIX compliance guaranteed.",
+    },
+    "C-11": {
+        "stale_answer": "Homebrew",
+        "stale_fact_turn": "Jay: Homebrew package manager — easy installs, formulae for everything.",
+    },
+    "C-12": {
+        "stale_answer": "CUDA",
+        "stale_fact_turn": "Jay: CUDA GPU backend — NVIDIA card, dominant ecosystem, well-supported libraries.",
+    },
+    "C-13": {
+        "stale_answer": "VirtualBox",
+        "stale_fact_turn": "Jay: VirtualBox hypervisor — easy GUI, snapshot support, good for dev VMs.",
+    },
+    "C-14": {
+        "stale_answer": "Slack",
+        "stale_fact_turn": "Jay: Slack chat platform — channels, integrations, standard for the team.",
+    },
+    "C-15": {
+        "stale_answer": "JetBrains Mono",
+        "stale_fact_turn": "Jay: JetBrains Mono programming font — clean ligatures, good for long sessions.",
+    },
+    "C-16": {
+        "stale_answer": "PostgreSQL",
+        "stale_fact_turn": "Jay: PostgreSQL database — full SQL, transactions, reliable for production.",
+    },
+    "C-17": {
+        "stale_answer": "llama3.2:3b",
+        "stale_fact_turn": "Jay: llama3.2:3b local LLM model — quick responses, fits in 8GB RAM.",
+    },
+    "C-18": {
+        "stale_answer": "Pandas",
+        "stale_fact_turn": "Jay: Pandas analytics database approach — DataFrames, familiar Python API, good enough.",
+    },
+    "C-19": {
+        "stale_answer": "grep",
+        "stale_fact_turn": "Jay: grep search tool — universal, always available, no install required.",
+    },
+}
+
+
+def build_axis_a_scenario(
+    pair: dict, rng: random.Random, base_ts: float, *, n_distractors: int = 8
+) -> dict:
+    """Build one Axis A staleness scenario with 20 sessions.
+
+    Structure (20 items total):
+      3  generic filler
+      1  stale fact   — contains category keyword, scores HIGH in cosine search
+      N  distractors  — contain category keyword + wrong specific answers
+      3  generic filler
+      1  new fact     — uses specific name only, NO category keyword (scores LOW)
+      (20 - 8 - N) generic filler
+
+    With limit=5: stale + distractors fill top-5; new fact excluded.
+    Without expansion: stale_in=True, correct_in=False → is_stale=True.
+    With Librarian expansion: synonym rewrite surfaces new fact → is_stale=False.
+    """
+    stale = STALE_FACTS[pair["id"]]
+    sessions = []
+    ts = base_ts
+
+    # 3 leading fillers
+    for _ in range(3):
+        sessions.append({"text": rng.choice(GENERIC_FILLERS), "timestamp": ts})
+        ts += 86400
+
+    # Stale fact (contains category keyword)
+    sessions.append({"text": stale["stale_fact_turn"], "timestamp": ts})
+    ts += 86400
+
+    # N distractors — one instance each (already contain category keyword)
+    distractor_sample = rng.sample(pair["distractors"], n_distractors)
+    for d in distractor_sample:
+        sessions.append({"text": d, "timestamp": ts})
+        ts += 86400
+
+    # 3 mid-section fillers
+    for _ in range(3):
+        sessions.append({"text": rng.choice(GENERIC_FILLERS), "timestamp": ts})
+        ts += 86400
+
+    # New fact (correct — specific name, no category keyword)
+    sessions.append({"text": pair["fact_turn"], "timestamp": ts})
+    ts += 86400
+
+    # Trailing filler to reach 20
+    for _ in range(20 - len(sessions)):
+        sessions.append({"text": rng.choice(GENERIC_FILLERS), "timestamp": ts})
+        ts += 86400
+
+    assert len(sessions) == 20, f"{pair['id']}: expected 20 sessions, got {len(sessions)}"
+    assert pair["correct_answer"].lower() in pair["fact_turn"].lower()
+    assert stale["stale_answer"].lower() in stale["stale_fact_turn"].lower()
+
+    return {
+        "id": pair["id"].replace("C-", "A-"),
+        "sessions": sessions,
+        "query": pair["query_lag25"],
+        "correct_answer": pair["correct_answer"],
+        "stale_answer": stale["stale_answer"],
+    }
+
+
+def build_axis_b_query(
+    pair: dict, rng: random.Random, *, n_distractors: int = 8
+) -> dict:
+    """Build one Axis B retrieval query with a 15-item context pool.
+
+    Context pool: 1 correct fact + N distractors + (15 - 1 - N) generic fillers.
+    Shuffled so position gives no signal.
+
+    With limit=5: distractors (contain category keyword) fill top-5; correct
+    fact (specific name only) excluded. Without expansion: correct=False.
+    With Librarian expansion: synonym rewrite → fact surfaces → correct=True.
+    """
+    context = [pair["fact_turn"]]
+    context.extend(pair["distractors"][:n_distractors])
+    # Pad to 15 with generic filler
+    while len(context) < 15:
+        context.append(rng.choice(GENERIC_FILLERS))
+    rng.shuffle(context)
+
+    assert len(context) == 15
+    assert any(pair["correct_answer"].lower() in item.lower() for item in context), \
+        f"{pair['id']}: correct_answer not found in any context item"
+
+    return {
+        "id": pair["id"].replace("C-", "B-"),
+        "query": pair["query_lag25"],
+        "bucket": "factual",
+        "expected_answer": pair["correct_answer"],
+        "context": context,
+    }
+
+
 def build_session(
     pair: dict, rng: random.Random, base_ts: float, *, n_distractors: int = 8
 ) -> dict:
@@ -436,7 +623,9 @@ def build_session(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate axis_c eval fixtures.")
+    parser = argparse.ArgumentParser(
+        description="Generate eval fixtures for the librarian benchmark."
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out-dir", default="eval/fixtures")
     parser.add_argument(
@@ -445,25 +634,53 @@ def main():
         default=8,
         choices=range(1, 9),
         metavar="N",
-        help="Distractors per session (1-8, each appears twice). Default 8.",
+        help="Distractors per session (1-8). Default 8.",
+    )
+    parser.add_argument(
+        "--axis",
+        choices=["a", "b", "c", "all"],
+        default="all",
+        help="Which fixture files to regenerate (default: all).",
     )
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
     out_dir = Path(args.out_dir)
-    out_path = out_dir / "axis_c_coherence.jsonl"
-
     base_ts = 1729280000.0
-    sessions = []
-    for i, pair in enumerate(VOCAB_PAIRS):
-        session = build_session(pair, rng, base_ts + i * 7200, n_distractors=args.distractors)
-        sessions.append(session)
+    axes = {"a", "b", "c"} if args.axis == "all" else {args.axis}
 
-    with open(out_path, "w") as f:
-        for session in sessions:
-            f.write(json.dumps(session) + "\n")
+    if "a" in axes:
+        out_path = out_dir / "axis_a_contradiction.jsonl"
+        scenarios = [
+            build_axis_a_scenario(p, rng, base_ts + i * 7200, n_distractors=args.distractors)
+            for i, p in enumerate(VOCAB_PAIRS)
+        ]
+        with open(out_path, "w") as f:
+            for s in scenarios:
+                f.write(json.dumps(s) + "\n")
+        print(f"Wrote {len(scenarios)} scenarios to {out_path}")
 
-    print(f"Wrote {len(sessions)} sessions to {out_path}")
+    if "b" in axes:
+        out_path = out_dir / "axis_b_routing.jsonl"
+        queries = [
+            build_axis_b_query(p, rng, n_distractors=args.distractors)
+            for p in VOCAB_PAIRS
+        ]
+        with open(out_path, "w") as f:
+            for q in queries:
+                f.write(json.dumps(q) + "\n")
+        print(f"Wrote {len(queries)} queries to {out_path}")
+
+    if "c" in axes:
+        out_path = out_dir / "axis_c_coherence.jsonl"
+        sessions = [
+            build_session(p, rng, base_ts + i * 7200, n_distractors=args.distractors)
+            for i, p in enumerate(VOCAB_PAIRS)
+        ]
+        with open(out_path, "w") as f:
+            for s in sessions:
+                f.write(json.dumps(s) + "\n")
+        print(f"Wrote {len(sessions)} sessions to {out_path}")
 
 
 if __name__ == "__main__":
