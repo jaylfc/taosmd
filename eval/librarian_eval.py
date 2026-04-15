@@ -475,7 +475,12 @@ async def eval_axis_c(
         return {"skipped": True, "reason": "no fixtures"}
 
     runner = _PIPELINE_RUNNERS[config]
-    recall_by_k: dict[int, list[float]] = {25: [], 50: [], 100: [], 200: []}
+    # Discover lag_k values from fixtures rather than hardcoding, so empty
+    # lags don't default to 0.0 and dilute the composite score.
+    fixture_lags: set[int] = {
+        tq["lag_k"] for s in sessions for tq in s.test_queries
+    }
+    recall_by_k: dict[int, list[float]] = {k: [] for k in fixture_lags}
 
     for session in sessions:
         all_turn_texts = [t["content"] for t in session.turns]
