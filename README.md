@@ -191,7 +191,7 @@ The Librarian adds LLM-assisted query expansion on top of the vector + cross-enc
 | Full pipeline (+ cross-encoder) | 0.752 | 30% | 30% |
 | **Full + Librarian** | **0.810** | **45%** | **55%** |
 
-**+15.4% on the vocabulary-gap axis.** The cross-encoder alone adds nothing when the target fact is excluded from its candidate pool — only the Librarian's expansion bridges category→specific-name gaps (e.g. query: *"code editor"*, fact: *"Neovim lua config done"*). Axis A/B fixtures are being redesigned for a more complete composite in the next benchmark cycle.
+**+15.4% on the vocabulary-gap axis.** The cross-encoder alone adds nothing when the target fact is excluded from its candidate pool — only the Librarian's expansion bridges category→specific-name gaps (e.g. query: *"code editor"*, fact: *"Neovim lua config done"*). These are preliminary results on one class of retrieval failure; we're actively working on tougher benchmarks to stress-test staleness detection and multi-store routing before drawing composite conclusions.
 
 ## Architecture
 
