@@ -651,8 +651,10 @@ def main():
 
     if "a" in axes:
         out_path = out_dir / "axis_a_contradiction.jsonl"
+        # 3 distractors: cross-encoder sees 4 category-keyword items (3 distractors + stale);
+        # expanded fact only needs to beat generic fillers (near-zero scores) to enter top-5.
         scenarios = [
-            build_axis_a_scenario(p, rng, base_ts + i * 7200, n_distractors=args.distractors)
+            build_axis_a_scenario(p, rng, base_ts + i * 7200, n_distractors=3)
             for i, p in enumerate(VOCAB_PAIRS)
         ]
         with open(out_path, "w") as f:
@@ -662,8 +664,10 @@ def main():
 
     if "b" in axes:
         out_path = out_dir / "axis_b_routing.jsonl"
+        # 3 distractors: 1 correct + 3 distractors + 11 fillers = 15 items;
+        # expanded fact ranked above fillers → enters top-5 → correct_in=True.
         queries = [
-            build_axis_b_query(p, rng, n_distractors=args.distractors)
+            build_axis_b_query(p, rng, n_distractors=3)
             for p in VOCAB_PAIRS
         ]
         with open(out_path, "w") as f:
