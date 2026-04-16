@@ -144,3 +144,96 @@ def score_and_tier(
         "expired": expired,
         "days_old": round(days_old, 1),
     }
+
+
+# ------------------------------------------------------------------
+# Composite scoring (inspired by OpenClaw's dreaming system)
+# ------------------------------------------------------------------
+
+# Six weighted signals for memory importance ranking
+SIGNAL_WEIGHTS = {
+    "relevance": 0.30,        # How semantically similar to recent queries
+    "frequency": 0.24,        # How often this memory has appeared
+    "query_diversity": 0.15,  # How many DIFFERENT queries retrieved this
+    "recency": 0.15,          # How recently this memory was created/accessed
+    "consolidation": 0.10,    # How many processing phases reinforced this
+    "richness": 0.06,         # How interconnected this is in the KG
+}
+
+
+def composite_score(
+    relevance: float = 0.0,
+    frequency: int = 0,
+    unique_queries: int = 0,
+    created_at: float = 0,
+    last_accessed_at: float = 0,
+    consolidation_count: int = 0,
+    kg_connections: int = 0,
+    max_frequency: int = 10,
+    max_queries: int = 10,
+    max_consolidation: int = 5,
+    max_connections: int = 20,
+    now: float | None = None,
+) -> dict:
+    """Compute a composite importance score using 6 weighted signals.
+
+    Inspired by OpenClaw's dreaming system but adapted for taOSmd's
+    zero-loss architecture (we score for retrieval priority, not for
+    selective promotion/deletion).
+
+    Args:
+        relevance: Cosine similarity to the current query (0-1).
+        frequency: How many times this memory has appeared (appeared_count).
+        unique_queries: How many different queries have retrieved this.
+        created_at: Unix timestamp of creation.
+        last_accessed_at: Unix timestamp of last access.
+        consolidation_count: How many processing phases have reinforced this
+                            (enrichment, crystallization, reflection).
+        kg_connections: Number of KG triples connected to this memory's entities.
+        max_*: Normalisation ceilings for each count-based signal.
+        now: Current time.
+
+    Returns:
+        {score, signals: {name: value}, tier, meets_promotion_threshold}
+    """
+    t = now or time.time()
+
+    # Normalise each signal to 0-1
+    signals = {
+        "relevance": min(max(relevance, 0.0), 1.0),
+        "frequency": min(frequency / max(max_frequency, 1), 1.0),
+        "query_diversity": min(unique_queries / max(max_queries, 1), 1.0),
+        "recency": _recency_score(created_at, last_accessed_at, t),
+        "consolidation": min(consolidation_count / max(max_consolidation, 1), 1.0),
+        "richness": min(kg_connections / max(max_connections, 1), 1.0),
+    }
+
+    # Weighted sum
+    score = sum(signals[name] * weight for name, weight in SIGNAL_WEIGHTS.items())
+    score = min(max(score, 0.0), 1.0)
+
+    tier = classify_tier(score)
+
+    # Promotion threshold (OpenClaw-style gates)
+    meets_promotion = (
+        score >= 0.5
+        and frequency >= 3
+        and unique_queries >= 2
+    )
+
+    return {
+        "score": round(score, 4),
+        "signals": {k: round(v, 3) for k, v in signals.items()},
+        "tier": tier,
+        "meets_promotion_threshold": meets_promotion,
+    }
+
+
+def _recency_score(created_at: float, last_accessed_at: float, now: float) -> float:
+    """Compute recency signal — more recent = higher score."""
+    most_recent = max(created_at, last_accessed_at) if last_accessed_at else created_at
+    if most_recent <= 0:
+        return 0.0
+    hours_ago = max((now - most_recent) / 3600, 0.001)
+    # Exponential decay: score ≈ 1.0 for <1h ago, ≈ 0.5 at 24h, ≈ 0.1 at 7 days
+    return math.exp(-0.03 * hours_ago)

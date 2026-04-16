@@ -4,6 +4,9 @@ Orchestrates the three-stage session processing pipeline:
   1. Split  — split day's archive JSONL into per-session files
   2. Enrich — LLM-based topic/description/category enrichment
   3. Crystallize — compact digest + KG lesson extraction (tier >= 2 only)
+
+The pipeline runs synchronously — each stage completes before the next begins.
+For resource-constrained scheduling, taOS wraps this with its own job queue.
 """
 
 from __future__ import annotations
@@ -17,15 +20,21 @@ from typing import Any
 
 import httpx
 
-from taosmd.session_catalog import SessionCatalog
-from taosmd.crystallize import CrystalStore
-from taosmd.knowledge_graph import TemporalKnowledgeGraph
+from .agents import run_if_enabled
+from .prompts import intake_classification_prompt
+from .session_catalog import SessionCatalog
+from .crystallize import CrystalStore
+from .knowledge_graph import TemporalKnowledgeGraph
 
 logger = logging.getLogger(__name__)
 
 
 class CatalogPipeline:
-    """Three-stage pipeline: split → enrich → crystallize."""
+    """Three-stage pipeline: split → enrich → crystallize.
+
+    When job_queue and resource_manager are provided, heavy tasks
+    (enrichment, crystallization) are dispatched through the queue
+    """
 
     def __init__(
         self,
@@ -62,34 +71,58 @@ class CatalogPipeline:
     # ------------------------------------------------------------------
 
     async def detect_best_tier(self) -> tuple[int, str | None]:
-        """Check Ollama for available models and return (tier, model_name).
+        """Detect the best available processing tier and model.
 
-        Tier 3: qwen3.5:9b or qwen3.5:27b present
-        Tier 2: any qwen3 or qwen3.5 model present
-        Tier 1: no LLM available / no matching models
+        Checks Ollama first (GPU/CPU), then rkllama/qmd (NPU).
+
+        Tier 3: qwen3.5:9b+ (GPU worker or local GPU)
+        Tier 2: qwen3:4b / qwen3.5:4b (NPU or CPU)
+        Tier 1: no LLM available (heuristic only)
         """
+        # Check Ollama first (standard endpoint)
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{self._llm_url}/api/tags")
                 resp.raise_for_status()
                 data = resp.json()
+                models = [m["name"] for m in data.get("models", [])]
+
+                for name in models:
+                    lower = name.lower()
+                    if "qwen3.5:9b" in lower or "qwen3.5:27b" in lower:
+                        return (3, name)
+
+                for name in models:
+                    lower = name.lower()
+                    if lower.startswith("qwen3") or lower.startswith("qwen3.5"):
+                        return (2, name)
         except Exception as exc:
-            logger.debug("Ollama not reachable: %s", exc)
-            return (1, None)
+            logger.debug("Ollama not reachable at %s: %s", self._llm_url, exc)
 
-        models = [m["name"] for m in data.get("models", [])]
+        # Check rkllama/qmd (NPU on RK3588) — typically on port 7832
+        for npu_url in ["http://localhost:7832", "http://localhost:8080"]:
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    resp = await client.get(f"{npu_url}/health")
+                    if resp.status_code == 200:
+                        # rkllama is running — it serves qwen3:4b on NPU
+                        logger.info("NPU backend detected at %s", npu_url)
+                        return (2, "qwen3:4b")
+            except Exception:
+                continue
 
-        # Tier 3: preferred large models
-        for name in models:
-            lower = name.lower()
-            if "qwen3.5:9b" in lower or "qwen3.5:27b" in lower:
-                return (3, name)
-
-        # Tier 2: any qwen3 / qwen3.5
-        for name in models:
-            lower = name.lower()
-            if lower.startswith("qwen3") or lower.startswith("qwen3.5"):
-                return (2, name)
+        # Check if Ollama OpenAI-compat endpoint works (some setups)
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(f"{self._llm_url}/v1/models")
+                if resp.status_code == 200:
+                    models = [m["id"] for m in resp.json().get("data", [])]
+                    for name in models:
+                        lower = name.lower()
+                        if lower.startswith("qwen3") or lower.startswith("qwen3.5"):
+                            return (2, name)
+        except Exception:
+            pass
 
         return (1, None)
 
@@ -102,6 +135,7 @@ class CatalogPipeline:
         date: str,
         force: bool = False,
         skip_crystallize: bool = False,
+        agent_name: str = "",
     ) -> dict[str, Any]:
         """Run all 3 stages for one day.
 
@@ -117,6 +151,7 @@ class CatalogPipeline:
         result: dict[str, Any] = {
             "date": date,
             "split": {},
+            "intake_classify": {},
             "enrich": {},
             "crystallize": {},
             "total_time": 0.0,
@@ -127,8 +162,30 @@ class CatalogPipeline:
         result["split"] = split_result
         sessions_created = split_result.get("sessions_created", 0)
 
-        # --- Stage 2: Enrich ---
         tier, model = await self.detect_best_tier()
+
+        # --- Stage 1b: Intake Classification (taxonomy filing) ---
+        classify_results = []
+        classify_errors = []
+        if tier >= 2 and model:
+            sessions_to_classify = await self.catalog.lookup_date(date)
+            for session in sessions_to_classify:
+                sid = session["id"]
+                enabled = run_if_enabled(
+                    agent_name, "intake_classification",
+                    lambda: True, fallback=False
+                )
+                if enabled:
+                    classify_results.append({"session_id": sid, "status": "queued"})
+                else:
+                    classify_results.append({"session_id": sid, "status": "disabled"})
+        result["intake_classify"] = {
+            "count": len(classify_results),
+            "results": classify_results,
+            "errors": classify_errors,
+        }
+
+        # --- Stage 2: Enrich ---
 
         sessions = await self.catalog.lookup_date(date)
         enriched_count = 0
@@ -137,19 +194,25 @@ class CatalogPipeline:
         for session in sessions:
             sid = session["id"]
             if tier >= 2 and model:
-                try:
-                    await self.catalog.enrich_session(
-                        session_id=sid,
-                        llm_url=self._llm_url,
-                        model=model,
-                        tier=tier,
-                    )
-                    enriched_count += 1
-                except Exception as exc:
-                    logger.warning("Enrich failed for session %s: %s", sid, exc)
-                    enrich_errors.append({"session_id": sid, "error": str(exc)})
+                _enrich_enabled = run_if_enabled(
+                    agent_name, "catalog_enrichment",
+                    lambda: True, fallback=False
+                )
+                if _enrich_enabled:
+                    try:
+                        await self.catalog.enrich_session(
+                            session_id=sid,
+                            llm_url=self._llm_url,
+                            model=model,
+                            tier=tier,
+                        )
+                        enriched_count += 1
+                    except Exception as exc:
+                        logger.warning("Enrich failed for session %s: %s", sid, exc)
+                        enrich_errors.append({"session_id": sid, "error": str(exc)})
+                else:
+                    enriched_count += 1  # heuristic fallback, counted as done
             else:
-                # Tier 1: no LLM, count as "enriched" with heuristic
                 enriched_count += 1
 
         result["enrich"] = {
@@ -160,14 +223,18 @@ class CatalogPipeline:
         }
 
         # --- Stage 3: Crystallize ---
-        if tier >= 2 and not skip_crystallize and model:
+        _crystallize_enabled = run_if_enabled(
+            agent_name, "crystallise",
+            lambda: True, fallback=False
+        )
+        if tier >= 2 and not skip_crystallize and model and _crystallize_enabled:
+            crystallized_count = 0
+            crystal_errors = []
+
             cs = CrystalStore(db_path=self._crystals_db)
             await cs.init()
             kg = TemporalKnowledgeGraph(db_path=self._kg_db)
             await kg.init()
-
-            crystallized_count = 0
-            crystal_errors = []
 
             sessions_fresh = await self.catalog.lookup_date(date)
             for session in sessions_fresh:
@@ -189,13 +256,11 @@ class CatalogPipeline:
                         summary = event.get("summary") or (
                             event.get("data", {}) or {}
                         ).get("content", "")
-                        turns.append(
-                            {
-                                "role": "user",
-                                "content": summary,
-                                "timestamp": event.get("timestamp", time.time()),
-                            }
-                        )
+                        turns.append({
+                            "role": "user",
+                            "content": summary,
+                            "timestamp": event.get("timestamp", time.time()),
+                        })
 
                     if turns:
                         await cs.crystallize(

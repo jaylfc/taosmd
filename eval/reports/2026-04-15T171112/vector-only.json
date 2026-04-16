@@ -1,0 +1,833 @@
+{
+  "config": "vector-only",
+  "timestamp": "2026-04-15T171112",
+  "axis_a": {
+    "n": 50,
+    "stale_rate": 0.02,
+    "correct_rate": 0.98,
+    "stale_count": 1,
+    "results": [
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-00",
+        "query": "What does Jay currently use for editor?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses VS Code as his primary editor. Jay is happy with it.",
+          "Short update: Jay switched to Neovim full-time. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 754.491337982472,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-01",
+        "query": "What does Jay currently use for shell?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses bash as his shell. Jay is happy with it.",
+          "Short update: Jay migrated to zsh with oh-my-zsh. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 129.43635403644294,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-02",
+        "query": "What does Jay currently use for theme?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay runs a light theme in his terminal. Jay is happy with it.",
+          "Short update: Jay switched to a dark terminal theme. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 125.7458669715561,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-03",
+        "query": "What does Jay currently use for python_version?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay is running Python 3.9 on his dev machine. Jay is happy with it.",
+          "Short update: Jay upgraded his dev machine to Python 3.12. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 123.43968800269067,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-04",
+        "query": "What does Jay currently use for framework?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay builds backends with Flask. Jay is happy with it.",
+          "Short update: Jay moved to FastAPI for all new backend work. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 119.8414700338617,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-05",
+        "query": "What does Jay currently use for db?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses PostgreSQL for the project database. Jay is happy with it.",
+          "Short update: Jay migrated the project to SQLite for local-first simplicity. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.86675603454933,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-06",
+        "query": "What does Jay currently use for language?",
+        "retrieved": [
+          "Short update: Jay has been writing shell scripts in fish lately. The change happened last week.",
+          "In today's session we discussed tools. Jay writes most scripts in Python. Jay is happy with it."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 117.70139494910836,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-07",
+        "query": "What does Jay currently use for model?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses qwen3:4b for local LLM inference. Jay is happy with it.",
+          "Short update: Jay switched to gemma4:e2b for local inference after benchmarks. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.04846802260727,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-08",
+        "query": "What does Jay currently use for font?",
+        "retrieved": [
+          "Short update: Jay switched to Iosevka Nerd Font. The change happened last week.",
+          "In today's session we discussed tools. Jay uses JetBrains Mono in his editor. Jay is happy with it."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.83299602009356,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-09",
+        "query": "What does Jay currently use for branch?",
+        "retrieved": [
+          "Short update: Jay renamed the working branch to main. The change happened last week.",
+          "In today's session we discussed tools. The main working branch is dev. Jay is happy with it."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 117.68024100456387,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-10",
+        "query": "What does Jay currently use for indent?",
+        "retrieved": [
+          "Short update: Jay is now using 2-space indentation across all projects. The change happened last week.",
+          "In today's session we discussed tools. Jay uses 4-space indentation in Python files. Jay is happy with it."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.28457401134074,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-11",
+        "query": "What does Jay currently use for test_runner?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay runs tests with unittest. Jay is happy with it.",
+          "Short update: Jay migrated to pytest for all new tests. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.78523300401866,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-12",
+        "query": "What does Jay currently use for container?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses Docker for containerisation. Jay is happy with it.",
+          "Short update: Jay switched to Incus (LXC) containers. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.28918603714556,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-13",
+        "query": "What does Jay currently use for gpu_backend?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses CUDA for GPU acceleration. Jay is happy with it.",
+          "Short update: Jay switched to ROCm since he got an AMD card. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.64799296017736,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-14",
+        "query": "What does Jay currently use for search?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses Google as his primary search engine. Jay is happy with it.",
+          "Short update: Jay switched to Kagi for private search. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.49503201665357,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-15",
+        "query": "What does Jay currently use for notes?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay keeps notes in Obsidian. Jay is happy with it.",
+          "Short update: Jay migrated all notes to Logseq. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.16179900011048,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-16",
+        "query": "What does Jay currently use for password_manager?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses Bitwarden for passwords. Jay is happy with it.",
+          "Short update: Jay self-hosts Vaultwarden now. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.17414895631373,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-17",
+        "query": "What does Jay currently use for vpn?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses WireGuard for his VPN. Jay is happy with it.",
+          "Short update: Jay migrated to Tailscale mesh. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 117.99344199243933,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-18",
+        "query": "What does Jay currently use for deploy?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay deploys to a VPS on DigitalOcean. Jay is happy with it.",
+          "Short update: Jay moved all deployments to a self-hosted Proxmox cluster. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 117.78033705195412,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-pref-19",
+        "query": "What does Jay currently use for chat?",
+        "retrieved": [
+          "In today's session we discussed tools. Jay uses Discord for team chat. Jay is happy with it.",
+          "Short update: Jay moved the team to Matrix/Element. The change happened last week."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 120.72403903584927,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-00",
+        "query": "What is the current state of project status?",
+        "retrieved": [
+          "Progress notes: The taOS web GUI is in MVP phase.",
+          "Update: The taOS web GUI MVP is complete and deployed."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.72066400246695,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-01",
+        "query": "What is the current state of benchmark result?",
+        "retrieved": [
+          "Progress notes: The current Recall@5 on LongMemEval is 96.2%.",
+          "Update: After the RRF fix the Recall@5 is confirmed at 97.0%."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.67083500651643,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-02",
+        "query": "What is the current state of pi model?",
+        "retrieved": [
+          "Progress notes: Jay is running on Orange Pi 5.",
+          "Update: Jay upgraded to Orange Pi 5 Plus for the extra RAM."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 117.59049695683643,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-03",
+        "query": "What is the current state of ram?",
+        "retrieved": [
+          "Progress notes: The dev machine has 16 GB RAM.",
+          "Update: Jay upgraded the dev machine to 32 GB RAM."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.7904989561066,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-04",
+        "query": "What is the current state of storage?",
+        "retrieved": [
+          "Progress notes: The archive lives on a 256 GB SSD.",
+          "Update: Jay expanded the archive drive to 1 TB."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.68202199507505,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-05",
+        "query": "What is the current state of port?",
+        "retrieved": [
+          "Progress notes: The taOSmd API runs on port 8000.",
+          "Update: The API was moved to port 9001 to avoid conflicts."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.54548399383202,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-06",
+        "query": "What is the current state of branch_count?",
+        "retrieved": [
+          "Update: After the merge spree taosmd has 1 active branch.",
+          "Progress notes: taosmd has 3 open branches."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 115.56705902330577,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-07",
+        "query": "What is the current state of test_count?",
+        "retrieved": [
+          "Update: After the new suite taosmd has 74 tests.",
+          "Progress notes: taosmd has 50 tests."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 113.56759298359975,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-08",
+        "query": "What is the current state of module_count?",
+        "retrieved": [
+          "Update: After the refactor taosmd has 22 modules.",
+          "Progress notes: taosmd has 18 modules."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 113.78517001867294,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-09",
+        "query": "What is the current state of ollama_version?",
+        "retrieved": [
+          "Update: Ollama was updated to 0.20.7 today.",
+          "Progress notes: Fedora is running Ollama 0.18.3."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 117.42135405074805,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-10",
+        "query": "What is the current state of node_version?",
+        "retrieved": [
+          "Progress notes: The project uses Node 18.",
+          "Update: Jay upgraded the frontend to Node 22."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 120.04581198561937,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-11",
+        "query": "What is the current state of taos_phase?",
+        "retrieved": [
+          "Progress notes: TinyAgentOS is in Phase 1.",
+          "Update: TinyAgentOS has entered Phase 2 with local LLM support."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 118.45838598674163,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-12",
+        "query": "What is the current state of embedding_dim?",
+        "retrieved": [
+          "Update: After switching to nomic the embedding dimension is 768.",
+          "Progress notes: The embedding model produces 384-dimensional vectors."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.89462402136996,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-13",
+        "query": "What is the current state of recall_competitor?",
+        "retrieved": [
+          "Progress notes: MemPalace holds the SOTA at 96.6%.",
+          "Update: taosmd at 97.0% is now the new SOTA, beating MemPalace."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 117.07184097031131,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-14",
+        "query": "What is the current state of cron_time?",
+        "retrieved": [
+          "Update: The cron was changed to run at 3 AM to avoid peak hours.",
+          "Progress notes: The archive compression cron runs at midnight."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.9311489793472,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-15",
+        "query": "What is the current state of agent_count?",
+        "retrieved": [
+          "Update: A fourth agent was added for the benchmarking task.",
+          "Progress notes: Three OpenClaw agents are running in production."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.5597130311653,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-16",
+        "query": "What is the current state of kg_triples?",
+        "retrieved": [
+          "Update: After ingesting all sessions the KG has over 1400 triples.",
+          "Progress notes: The knowledge graph has around 200 triples."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 120.28890795772895,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-17",
+        "query": "What is the current state of crystal_count?",
+        "retrieved": [
+          "Update: After the full re-run there are 47 crystals.",
+          "Progress notes: There are 12 session crystals in the store."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 117.8321439656429,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-18",
+        "query": "What is the current state of issue_count?",
+        "retrieved": [
+          "Update: After the sprint the issue count is down to 2.",
+          "Progress notes: taosmd has 5 open issues."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 116.87356204492971,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-fact-19",
+        "query": "What is the current state of latency?",
+        "retrieved": [
+          "Progress notes: Retrieval latency is around 5ms.",
+          "Update: After the cross-encoder fix retrieval is now under 1ms for fast queries."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 117.51020001247525,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-00",
+        "query": "What is Jay's current approach to language preference evolution?",
+        "retrieved": [
+          "Jay prefers Go for CLI tools.",
+          "Jay tried Rust for the CLI and liked it.",
+          "Jay is now committed to Rust for all new CLI tools after the performance wins."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 119.11842500558123,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-01",
+        "query": "What is Jay's current approach to model preference?",
+        "retrieved": [
+          "Jay uses qwen3:4b for all LLM tasks.",
+          "Jay is testing gemma3:12b for richer extraction.",
+          "Jay settled on gemma4:e2b after benchmarks \u2014 best balance of speed and quality."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 120.33982499269769,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-02",
+        "query": "What is Jay's current approach to git workflow?",
+        "retrieved": [
+          "Jay uses feature branches for all changes.",
+          "Jay returned to feature branches \u2014 cleaner for async review.",
+          "Jay tried trunk-based development for a sprint."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 119.41706802463159,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-03",
+        "query": "What is Jay's current approach to benchmark dataset?",
+        "retrieved": [
+          "The full 500-question benchmark is now the standard.",
+          "Jay is testing against a 100-question sample.",
+          "Jay expanded to the full 500-question LongMemEval-S set."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 119.7849499876611,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-04",
+        "query": "What is Jay's current approach to memory backend?",
+        "retrieved": [
+          "The team extracted memory to a standalone taosmd library.",
+          "taOS uses the built-in tinyagentos memory.",
+          "taOS now imports taosmd as a pip dependency \u2014 clean separation."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 120.1733389752917,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-05",
+        "query": "What is Jay's current approach to vector model?",
+        "retrieved": [
+          "Jay uses all-MiniLM-L6-v2 ONNX (384d) for embeddings.",
+          "Jay is benchmarking nomic-embed-text-v1.5 (768d) as a potential upgrade.",
+          "Benchmarks confirmed MiniLM stays \u2014 nomic adds cost without meaningful recall gain."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 120.87003304623067,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-06",
+        "query": "What is Jay's current approach to infra platform?",
+        "retrieved": [
+          "Jay runs everything on a single Orange Pi 5.",
+          "Jay added a Fedora x86 machine as a GPU worker.",
+          "The cluster now has Pi (NPU) + Fedora (GPU) + a remote GPU worker."
+        ],
+        "correct": false,
+        "stale": true,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 120.18855998758227,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-07",
+        "query": "What is Jay's current approach to agent framework?",
+        "retrieved": [
+          "Jay uses OpenClaw as the primary agent framework.",
+          "Jay is evaluating Hermes as an alternative.",
+          "Jay standardised on OpenClaw \u2014 Hermes had memory limitations."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 119.40619599772617,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-08",
+        "query": "What is Jay's current approach to issue tracker?",
+        "retrieved": [
+          "Issues are tracked in a plain text file.",
+          "Jay migrated to GitHub Issues.",
+          "All work is now tracked in GitHub Issues with project boards."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 119.52777102123946,
+        "extra": {}
+      },
+      {
+        "axis": "A",
+        "config": "vector-only",
+        "scenario_id": "A-multi-09",
+        "query": "What is Jay's current approach to session taxonomy?",
+        "retrieved": [
+          "Sessions are filed under flat categories.",
+          "Jay designed a hierarchical project/topic/subtopic taxonomy.",
+          "The Librarian now uses emergent taxonomy \u2014 paths confirmed after 3 uses."
+        ],
+        "correct": true,
+        "stale": false,
+        "recall_at_5": 0.0,
+        "tokens_used": 0,
+        "latency_ms": 122.95131798600778,
+        "extra": {}
+      }
+    ]
+  },
+  "axis_b": {
+    "skipped": true,
+    "reason": "no fixtures"
+  },
+  "axis_c": {
+    "skipped": true,
+    "reason": "no fixtures"
+  },
+  "tokens_total": 0,
+  "composite_score": 0.3267,
+  "quality_per_1k_tokens": 0.0
+}

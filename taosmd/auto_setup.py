@@ -67,7 +67,35 @@ async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
     await history.close()
     print(" ✓")
 
-    # 5. Daily maintenance cron
+    # 5. Session Catalog
+    print("  Setting up Session Catalog...", end="", flush=True)
+    from taosmd.session_catalog import SessionCatalog
+    catalog = SessionCatalog(
+        db_path=data_path / "session-catalog.db",
+        archive_dir=data_path / "archive",
+        sessions_dir=data_path / "sessions",
+    )
+    await catalog.init()
+    await catalog.close()
+    print(" ✓")
+
+    # 6. Crystal Store
+    print("  Setting up Crystal Store...", end="", flush=True)
+    from taosmd.crystallize import CrystalStore
+    cs = CrystalStore(db_path=data_path / "crystals.db")
+    await cs.init()
+    await cs.close()
+    print(" ✓")
+
+    # 7. Insight Store
+    print("  Setting up Insight Store...", end="", flush=True)
+    from taosmd.reflect import InsightStore
+    insights = InsightStore(db_path=data_path / "insights.db")
+    await insights.init()
+    await insights.close()
+    print(" ✓")
+
+    # 8. Daily maintenance cron
     setup_cron = True
     if interactive:
         resp = input("\n  Install daily maintenance cron job? (compresses old archives) [Y/n]: ").strip().lower()
@@ -76,7 +104,7 @@ async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
     if setup_cron:
         _install_cron(data_dir)
 
-    # 6. Create config file
+    # Create config file
     config = {
         "data_dir": str(data_path),
         "archive": {
@@ -92,7 +120,16 @@ async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
         "extraction": {
             "regex_enabled": True,
             "llm_enabled": True,
-            "llm_url": "http://localhost:8080",  # rkllama or ollama
+            "llm_url": "http://localhost:11434",  # Ollama (GPU/CPU) or rkllama (NPU)
+        },
+        "pipeline": {
+            "schedule": "0 3 * * *",
+            "crystallize_enabled": True,
+            "enricher_model": "auto",  # ResourceManager picks best available
+        },
+        "retrieval": {
+            "default_strategy": "thorough",
+            "secret_filter_mode": "redact",
         },
     }
     config_path = data_path / "config.json"
@@ -101,15 +138,17 @@ async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
     print(f"\n  Config saved to {config_path}")
 
     print(f"\n✓ taOSmd is ready at {data_path}")
-    print(f"  Archive: {data_path}/archive/ (append-only daily JSONL)")
-    print(f"  KG:      {data_path}/knowledge-graph.db")
-    print(f"  Vectors: {data_path}/vector-memory.db")
-    print(f"  Config:  {config_path}")
+    print(f"  Archive:  {data_path}/archive/ (append-only daily JSONL)")
+    print(f"  KG:       {data_path}/knowledge-graph.db")
+    print(f"  Vectors:  {data_path}/vector-memory.db")
+    print(f"  Catalog:  {data_path}/session-catalog.db")
+    print(f"  Crystals: {data_path}/crystals.db")
+    print(f"  Config:   {config_path}")
 
 
 def _install_cron(data_dir: str):
     """Install a daily cron job for archive compression."""
-    cron_cmd = f'0 3 * * * cd {data_dir} && python3 -c "import asyncio; from taosmd.archive import ArchiveStore; a = ArchiveStore(archive_dir=\\"{data_dir}/archive\\", index_path=\\"{data_dir}/archive-index.db\\"); asyncio.run(a.init()); asyncio.run(a.compress_old_files()); asyncio.run(a.close())" 2>/dev/null'
+    cron_cmd = f'0 3 * * * cd {data_dir} && python3 -c "import asyncio; from taosmd.archive import ArchiveStore; from taosmd.catalog_pipeline import CatalogPipeline; a = ArchiveStore(archive_dir=\\"{data_dir}/archive\\", index_path=\\"{data_dir}/archive-index.db\\"); asyncio.run(a.init()); asyncio.run(a.compress_old_files()); asyncio.run(a.close()); p = CatalogPipeline(archive_dir=\\"{data_dir}/archive\\", sessions_dir=\\"{data_dir}/sessions\\", catalog_db=\\"{data_dir}/session-catalog.db\\", crystals_db=\\"{data_dir}/crystals.db\\", kg_db=\\"{data_dir}/knowledge-graph.db\\"); asyncio.run(p.init()); asyncio.run(p.index_yesterday()); asyncio.run(p.close())" 2>/dev/null'
 
     try:
         # Check if cron job already exists

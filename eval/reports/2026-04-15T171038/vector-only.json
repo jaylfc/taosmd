@@ -1,0 +1,31 @@
+{
+  "config": "vector-only",
+  "timestamp": "2026-04-15T171038",
+  "axis_a": {
+    "skipped": true,
+    "reason": "no fixtures"
+  },
+  "axis_b": {
+    "n": 200,
+    "overall_accuracy": 1.0,
+    "accuracy_per_bucket": {
+      "factual": 1.0,
+      "preference": 1.0,
+      "temporal": 1.0,
+      "pattern": 1.0
+    },
+    "bucket_counts": {
+      "factual": 50,
+      "preference": 50,
+      "temporal": 50,
+      "pattern": 50
+    }
+  },
+  "axis_c": {
+    "skipped": true,
+    "reason": "no fixtures"
+  },
+  "tokens_total": 0,
+  "composite_score": 0.6667,
+  "quality_per_1k_tokens": 0.0
+}

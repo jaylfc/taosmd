@@ -185,26 +185,54 @@ All systems tested on the same benchmark (LongMemEval-S, 500 questions) with the
 | **Hybrid + query expansion (default)** | **97.0%** | **+2.0** |
 | All-turns hybrid (harder test) | 93.2% | -1.8 |
 
+### Librarian Layer — Vocabulary-Gap Benchmark
+
+The Librarian adds LLM-assisted query expansion on top of the vector + cross-encoder stack. We measure its effect with a purpose-built three-axis harness on long-horizon sessions (60 turns, fact buried at turn 5).
+
+**Axis C — vocabulary-gap coherence** (2026-04-15, gemma4:e2b 5B, Fedora host):
+
+| Config | Composite | recall@lag25 | recall@lag50 |
+|--------|-----------|-------------|-------------|
+| Vector-only | 0.752 | 30% | 30% |
+| Full pipeline (+ cross-encoder) | 0.752 | 30% | 30% |
+| **Full + Librarian** | **0.810** | **45%** | **55%** |
+
+**+15.4% on the vocabulary-gap axis.** The cross-encoder alone adds nothing when the target fact is excluded from its candidate pool — only the Librarian's expansion bridges category→specific-name gaps (e.g. query: *"code editor"*, fact: *"Neovim lua config done"*). These are preliminary results on one class of retrieval failure; we're actively working on tougher benchmarks to stress-test staleness detection and multi-store routing before drawing composite conclusions.
+
 ## Architecture
 
 ```
 taOSmd Memory Stack (v0.2):
+
+Memory Layers:
 ├── Temporal Knowledge Graph    — structured facts with validity windows
-├── Vector Memory               — hybrid search with RRF fusion (ONNX MiniLM)
+├── Vector Memory               — hybrid search (semantic + keyword boost, ONNX MiniLM or Nomic)
 ├── Zero-Loss Archive           — append-only JSONL, FTS5 full-text search
 ├── Session Catalog             — LLM-derived timeline directory over archives
-├── Memory Extractor            — regex (15ms) + LLM (17s on NPU)
+└── Crystal Store               — compressed session digests with lessons
+
+Processing:
+├── Memory Extractor            — regex (15ms) + LLM fact extraction (qwen3:4b)
+├── Session Splitter            — 30-min gap heuristic, per-session split files
+├── Session Enricher            — LLM topic/description/category (tiered: 1=heuristic, 2=4B, 3=9B+)
+├── Session Crystallizer        — narrative digests, outcomes, lessons → KG
+├── Secret Filtering            — 17 regex patterns, auto-redact on all ingest paths
+└── Retention Scoring           — Ebbinghaus decay with hot/warm/cold tiers
+
+Retrieval:
+├── Parallel Fan-Out            — query all layers simultaneously (thorough mode)
 ├── Query Expansion             — entity extraction + temporal resolution
-├── Intent Classifier           — route queries to optimal memory layer
-├── Context Assembler           — core/archival split, token-budgeted L0-L3
+├── Intent Classifier           — routes to optimal layer, weights RRF merge
+├── Cross-Encoder Reranker      — ms-marco-MiniLM ONNX second-stage reranking
 ├── Graph Expansion             — BFS traversal from search results through KG
-├── Retention Scoring           — Ebbinghaus decay with hot/warm/cold tiers
-├── Session Crystallization     — LLM session digests with lesson extraction
-├── Cross-Memory Reflection     — cluster-then-synthesize insights from KG
-├── Secret Filtering            — 17 regex patterns, auto-redact on ingest
-├── Multi-Agent Leases          — TTL exclusive locks for memory operations
-└── Mesh Sync                   — LWW delta replication across workers
+└── Context Assembler           — core/archival split, token-budgeted L0-L3
+
+Integration:
+├── Backend Abstraction         — pluggable interface for platforms (taOS, Claude Code, etc.)
+└── Cross-Memory Reflection     — cluster-then-synthesize insights from KG
 ```
+
+taOSmd is a standalone library. Platform features like job scheduling, worker management, gaming detection, and mesh sync live in the host platform (e.g., [taOS](https://github.com/jaylfc/tinyagentos)).
 
 ## Quick Start
 

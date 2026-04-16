@@ -1,0 +1,19 @@
+{
+  "config": "vector-only",
+  "timestamp": "2026-04-15T153103",
+  "axis_a": {
+    "skipped": true,
+    "reason": "no fixtures"
+  },
+  "axis_b": {
+    "skipped": true,
+    "reason": "no fixtures"
+  },
+  "axis_c": {
+    "skipped": true,
+    "reason": "no fixtures"
+  },
+  "tokens_total": 0,
+  "composite_score": 0.3333,
+  "quality_per_1k_tokens": 0.0
+}
