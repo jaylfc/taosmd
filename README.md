@@ -187,7 +187,9 @@ All systems tested on the same benchmark (LongMemEval-S, 500 questions) with the
 
 ### Librarian Layer — Vocabulary-Gap Benchmark
 
-The Librarian adds LLM-assisted query expansion on top of the vector + cross-encoder stack. We measure its effect with a purpose-built three-axis harness on long-horizon sessions (60 turns, fact buried at turn 5).
+**Why a librarian on top of retrieval?** Most agent memory systems are query-time RAG: user asks, you embed the query, you fetch. That's fine when the user asks for the same thing they stored. It breaks when the relevant context is *implicit* — when the query vocabulary and the stored vocabulary don't overlap ("what operating system does Jay run?" vs a turn saying "Fedora Linux distribution set up"). The cross-encoder can't save you because the fact never made it into the candidate pool. The Librarian's job is to bridge that gap before retrieval happens.
+
+We measure its effect with a purpose-built three-axis harness on long-horizon sessions (60 turns, fact buried at turn 5).
 
 **Axis C — vocabulary-gap coherence** (2026-04-15, gemma4:e2b 5B, Fedora host):
 
@@ -205,7 +207,7 @@ The Librarian adds LLM-assisted query expansion on top of the vector + cross-enc
 taOSmd Memory Stack (v0.2):
 
 Memory Layers:
-├── Temporal Knowledge Graph    — structured facts with validity windows
+├── Temporal Knowledge Graph    — structured facts with validity windows + supersede chains (causal graph over time)
 ├── Vector Memory               — hybrid search (semantic + keyword boost, ONNX MiniLM or Nomic)
 ├── Zero-Loss Archive           — append-only JSONL, FTS5 full-text search
 ├── Session Catalog             — LLM-derived timeline directory over archives
@@ -233,6 +235,17 @@ Integration:
 ```
 
 taOSmd is a standalone library. Platform features like job scheduling, worker management, gaming detection, and mesh sync live in the host platform (e.g., [taOS](https://github.com/jaylfc/tinyagentos)).
+
+## Security & Integrity
+
+Memory poisoning — where an attacker plants a false "fact" that then contaminates every future answer — is an emerging risk for agent memory systems. taOSmd doesn't claim to solve it, but the architecture gives you primitives to build against it:
+
+- **Archive-first** — every conversation lands in the Hall of Records verbatim, append-only, never edited. If an extracted fact later looks wrong, the original words are still on the shelf. Nothing is silently rewritten.
+- **Supersede chains, not deletion** — when a fact is contradicted, the old one is marked superseded, not removed. The history is auditable. You can see when, by whom, and in response to what.
+- **`retrieve(verify=True)`** — opt-in verification pass cross-checks returned facts against the archive before handing them to the agent. Catches hallucinated or tampered facts that diverge from the raw transcript.
+- **Secret filtering on every ingest path** — 17 regex patterns auto-redact credentials, tokens, and PII before they land in the archive. Reduces the attack surface rather than widening it.
+
+These primitives address the *how would I detect and roll back a poisoned fact?* question, not the *how do I prevent the attacker from speaking in the first place?* question — which sits above taosmd at the agent/application layer.
 
 ## Quick Start
 
