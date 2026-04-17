@@ -330,7 +330,7 @@ async def run(args: argparse.Namespace) -> int:
             return await _process_qa(qa, conv_id, vmem, client, args.ollama_url,
                                      args.model, args.top_k, args.strategy)
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=args.timeout) as client:
         for conv in conversations:
             conv_id = conv.get("sample_id", "unknown")
             tmp = tempfile.mkdtemp(prefix=f"locomo_{conv_id}_")
@@ -428,6 +428,11 @@ def _parse_args() -> argparse.Namespace:
         "--concurrency", type=int, default=3,
         help=("Max parallel QAs per conversation. Requires OLLAMA_NUM_PARALLEL "
               ">= N on the Ollama server. Default 3; use 1 for sequential."),
+    )
+    p.add_argument(
+        "--timeout", type=float, default=120.0,
+        help="HTTP timeout for Ollama calls in seconds. Default 120 (was 60 — "
+             "bumped after observing p95 latency of 52s under concurrency=3).",
     )
     return p.parse_args()
 
