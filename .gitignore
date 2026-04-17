@@ -10,3 +10,4 @@ models/minilm-onnx/model.onnx
 .env
 *.log
 eval/reports/
+CLAUDE.md
