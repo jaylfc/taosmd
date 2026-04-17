@@ -20,11 +20,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tinyagentos.temporal_knowledge_graph import TemporalKnowledgeGraph
-from tinyagentos.archive import ArchiveStore
-from tinyagentos.memory_extractor import extract_facts_from_text, process_conversation_turn
-from tinyagentos.context_assembler import ContextAssembler
-from tinyagentos.vector_memory import VectorMemory
+from taosmd.knowledge_graph import TemporalKnowledgeGraph
+from taosmd.archive import ArchiveStore
+from taosmd.memory_extractor import extract_facts_from_text, process_conversation_turn
+from taosmd.context_assembler import ContextAssembler
+from taosmd.vector_memory import VectorMemory
 
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json")
@@ -149,7 +149,11 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
         tmp = tempfile.mkdtemp()
         kg = TemporalKnowledgeGraph(db_path=os.path.join(tmp, "kg.db"))
         archive = ArchiveStore(archive_dir=os.path.join(tmp, "archive"), index_path=os.path.join(tmp, "idx.db"))
-        vmem = VectorMemory(db_path=os.path.join(tmp, "vectors.db"))
+        vmem = VectorMemory(
+            db_path=os.path.join(tmp, "vectors.db"),
+            embed_mode=os.environ.get("TAOSMD_EMBED_MODE", "onnx"),
+            onnx_path=os.environ.get("TAOSMD_ONNX_PATH", "/home/jay/taosmd/models/minilm-onnx"),
+        )
         await kg.init()
         await archive.init()
 
