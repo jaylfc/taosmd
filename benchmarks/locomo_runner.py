@@ -145,13 +145,20 @@ async def _judge(client: httpx.AsyncClient, url: str, model: str,
 def _session_keys(conversation: dict) -> list[tuple[str, str]]:
     pairs = []
     for key in conversation.keys():
-        if key.startswith("session_") and not key.endswith("_date_time"):
-            pairs.append((key, conversation.get(f"{key}_date_time", "")))
-    pairs.sort(key=lambda kv: int(kv[0].split("_")[1]) if kv[0].split("_")[1].isdigit() else 0)
+        if not key.startswith("session_") or key.endswith("_date_time"):
+            continue
+        parts = key.split("_")
+        if len(parts) != 2 or not parts[1].isdigit():
+            continue
+        if not isinstance(conversation.get(key), list):
+            continue
+        pairs.append((key, conversation.get(f"{key}_date_time", "")))
+    pairs.sort(key=lambda kv: int(kv[0].split("_")[1]))
     return pairs
 
 
-async def _ingest_conversation(vmem: VectorMemory, conversation: dict) -> tuple[int, float]:
+async def _ingest_conversation(vmem: VectorMemory, conv: dict) -> tuple[int, float]:
+    conversation = conv.get("conversation", conv)
     t0 = time.time()
     added = 0
     for session_key, dt in _session_keys(conversation):
