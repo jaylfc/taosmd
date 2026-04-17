@@ -323,12 +323,26 @@ async def run(args: argparse.Namespace) -> int:
     failed_qa = 0
     concurrency = max(1, int(args.concurrency))
     sem = asyncio.Semaphore(concurrency)
+    progress_lock = asyncio.Lock()
 
     async def _guarded(qa: dict, conv_id: str, vmem: VectorMemory,
                        client: httpx.AsyncClient) -> dict | None:
+        nonlocal total_seen, failed_qa
         async with sem:
-            return await _process_qa(qa, conv_id, vmem, client, args.ollama_url,
-                                     args.model, args.top_k, args.strategy)
+            try:
+                outcome = await _process_qa(qa, conv_id, vmem, client, args.ollama_url,
+                                            args.model, args.top_k, args.strategy)
+            except Exception as e:
+                async with progress_lock:
+                    failed_qa += 1
+                    print(f"  qa failed: {e!r}", flush=True)
+                return None
+        if outcome is not None:
+            async with progress_lock:
+                total_seen += 1
+                if total_seen % 25 == 0:
+                    print(f"  progress: {total_seen} QAs processed", flush=True)
+        return outcome
 
     async with httpx.AsyncClient(timeout=args.timeout) as client:
         for conv in conversations:
@@ -344,13 +358,15 @@ async def run(args: argparse.Namespace) -> int:
             added, ingest_s = await _ingest_conversation(vmem, conv)
             print(f"[{conv_id}] ingested {added} turns in {ingest_s:.1f}s", flush=True)
 
-            # Pick eligible QAs up-front so --limit semantics (global cap across
-            # conversations, preserving dataset order) match the previous loop.
+            # Pick eligible QAs up-front. --per-conv-limit caps QAs per
+            # conversation (for balanced sampling); --limit is the global cap.
             eligible: list[dict] = []
             for qa in conv.get("qa", []) or []:
                 cat = int(qa.get("category", 0))
                 if cat not in include_cats:
                     continue
+                if args.per_conv_limit and len(eligible) >= args.per_conv_limit:
+                    break
                 if args.limit and (total_seen + len(eligible)) >= args.limit:
                     break
                 eligible.append(qa)
@@ -359,16 +375,9 @@ async def run(args: argparse.Namespace) -> int:
                 tasks = [_guarded(qa, conv_id, vmem, client) for qa in eligible]
                 gathered = await asyncio.gather(*tasks, return_exceptions=True)
                 for outcome in gathered:
-                    if isinstance(outcome, Exception):
-                        failed_qa += 1
-                        print(f"  qa failed: {outcome!r}", flush=True)
-                        continue
-                    if outcome is None:
+                    if isinstance(outcome, Exception) or outcome is None:
                         continue
                     results.append(outcome)
-                    total_seen += 1
-                    if total_seen % 25 == 0:
-                        print(f"  progress: {total_seen} QAs processed", flush=True)
             await vmem.close()
             if args.limit and total_seen >= args.limit:
                 break
@@ -409,7 +418,9 @@ async def run(args: argparse.Namespace) -> int:
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="LoCoMo benchmark runner for taosmd")
     p.add_argument("--dataset", default="/home/jay/taosmd/data/locomo/data/locomo10.json")
-    p.add_argument("--limit", type=int, default=0, help="Cap total QAs (0=all)")
+    p.add_argument("--limit", type=int, default=0, help="Cap total QAs across all conversations (0=all)")
+    p.add_argument("--per-conv-limit", type=int, default=0,
+                   help="Cap QAs per conversation for balanced sampling (0=all eligible)")
     p.add_argument("--conversations", type=int, default=10)
     p.add_argument("--category", default="all")
     p.add_argument("--include-adversarial", action="store_true")
