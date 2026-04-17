@@ -29,9 +29,9 @@ from taosmd.vector_memory import VectorMemory
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json")
 
-# Remote LLM for answer generation (Ollama on Fedora with RTX 3060)
-REMOTE_LLM_URL = "http://192.168.6.108:11434"
-REMOTE_LLM_MODEL = "qwen2.5:3b"
+# Remote LLM for answer generation (override via TAOSMD_OLLAMA_URL env var)
+REMOTE_LLM_URL = os.environ.get("TAOSMD_OLLAMA_URL", "http://localhost:11434")
+REMOTE_LLM_MODEL = os.environ.get("TAOSMD_OLLAMA_MODEL", "qwen2.5:3b")
 
 ANSWER_PROMPT = """Based on the following context from past conversations, answer the question.
 If the answer is not in the context, say "I don't know."
