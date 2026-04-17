@@ -4,6 +4,12 @@
 Ingests each LoCoMo conversation into a fresh VectorMemory, runs retrieval
 against every QA, generates answers via Ollama, and scores with F1, BLEU-1,
 and an LLM judge. Output mirrors the Mem0 paper convention.
+
+Per-conversation QAs run concurrently (see ``--concurrency``) to cut wall
+time; conversations themselves remain sequential so vmem instances do not
+fight over the tempdir / embedding model load. Concurrency requires the
+Ollama server to be configured with ``OLLAMA_NUM_PARALLEL`` at least as
+large as ``--concurrency`` or requests will serialise on the server side.
 """
 
 from __future__ import annotations
@@ -314,6 +320,15 @@ async def run(args: argparse.Namespace) -> int:
 
     results: list[dict] = []
     total_seen = 0
+    failed_qa = 0
+    concurrency = max(1, int(args.concurrency))
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _guarded(qa: dict, conv_id: str, vmem: VectorMemory,
+                       client: httpx.AsyncClient) -> dict | None:
+        async with sem:
+            return await _process_qa(qa, conv_id, vmem, client, args.ollama_url,
+                                     args.model, args.top_k, args.strategy)
 
     async with httpx.AsyncClient(timeout=60) as client:
         for conv in conversations:
@@ -329,20 +344,31 @@ async def run(args: argparse.Namespace) -> int:
             added, ingest_s = await _ingest_conversation(vmem, conv)
             print(f"[{conv_id}] ingested {added} turns in {ingest_s:.1f}s", flush=True)
 
+            # Pick eligible QAs up-front so --limit semantics (global cap across
+            # conversations, preserving dataset order) match the previous loop.
+            eligible: list[dict] = []
             for qa in conv.get("qa", []) or []:
                 cat = int(qa.get("category", 0))
                 if cat not in include_cats:
                     continue
-                if args.limit and total_seen >= args.limit:
+                if args.limit and (total_seen + len(eligible)) >= args.limit:
                     break
-                record = await _process_qa(qa, conv_id, vmem, client, args.ollama_url,
-                                           args.model, args.top_k, args.strategy)
-                if record is None:
-                    continue
-                results.append(record)
-                total_seen += 1
-                if total_seen % 25 == 0:
-                    print(f"  progress: {total_seen} QAs processed", flush=True)
+                eligible.append(qa)
+
+            if eligible:
+                tasks = [_guarded(qa, conv_id, vmem, client) for qa in eligible]
+                gathered = await asyncio.gather(*tasks, return_exceptions=True)
+                for outcome in gathered:
+                    if isinstance(outcome, Exception):
+                        failed_qa += 1
+                        print(f"  qa failed: {outcome!r}", flush=True)
+                        continue
+                    if outcome is None:
+                        continue
+                    results.append(outcome)
+                    total_seen += 1
+                    if total_seen % 25 == 0:
+                        print(f"  progress: {total_seen} QAs processed", flush=True)
             await vmem.close()
             if args.limit and total_seen >= args.limit:
                 break
@@ -360,6 +386,8 @@ async def run(args: argparse.Namespace) -> int:
         "conversations": min(args.conversations, len(conversations)),
         "git_sha": _git_sha(),
         "dataset": str(dataset_path),
+        "concurrency": concurrency,
+        "failed_qa": failed_qa,
     }
 
     if args.out:
@@ -396,6 +424,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
+    p.add_argument(
+        "--concurrency", type=int, default=3,
+        help=("Max parallel QAs per conversation. Requires OLLAMA_NUM_PARALLEL "
+              ">= N on the Ollama server. Default 3; use 1 for sequential."),
+    )
     return p.parse_args()
 
 
