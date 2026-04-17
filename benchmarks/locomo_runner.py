@@ -312,7 +312,12 @@ async def run(args: argparse.Namespace) -> int:
         for conv in conversations:
             conv_id = conv.get("sample_id", "unknown")
             tmp = tempfile.mkdtemp(prefix=f"locomo_{conv_id}_")
-            vmem = VectorMemory(db_path=os.path.join(tmp, "vmem.db"), qmd_url=args.qmd_url)
+            vmem = VectorMemory(
+                db_path=os.path.join(tmp, "vmem.db"),
+                qmd_url=args.qmd_url,
+                embed_mode=args.embed_mode,
+                onnx_path=args.onnx_path,
+            )
             await vmem.init(http_client=client)
             added, ingest_s = await _ingest_conversation(vmem, conv)
             print(f"[{conv_id}] ingested {added} turns in {ingest_s:.1f}s", flush=True)
@@ -374,6 +379,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--category", default="all")
     p.add_argument("--include-adversarial", action="store_true")
     p.add_argument("--qmd-url", default="http://localhost:7832")
+    p.add_argument("--embed-mode", choices=["qmd", "local", "onnx"], default="onnx",
+                   help="Embedding backend. Default onnx (Fedora reference stack).")
+    p.add_argument("--onnx-path", default="/home/jay/taosmd/models/minilm-onnx",
+                   help="Path to MiniLM ONNX model directory.")
     p.add_argument("--ollama-url", default="http://localhost:11434")
     p.add_argument("--model", default="qwen3:4b")
     p.add_argument("--top-k", type=int, default=10)
