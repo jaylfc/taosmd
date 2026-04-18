@@ -4,9 +4,9 @@
 
 # taOSmd
 
-**Framework-agnostic AI memory system. 97.0% Recall@5 on LongMemEval-S.**
+**Framework-agnostic AI memory system. 97.0% end-to-end Judge accuracy on LongMemEval-S.**
 
-Beats MemPalace (96.6%) and agentmemory (95.2%) — running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
+Our 97.0% is end-to-end Judge accuracy on LongMemEval-S (retrieve → generate → judge with an LLM grader). MemPalace (96.6%) and agentmemory (95.2%), which are the most-cited open systems, publish Recall@5 retrieval scores on the same dataset — a different metric measuring whether the correct session appears in the top-5 retrieved, with no generation or judge step. Our number is the stricter measurement; direct comparison isn't apples-to-apples until they (or we) re-run end-to-end. Running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
 
 ---
 
