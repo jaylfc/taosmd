@@ -416,11 +416,20 @@ class SessionCatalog:
         self,
         session_id: int,
         max_lines: int = 100,
+        *,
+        agent_name: str | None = None,
     ) -> dict | None:
         """Get session metadata plus the raw event lines from its split file.
 
         Loads from the split file (fast) rather than seeking through the full
         day archive. Falls back to archive line-range if split file is missing.
+
+        Args:
+            session_id: primary key of the session to fetch.
+            max_lines:  maximum number of lines to return.
+            agent_name: optional agent slug. When set, only lines whose parsed
+                JSON ``agent_name`` field matches are included. When None
+                (default), all lines are returned unchanged.
         """
         row = self._conn.execute(
             "SELECT * FROM sessions WHERE id = ?", (session_id,)
@@ -431,13 +440,25 @@ class SessionCatalog:
         session = self._format(dict(row))
         lines: list[str] = []
 
+        def _accept_line(raw: str) -> bool:
+            """Return True if this raw JSONL line passes the agent_name filter."""
+            if agent_name is None:
+                return True
+            try:
+                event = json.loads(raw)
+                return event.get("agent_name") == agent_name
+            except (json.JSONDecodeError, AttributeError):
+                return False
+
         split_path = Path(row["split_file"]) if row["split_file"] else None
         if split_path and split_path.exists():
             with open(split_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if len(lines) >= max_lines:
                         break
-                    lines.append(line.strip())
+                    stripped = line.strip()
+                    if _accept_line(stripped):
+                        lines.append(stripped)
         else:
             # Fallback: read from archive between line_start and line_end
             archive_path = Path(row["archive_file"])
@@ -455,7 +476,9 @@ class SessionCatalog:
                             break
                         if len(lines) >= max_lines:
                             break
-                        lines.append(line.strip())
+                        stripped = line.strip()
+                        if _accept_line(stripped):
+                            lines.append(stripped)
 
         session["archive_lines"] = lines
         session["lines_returned"] = len(lines)
@@ -513,6 +536,8 @@ class SessionCatalog:
         llm_url: str,
         model: str,
         tier: int = 2,
+        *,
+        agent_name: str | None = None,
     ) -> dict | None:
         """Enrich a catalog session with LLM-generated topic/description/category.
 
@@ -527,11 +552,14 @@ class SessionCatalog:
             llm_url:    base URL of the Ollama server (e.g. "http://localhost:11434").
             model:      model name to use for generation.
             tier:       tier to set on success (default 2 = LLM-enriched).
+            agent_name: optional agent slug to scope enrichment. When set, only
+                archive rows belonging to this agent are enriched. When None
+                (default), behaves as before — unscoped across all agents.
 
         Returns:
             Updated session dict, or None if session_id is not found.
         """
-        ctx = await self.get_session_context(session_id)
+        ctx = await self.get_session_context(session_id, agent_name=agent_name)
         if ctx is None:
             return None
 

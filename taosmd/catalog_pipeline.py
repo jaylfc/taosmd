@@ -205,6 +205,7 @@ class CatalogPipeline:
                             llm_url=self._llm_url,
                             model=model,
                             tier=tier,
+                            agent_name=agent_name,
                         )
                         enriched_count += 1
                     except Exception as exc:
