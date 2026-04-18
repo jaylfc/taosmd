@@ -394,3 +394,60 @@ class TestEnricher:
         assert topic == "legacy topic phrase"
         assert description == "legacy description sentence."
         assert category == "coding"
+
+    def test_lookup_date_respects_agent_name(self):
+        """lookup_date(date, agent_name='alice') returns only alice's sessions;
+        lookup_date(date) returns both (backward compat)."""
+        import tempfile
+        tmpdir = tempfile.TemporaryDirectory()
+        tmp = Path(tmpdir.name)
+
+        cat = _make_catalog(tmp)
+        _run(cat.init())
+
+        archive_dir = tmp / "archive"
+        t = BASE_TS
+
+        alice_events = [
+            {
+                "timestamp": t,
+                "event_type": "conversation",
+                "agent_name": "alice",
+                "summary": "alice started coding",
+                "data": {},
+            },
+        ]
+        bob_events = [
+            {
+                "timestamp": t + 55 * 60,
+                "event_type": "conversation",
+                "agent_name": "bob",
+                "summary": "bob reviewing PR",
+                "data": {},
+            },
+        ]
+
+        _write_archive(archive_dir, alice_events + bob_events)
+        cat.split_day("2025-04-13")
+
+        # Unscoped — both sessions returned
+        all_sessions = _run(cat.lookup_date("2025-04-13"))
+        assert len(all_sessions) == 2, f"Expected 2 sessions total, got {len(all_sessions)}"
+
+        # Scoped to alice — only alice's session
+        alice_sessions = _run(cat.lookup_date("2025-04-13", agent_name="alice"))
+        assert len(alice_sessions) == 1, (
+            f"Expected 1 alice session, got {len(alice_sessions)}"
+        )
+        assert alice_sessions[0]["agent_name"] == "alice", (
+            f"Expected agent_name='alice', got {alice_sessions[0].get('agent_name')!r}"
+        )
+
+        # Scoped to bob — only bob's session
+        bob_sessions = _run(cat.lookup_date("2025-04-13", agent_name="bob"))
+        assert len(bob_sessions) == 1, (
+            f"Expected 1 bob session, got {len(bob_sessions)}"
+        )
+
+        _run(cat.close())
+        tmpdir.cleanup()

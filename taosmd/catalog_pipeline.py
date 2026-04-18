@@ -237,11 +237,11 @@ class CatalogPipeline:
             kg = TemporalKnowledgeGraph(db_path=self._kg_db)
             await kg.init()
 
-            sessions_fresh = await self.catalog.lookup_date(date)
+            sessions_fresh = await self.catalog.lookup_date(date, agent_name=agent_name or None)
             for session in sessions_fresh:
                 sid = session["id"]
                 try:
-                    ctx = await self.catalog.get_session_context(sid)
+                    ctx = await self.catalog.get_session_context(sid, agent_name=agent_name or None)
                     if ctx is None:
                         continue
 
