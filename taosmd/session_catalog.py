@@ -28,6 +28,8 @@ from pathlib import Path
 
 import httpx
 
+from taosmd import prompts
+
 logger = logging.getLogger(__name__)
 
 SESSION_GAP_THRESHOLD = 1800  # 30 minutes
@@ -601,19 +603,7 @@ class SessionCatalog:
         Raises:
             httpx.HTTPError / Exception on network or parse failure.
         """
-        categories_str = ", ".join(SESSION_CATEGORIES)
-        prompt = (
-            f"You are analyzing a memory session log.\n"
-            f"Given the following session events, provide:\n"
-            f"TOPIC: a short topic phrase (5-10 words)\n"
-            f"DESCRIPTION: one sentence describing what happened\n"
-            f"CATEGORY: one category from this list: {categories_str}\n\n"
-            f"Respond in exactly this format:\n"
-            f"TOPIC: <topic>\n"
-            f"DESCRIPTION: <description>\n"
-            f"CATEGORY: <category>\n\n"
-            f"Session content:\n{content[:3000]}"
-        )
+        prompt = prompts.session_enrichment_prompt(session_log=content)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -628,10 +618,24 @@ class SessionCatalog:
             response.raise_for_status()
             text = response.json()["response"]
 
-        return self._parse_enrichment(text)
+        # Strip markdown fences if the model wrapped the JSON.
+        stripped = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.DOTALL)
+        try:
+            data = json.loads(stripped)
+            topic = str(data["topic"])
+            description = str(data["description"])
+            category = str(data["category"]).lower()
+            if not topic or not description or not category:
+                raise ValueError("empty field in JSON response")
+            return topic, description, category
+        except (json.JSONDecodeError, KeyError, ValueError):
+            # legacy — fallback when JSON parse fails
+            return self._parse_enrichment(text)
 
     def _parse_enrichment(self, text: str) -> tuple[str, str, str]:
         """Parse an LLM response into (topic, description, category).
+
+        legacy — fallback when JSON parse fails (used by _llm_enrich).
 
         Expected format:
             TOPIC: <topic>

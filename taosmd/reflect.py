@@ -150,12 +150,24 @@ class InsightStore:
         entity: str | None = None,
         llm_url: str = "http://localhost:11434",
         model: str = "qwen3:4b",
+        agent_name: str = "",
     ) -> list[dict]:
         """Run reflection over KG triples, synthesizing insights.
 
         If entity is provided, reflects only on that entity's neighbourhood.
         Otherwise reflects on all active triples.
         """
+        from .agents import is_task_enabled  # noqa: PLC0415
+
+        # Gate: named agents with reflect disabled return early.
+        # Anonymous callers (agent_name is "") always run.
+        if agent_name and not is_task_enabled(agent_name, "reflect"):
+            logger.debug(
+                "InsightStore.reflect: reflect disabled for agent=%r, skipping",
+                agent_name,
+            )
+            return []
+
         # Gather triples
         if entity:
             triples = await kg.query_entity(entity, track_access=False)

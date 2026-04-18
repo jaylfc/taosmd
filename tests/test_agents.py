@@ -417,3 +417,269 @@ def test_legacy_record_without_fanout_defaults_to_low(registry, tmp_path):
     # effective_fanout should still resolve correctly
     k = registry.effective_fanout("old-agent")
     assert k == FANOUT_LEVELS["low"]
+
+
+# ---------------------------------------------------------------------------
+# Gate wiring: process_conversation_turn (fact_extraction)
+# ---------------------------------------------------------------------------
+
+
+def test_fact_extraction_gate_disabled_skips_llm(registry, tmp_path):
+    """fact_extraction=False → LLM call is not made; falls back to regex."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    registry.register_agent("alice")
+    registry.set_librarian("alice", tasks={"fact_extraction": False})
+
+    # Patch is_task_enabled to use our tmp registry so it sees "alice"
+    import taosmd.memory_extractor as me
+
+    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+        spy = AsyncMock(return_value=[])
+        with patch.object(me, "extract_facts_with_llm", spy):
+            # We need a minimal KG stub with add_triple_with_contradiction_check
+            kg_stub = AsyncMock()
+            kg_stub.add_triple_with_contradiction_check = AsyncMock(
+                return_value={"triple_id": "t1", "contradictions_resolved": 0}
+            )
+            asyncio.run(
+                me.process_conversation_turn(
+                    "Alice uses Postgres.",
+                    agent_name="alice",
+                    kg=kg_stub,
+                    llm_url="http://fake:11434",
+                    http_client=AsyncMock(),
+                    use_llm=True,
+                )
+            )
+    spy.assert_not_called()
+
+
+def test_fact_extraction_gate_enabled_calls_llm(registry, tmp_path):
+    """fact_extraction=True (default) → LLM call is attempted."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    registry.register_agent("alice")
+    # Default: fact_extraction is True
+
+    import taosmd.memory_extractor as me
+
+    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+        spy = AsyncMock(return_value=[])
+        with patch.object(me, "extract_facts_with_llm", spy):
+            kg_stub = AsyncMock()
+            kg_stub.add_triple_with_contradiction_check = AsyncMock(
+                return_value={"triple_id": "t1", "contradictions_resolved": 0}
+            )
+            asyncio.run(
+                me.process_conversation_turn(
+                    "Alice uses Postgres.",
+                    agent_name="alice",
+                    kg=kg_stub,
+                    llm_url="http://fake:11434",
+                    http_client=AsyncMock(),
+                    use_llm=True,
+                )
+            )
+    spy.assert_called_once()
+
+
+def test_fact_extraction_gate_none_agent_runs_llm(registry, tmp_path):
+    """agent_name=None → anonymous caller; LLM always runs regardless of registry."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import taosmd.memory_extractor as me
+
+    # No agent registered at all — anonymous install
+    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+        spy = AsyncMock(return_value=[])
+        with patch.object(me, "extract_facts_with_llm", spy):
+            kg_stub = AsyncMock()
+            kg_stub.add_triple_with_contradiction_check = AsyncMock(
+                return_value={"triple_id": "t1", "contradictions_resolved": 0}
+            )
+            asyncio.run(
+                me.process_conversation_turn(
+                    "Alice uses Postgres.",
+                    agent_name=None,
+                    kg=kg_stub,
+                    llm_url="http://fake:11434",
+                    http_client=AsyncMock(),
+                    use_llm=True,
+                )
+            )
+    spy.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Gate wiring: CrystalStore.crystallize (crystallise)
+# ---------------------------------------------------------------------------
+
+
+def test_crystallize_gate_disabled_returns_skipped(registry, tmp_path):
+    """crystallise=False → crystallize() returns early without LLM call."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    registry.register_agent("alice")
+    registry.set_librarian("alice", tasks={"crystallise": False})
+
+    import taosmd.crystallize as cr
+
+    turns = [{"role": "user", "content": "hello", "timestamp": 1000.0}]
+
+    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+        cs = cr.CrystalStore(db_path=str(tmp_path / "crystals.db"))
+        spy = AsyncMock(return_value=("narrative", [], [], []))
+        with patch.object(cs, "_llm_crystallize", spy):
+            result = asyncio.run(cs.init())
+            result = asyncio.run(
+                cs.crystallize(
+                    session_id="s1",
+                    turns=turns,
+                    agent_name="alice",
+                    llm_url="http://fake:11434",
+                    model="test-model",
+                )
+            )
+    assert result.get("skipped") is True
+    spy.assert_not_called()
+
+
+def test_crystallize_gate_enabled_calls_llm(registry, tmp_path):
+    """crystallise=True (default) → _llm_crystallize is called."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    registry.register_agent("alice")
+
+    import taosmd.crystallize as cr
+
+    turns = [{"role": "user", "content": "hello", "timestamp": 1000.0},
+             {"role": "assistant", "content": "world", "timestamp": 1005.0}]
+
+    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+        cs = cr.CrystalStore(db_path=str(tmp_path / "crystals.db"))
+        spy = AsyncMock(return_value=("narrative", [], [], []))
+        with patch.object(cs, "_llm_crystallize", spy):
+            asyncio.run(cs.init())
+            asyncio.run(
+                cs.crystallize(
+                    session_id="s1",
+                    turns=turns,
+                    agent_name="alice",
+                    llm_url="http://fake:11434",
+                    model="test-model",
+                )
+            )
+    spy.assert_called_once()
+
+
+def test_crystallize_gate_none_agent_runs_llm(registry, tmp_path):
+    """agent_name=None → anonymous; _llm_crystallize always runs."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import taosmd.crystallize as cr
+
+    turns = [{"role": "user", "content": "hello", "timestamp": 1000.0},
+             {"role": "assistant", "content": "world", "timestamp": 1005.0}]
+
+    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+        cs = cr.CrystalStore(db_path=str(tmp_path / "crystals.db"))
+        spy = AsyncMock(return_value=("narrative", [], [], []))
+        with patch.object(cs, "_llm_crystallize", spy):
+            asyncio.run(cs.init())
+            asyncio.run(
+                cs.crystallize(
+                    session_id="s1",
+                    turns=turns,
+                    agent_name=None,
+                    llm_url="http://fake:11434",
+                    model="test-model",
+                )
+            )
+    spy.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Gate wiring: InsightStore.reflect (reflect)
+# ---------------------------------------------------------------------------
+
+
+def test_reflect_gate_disabled_returns_empty(registry, tmp_path):
+    """reflect=False → InsightStore.reflect() returns [] without LLM call."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    registry.register_agent("alice")
+    registry.set_librarian("alice", tasks={"reflect": False})
+
+    import taosmd.reflect as rf
+
+    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+        store = rf.InsightStore(db_path=str(tmp_path / "insights.db"))
+        kg_stub = AsyncMock()
+        spy = AsyncMock(return_value=None)
+        with patch.object(store, "_synthesize_cluster", spy):
+            asyncio.run(store.init())
+            result = asyncio.run(
+                store.reflect(kg=kg_stub, agent_name="alice")
+            )
+    assert result == []
+    spy.assert_not_called()
+
+
+def test_reflect_gate_enabled_calls_synthesize(registry, tmp_path):
+    """reflect=True (default) → _synthesize_cluster is called when there are clusters."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    registry.register_agent("alice")
+
+    import taosmd.reflect as rf
+
+    triples = [
+        {"subject": "Alice", "predicate": "uses", "object": "Postgres", "id": "t1"},
+        {"subject": "Alice", "predicate": "uses", "object": "Redis", "id": "t2"},
+    ]
+
+    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+        store = rf.InsightStore(db_path=str(tmp_path / "insights.db"))
+        kg_stub = AsyncMock()
+        kg_stub.timeline = AsyncMock(return_value=triples)
+        spy = AsyncMock(return_value=None)
+        with patch.object(store, "_synthesize_cluster", spy):
+            asyncio.run(store.init())
+            asyncio.run(
+                store.reflect(kg=kg_stub, agent_name="alice")
+            )
+    spy.assert_called()
+
+
+def test_reflect_gate_anonymous_always_runs(registry, tmp_path):
+    """agent_name="" → anonymous; reflection always runs."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import taosmd.reflect as rf
+
+    triples = [
+        {"subject": "Alice", "predicate": "uses", "object": "Postgres", "id": "t1"},
+        {"subject": "Alice", "predicate": "uses", "object": "Redis", "id": "t2"},
+    ]
+
+    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+        store = rf.InsightStore(db_path=str(tmp_path / "insights.db"))
+        kg_stub = AsyncMock()
+        kg_stub.timeline = AsyncMock(return_value=triples)
+        spy = AsyncMock(return_value=None)
+        with patch.object(store, "_synthesize_cluster", spy):
+            asyncio.run(store.init())
+            asyncio.run(
+                store.reflect(kg=kg_stub, agent_name="")
+            )
+    spy.assert_called()
