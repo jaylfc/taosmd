@@ -136,3 +136,78 @@ class TestPipelineDetectBestTier:
         assert tier in (1, 2), f"Expected tier 1 or 2, got {tier}"
         if tier == 2:
             assert model is not None, "Tier 2 should have a model name"
+
+
+class TestCrystallizeAgentScoping:
+
+    def setup_method(self, method):
+        import tempfile
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+
+    def teardown_method(self, method):
+        self._tmpdir.cleanup()
+
+    def test_crystallize_stage_passes_agent_name_to_lookup_date(self):
+        """index_day(agent_name='alice') must call lookup_date with agent_name='alice'
+        in the crystallize stage, so bob's sessions are never touched."""
+        from unittest.mock import AsyncMock, patch
+
+        t = BASE_TS
+
+        alice_events = [
+            {
+                "timestamp": t,
+                "event_type": "conversation",
+                "agent_name": "alice",
+                "summary": "alice started coding",
+                "data": {},
+            },
+        ]
+        bob_events = [
+            {
+                "timestamp": t + 55 * 60,
+                "event_type": "conversation",
+                "agent_name": "bob",
+                "summary": "bob reviewing PR",
+                "data": {},
+            },
+        ]
+
+        _write_archive(self.tmp / "archive", alice_events + bob_events)
+
+        pipeline = _make_pipeline(self.tmp)
+
+        lookup_calls: list[dict] = []
+
+        async def run():
+            await pipeline.init()
+
+            # Record calls to lookup_date so we can assert on agent_name.
+            original_lookup = pipeline.catalog.lookup_date
+
+            async def recording_lookup(date, *, agent_name=None):
+                lookup_calls.append({"date": date, "agent_name": agent_name})
+                return await original_lookup(date, agent_name=agent_name)
+
+            pipeline.catalog.lookup_date = recording_lookup
+
+            # Patch detect_best_tier → tier 2, and run_if_enabled → True so
+            # the crystallize block is entered (alice is not a registered agent).
+            with patch.object(
+                pipeline, "detect_best_tier", new=AsyncMock(return_value=(2, "test-model"))
+            ), patch("taosmd.catalog_pipeline.run_if_enabled", return_value=True):
+                await pipeline.index_day("2025-04-13", agent_name="alice")
+
+            await pipeline.close()
+
+        _run(run())
+
+        # The crystallize stage must have called lookup_date with agent_name="alice".
+        # (Other stages also call lookup_date unscoped — only the crystallize fix
+        # is verified here.)
+        scoped_calls = [c for c in lookup_calls if c["agent_name"] == "alice"]
+        assert scoped_calls, (
+            f"Expected at least one lookup_date call with agent_name='alice' "
+            f"(crystallize stage); got calls: {lookup_calls}"
+        )

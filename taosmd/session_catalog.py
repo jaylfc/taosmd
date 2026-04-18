@@ -160,6 +160,13 @@ class SessionCatalog:
                 self._conn.execute(_sql)
             except Exception:
                 pass  # column already exists
+        # agent_name column — safe no-op if already present
+        try:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN agent_name TEXT DEFAULT ''"
+            )
+        except Exception:
+            pass
         try:
             self._conn.execute(
                 'CREATE INDEX IF NOT EXISTS idx_sessions_path '
@@ -285,6 +292,10 @@ class SessionCatalog:
             summaries = [e.get("summary", "") for e in group if e.get("summary")]
             topic = summaries[0][:80] if summaries else "Activity session"
 
+            # Derive agent_name from first event that carries the field
+            agent_names = [e.get("agent_name", "") for e in group if e.get("agent_name")]
+            session_agent = agent_names[0] if agent_names else ""
+
             # Build split file path: data/sessions/YYYY/MM/DD/session-NNN-<cat>-<slug>.jsonl
             category = "other"
             slug = _slugify(topic)
@@ -308,8 +319,8 @@ class SessionCatalog:
                 """INSERT INTO sessions
                    (date, start_time, end_time, topic, description, category,
                     archive_file, line_start, line_end, split_file,
-                    turn_count, tier, partial, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_count, tier, partial, created_at, agent_name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     date,
                     start_ts,
@@ -325,6 +336,7 @@ class SessionCatalog:
                     1,
                     1 if partial else 0,
                     now,
+                    session_agent,
                 ),
             )
             session_id = cursor.lastrowid
@@ -371,12 +383,25 @@ class SessionCatalog:
     # Queries
     # ------------------------------------------------------------------
 
-    async def lookup_date(self, date: str) -> list[dict]:
-        """Get all sessions for a specific date, ordered by start time."""
-        rows = self._conn.execute(
-            "SELECT * FROM sessions WHERE date = ? ORDER BY start_time",
-            (date,),
-        ).fetchall()
+    async def lookup_date(self, date: str, *, agent_name: str | None = None) -> list[dict]:
+        """Get all sessions for a specific date, ordered by start time.
+
+        Args:
+            date: YYYY-MM-DD string.
+            agent_name: optional agent slug. When set, only sessions whose
+                ``agent_name`` column matches are returned. When None (default),
+                all sessions for the date are returned.
+        """
+        if agent_name:
+            rows = self._conn.execute(
+                "SELECT * FROM sessions WHERE date = ? AND agent_name = ? ORDER BY start_time",
+                (date, agent_name),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM sessions WHERE date = ? ORDER BY start_time",
+                (date,),
+            ).fetchall()
         return [self._format(dict(r)) for r in rows]
 
     async def lookup_range(self, start_date: str, end_date: str) -> list[dict]:
