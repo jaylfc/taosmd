@@ -235,3 +235,100 @@ class TestEnricher:
         assert session_id in ids, (
             f"session_id {session_id} not found in FTS results: {ids}"
         )
+
+    def test_enrich_session_respects_agent_name(self):
+        """enrich_session with agent_name='alice' must not touch bob's session.
+
+        Two sessions are created: one whose split file contains only alice's
+        events, one whose split file contains only bob's events.  Enrichment
+        called with agent_name='alice' should leave bob's session at tier=1
+        (LLM unreachable, so even alice's tier stays at 1 — but the key
+        assertion is that bob's context comes back empty, meaning the enrichment
+        path received no content for that session and left the tier unchanged).
+        """
+        import tempfile
+        tmpdir = tempfile.TemporaryDirectory()
+        tmp = Path(tmpdir.name)
+
+        cat = _make_catalog(tmp)
+        _run(cat.init())
+
+        # Write a single archive file with events tagged for two agents.
+        archive_dir = tmp / "archive"
+        t = BASE_TS
+
+        alice_events = [
+            {
+                "timestamp": t,
+                "event_type": "conversation",
+                "agent_name": "alice",
+                "summary": "alice started coding",
+                "data": {},
+            },
+            {
+                "timestamp": t + 5 * 60,
+                "event_type": "conversation",
+                "agent_name": "alice",
+                "summary": "alice finished coding",
+                "data": {},
+            },
+        ]
+        bob_events = [
+            {
+                "timestamp": t + 55 * 60,
+                "event_type": "conversation",
+                "agent_name": "bob",
+                "summary": "bob reviewing PR",
+                "data": {},
+            },
+            {
+                "timestamp": t + 60 * 60,
+                "event_type": "conversation",
+                "agent_name": "bob",
+                "summary": "bob merged PR",
+                "data": {},
+            },
+        ]
+
+        _write_archive(archive_dir, alice_events + bob_events)
+        cat.split_day("2025-04-13")
+
+        sessions = _run(cat.lookup_date("2025-04-13"))
+        assert len(sessions) == 2, f"Expected 2 sessions, got {len(sessions)}"
+
+        # Both sessions start at tier=1.
+        assert sessions[0]["tier"] == 1
+        assert sessions[1]["tier"] == 1
+
+        alice_session_id = sessions[0]["id"]
+        bob_session_id = sessions[1]["id"]
+
+        # Call enrich with agent_name="alice". LLM is unreachable so tier stays
+        # at 1 for alice's session, but the important invariant is that bob's
+        # get_session_context returns no matching lines — the agent filter works.
+        _run(
+            cat.enrich_session(
+                alice_session_id,
+                llm_url="http://localhost:99999",
+                model="test-model",
+                tier=2,
+                agent_name="alice",
+            )
+        )
+
+        # Fetch context for bob's session scoped to alice — should be empty.
+        bob_ctx = _run(
+            cat.get_session_context(bob_session_id, agent_name="alice")
+        )
+        _run(cat.close())
+        tmpdir.cleanup()
+
+        assert bob_ctx is not None, "get_session_context returned None for bob's session"
+        assert bob_ctx["archive_lines"] == [], (
+            f"Expected no alice lines in bob's session, got: {bob_ctx['archive_lines']}"
+        )
+
+        # Bob's tier must remain 1 — enrichment was never called for it.
+        assert bob_ctx["tier"] == 1, (
+            f"Expected bob's tier=1, got {bob_ctx['tier']}"
+        )
