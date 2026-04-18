@@ -48,7 +48,19 @@ from .agents import (
 )
 from . import prompts
 
+from importlib.resources import files
+
+
+def agent_rules() -> str:
+    """Return the verbatim `docs/agent-rules.md` contract.
+
+    Works from both editable and wheel installs.
+    """
+    return files("taosmd").joinpath("docs/agent-rules.md").read_text(encoding="utf-8")
+
+
 __all__ = [
+    "agent_rules",
     # Core memory layers
     "KnowledgeGraph",
     "VectorMemory",
