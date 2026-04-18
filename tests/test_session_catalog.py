@@ -332,3 +332,65 @@ class TestEnricher:
         assert bob_ctx["tier"] == 1, (
             f"Expected bob's tier=1, got {bob_ctx['tier']}"
         )
+
+    def test_llm_enrich_json_path(self):
+        """_llm_enrich parses a clean JSON response from the module prompt."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        cat = _make_catalog(self.tmp)
+        _run(cat.init())
+
+        json_response = '{"topic": "ONNX batch inference", "description": "Debugged batch inference pipeline.", "category": "debugging"}'
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"response": json_response}
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("taosmd.session_catalog.httpx.AsyncClient", return_value=mock_client):
+            topic, description, category = _run(
+                cat._llm_enrich("some session content", "http://localhost:11434", "test-model")
+            )
+
+        _run(cat.close())
+
+        assert topic == "ONNX batch inference"
+        assert description == "Debugged batch inference pipeline."
+        assert category == "debugging"
+
+    def test_llm_enrich_json_fallback_to_legacy_parser(self):
+        """_llm_enrich falls back to _parse_enrichment when JSON parse fails."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        cat = _make_catalog(self.tmp)
+        _run(cat.init())
+
+        legacy_response = (
+            "TOPIC: legacy topic phrase\n"
+            "DESCRIPTION: legacy description sentence.\n"
+            "CATEGORY: coding\n"
+        )
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"response": legacy_response}
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("taosmd.session_catalog.httpx.AsyncClient", return_value=mock_client):
+            topic, description, category = _run(
+                cat._llm_enrich("some session content", "http://localhost:11434", "test-model")
+            )
+
+        _run(cat.close())
+
+        assert topic == "legacy topic phrase"
+        assert description == "legacy description sentence."
+        assert category == "coding"
