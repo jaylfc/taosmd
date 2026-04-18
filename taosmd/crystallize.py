@@ -102,6 +102,17 @@ class CrystalStore:
         if not turns:
             return {"error": "no turns to crystallize"}
 
+        from .agents import is_task_enabled  # noqa: PLC0415
+
+        # Gate: named agents with crystallise disabled return early.
+        # Anonymous callers (agent_name is None or "") always run.
+        if agent_name and not is_task_enabled(agent_name, "crystallise"):
+            logger.debug(
+                "CrystalStore.crystallize: crystallise disabled for agent=%r, skipping",
+                agent_name,
+            )
+            return {"skipped": True, "reason": "crystallise task disabled"}
+
         # Build conversation text (truncate to ~4000 chars for LLM context)
         conv_parts = []
         for turn in turns:

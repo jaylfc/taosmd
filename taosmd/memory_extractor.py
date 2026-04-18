@@ -211,8 +211,18 @@ async def process_conversation_turn(
 
     Returns {facts_extracted, triples_created, contradictions_resolved, triple_ids, method}.
     """
+    from .agents import is_task_enabled  # noqa: PLC0415
+
     # Choose extraction method: LLM first, regex fallback
+    # Gate: named agents with fact_extraction disabled fall back to regex.
+    # Anonymous callers (agent_name is None or "") always run as before.
     method = "regex"
+    if agent_name and not is_task_enabled(agent_name, "fact_extraction"):
+        logger.debug(
+            "process_conversation_turn: fact_extraction disabled for agent=%r, using regex",
+            agent_name,
+        )
+        use_llm = False
     if use_llm and llm_url and http_client:
         facts = await extract_facts_with_llm(text, llm_url, http_client)
         if facts:
