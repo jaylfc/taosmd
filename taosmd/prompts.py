@@ -177,8 +177,10 @@ Rules:
 - Topic is a noun phrase, not a sentence.
 - Description should quote a phrase from the log when possible. Do not
   paraphrase what was actually said.
-- Category is one of: question, decision, note, task, exchange, debug,
-  research, conversation. Pick "conversation" when nothing else fits.
+- Category is one of: coding, debugging, research, planning,
+  conversation, configuration, deployment, testing, documentation,
+  brainstorming, review, maintenance, other. Pick "other" when nothing
+  else fits.
 
 Quality bar:
 - Topic words appear in the log.
