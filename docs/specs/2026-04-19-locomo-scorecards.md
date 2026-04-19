@@ -130,25 +130,81 @@ generator-quality improvement.
 | Self-judge | gemma4:e2b (i.e. the same generator) |
 | External judge | qwen3:4b via Ollama, temperature 0.0, `benchmarks/locomo_rescore_streaming.py` |
 | Timeout (rescore) | 240s per call, concurrency 3 |
-| Commits | Runner + adapter + prompt-opt: `fd27d2c` (PR #30, consolidated). Rescore tool: `c360faa` (PR #29, merged). Silent-failure fixes: `786eb72` (PR #33, stacked on #30). MemPalace adapter: `ca0ccb7` (on #30's branch). Earlier per-commit SHAs from the working branch (`40403cc`/`86c4c19`/`3c5c6c2`) were rewritten out of history during PR #30's rebase-to-single-commit. |
+| Commits | Runner + adapter + prompt-opt: `fd27d2c` (PR #30, merged). Rescore tool: `c360faa` (PR #29, merged). README Judge framing: `116edab`/`PR #31` + `fix/readme-judge-accuracy-consistency` (PR #32, merged). Silent-failure fixes: `bc0a773` (PR #35, pending). MemPalace adapter (chromadb path): `571d8af` (PR #36, pending — supersedes earlier `ca0ccb7` palace/mine attempt). |
+
+---
+
+## Configuration log (models + deployment profile)
+
+| Role | Model | Params | Quant | VRAM/RAM | Backend | Notes |
+|---|---|---|---|---|---|---|
+| Generator (benchmark default) | `gemma4:e2b` | 5.1B | Q4_K_M | ~7 GB | Ollama | Best default at ≤12 GB VRAM tier |
+| Generator (larger, tested) | `gemma4:e4b` | 8.0B | Q4_K_M | ~11 GB | Ollama | Higher IDK rate (78% multi-hop) hurts scores — see lessons below |
+| External judge (settled on) | `qwen3:4b` | 4B | Q4_K_M | ~5 GB | Ollama | Reliable structured/JSON output; 100% coverage on all four rescore runs |
+| External judge (rejected) | `qwen3.5:9b` | 9B | Q4_K_M | ~9 GB | Ollama | 64–72% timeout rate under NUM_PARALLEL=3 at 60 s client timeout — too slow for production judging |
+| Embedder (taosmd) | all-MiniLM-L6-v2 ONNX | 22M | fp32 | CPU (~80 MB) | ONNX Runtime | 0.3 ms Pi / ~10 ms Fedora CPU |
+| Embedder (mem0) | `nomic-embed-text` | 137M | Q4 | ~0.6 GB | Ollama | 2048-token context — batch ingest mandatory for long conversations |
+| Embedder (MemPalace) | chromadb default (MiniLM) | 22M | fp32 | CPU | chromadb built-in | Matches MemPalace's own benchmark default |
+| Fact extractor (mem0) | same as generator | — | — | — | Ollama | Requires reliable JSON output; **fails on gemma family**, works on qwen — see lesson #2 |
+| Cross-encoder rerank (taosmd) | ms-marco-MiniLM ONNX | 22M | fp32 | CPU | ONNX Runtime | Second-stage rerank over top-K vector hits |
+
+### Host / runtime
+
+| Item | Value |
+|---|---|
+| Benchmark host | Fedora workstation, RTX 3060 12 GB |
+| Ollama | `OLLAMA_NUM_PARALLEL=3` (systemd override) — capped throughput at 3 concurrent |
+| Python | 3.14 |
+| Concurrency (client) | 3 during rescore; request limit dominated by server NUM_PARALLEL |
+| Rescore timeout | 240 s per call (60 s was too tight for qwen3.5:9b) |
+| GPU utilisation observed | 87–95% through ingest + QA; 90–95% through rescore |
+
+---
+
+## Hardware tier recommendations (derived from this benchmark)
+
+**Orange Pi 5 Plus (16 GB RAM, RK3588 NPU, no CUDA):**
+- Generator: `qwen3:4b` via rkllama on the NPU (~4 GB) — only option that does structured output reliably at this size
+- Judge: **external** — Pi can't comfortably dual-load a judge model alongside the generator. Offload to a Fedora or cloud peer.
+- Embedder: all-MiniLM-L6-v2 ONNX on CPU (0.3 ms)
+- Memory arch: taosmd (this is the tier it was designed around)
+- Inference backend: rkllama for LLM, ONNX Runtime for embed/rerank
+
+**Fedora 3060 or any 10–12 GB VRAM GPU:**
+- Generator: `gemma4:e2b` as default (best measured Overall Judge at this tier); `qwen3.5:9b` if quality headroom matters more than speed
+- Judge: `qwen3:4b` runs alongside gen comfortably (~10 GB combined)
+- Ollama: set `OLLAMA_NUM_PARALLEL=3` — verified sweet spot; higher client-side concurrency without raising this limit wastes effort
+- Memory arch: taosmd. **Apply prompt-opt** (absolute-dates + infer-when-uncertain in `ANSWER_PROMPT`) — gains +0.05 Temporal / +0.03 Multi-hop for free, zero cost
+- Embedder: MiniLM ONNX (CPU) — keeps VRAM for generator + judge
+
+**Laptop / Mac Mini (16 GB unified, CPU or small Metal):**
+- Generator: `qwen3:4b` via Ollama — slow but workable (20–30 s/answer on M-series, 60+ s on CPU-only)
+- Judge: external (don't dual-load)
+- Embedder + arch: same as Pi
+
+**High-end workstation (≥24 GB VRAM):**
+- Generator: consider `qwen3.5:9b` as default for quality headroom
+- Note: **`gemma4:e2b` remained competitive against e4b even on our 12 GB card** — larger isn't always better at this architectural tier (see lesson #1). Don't assume bigger is the default.
+
+---
+
+## Lessons that drive the defaults
+
+1. **Bigger generator ≠ better default at small-LLM scale.** `gemma4:e2b` (5.1 B) beat `gemma4:e4b` (8.0 B) on LoCoMo Overall Judge, 0.40 vs 0.38. The 8 B model was more cautious — 78% "I don't know" rate on multi-hop vs 59% for e2b — and that refusal behaviour dominates the score. Recommendation: keep e2b as the default at the 7 GB VRAM tier even if a bigger model fits.
+2. **`qwen3:4b` is the structured-output default, not `gemma`.** Mem0's LLM fact-extraction blew up on every gemma variant (returned JSON lists where mem0 expected dicts). Qwen handles mem0's extraction schema without patching. Any downstream that asks the model for structured output — extractors, rerankers, judges — should default to qwen at 4 B+.
+3. **Ollama `NUM_PARALLEL` is the real concurrency ceiling.** Client-side `concurrency=8` is meaningless if the server is capped at 3. Either raise the server setting for heavier hardware or calibrate client concurrency to match it.
+4. **Nomic embedder's 2048-token context forces batch ingest.** A single LoCoMo conversation's 400–700 turns concatenated fits nowhere near 2048 tokens. Either split into short batches (≤6 turns per `memory.add`) or use a longer-context embedder like qwen3-embedding:4b (8192 ctx).
+5. **Architecture choice dominates generator choice at small scale.** taosmd vs mem0 at the same gemma4:e2b was a ~7× Judge delta. No single-model swap we tested moved the needle that far. Put engineering effort into retrieval architecture (rerank, query expansion, KG) before chasing a bigger generator.
+6. **Self-judge systematically inflates.** Every system we rescored showed self-judge > external by 0.03–0.15. Never publish a number the system graded itself. Always pair generation and judging with distinct models.
+7. **R@K in adapters without per-turn dia_id round-trip is meaningless.** Mem0 and MemPalace both store turns without preserving LoCoMo's `dia_id` metadata, so the recall metric collapses to 0 regardless of retrieval quality. Report it as `None` (metric unavailable) rather than `0.0` — see PR #35.
 
 ---
 
 ## In flight / queued
 
-- **Complete as of 2026-04-19 21:57 BST** — mem0-e2b external rescore with
-  qwen3:4b: Overall Judge **0.06** (116.9 min runtime, 0 errors, 100%
-  coverage). Full per-category numbers in the table above.
-- MemPalace adapter (`benchmarks/mempalace_locomo_runner.py`) — already
-  built (commit `ca0ccb7`, landed in PR #30). Routes retrieval through
-  `mempalace.searcher.search_memories()`, same generator/prompt/judge as
-  taosmd + mem0 runners. Ready to kick off — requires `pip install
-  mempalace` on Fedora first. MemPalace's own LoCoMo numbers are R@10-only
-  (60.3% raw / 88.9% hybrid v5 per their `benchmarks/BENCHMARKS.md`);
-  adding end-to-end Judge under identical conditions is a novel
-  measurement and completes the three-architecture story.
-- PR #30 (LoCoMo bundle), PR #32 (README Judge framing), PR #33 (silent-
-  failure fixes) — open, awaiting bot review cycle.
+- **Complete as of 2026-04-19 21:57 BST** — mem0-e2b external rescore with `qwen3:4b`: Overall Judge **0.06** (116.9 min runtime, 0 errors, 100% coverage).
+- **MemPalace adapter** — reworked via PR #36 to use raw chromadb (their own benchmark pattern from `benchmarks/locomo_bench.py`). Smoke testing on Fedora now; full benchmark to follow. Adds the third architecture under identical generator + judge + dataset — completes the comparison.
+- Open PRs awaiting merge: **#34** (this doc), **#35** (silent-failure fixes), **#36** (mempalace adapter rewrite).
 
 ---
 
