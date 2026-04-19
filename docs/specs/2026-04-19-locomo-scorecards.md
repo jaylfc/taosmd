@@ -31,20 +31,31 @@ otherwise noted. Same `ANSWER_PROMPT` across all systems.
 
 Run dates: 2026-04-17 → 2026-04-18.
 
-| Category (count) | taosmd-e2b | taosmd-e4b | taosmd-e2b+prompt-opt | mem0-e2b (infer=False) |
-|---|---|---|---|---|
-| Single-hop (282) | 0.34 | 0.13 | 0.34 | 0.11 |
-| Temporal (321)   | 0.29 | 0.25 | 0.36 | 0.02 |
-| Multi-hop (96)   | 0.22 | 0.09 | 0.29 | 0.12 |
-| Open-dom (841)   | 0.64 | 0.52 | 0.64 | 0.10 |
-| **Overall Judge** | **0.48** | **0.37** | **0.51** | **0.09** |
-| Overall F1 | 0.16 | 0.15 | 0.17 | 0.05 |
+| Category (count) | taosmd-e2b | taosmd-e4b | taosmd-e2b+prompt-opt | mem0-e2b (infer=False) | MemPalace-e2b |
+|---|---|---|---|---|---|
+| Single-hop (282) | 0.34 | 0.13 | 0.34 | 0.11 | 0.29 |
+| Temporal (321)   | 0.29 | 0.25 | 0.36 | 0.02 | 0.33 |
+| Multi-hop (96)   | 0.22 | 0.09 | 0.29 | 0.12 | 0.24 |
+| Open-dom (841)   | 0.64 | 0.52 | 0.64 | 0.10 | 0.51 |
+| **Overall Judge** | **0.48** | **0.37** | **0.51** | **0.09** | **0.42** |
+| Overall F1 | 0.16 | 0.15 | 0.17 | 0.05 | 0.15 |
+
+**Surprise on MemPalace self-judge.** Their chromadb+MiniLM setup (no LLM extraction, no cross-encoder, no query expansion) lands at Overall 0.42 — **much closer to taosmd than to mem0**. Per-category:
+- MemPalace **beats baseline taosmd-e2b on Temporal** (0.33 vs 0.29) and **Multi-hop** (0.24 vs 0.22)
+- taosmd's architectural edge shows on Open-dom (0.64 vs 0.51, +0.13) and Single-hop (0.34 vs 0.29, +0.05)
+- The prompt-opt variant is still the overall leader (0.51)
+- mem0 is a distant fourth on every category
+
+Reads as: **verbatim-store + good default embedder is a surprisingly strong baseline**. taosmd's cross-encoder rerank + query expansion + KG only pulls ahead on categories that benefit from surface-semantic retrieval beyond single-turn similarity (Open-dom especially). mem0's `infer=False` raw vector pattern (with nomic-embed-text) underperforms both — likely the nomic embedder being a weaker default than all-MiniLM on conversation-turn-level content.
 
 Result files:
 - `benchmarks/results/locomo_20260417_140810_full_gemma_e2b.json`
 - `benchmarks/results/locomo_20260418_035232_full_gemma_e4b.json`
 - `benchmarks/results/locomo_20260418_130212_full_gemma_e2b_opt.json`
 - `benchmarks/results/locomo_20260419_185944_full_mem0_e2b_noinfer_full_mem0_e2b.json`
+- `benchmarks/results/locomo_20260419_225441_full_mempalace_e2b_full_mempalace_e2b.json`
+
+Ingest timings (10 convs each): taosmd runner ingests via ONNX MiniLM + KG in ~180-200s total. mem0 batch-ingest at `infer=False` ~130s. **MemPalace (raw chromadb) was the fastest at ~100s** — simpler architecture, less processing per turn.
 
 ### External qwen3:4b judge (100% coverage, 0 errors)
 
@@ -202,8 +213,9 @@ generator-quality improvement.
 
 ## In flight / queued
 
-- **Complete as of 2026-04-19 21:57 BST** — mem0-e2b external rescore with `qwen3:4b`: Overall Judge **0.06** (116.9 min runtime, 0 errors, 100% coverage).
-- **MemPalace adapter** — reworked via PR #36 to use raw chromadb (their own benchmark pattern from `benchmarks/locomo_bench.py`). Smoke testing on Fedora now; full benchmark to follow. Adds the third architecture under identical generator + judge + dataset — completes the comparison.
+- **Complete 2026-04-19 21:57 BST** — mem0-e2b external rescore with `qwen3:4b`: Overall Judge **0.06** (116.9 min runtime, 0 errors, 100% coverage).
+- **Complete 2026-04-19 23:54 BST** — MemPalace-e2b full benchmark (self-judge): Overall Judge **0.42** (ingest ~100s + QAs ~86min). Per-category showing MemPalace beating baseline taosmd on Temporal + Multi-hop.
+- **Running** — MemPalace external rescore with `qwen3:4b`. ETA ~01:55 BST 2026-04-20 based on prior run pace.
 - Open PRs awaiting merge: **#34** (this doc), **#35** (silent-failure fixes), **#36** (mempalace adapter rewrite).
 
 ---
