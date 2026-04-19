@@ -22,7 +22,7 @@ Predicted: {predicted}
 
 Reply YES or NO only."""
 
-CAT_NAMES = {1: "Single-hop", 2: "Temporal  ", 3: "Multi-hop ", 4: "Open-dom  "}
+CAT_NAMES = {1: "Single-hop", 2: "Temporal  ", 3: "Multi-hop ", 4: "Open-dom  ", 5: "Adversarial"}
 
 
 def parse_reply(reply: str) -> float:
@@ -71,7 +71,7 @@ async def main():
             judge_one(client, args.ollama_url, args.model, r, args.timeout, sem)
             for r in todo
         ])
-    for rec, new_judge in zip(todo, results_list):
+    for rec, new_judge in zip(todo, results_list, strict=True):
         if new_judge is not None:
             rec["judge_rejudged"] = new_judge
 
@@ -92,15 +92,15 @@ async def main():
     tot_orig = 0.0
     tot_rej_sum = 0.0
     tot_rej_n = 0
-    for c in [1, 2, 3, 4]:
+    for c in [1, 2, 3, 4, 5]:
         rs = [r for r in results if r["category"] == c]
         if not rs:
             continue
         f1 = statistics.mean(r["f1"] for r in rs)
         orig = statistics.mean(r["judge"] for r in rs)
         rv = [r["judge_rejudged"] for r in rs if r.get("judge_rejudged") is not None]
-        rejudge = statistics.mean(rv) if rv else 0.0
-        delta = rejudge - orig
+        rejudge = statistics.mean(rv) if rv else float("nan")
+        delta = (rejudge - orig) if rv else float("nan")
         name = CAT_NAMES[c]
         print(f"{name} ({c})   {len(rs):>6} {f1:>8.3f} {orig:>8.2f} {rejudge:>10.2f} {delta:>+8.2f}  (n={len(rv)})")
         tot_count += len(rs)
@@ -111,9 +111,11 @@ async def main():
     print("-" * 80)
     all_f1 = tot_f1 / tot_count
     all_orig = tot_orig / tot_count
-    all_rej = tot_rej_sum / tot_rej_n if tot_rej_n else 0.0
-    print(f"{'Overall':<21} {tot_count:>6} {all_f1:>8.3f} {all_orig:>8.2f} {all_rej:>10.2f} {all_rej-all_orig:>+8.2f}  (n={tot_rej_n})")
+    all_rej = tot_rej_sum / tot_rej_n if tot_rej_n else float("nan")
+    all_delta = (all_rej - all_orig) if tot_rej_n else float("nan")
+    print(f"{'Overall':<21} {tot_count:>6} {all_f1:>8.3f} {all_orig:>8.2f} {all_rej:>10.2f} {all_delta:>+8.2f}  (n={tot_rej_n})")
     print("=" * 80)
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

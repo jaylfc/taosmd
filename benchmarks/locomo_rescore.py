@@ -251,24 +251,22 @@ async def rejudge_all(
     model: str,
     concurrency: int,
     timeout: float = 240.0,
-) -> tuple[list, int]:
+) -> list:
     """
-    Add judge_rejudged to each record. Returns (updated_records, unparseable_count).
-    unparseable_count covers items where we got a response but it wasn't YES/NO
-    (None returns from errors are excluded from this count).
+    Add judge_rejudged to each record. Returns the updated records list.
+
+    judge_rejudged is 1.0 (YES-prefixed reply), 0.0 (anything else), or None
+    (HTTP error / parse failure / timeout). parse_judge_reply treats any
+    non-YES reply uniformly as 0.0.
     """
     sem = asyncio.Semaphore(concurrency)
-    unparseable = 0
     results = list(records)  # shallow copy list
 
     async def _judge_one(idx: int, rec: dict):
-        nonlocal unparseable
         async with sem:
             val = await _call_ollama_judge(client, ollama_url, model, rec, timeout=timeout)
         results[idx] = dict(rec)
         results[idx]["judge_rejudged"] = val
-        # val is None on HTTP error; if it returned 0.0 for a non-NO reply, we
-        # can't distinguish here — parse_judge_reply handles it uniformly.
 
     limits = httpx.Limits(max_connections=concurrency + 2, max_keepalive_connections=concurrency)
     async with httpx.AsyncClient(limits=limits) as client:
@@ -281,7 +279,7 @@ async def rejudge_all(
                 print(f"  rejudge progress: {done}/{len(records)}")
 
     print(f"  rejudge progress: {len(records)}/{len(records)}")
-    return results, unparseable
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +324,7 @@ def build_scorecard(results: list, with_rejudge: bool = False) -> dict:
     return {"by_cat": cats, "overall": overall}
 
 
-def print_scorecard(filename: str, scorecard: dict, rejudge_model: str | None = None, unparseable: int = 0):
+def print_scorecard(filename: str, scorecard: dict, rejudge_model: str | None = None):
     w = 80
     print("=" * w)
     header = f"LoCoMo Rescore — {filename}"
@@ -387,8 +385,6 @@ def print_scorecard(filename: str, scorecard: dict, rejudge_model: str | None = 
             print(f"{'Overall':<20} {n:>6}  {f1:.3f}        {orig:.2f}       {tol:.2f}   {sign}{delta_tol:.2f}")
 
     print("=" * w)
-    if rejudge_model:
-        print(f"Unparseable judge replies: {unparseable}")
 
 
 # ---------------------------------------------------------------------------
@@ -406,15 +402,14 @@ def run(path: Path, rejudge_model: str | None, ollama_url: str, concurrency: int
 
     rescored = [rescore_record(r) for r in results]
 
-    unparseable = 0
     if rejudge_model:
         print(f"Re-judging {len(rescored)} items with model '{rejudge_model}' @ {ollama_url} ...")
-        rescored, unparseable = asyncio.run(
+        rescored = asyncio.run(
             rejudge_all(rescored, ollama_url, rejudge_model, concurrency, timeout=timeout)
         )
 
     scorecard = build_scorecard(rescored, with_rejudge=bool(rejudge_model))
-    print_scorecard(path.name, scorecard, rejudge_model=rejudge_model, unparseable=unparseable)
+    print_scorecard(path.name, scorecard, rejudge_model=rejudge_model)
 
     out_path = path.parent / (path.stem + ".rescored.json")
     sidecar = dict(data)
@@ -532,7 +527,7 @@ def self_test():
     print("Sample scorecard output (with rejudge column):")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        print_scorecard("test_results.json", sc, rejudge_model="qwen3.5:9b", unparseable=0)
+        print_scorecard("test_results.json", sc, rejudge_model="qwen3.5:9b")
     scorecard_text = buf.getvalue()
     print(scorecard_text, end="")
     ok_f1 = "F1" in scorecard_text
