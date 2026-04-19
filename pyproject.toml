@@ -14,7 +14,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
 local = ["sentence-transformers"]
-benchmarks = ["mem0ai>=0.1.0"]
+benchmarks = ["mem0ai>=0.1.0", "mempalace"]
 
 [tool.setuptools.packages.find]
 include = ["taosmd*"]
