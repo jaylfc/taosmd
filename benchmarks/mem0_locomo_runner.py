@@ -300,6 +300,14 @@ async def _process_qa_mem0(
     category = int(qa.get("category", 0))
     evidence = qa.get("evidence", []) or []
 
+    # mem0 stored facts don't carry original LoCoMo dia_id metadata, so we
+    # cannot match against the gold evidence list. Report both hits and total
+    # as None — the metric is _unavailable_, not zero. _summary in the taosmd
+    # runner (and any downstream scorecard builder) skips None-valued rows
+    # from retrieval_recall so this artefact doesn't publish a fake 0.0.
+    # TODO: wire dia_id pass-through if mem0 adds metadata preservation.
+    EVIDENCE_UNAVAILABLE = {"evidence_hits": None, "evidence_total": None}
+
     t0 = time.time()
     try:
         # mem0.search is synchronous; offload to thread pool to avoid blocking.
@@ -313,23 +321,20 @@ async def _process_qa_mem0(
             "reference": reference,
             "predicted": "",
             "category": category,
-            "f1": 0.0,
-            "bleu1": 0.0,
-            "judge": 0.0,
+            "f1": None,
+            "bleu1": None,
+            "judge": None,
             "retrieval_ms": 0.0,
             "gen_ms": 0.0,
-            # evidence_hits/evidence_total not computable without dia_id metadata from
-            # mem0's stored facts (mem0 doesn't preserve per-turn dia_ids). Set to 0.
-            # TODO: if mem0 exposes metadata round-trip, wire dia_id here.
-            "evidence_hits": 0,
-            "evidence_total": len(evidence),
-            "error": str(exc),
+            **EVIDENCE_UNAVAILABLE,
+            "error": f"{type(exc).__name__}: {exc}",
         }
     retrieval_ms = (time.time() - t0) * 1000.0
 
     context = "\n---\n".join(context_chunks) if context_chunks else ""
 
     t1 = time.time()
+    generation_error: str | None = None
     try:
         predicted = await _ollama_generate(
             client, ollama_url, model,
@@ -337,43 +342,35 @@ async def _process_qa_mem0(
         )
     except Exception as exc:
         predicted = ""
-        gen_ms = (time.time() - t1) * 1000.0
-        return {
-            "conversation_id": conv_id,
-            "question": question,
-            "reference": reference,
-            "predicted": predicted,
-            "category": category,
-            "f1": 0.0,
-            "bleu1": 0.0,
-            "judge": 0.0,
-            "retrieval_ms": round(retrieval_ms, 2),
-            "gen_ms": round(gen_ms, 2),
-            "evidence_hits": 0,
-            "evidence_total": len(evidence),
-            "error": str(exc),
-        }
+        generation_error = f"{type(exc).__name__}: {exc}"
     gen_ms = (time.time() - t1) * 1000.0
 
-    judge = await _judge(client, ollama_url, model, question, reference, predicted)
+    if generation_error is None:
+        judge = await _judge(client, ollama_url, model, question, reference, predicted)
+        f1_val = round(_f1(predicted, reference), 4)
+        bleu_val = round(_bleu1(predicted, reference), 4)
+        judge_val = round(judge, 4) if judge is not None else None
+    else:
+        f1_val = None
+        bleu_val = None
+        judge_val = None
 
-    return {
+    row: dict = {
         "conversation_id": conv_id,
         "question": question,
         "reference": reference,
         "predicted": predicted,
         "category": category,
-        "f1": round(_f1(predicted, reference), 4),
-        "bleu1": round(_bleu1(predicted, reference), 4),
-        "judge": round(judge, 4),
+        "f1": f1_val,
+        "bleu1": bleu_val,
+        "judge": judge_val,
         "retrieval_ms": round(retrieval_ms, 2),
         "gen_ms": round(gen_ms, 2),
-        # mem0 stored facts don't carry original dia_id metadata, so we cannot
-        # match against the LoCoMo gold evidence list. Set evidence_hits to 0.
-        # TODO: wire dia_id if mem0 adds metadata pass-through in a future release.
-        "evidence_hits": 0,
-        "evidence_total": len(evidence),
+        **EVIDENCE_UNAVAILABLE,
     }
+    if generation_error is not None:
+        row["error"] = generation_error
+    return row
 
 
 # ---------------------------------------------------------------------------
