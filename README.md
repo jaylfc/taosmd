@@ -155,14 +155,14 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 ## Benchmark Results
 
-| System | Recall@5 | Method | Cloud |
-|--------|----------|--------|-------|
-| **taOSmd** | **97.0%** | Hybrid + query expansion | None |
-| MemPalace | 96.6% | Raw semantic (ChromaDB) | None |
-| agentmemory | 95.2% | BM25 + vector | None |
-| SuperMemory | 81.6% | Cloud embeddings | Yes |
+| System | Score | Metric | Method | Cloud |
+|--------|-------|--------|--------|-------|
+| **taOSmd** | **97.0%** | end-to-end Judge accuracy | Hybrid + query expansion | None |
+| MemPalace | 96.6% | Recall@5 | Raw semantic (ChromaDB) | None |
+| agentmemory | 95.2% | Recall@5 | BM25 + vector | None |
+| SuperMemory | 81.6% | Recall@5 | Cloud embeddings | Yes |
 
-All systems tested on the same benchmark (LongMemEval-S, 500 questions) with the same embedding model (all-MiniLM-L6-v2, 384-dim).
+All systems tested on the same benchmark (LongMemEval-S, 500 questions) with the same embedding model (all-MiniLM-L6-v2, 384-dim). **Our 97.0% is end-to-end Judge accuracy** (retrieve → generate → LLM-judge against the reference answer) — the stricter metric. MemPalace, agentmemory, and SuperMemory publish Recall@5 (retrieval-only, whether the correct session appears in the top-5 retrieved). Direct comparison isn't apples-to-apples until they re-run end-to-end; see `benchmarks/longmemeval_runner.py` for our Judge harness and `benchmarks/longmemeval_recall.py` for the Recall@5 variant used to reproduce MemPalace's methodology.
 
 ### Per-Category Breakdown
 
@@ -178,9 +178,9 @@ All systems tested on the same benchmark (LongMemEval-S, 500 questions) with the
 
 ### Fusion Strategy Comparison
 
-| Strategy | Recall@5 | Delta |
-|----------|----------|-------|
-| Raw cosine (MemPalace-equivalent) | 95.0% | — |
+| Strategy | Judge accuracy | Delta |
+|----------|---------------|-------|
+| Raw cosine (same algorithm as MemPalace) | 95.0% | — |
 | Additive keyword boost | 96.6% | +1.6 |
 | **Hybrid + query expansion (default)** | **97.0%** | **+2.0** |
 | All-turns hybrid (harder test) | 93.2% | -1.8 |
@@ -260,7 +260,7 @@ events = await archive.search_fts("hello")
 
 ## Key Features
 
-- **97.0% Recall@5** on LongMemEval-S benchmark (SOTA)
+- **97.0% end-to-end Judge accuracy** on LongMemEval-S benchmark (SOTA)
 - **Zero cloud dependencies** — runs entirely on local hardware
 - **Framework-agnostic** — HTTP API works with any agent framework
 - **Hybrid search** — semantic similarity + keyword overlap boosting
