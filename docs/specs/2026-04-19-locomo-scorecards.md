@@ -52,23 +52,31 @@ Run date: 2026-04-19. Same predictions as self-judge, re-graded by qwen3:4b.
 
 | Category (count) | taosmd-e2b | taosmd-e4b | taosmd-e2b+prompt-opt | mem0-e2b |
 |---|---|---|---|---|
-| Single-hop (282) | 0.08 | 0.18 | 0.16 | — |
-| Temporal (321)   | 0.13 | 0.14 | 0.21 | — |
-| Multi-hop (96)   | 0.05 | 0.00 | 0.00 | — |
-| Open-dom (841)   | 0.43 | 0.30 | 0.46 | — |
-| **Overall Judge** | **0.27** | **0.22** | **0.34** | **pending** |
-| Overall F1 | 0.162 | 0.152 | 0.175 | 0.05 (self-graded) |
+| Single-hop (282) | 0.17 | 0.15 | 0.16 | 0.04 |
+| Temporal (321)   | 0.36 | 0.31 | 0.41 | 0.02 |
+| Multi-hop (96)   | 0.21 | 0.14 | 0.24 | 0.10 |
+| Open-dom (841)   | 0.51 | 0.51 | 0.51 | 0.07 |
+| **Overall Judge** | **0.40** | **0.38** | **0.41** | **0.06** |
+| Overall F1 | 0.162 | 0.152 | 0.175 | 0.047 |
 
-> **Earlier caveat** — the initial rescore pass with qwen3.5:9b had a 64–72%
-> timeout rate; those numbers (taosmd-e2b Overall 0.27 on that pass) were
-> computed over a ~28% sample biased toward short predictions. That run is
-> superseded by the qwen3:4b pass above which has 100% coverage.
+**Biggest architecture gap: Temporal** (taosmd-e2b+prompt-opt 0.41 vs mem0 0.02 = 20.5×). **Overall gap: ~7×** under external judge (taosmd-e2b 0.40 vs mem0 0.06). Same generator, same prompt, same judge, same 1540 QAs — only the retrieval layer differs.
+
+> **Earlier-run caveat** — before we settled on `qwen3:4b` as external judge,
+> a first pass with `qwen3.5:9b` hit a 64–72% timeout rate (root cause: 60 s
+> client timeout vs the model's occasional long tail at NUM_PARALLEL=3). The
+> numbers from that partial run (taosmd-e2b Overall 0.27, e4b 0.22, opt 0.34)
+> were computed over a ~28% sample biased toward short predicted text.
+> **Those numbers are superseded by the qwen3:4b 100%-coverage pass tabulated
+> above** and should not be quoted. Kept here only to explain the shift if
+> anyone reads earlier chat transcripts.
 
 Rescore output files (include per-item `judge_rejudged`):
 - `benchmarks/results/locomo_20260417_140810_full_gemma_e2b.rescored_v2.json`
 - `benchmarks/results/locomo_20260418_035232_full_gemma_e4b.rescored_v2.json`
 - `benchmarks/results/locomo_20260418_130212_full_gemma_e2b_opt.rescored_v2.json`
-- mem0 rescore output pending (in flight, ETA ~23:00 BST 2026-04-19)
+- `benchmarks/results/locomo_20260419_185944_full_mem0_e2b_noinfer.rescored_v2.json`
+
+Timings: taosmd e2b rescore 188.8 min, e4b 166.6 min, e2b-opt 206.7 min, mem0 116.9 min — all at concurrency 3 against `qwen3:4b` with 240 s per-call timeout. Zero judge errors across all four runs.
 
 ---
 
@@ -128,15 +136,17 @@ generator-quality improvement.
 
 ## In flight / queued
 
-- mem0-e2b external qwen3:4b rescore — running in screen `locomo-mem0-rescore`
-  on Fedora, ETA ~23:00 BST 2026-04-19.
-- MemPalace adapter (`benchmarks/mempalace_locomo_runner.py`) — to be built
-  via Sonnet subagent once mem0 rescore completes. Expected architecture:
-  use `mempalace.searcher.search_memories()` as the retrieval step, keep
-  the same generator/prompt/judge as taosmd + mem0 runners. MemPalace's own
-  LoCoMo numbers are R@10-only (60.3% raw / 88.9% hybrid v5 per their
-  `benchmarks/BENCHMARKS.md`) — adding end-to-end Judge is a novel
-  measurement.
+- **Complete as of 2026-04-19 21:57 BST** — mem0-e2b external rescore with
+  qwen3:4b: Overall Judge **0.06** (116.9 min runtime, 0 errors, 100%
+  coverage). Full per-category numbers in the table above.
+- MemPalace adapter (`benchmarks/mempalace_locomo_runner.py`) — already
+  built (commit `ca0ccb7`, landed in PR #30). Routes retrieval through
+  `mempalace.searcher.search_memories()`, same generator/prompt/judge as
+  taosmd + mem0 runners. Ready to kick off — requires `pip install
+  mempalace` on Fedora first. MemPalace's own LoCoMo numbers are R@10-only
+  (60.3% raw / 88.9% hybrid v5 per their `benchmarks/BENCHMARKS.md`);
+  adding end-to-end Judge under identical conditions is a novel
+  measurement and completes the three-architecture story.
 - PR #30 (LoCoMo bundle), PR #32 (README Judge framing), PR #33 (silent-
   failure fixes) — open, awaiting bot review cycle.
 
