@@ -122,7 +122,7 @@ generator-quality improvement.
 | Self-judge | gemma4:e2b (i.e. the same generator) |
 | External judge | qwen3:4b via Ollama, temperature 0.0, `benchmarks/locomo_rescore_streaming.py` |
 | Timeout (rescore) | 240s per call, concurrency 3 |
-| Commits | taosmd runs: `40403cc` (runner) + `86c4c19` (rescore); prompt-opt: `3c5c6c2` |
+| Commits | Runner + adapter + prompt-opt: `fd27d2c` (PR #30, consolidated). Rescore tool: `c360faa` (PR #29, merged). Silent-failure fixes: `786eb72` (PR #33, stacked on #30). MemPalace adapter: `ca0ccb7` (on #30's branch). Earlier per-commit SHAs from the working branch (`40403cc`/`86c4c19`/`3c5c6c2`) were rewritten out of history during PR #30's rebase-to-single-commit. |
 
 ---
 
