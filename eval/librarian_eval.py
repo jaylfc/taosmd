@@ -623,14 +623,24 @@ def _print_summary(reports: dict[str, EvalReport]) -> None:
         baseline = reports["full-pipeline"].composite_score
         librarian = reports["full+librarian"].composite_score
         gain = (librarian - baseline) / baseline * 100 if baseline > 0 else 0
-        bt = reports["full-pipeline"].tokens_total
         lt = reports["full+librarian"].tokens_total
-        token_mult = lt / bt if bt > 0 else float("inf")
-        target_met = gain >= 15.0 and token_mult <= 3.0
+        lib = reports["full+librarian"]
+        # eval_axis_c emits n_sessions, not n — using the wrong field here
+        # undercounts n_queries and inflates tokens_per_query.
+        n_queries = max(
+            lib.axis_a.get("n", 0)
+            + lib.axis_b.get("n", 0)
+            + lib.axis_c.get("n_sessions", lib.axis_c.get("n", 0)),
+            1,
+        )
+        tokens_per_query = lt / n_queries
+        TOKEN_BUDGET = 2000
+        cost_ok = tokens_per_query <= TOKEN_BUDGET
+        target_met = gain >= 15.0 and cost_ok
         print(
             f"\nLibrarian gain over full-pipeline: {gain:+.1f}%  "
-            f"token cost: {token_mult:.1f}x  "
-            f"target met ({'YES' if target_met else 'NO'}: ≥15% gain at ≤3x tokens)"
+            f"tokens/query: {tokens_per_query:.0f} (budget ≤{TOKEN_BUDGET})  "
+            f"target met ({'YES' if target_met else 'NO'}: ≥15% gain at ≤{TOKEN_BUDGET} tokens/query)"
         )
 
 
