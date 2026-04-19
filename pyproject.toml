@@ -14,12 +14,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
 local = ["sentence-transformers"]
+benchmarks = ["mem0ai>=0.1.0"]
 
 [tool.setuptools.packages.find]
 include = ["taosmd*"]
-
-[tool.setuptools.package-data]
-taosmd = ["docs/*.md"]
 
 [project.scripts]
 taosmd = "taosmd.cli:main"
