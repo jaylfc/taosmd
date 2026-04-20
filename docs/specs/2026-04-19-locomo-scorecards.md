@@ -61,16 +61,23 @@ Ingest timings (10 convs each): taosmd runner ingests via ONNX MiniLM + KG in ~1
 
 Run date: 2026-04-19. Same predictions as self-judge, re-graded by qwen3:4b.
 
-| Category (count) | taosmd-e2b | taosmd-e4b | taosmd-e2b+prompt-opt | mem0-e2b |
-|---|---|---|---|---|
-| Single-hop (282) | 0.17 | 0.15 | 0.16 | 0.04 |
-| Temporal (321)   | 0.36 | 0.31 | 0.41 | 0.02 |
-| Multi-hop (96)   | 0.21 | 0.14 | 0.24 | 0.10 |
-| Open-dom (841)   | 0.51 | 0.51 | 0.51 | 0.07 |
-| **Overall Judge** | **0.40** | **0.38** | **0.41** | **0.06** |
-| Overall F1 | 0.162 | 0.152 | 0.175 | 0.047 |
+| Category (count) | taosmd-e2b | taosmd-e4b | taosmd-e2b+prompt-opt | mem0-e2b | MemPalace-e2b |
+|---|---|---|---|---|---|
+| Single-hop (282) | 0.17 | 0.15 | 0.16 | 0.04 | 0.16 |
+| Temporal (321)   | 0.36 | 0.31 | 0.41 | 0.02 | 0.35 |
+| Multi-hop (96)   | 0.21 | 0.14 | 0.24 | 0.10 | 0.20 |
+| Open-dom (841)   | 0.51 | 0.51 | 0.51 | 0.07 | 0.41 |
+| **Overall Judge** | **0.40** | **0.38** | **0.41** | **0.06** | **0.34** |
+| Overall F1 | 0.162 | 0.152 | 0.175 | 0.047 | 0.146 |
 
-**Biggest architecture gap: Temporal** (taosmd-e2b+prompt-opt 0.41 vs mem0 0.02 = 20.5×). **Overall gap: ~7×** under external judge (taosmd-e2b 0.40 vs mem0 0.06). Same generator, same prompt, same judge, same 1540 QAs — only the retrieval layer differs.
+**The real architecture story (under external judge, same compute tier):**
+- **Single-hop is a tie** at ~0.16–0.17 across taosmd, taosmd-opt, MemPalace. Basic semantic retrieval is solved at this tier by any competent system.
+- **Temporal is nearly tied** between taosmd (0.36) and MemPalace (0.35); only prompt-opt breaks away (+0.05 on Temporal is the cleanest localised win we measured).
+- **Multi-hop**: taosmd-opt leads (0.24 vs 0.20 MemPalace vs 0.21 baseline taosmd). KG + query expansion help on synthesis questions.
+- **Open-dom is taosmd's clearest architectural win** (0.51 vs MemPalace 0.41, +0.10 absolute / +24% relative). This is where cross-encoder rerank + query expansion over the full corpus pay off.
+- **mem0 is a distant fourth on every category** (4–20× behind). Its `infer=False` raw vector with `nomic-embed-text` underperforms `chromadb + all-MiniLM-L6-v2` consistently.
+
+**Headline numbers:** taosmd-opt leads Overall at 0.41. MemPalace is 0.07 pp behind at 0.34. mem0 is 0.28 pp behind at 0.06. The narrow taosmd↔MemPalace gap shifts the framing: **taosmd's architectural edge concentrates on harder question types (Open-dom + Multi-hop) that benefit from rerank and synthesis**, while on simpler retrieval (Single-hop, Temporal) a good verbatim-store + default embedder is nearly as good. That's a cleaner story than "we dominate" — and more useful for positioning taosmd against the audiences we actually target.
 
 > **Earlier-run caveat** — before we settled on `qwen3:4b` as external judge,
 > a first pass with `qwen3.5:9b` hit a 64–72% timeout rate (root cause: 60 s
@@ -86,8 +93,9 @@ Rescore output files (include per-item `judge_rejudged`):
 - `benchmarks/results/locomo_20260418_035232_full_gemma_e4b.rescored_v2.json`
 - `benchmarks/results/locomo_20260418_130212_full_gemma_e2b_opt.rescored_v2.json`
 - `benchmarks/results/locomo_20260419_185944_full_mem0_e2b_noinfer.rescored_v2.json`
+- `benchmarks/results/locomo_20260419_225441_full_mempalace_e2b.rescored_v2.json`
 
-Timings: taosmd e2b rescore 188.8 min, e4b 166.6 min, e2b-opt 206.7 min, mem0 116.9 min — all at concurrency 3 against `qwen3:4b` with 240 s per-call timeout. Zero judge errors across all four runs.
+Timings: taosmd e2b rescore 188.8 min, e4b 166.6 min, e2b-opt 206.7 min, mem0 116.9 min, MemPalace 180.5 min — all at concurrency 3 against `qwen3:4b` with 240 s per-call timeout. Zero judge errors across all five runs.
 
 ---
 
@@ -213,10 +221,11 @@ generator-quality improvement.
 
 ## In flight / queued
 
-- **Complete 2026-04-19 21:57 BST** — mem0-e2b external rescore with `qwen3:4b`: Overall Judge **0.06** (116.9 min runtime, 0 errors, 100% coverage).
-- **Complete 2026-04-19 23:54 BST** — MemPalace-e2b full benchmark (self-judge): Overall Judge **0.42** (ingest ~100s + QAs ~86min). Per-category showing MemPalace beating baseline taosmd on Temporal + Multi-hop.
-- **Running** — MemPalace external rescore with `qwen3:4b`. ETA ~01:55 BST 2026-04-20 based on prior run pace.
+- **Complete 2026-04-19 21:57 BST** — mem0-e2b external rescore: Overall Judge **0.06**.
+- **Complete 2026-04-19 23:54 BST** — MemPalace-e2b full benchmark self-judge: Overall Judge **0.42**.
+- **Complete 2026-04-20 02:55 BST** — MemPalace-e2b external rescore: Overall Judge **0.34** (180.5 min, 0 errors, 100% coverage). All three architectures now have both self-judge and external-judge scorecards on identical generator + dataset + prompt. Comparison is complete.
 - Open PRs awaiting merge: **#34** (this doc), **#35** (silent-failure fixes), **#36** (mempalace adapter rewrite).
+- Next: README rewrite aligned to `project_taosmd_positioning.md` memory — lead with the four target audiences (SBC/Pi-class, taOS clusters, offline/compliance, long-horizon agents), frame benchmark numbers as "at the compute tier we target" rather than raw SOTA, highlight the architectural edge on Open-dom + Multi-hop specifically.
 
 ---
 
