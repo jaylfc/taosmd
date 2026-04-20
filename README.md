@@ -6,19 +6,13 @@
 
 **Framework-agnostic AI memory system. 97.0% end-to-end Judge accuracy on LongMemEval-S.**
 
-Our 97.0% is end-to-end Judge accuracy on LongMemEval-S (retrieve → generate → judge with an LLM grader). MemPalace (96.6%) and agentmemory (95.2%), which are the most-cited open systems, publish Recall@5 retrieval scores on the same dataset — a different metric measuring whether the correct session appears in the top-5 retrieved, with no generation or judge step. Our number is the stricter measurement; direct comparison isn't apples-to-apples until they (or we) re-run end-to-end. Running entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
+End-to-end Judge accuracy means retrieve → generate → LLM-grade against the reference answer. Runs entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
 
 ---
 
 ## Why this exists
 
-Most memory systems try to recreate human thinking. They embed, they index, they retrieve, and they call it "cognition" because that sounds better than "we built a vector database". The brain is hard, so they reach for it as a metaphor and hope nobody asks where the reasoning is supposed to come from.
-
-A few years in, **MemPalace** stepped sideways. Instead of a brain, a building — a palace of rooms where memories sit on shelves you can walk past. That's a real improvement. The metaphor is concrete. You can picture the kitchen and remember what you cooked.
-
-But a building is still one person's mind, just dressed up. When a human needs to remember something they didn't personally experience, they don't walk through their own house. They go outside. They go to the **library**.
-
-The library is the biggest thing humans ever built for memory. Not the brain, not the palace — the library. One species figured out that putting verbatim records on shelves, organised by subject, indexed by a card catalogue, maintained by a librarian who actually knows where everything is, beats any individual brain by orders of magnitude. The library is how we got from "I remember my grandmother's recipe" to "I can read what Marcus Aurelius wrote on a Tuesday in 175 AD".
+The library is the biggest thing humans ever built for memory. One species figured out that putting verbatim records on shelves, organised by subject, indexed by a card catalogue, maintained by a librarian who actually knows where everything is, beats any individual brain by orders of magnitude. The library is how we got from "I remember my grandmother's recipe" to "I can read what Marcus Aurelius wrote on a Tuesday in 175 AD".
 
 **taosmd is the library.**
 
@@ -32,13 +26,11 @@ Uncertainty is her specialty. If the agent isn't sure, it asks her, and she'll e
 
 Everything is time-stamped. Everything is on a shelf. Nothing is ever lost.
 
-**What about dreaming?** A few systems have started calling their consolidation pass "dreaming" — [OpenClaw's dreaming](https://docs.openclaw.ai/concepts/dreaming) is the cleanest example. The idea is good: take the day's signals, score them, promote the durable ones to long-term memory. It's their version of the librarian shelving the day's events.
+**What about consolidation?** Many memory systems compress the day's signals into something summarised — scoring, gating, promoting the durable parts. The catch: once the day is rewritten into a summary, the original wording is typically gone. The bit that survives is the bit the summariser thought worth keeping.
 
-The catch is the dream rewrites itself. Snippets get scored, gated, redacted, summarised into a `MEMORY.md`. What didn't make the cut, and what the original wording actually was, is gone. The bit that survives is the bit the dreamer thought worth keeping at 3am.
+taosmd doesn't consolidate *onto* the transcript; it consolidates *on top of* it. The verbatim record goes into the zero-loss archive **first**. The librarian crystallises whatever's worth crystallising — but the original is still on the shelf, byte for byte, never overwritten. Disagree with how she summarised today? Walk over to the archive and read what was actually said. The summary and the source are both there.
 
-I don't know about you, but I can never remember my dreams. So I built a robot librarian who never sleeps instead. The verbatim transcript goes into the zero-loss archive **first**. The librarian crystallises whatever's worth crystallising — but the original is still on the shelf, byte for byte, never overwritten. Disagree with how she summarised today? Walk over to the archive and read what was actually said. The dream and the source are both there.
-
-That's the difference. We didn't dress up a vector database as a brain. We built a library.
+That's the difference. We built a library.
 
 ---
 
@@ -155,26 +147,19 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 ## Benchmark Results
 
-| System | Score | Metric | Method | Cloud |
-|--------|-------|--------|--------|-------|
-| **taOSmd** | **97.0%** | end-to-end Judge accuracy | Hybrid + query expansion | None |
-| MemPalace | 96.6% | Recall@5 | Raw semantic (ChromaDB) | None |
-| agentmemory | 95.2% | Recall@5 | BM25 + vector | None |
-| SuperMemory | 81.6% | Recall@5 | Cloud embeddings | Yes |
-
-All systems tested on the same benchmark (LongMemEval-S, 500 questions) with the same embedding model (all-MiniLM-L6-v2, 384-dim). **Our 97.0% is end-to-end Judge accuracy** (retrieve → generate → LLM-judge against the reference answer) — the stricter metric. MemPalace, agentmemory, and SuperMemory publish Recall@5 (retrieval-only, whether the correct session appears in the top-5 retrieved). Direct comparison isn't apples-to-apples until they re-run end-to-end; see `benchmarks/longmemeval_runner.py` for our Judge harness and `benchmarks/longmemeval_recall.py` for the Recall@5 variant used to reproduce MemPalace's methodology.
+**97.0% end-to-end Judge accuracy on LongMemEval-S** (500 questions, standard test set). Harness: `benchmarks/longmemeval_runner.py`. Methodology notes and comparison against other published systems: [docs/benchmarks.md](docs/benchmarks.md).
 
 ### Per-Category Breakdown
 
-| Category | taOSmd (hybrid+expand) | taOSmd (raw semantic) | MemPalace |
-|----------|----------------------|----------------------|-----------|
-| knowledge-update | **100.0%** (78/78) | 100.0% | — |
-| multi-session | **98.5%** (131/133) | 95.5% | — |
-| single-session-user | **97.1%** (68/70) | 90.0% | — |
-| single-session-assistant | **96.4%** (54/56) | 96.4% | — |
-| temporal-reasoning | 94.0% (125/133) | 94.0% | — |
-| single-session-preference | 90.0% (27/30) | 93.3% | — |
-| **Overall** | **97.0%** (485/500) | 95.0% (475/500) | 96.6% |
+| Category | hybrid + expand | raw semantic |
+|----------|----------------|--------------|
+| knowledge-update | **100.0%** (78/78) | 100.0% |
+| multi-session | **98.5%** (131/133) | 95.5% |
+| single-session-user | **97.1%** (68/70) | 90.0% |
+| single-session-assistant | **96.4%** (54/56) | 96.4% |
+| temporal-reasoning | 94.0% (125/133) | 94.0% |
+| single-session-preference | 90.0% (27/30) | 93.3% |
+| **Overall** | **97.0%** (485/500) | 95.0% (475/500) |
 
 ### Fusion Strategy Comparison
 
