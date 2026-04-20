@@ -12,25 +12,16 @@ End-to-end Judge accuracy means retrieve → generate → LLM-grade against the 
 
 ## Why this exists
 
-The library is the biggest thing humans ever built for memory. One species figured out that putting verbatim records on shelves, organised by subject, indexed by a card catalogue, maintained by a librarian who actually knows where everything is, beats any individual brain by orders of magnitude. The library is how we got from "I remember my grandmother's recipe" to "I can read what Marcus Aurelius wrote on a Tuesday in 175 AD".
+Most memory benchmarks run on hosted models (GPT-4o-mini, Claude, Gemini) behind an API key — fine for prototypes, not fine if you're:
 
-**taosmd is the library.**
+- **On modest hardware.** Running an agent on a £170 Orange Pi 5 Plus, an old laptop, or a Mac mini. No 24 GB 4090 — just an NPU or a CPU and ~16 GB RAM. The memory system has to fit *around* that, not on top of it.
+- **Distributed across a few small machines.** Pi + desktop + laptop, pooled by the taOS stack. The memory layer lives across those nodes without assuming any single "real" machine.
+- **Offline or air-gapped.** Forwarding a conversation turn to a third-party API is a compliance violation or a signal flare. Memory here can't mean "we shipped it to a hosted API".
+- **Zero-loss by default.** The verbatim transcript goes into an append-only archive first; summaries and structure are layered on top, never *over*. The source is still on the shelf byte-for-byte. Disagree with a summary? Read what was actually said.
 
-There is a librarian. She sits at the desk and watches every conversation that passes through. She takes it down word for word — no paraphrasing, no summary that loses the joke, no compression that flattens the nuance. The transcript is the truth, and the truth is what gets shelved.
+The 97.0% on LongMemEval-S was measured on the Orange Pi 5 Plus stack — the same hardware a user would actually deploy. No hidden hosted model doing the heavy lifting off-camera.
 
-Then she does the work nobody wants to do. She breaks the day into chapters, stories, articles, recurring serials. She logs the date, the participants, the subject, the cross-references to earlier conversations on the same theme. She writes it all down in her directory so she knows where to put her hand on any of it.
-
-When you ask the agent something, the librarian helps. Vector search picks the candidate shelves, keyword search confirms the title, the temporal graph tells her which version is the current one, and the archive proves what was actually said. No single component is doing magic. They're all doing one job each, the way a real library does: stacks, catalogue, reference desk, archive.
-
-Uncertainty is her specialty. If the agent isn't sure, it asks her, and she'll either find the source, find an earlier conversation that contradicts the claim, or admit nobody's said anything about it before. She doesn't make things up. She points at the page.
-
-Everything is time-stamped. Everything is on a shelf. Nothing is ever lost.
-
-**What about consolidation?** Many memory systems compress the day's signals into something summarised — scoring, gating, promoting the durable parts. The catch: once the day is rewritten into a summary, the original wording is typically gone. The bit that survives is the bit the summariser thought worth keeping.
-
-taosmd doesn't consolidate *onto* the transcript; it consolidates *on top of* it. The verbatim record goes into the zero-loss archive **first**. The librarian crystallises whatever's worth crystallising — but the original is still on the shelf, byte for byte, never overwritten. Disagree with how she summarised today? Walk over to the archive and read what was actually said. The summary and the source are both there.
-
-That's the difference. We built a library.
+Zero cloud dependencies. Zero API keys. NPU if you have one, CPU if you don't, cluster if you want the throughput.
 
 ---
 
