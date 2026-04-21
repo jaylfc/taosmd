@@ -122,6 +122,43 @@ generator-quality improvement.
 
 ---
 
+## Parametric retrieval matrix (C1–C6, 2026-04-20 → 2026-04-21)
+
+Isolating the contribution of each retrieval lever. Same generator
+(`gemma4:e2b`), same external judge (`qwen3:4b`), same 1540 QAs, same
+answer prompt (prompt-opt baseline). Only the flag under test changes.
+
+| Config | Flag | Ext Judge | Δ vs baseline-opt (0.410) | Notes |
+|---|---|---|---|---|
+| **C3 adjacent_turns** | `--adjacent-turns 1` | **0.465** | **+0.055** | **best single lever** |
+| C1 wider_k20 | `--retrieval-top-k 20` | 0.453 / 0.440* | +0.043 / +0.030 | reproduced across two runs |
+| C4 llm_expansion | `--llm-query-expansion` | 0.425 | +0.015 | positive but smaller |
+| baseline-opt (reference) | — | 0.410 | — | prompt-opt, no retrieval flags |
+| C2 session_date | `--context-format session_date` | 0.407 | -0.003 | flat — prompt-opt already has absolute dates |
+| C6 multihop_decompose | `--multihop-decompose` | 0.317 | **-0.093** | **regression** — decomposition at 5B hurts retrieval quality |
+| C5 bge_reranker | `--reranker bge-v2-m3` | — | — | deferred (CrossEncoderReranker refactor required) |
+
+*C1 ran twice: 10:07 standalone (0.453), 14:35 matrix rerun (0.440). 0.013 gap — within run-to-run variance at this sample size.
+
+**Headlines:**
+- **`adjacent_turns=1` is the single biggest architectural lever measured.** Stitching ±1 turn around each retrieved hit beats raw retrieval width and LLM-driven expansion. Cheap (no extra LLM call), generalises across all four categories.
+- **Multihop decomposition regresses at the 5B tier.** Sub-query retrieval surfaces less-relevant chunks than the original question when the decomposer is a 5B model; self-judge also dropped to 0.386 (lowest of any config). `adjacent_turns` captures the same "need more context" signal more cheaply and without the extra LLM call.
+- **Date-format swap is a no-op** once prompt-opt is applied — absolute dates in the answer prompt already saturate the temporal-reasoning signal.
+
+**Stacking hypothesis (c_stack in progress):** C1 (+wider retrieval), C3 (+adjacent turns), C4 (+LLM query expansion) are all independently positive and operate on different parts of the pipeline (retrieval width, context stitching, query rewriting). Stacked they should produce additive or partially-additive gains. Target: 0.48–0.52 Overall Judge. Run fires from `locomo-cstack` screen after `=== MATRIX DONE` marker lands.
+
+**Result files:**
+- `benchmarks/results/locomo_20260420_143548_c1_wider_k20.rescored_v2.json`
+- `benchmarks/results/locomo_20260420_200007_c2_session_date.rescored_v2.json`
+- `benchmarks/results/locomo_20260421_010806_c3_adjacent_turns.rescored_v2.json`
+- `benchmarks/results/locomo_20260421_062202_c4_llm_expansion.rescored_v2.json`
+- `benchmarks/results/locomo_20260421_115548_c6_multihop_decompose.rescored_v2.json`
+
+Runner commit: `d89e349` (feat/locomo-param-configs, PR #37).
+Chain script: `/home/jay/locomo_matrix_chain.sh` (local to Fedora host, not checked in).
+
+---
+
 ## Known data artefacts
 
 - **mem0 R@K always reports 0.0** because mem0 doesn't round-trip per-turn
@@ -216,16 +253,35 @@ generator-quality improvement.
 5. **Architecture choice dominates generator choice at small scale.** taosmd vs mem0 at the same gemma4:e2b was a ~7× Judge delta. No single-model swap we tested moved the needle that far. Put engineering effort into retrieval architecture (rerank, query expansion, KG) before chasing a bigger generator.
 6. **Self-judge systematically inflates.** Every system we rescored showed self-judge > external by 0.03–0.15. Never publish a number the system graded itself. Always pair generation and judging with distinct models.
 7. **R@K in adapters without per-turn dia_id round-trip is meaningless.** Mem0 and MemPalace both store turns without preserving LoCoMo's `dia_id` metadata, so the recall metric collapses to 0 regardless of retrieval quality. Report it as `None` (metric unavailable) rather than `0.0` — see PR #35.
+8. **Multihop decomposition regresses at small-LLM scale.** The `--multihop-decompose` config landed at 0.317 vs baseline-opt 0.410 — a 22% relative drop and the first negative result in the retrieval-matrix sweep. Sub-query retrieval surfaces lower-quality chunks than the original question when the decomposer is a 5B model. `adjacent_turns=1` (0.465) captures the same "need more context" signal without the LLM call. If re-enabling decomposition later, pair it with a ≥9B decomposer or gate it by question type.
+9. **Context stitching beats retrieval width.** `adjacent_turns=1` (+0.055) > `retrieval_top_k=20` (+0.043). Once retrieval surfaces a plausible hit, giving the generator ±1 neighbour turns of dialogue context is a bigger lift than finding more candidates. Architecture implication: investing in richer context windows around hits is higher-yield than broader candidate pools.
 
 ---
 
 ## In flight / queued
 
-- **Complete 2026-04-19 21:57 BST** — mem0-e2b external rescore: Overall Judge **0.06**.
-- **Complete 2026-04-19 23:54 BST** — MemPalace-e2b full benchmark self-judge: Overall Judge **0.42**.
-- **Complete 2026-04-20 02:55 BST** — MemPalace-e2b external rescore: Overall Judge **0.34** (180.5 min, 0 errors, 100% coverage). All three architectures now have both self-judge and external-judge scorecards on identical generator + dataset + prompt. Comparison is complete.
-- Open PRs awaiting merge: **#34** (this doc), **#35** (silent-failure fixes), **#36** (mempalace adapter rewrite).
-- Next: README rewrite aligned to `project_taosmd_positioning.md` memory — lead with the four target audiences (SBC/Pi-class, taOS clusters, offline/compliance, long-horizon agents), frame benchmark numbers as "at the compute tier we target" rather than raw SOTA, highlight the architectural edge on Open-dom + Multi-hop specifically.
+### Complete
+- **2026-04-19 21:57 BST** — mem0-e2b external rescore: Overall Judge **0.06**.
+- **2026-04-19 23:54 BST** — MemPalace-e2b self-judge: Overall Judge **0.42**.
+- **2026-04-20 02:55 BST** — MemPalace-e2b external rescore: Overall Judge **0.34** (180.5 min, 0 errors, 100% coverage).
+- **2026-04-20 20:00 BST** — C1 wider_k20 (matrix rerun) rescore: **0.440**.
+- **2026-04-21 01:08 BST** — C2 session_date rescore: **0.407** (flat).
+- **2026-04-21 06:22 BST** — C3 adjacent_turns rescore: **0.465** (new leader).
+- **2026-04-21 11:55 BST** — C4 llm_expansion rescore: **0.425**.
+- **2026-04-21 17:41 BST** — C6 multihop_decompose rescore: **0.317** (regression, -0.084 vs baseline-opt).
+- **2026-04-21 17:41 BST** — MATRIX DONE. All 5 C configs complete; C5 (bge reranker) deferred.
+
+### In flight
+- **c_stack_k20_adj1_llm** — BENCH started 2026-04-21 17:42 BST. Stacks C1+C3+C4 flags (`--retrieval-top-k 20 --adjacent-turns 1 --llm-query-expansion`) on gemma4:e2b, rescored by qwen3:4b. Watcher: screen `locomo-cstack`. ETA: bench done ~19:30, rescore done ~23:00 BST.
+
+### Queued (fire-on-prior-done)
+1. **qwen9b_k20** — `qwen3.5:9b` dense + `--retrieval-top-k 20`, Ollama, rescored by qwen3:4b. Watcher: screen `locomo-qwen9b`, keyed off `=== CSTACK DONE` marker. ~6h total. Tests "does a larger dense generator push taosmd same-tier past the architectural ceiling of 5B?"
+2. **qwen36_hlwq_k20** — Qwen3.6-35B-A3B HLWQ-CT-INT4 via vLLM (`--expert-cache=2`), rescored by qwen3:4b. ~6–8h. Novel 5-bit MoE quant, tests MoE on 12 GB VRAM with expert offload.
+3. **qwen36_moe_k20** — `qwen3.6:35b-a3b-q4_K_M` via Ollama (CPU-offload MoE), rescored by qwen3:4b. ~8–10h. Standard-quant baseline for the MoE.
+
+### Meta
+- Open PRs: **#34** (this doc), **#35** (silent-failure fixes), **#36** (mempalace adapter), **#37** (parametric retrieval flags, landed on master at d89e349).
+- README reframing PRs **#38** and **#39** merged: competitor editorial removed, hardware/offline framing applied.
 
 ---
 
