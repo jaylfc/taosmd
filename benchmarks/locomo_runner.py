@@ -62,6 +62,10 @@ Predicted: {predicted}
 
 Reply YES or NO only."""
 
+MULTIHOP_PROMPT = """Split this question into 2 or 3 shorter, focused sub-queries that together cover everything needed to answer it. Respond with one sub-query per line. No numbering, no explanation.
+
+Question: {question}"""
+
 _PUNCT = re.compile(r"[^\w\s]")
 
 
@@ -164,49 +168,122 @@ def _session_keys(conversation: dict) -> list[tuple[str, str]]:
     return pairs
 
 
-async def _ingest_conversation(vmem: VectorMemory, conv: dict) -> tuple[int, float]:
+async def _ingest_conversation(
+    vmem: VectorMemory, conv: dict
+) -> tuple[int, float, dict[str, dict]]:
+    """Ingest conversation turns into vmem.
+
+    Returns (added_count, elapsed_s, turn_index) where turn_index maps a
+    sequential turn index (across all sessions) to its metadata dict, for use
+    with --adjacent-turns.
+    """
     conversation = conv.get("conversation", conv)
     t0 = time.time()
     added = 0
+    turn_index: dict[str, dict] = {}  # str(global_idx) -> {datetime, text, speaker, dia_id}
+    global_idx = 0
     for session_key, dt in _session_keys(conversation):
         for turn in conversation.get(session_key) or []:
             text = (turn.get("text") or "").strip()
             if not text:
                 continue
             speaker = turn.get("speaker", "")
+            dia_id = turn.get("dia_id", "")
             await vmem.add(
                 f"[{speaker}] {text}",
                 metadata={
-                    "dia_id": turn.get("dia_id", ""),
+                    "dia_id": dia_id,
                     "session": session_key,
                     "datetime": dt,
                     "speaker": speaker,
+                    "turn_idx": global_idx,
                 },
             )
+            turn_index[str(global_idx)] = {
+                "datetime": dt,
+                "text": f"[{speaker}] {text}",
+                "speaker": speaker,
+                "dia_id": dia_id,
+            }
+            global_idx += 1
             added += 1
-    return added, time.time() - t0
+    return added, time.time() - t0, turn_index
 
 
-async def _retrieve(strategy: str, query: str, vmem: VectorMemory, top_k: int) -> list[dict]:
-    if strategy == "vector-only":
-        raw = await vmem.search(query, limit=top_k)
-        return [{"text": r["text"], "metadata": r.get("metadata", {}),
-                 "score": r.get("similarity", 0.0)} for r in raw]
-    # TODO: wire cross-encoder reranker for strategy="full"; for now reuse retrieve() with vector source only.
-    hits = await retrieve(query, strategy="thorough", sources={"vector": vmem},
-                          limit=top_k, agent_name="locomo_eval")
-    return [{"text": h.get("text", ""),
-             "metadata": h.get("metadata", {}).get("metadata", h.get("metadata", {})),
-             "score": h.get("rrf_score", h.get("source_score", 0.0))} for h in hits]
+def _build_adjacent_map(
+    hits: list[dict], turn_index: dict[str, dict], adjacent_turns: int
+) -> dict[str, list[str]]:
+    """For each hit, collect text of ±adjacent_turns neighbours.
+
+    Returns a dict mapping turn_idx (as str) to list of neighbour text strings,
+    deduplicated across hits.
+    """
+    if adjacent_turns <= 0 or not turn_index:
+        return {}
+
+    max_idx = max(int(k) for k in turn_index)
+    seen_indices: set[int] = set()
+
+    # Collect the primary turn indices from hits first so we can exclude them
+    # from the neighbour lists (they'll appear in the main context).
+    primary_indices: set[int] = set()
+    for hit in hits:
+        meta = hit.get("metadata", {}) or {}
+        idx = meta.get("turn_idx")
+        if idx is not None:
+            primary_indices.add(int(idx))
+
+    adj_map: dict[str, list[str]] = {}
+    for hit in hits:
+        meta = hit.get("metadata", {}) or {}
+        idx = meta.get("turn_idx")
+        if idx is None:
+            continue
+        idx = int(idx)
+        neighbours = []
+        for offset in range(-adjacent_turns, adjacent_turns + 1):
+            if offset == 0:
+                continue
+            ni = idx + offset
+            if ni < 0 or ni > max_idx:
+                continue
+            if ni in seen_indices or ni in primary_indices:
+                continue
+            if str(ni) not in turn_index:
+                continue
+            neighbours.append(turn_index[str(ni)]["text"])
+            seen_indices.add(ni)
+        if neighbours:
+            adj_map[str(idx)] = neighbours
+
+    return adj_map
 
 
-def _build_context(hits: list[dict]) -> str:
+def _build_context(
+    hits: list[dict],
+    context_format: str = "plain",
+    adjacent_turns_map: dict[str, list[str]] | None = None,
+) -> str:
     lines = []
     for hit in hits:
         meta = hit.get("metadata", {}) or {}
         dt = meta.get("datetime", "")
-        prefix = f"[{dt}] " if dt else ""
+        turn_idx = str(meta.get("turn_idx", ""))
+
+        if context_format == "session_date":
+            prefix = f"[Session date: {dt}] " if dt else ""
+        elif context_format == "both":
+            prefix = f"[Session date: {dt}] [{dt}] " if dt else ""
+        else:  # plain
+            prefix = f"[{dt}] " if dt else ""
+
         lines.append(f"{prefix}{hit.get('text', '')}")
+
+        # Inject adjacent turns immediately after each hit
+        if adjacent_turns_map and turn_idx in adjacent_turns_map:
+            for neighbour_text in adjacent_turns_map[turn_idx]:
+                lines.append(neighbour_text)
+
     return "\n".join(lines)
 
 
@@ -218,8 +295,98 @@ def _evidence_hits(hits: list[dict], evidence: list[str]) -> int:
     return sum(1 for e in evidence if e in retrieved)
 
 
-async def _process_qa(qa: dict, conv_id: str, vmem: VectorMemory, client: httpx.AsyncClient,
-                      ollama_url: str, model: str, top_k: int, strategy: str) -> dict | None:
+def _load_reranker(reranker_choice: str) -> object | None:
+    """Return a reranker instance or None, based on --reranker choice."""
+    if reranker_choice == "off":
+        return None
+
+    _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    if reranker_choice == "ms-marco":
+        from taosmd.cross_encoder import CrossEncoderReranker
+        onnx_path = os.path.join(_REPO_ROOT, "models", "cross-encoder-onnx")
+        return CrossEncoderReranker(onnx_path=onnx_path)
+
+    if reranker_choice == "bge-v2-m3":
+        bge_path = os.path.join(_REPO_ROOT, "models", "bge-reranker-v2-m3-onnx")
+        if not Path(bge_path).exists():
+            raise FileNotFoundError(
+                f"BGE reranker model not found at {bge_path}.\n"
+                "Pull it with:\n"
+                "  huggingface-cli download BAAI/bge-reranker-v2-m3 "
+                f"--local-dir {bge_path}"
+            )
+        raise NotImplementedError(
+            "bge-v2-m3 reranker: model directory found but ONNX integration "
+            "is not yet wired up. Use --reranker ms-marco or --reranker off."
+        )
+
+    raise ValueError(f"Unknown reranker choice: {reranker_choice!r}")
+
+
+async def _decompose_query(
+    client: httpx.AsyncClient,
+    ollama_url: str,
+    question: str,
+) -> list[str]:
+    """Ask the LLM to split question into 2-3 sub-queries.
+
+    Returns a list of stripped lines. Falls back to [question] on failure or
+    if fewer than 2 lines are returned.
+    """
+    try:
+        raw = await _ollama_generate(
+            client, ollama_url, "gemma4:e2b",
+            MULTIHOP_PROMPT.format(question=question),
+            temperature=0.0,
+        )
+        lines = [l.strip() for l in raw.splitlines() if l.strip()]
+        if len(lines) >= 2:
+            return lines
+    except Exception:
+        pass
+    return [question]
+
+
+async def _retrieve(
+    strategy: str,
+    query: str,
+    vmem: VectorMemory,
+    top_k: int,
+    reranker: object | None = None,
+) -> list[dict]:
+    if strategy == "vector-only":
+        raw = await vmem.search(query, limit=top_k)
+        hits = [{"text": r["text"], "metadata": r.get("metadata", {}),
+                 "score": r.get("similarity", 0.0)} for r in raw]
+        if reranker is not None and getattr(reranker, "available", False):
+            hits = reranker.rerank(query, hits, top_k)
+        return hits
+    # TODO: wire cross-encoder reranker for strategy="full"; for now reuse retrieve() with vector source only.
+    hits = await retrieve(query, strategy="thorough", sources={"vector": vmem},
+                          limit=top_k, reranker=reranker, agent_name="locomo_eval")
+    return [{"text": h.get("text", ""),
+             "metadata": h.get("metadata", {}).get("metadata", h.get("metadata", {})),
+             "score": h.get("rrf_score", h.get("source_score", 0.0))} for h in hits]
+
+
+async def _process_qa(
+    qa: dict,
+    conv_id: str,
+    vmem: VectorMemory,
+    client: httpx.AsyncClient,
+    ollama_url: str,
+    model: str,
+    top_k: int,
+    strategy: str,
+    retrieval_top_k: int,
+    context_format: str,
+    adjacent_turns: int,
+    llm_query_expansion: bool,
+    reranker: object | None,
+    multihop_decompose: bool,
+    turn_index: dict[str, dict],
+) -> dict | None:
     if "answer" not in qa:
         return None
     question = qa["question"]
@@ -227,11 +394,42 @@ async def _process_qa(qa: dict, conv_id: str, vmem: VectorMemory, client: httpx.
     category = int(qa.get("category", 0))
     evidence = qa.get("evidence", []) or []
 
+    # --- optional LLM query expansion ---
+    retrieval_query = question
+    if llm_query_expansion:
+        try:
+            from taosmd.query_expansion import expand_query_llm
+            expansion = await expand_query_llm(question, llm_url=ollama_url, model=model)
+            reformulations = expansion.get("reformulations", [])
+            if reformulations:
+                retrieval_query = reformulations[0]
+        except Exception:
+            pass  # fall through to original question
+
     t0 = time.time()
-    hits = await _retrieve(strategy, question, vmem, top_k)
+
+    if multihop_decompose:
+        sub_queries = await _decompose_query(client, ollama_url, retrieval_query)
+        seen_texts: set[str] = set()
+        all_hits: list[dict] = []
+        for sq in sub_queries:
+            sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker)
+            for h in sq_hits:
+                t = h.get("text", "")
+                if t not in seen_texts:
+                    seen_texts.add(t)
+                    all_hits.append(h)
+        # Cap at retrieval_top_k, preserving order
+        hits = all_hits[:retrieval_top_k]
+    else:
+        hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker)
+
     retrieval_ms = (time.time() - t0) * 1000.0
 
-    context = _build_context(hits)
+    adj_map = _build_adjacent_map(hits, turn_index, adjacent_turns)
+    context = _build_context(hits, context_format=context_format,
+                             adjacent_turns_map=adj_map if adj_map else None)
+
     t1 = time.time()
     try:
         predicted = await _ollama_generate(
@@ -319,6 +517,16 @@ async def run(args: argparse.Namespace) -> int:
     else:
         include_cats = {int(args.category)}
 
+    # Resolve retrieval_top_k: falls back to top_k if not explicitly set.
+    retrieval_top_k = args.retrieval_top_k if args.retrieval_top_k is not None else args.top_k
+
+    # Initialise reranker once (shared across all QAs).
+    try:
+        reranker = _load_reranker(args.reranker)
+    except (FileNotFoundError, NotImplementedError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
     results: list[dict] = []
     total_seen = 0
     failed_qa = 0
@@ -326,13 +534,27 @@ async def run(args: argparse.Namespace) -> int:
     sem = asyncio.Semaphore(concurrency)
     progress_lock = asyncio.Lock()
 
-    async def _guarded(qa: dict, conv_id: str, vmem: VectorMemory,
-                       client: httpx.AsyncClient) -> dict | None:
+    async def _guarded(
+        qa: dict,
+        conv_id: str,
+        vmem: VectorMemory,
+        client: httpx.AsyncClient,
+        turn_index: dict[str, dict],
+    ) -> dict | None:
         nonlocal total_seen, failed_qa
         async with sem:
             try:
-                outcome = await _process_qa(qa, conv_id, vmem, client, args.ollama_url,
-                                            args.model, args.top_k, args.strategy)
+                outcome = await _process_qa(
+                    qa, conv_id, vmem, client,
+                    args.ollama_url, args.model, args.top_k, args.strategy,
+                    retrieval_top_k=retrieval_top_k,
+                    context_format=args.context_format,
+                    adjacent_turns=args.adjacent_turns,
+                    llm_query_expansion=args.llm_query_expansion,
+                    reranker=reranker,
+                    multihop_decompose=args.multihop_decompose,
+                    turn_index=turn_index,
+                )
             except Exception as e:
                 async with progress_lock:
                     failed_qa += 1
@@ -356,7 +578,7 @@ async def run(args: argparse.Namespace) -> int:
                 onnx_path=args.onnx_path,
             )
             await vmem.init(http_client=client)
-            added, ingest_s = await _ingest_conversation(vmem, conv)
+            added, ingest_s, turn_index = await _ingest_conversation(vmem, conv)
             print(f"[{conv_id}] ingested {added} turns in {ingest_s:.1f}s", flush=True)
 
             # Pick eligible QAs up-front. --per-conv-limit caps QAs per
@@ -373,7 +595,7 @@ async def run(args: argparse.Namespace) -> int:
                 eligible.append(qa)
 
             if eligible:
-                tasks = [_guarded(qa, conv_id, vmem, client) for qa in eligible]
+                tasks = [_guarded(qa, conv_id, vmem, client, turn_index) for qa in eligible]
                 gathered = await asyncio.gather(*tasks, return_exceptions=True)
                 for outcome in gathered:
                     if isinstance(outcome, Exception) or outcome is None:
@@ -390,6 +612,12 @@ async def run(args: argparse.Namespace) -> int:
         "timestamp": timestamp,
         "model": args.model,
         "top_k": args.top_k,
+        "retrieval_top_k": retrieval_top_k,
+        "context_format": args.context_format,
+        "adjacent_turns": args.adjacent_turns,
+        "llm_query_expansion": args.llm_query_expansion,
+        "reranker": args.reranker,
+        "multihop_decompose": args.multihop_decompose,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -445,6 +673,37 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--ollama-url", default="http://localhost:11434")
     p.add_argument("--model", default="qwen3:4b")
     p.add_argument("--top-k", type=int, default=10)
+    p.add_argument("--retrieval-top-k", type=int, default=None,
+                   help="Override top-K used in retrieval independently from --top-k. "
+                        "If not set, falls back to --top-k. Useful for widening the "
+                        "retrieval candidate pool while keeping the scoring metric fixed.")
+    p.add_argument("--context-format", choices=["plain", "session_date", "both"],
+                   default="plain",
+                   help="How each retrieved hit is prefixed in the answer context. "
+                        "plain: '[{date}] {text}' (default). "
+                        "session_date: '[Session date: {date}] {text}'. "
+                        "both: '[Session date: {date}] [{date}] {text}'.")
+    p.add_argument("--adjacent-turns", type=int, default=0,
+                   help="Include ±N neighbouring turns from the same conversation "
+                        "alongside each retrieval hit. Neighbours are deduplicated "
+                        "across hits. Default 0 (disabled).")
+    p.add_argument("--llm-query-expansion", action="store_true",
+                   help="Before retrieval, expand the query via taosmd.query_expansion."
+                        "expand_query_llm and use the first reformulation as the "
+                        "retrieval query. Default off (uses original question).")
+    p.add_argument("--reranker", choices=["ms-marco", "bge-v2-m3", "off"],
+                   default="ms-marco",
+                   help="Cross-encoder reranker applied after vector retrieval. "
+                        "ms-marco: ms-marco-MiniLM-L-6-v2 ONNX (default). "
+                        "bge-v2-m3: BAAI/bge-reranker-v2-m3 ONNX (model must be "
+                        "present under models/bge-reranker-v2-m3-onnx/). "
+                        "off: skip reranking (pure vector).")
+    p.add_argument("--multihop-decompose", action="store_true",
+                   help="Before retrieval, ask an LLM (gemma4:e2b) to split the "
+                        "question into 2-3 sub-queries, run retrieval for each, "
+                        "then union and dedupe the results up to --retrieval-top-k. "
+                        "Falls back to single-query retrieval if decomposition fails "
+                        "or returns fewer than 2 lines. Default off.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
