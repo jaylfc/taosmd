@@ -352,7 +352,16 @@ python benchmarks/longmemeval_recall.py
 
 # Per-category breakdown
 python benchmarks/longmemeval_granularity.py
+
+# LoCoMo (1540 QAs, multi-session conversations)
+python benchmarks/locomo_runner.py --model gemma4:e2b
+
+# LoCoMo with tunable retrieval levers (see docs/benchmarks.md)
+python benchmarks/locomo_runner.py --model gemma4:e2b \
+  --retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion
 ```
+
+All benchmark numbers in `docs/benchmarks.md` pin the commit they were measured on.
 
 ## Support
 
