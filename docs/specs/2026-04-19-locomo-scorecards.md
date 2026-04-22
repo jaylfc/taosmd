@@ -130,9 +130,14 @@ answer prompt (prompt-opt baseline). Only the flag under test changes.
 
 | Config | Flag | Ext Judge | Δ vs baseline-opt (0.410) | Notes |
 |---|---|---|---|---|
-| **C3 adjacent_turns** | `--adjacent-turns 1` | **0.465** | **+0.055** | **best single lever** |
+| **adj_sweep_adj2** | `--adjacent-turns 2` | **0.499** | **+0.089** | **new leader — sweet spot of the adj axis** |
+| adj_sweep_adj3 | `--adjacent-turns 3` | 0.487 | +0.077 | regresses slightly from adj=2 — diminishing after 2 |
+| c_stack_k20_adj1_llm | `--adjacent-turns 1 --retrieval-top-k 20 --llm-query-expansion` | 0.482 | +0.072 | stacking IS additive (+0.017 over adj=1) |
+| adj1_k20 | `--adjacent-turns 1 --retrieval-top-k 20` | 0.479 | +0.069 | k=20 adds +0.014 on top of adj=1 |
+| C3 adjacent_turns | `--adjacent-turns 1` | 0.465 | +0.055 | first lever that pushed clearly past +0.05 |
+| adj1_llm (partial) | `--adjacent-turns 1 --llm-query-expansion` | 0.464 | +0.054 | llm-exp on top of adj=1 is flat (+0.00 from adj=1 alone) |
 | C1 wider_k20 | `--retrieval-top-k 20` | 0.453 / 0.440* | +0.043 / +0.030 | reproduced across two runs |
-| C4 llm_expansion | `--llm-query-expansion` | 0.425 | +0.015 | positive but smaller |
+| C4 llm_expansion | `--llm-query-expansion` | 0.425 | +0.015 | positive alone but doesn't compound well |
 | baseline-opt (reference) | — | 0.410 | — | prompt-opt, no retrieval flags |
 | C2 session_date | `--context-format session_date` | 0.407 | -0.003 | flat — prompt-opt already has absolute dates |
 | C6 multihop_decompose | `--multihop-decompose` | 0.317 | **-0.093** | **regression** — decomposition at 5B hurts retrieval quality |
@@ -140,12 +145,14 @@ answer prompt (prompt-opt baseline). Only the flag under test changes.
 
 *C1 ran twice: 10:07 standalone (0.453), 14:35 matrix rerun (0.440). 0.013 gap — within run-to-run variance at this sample size.
 
-**Headlines:**
-- **`adjacent_turns=1` is the single biggest architectural lever measured.** Stitching ±1 turn around each retrieved hit beats raw retrieval width and LLM-driven expansion. Cheap (no extra LLM call), generalises across all four categories.
+**Headlines (revised 2026-04-22):**
+- **`adjacent_turns=2` is the single biggest architectural lever measured.** 0.499 vs baseline-opt 0.410 = +0.089 absolute, +21.7% relative. Stitching ±2 turns around each retrieved hit gives the generator enough dialogue context to resolve references and temporal links without needing wider candidate pools or LLM-driven expansion. Sweet spot: going from adj=2 to adj=3 *regresses* slightly (0.499 → 0.487), so the benefit plateaus or inverts past 2.
+- **Stacking IS additive, contrary to yesterday's partial-data read.** c_stack final landed at 0.482 (not 0.465 as the 62% partial suggested). Decomposing the stack at adj=1: adj=1 alone 0.465 → adj=1+k=20 0.479 (+0.014) → adj=1+k=20+llm-exp 0.482 (+0.003). k=20 is the useful second stacker; llm-exp on top of adj=1 is flat (`adj1_llm` tracks adj=1 alone at ~0.464 partial).
+- **Predicted-but-not-yet-measured: `adj=2 + k=20`.** If additive pattern holds, ~0.499 + 0.014 ≈ **0.513**. Queued as `adj2_k20` after `adj1_llm` completes (still gemma4:e2b block).
 - **Multihop decomposition regresses at the 5B tier.** Sub-query retrieval surfaces less-relevant chunks than the original question when the decomposer is a 5B model; self-judge also dropped to 0.386 (lowest of any config). `adjacent_turns` captures the same "need more context" signal more cheaply and without the extra LLM call.
 - **Date-format swap is a no-op** once prompt-opt is applied — absolute dates in the answer prompt already saturate the temporal-reasoning signal.
 
-**Stacking hypothesis (c_stack in progress):** C1 (+wider retrieval), C3 (+adjacent turns), C4 (+LLM query expansion) are all independently positive and operate on different parts of the pipeline (retrieval width, context stitching, query rewriting). Stacked they should produce additive or partially-additive gains. Target: 0.48–0.52 Overall Judge. Run fires from `locomo-cstack` screen after `=== MATRIX DONE` marker lands.
+**Cross-tier context:** at 0.499 we've reached the Letta/LangMem/OpenAI-memory band (all 0.50–0.52 on gpt-4o-mini) with a 5B quant model. Mem0 paper (0.66) and Zep (audited 0.584) on gpt-4o-mini remain ahead at absolute scale; the queued qwen3.5:9b and Qwen3.6-MoE runs test whether the architecture-to-compute ratio carries to larger generators.
 
 **Result files:**
 - `benchmarks/results/locomo_20260420_143548_c1_wider_k20.rescored_v2.json`
@@ -266,18 +273,28 @@ Chain script: `/home/jay/locomo_matrix_chain.sh` (local to Fedora host, not chec
 - **2026-04-20 02:55 BST** — MemPalace-e2b external rescore: Overall Judge **0.34** (180.5 min, 0 errors, 100% coverage).
 - **2026-04-20 20:00 BST** — C1 wider_k20 (matrix rerun) rescore: **0.440**.
 - **2026-04-21 01:08 BST** — C2 session_date rescore: **0.407** (flat).
-- **2026-04-21 06:22 BST** — C3 adjacent_turns rescore: **0.465** (new leader).
+- **2026-04-21 06:22 BST** — C3 adjacent_turns rescore: **0.465**.
 - **2026-04-21 11:55 BST** — C4 llm_expansion rescore: **0.425**.
-- **2026-04-21 17:41 BST** — C6 multihop_decompose rescore: **0.317** (regression, -0.084 vs baseline-opt).
+- **2026-04-21 17:41 BST** — C6 multihop_decompose rescore: **0.317** (regression, -0.093 vs baseline-opt).
 - **2026-04-21 17:41 BST** — MATRIX DONE. All 5 C configs complete; C5 (bge reranker) deferred.
+- **2026-04-21 23:43 BST** — c_stack_k20_adj1_llm rescore: **0.482** (stacking additive, partial earlier read of 0.465 was misleading).
+- **2026-04-22 05:12 BST** — adj_sweep_adj2 rescore: **0.499** (**new leader**).
+- **2026-04-22 10:42 BST** — adj_sweep_adj3 rescore: **0.487** (slight regression vs adj=2, diminishing past 2).
+- **2026-04-22 16:17 BST** — adj1_k20 rescore: **0.479** (k=20 adds +0.014 on adj=1).
 
 ### In flight
-- **c_stack_k20_adj1_llm** — BENCH started 2026-04-21 17:42 BST. Stacks C1+C3+C4 flags (`--retrieval-top-k 20 --adjacent-turns 1 --llm-query-expansion`) on gemma4:e2b, rescored by qwen3:4b. Watcher: screen `locomo-cstack`. ETA: bench done ~19:30, rescore done ~23:00 BST.
+- **adj1_llm** — gemma4:e2b, adj=1 + llm-exp. RESCORE started 2026-04-22 18:28 BST. Partial at 1202/1540 reads **0.464** (llm-exp on adj=1 looks flat). ETA: final ~21:30 BST.
 
 ### Queued (fire-on-prior-done)
-1. **qwen9b_k20** — `qwen3.5:9b` dense + `--retrieval-top-k 20`, Ollama, rescored by qwen3:4b. Watcher: screen `locomo-qwen9b`, keyed off `=== CSTACK DONE` marker. ~6h total. Tests "does a larger dense generator push taosmd same-tier past the architectural ceiling of 5B?"
-2. **qwen36_hlwq_k20** — Qwen3.6-35B-A3B HLWQ-CT-INT4 via vLLM (`--expert-cache=2`), rescored by qwen3:4b. ~6–8h. Novel 5-bit MoE quant, tests MoE on 12 GB VRAM with expert offload.
-3. **qwen36_moe_k20** — `qwen3.6:35b-a3b-q4_K_M` via Ollama (CPU-offload MoE), rescored by qwen3:4b. ~8–10h. Standard-quant baseline for the MoE.
+1. **adj2_k20** — gemma4:e2b + `--adjacent-turns 2 --retrieval-top-k 20`. Tests stacking additivity at the new sweet-spot adj value. Predicted ~0.513 if k=20's +0.014 contribution from adj=1 carries to adj=2.
+2. **qwen9b_k20** — `qwen3.5:9b` dense + `--retrieval-top-k 20`. Tests generator-size ceiling on the baseline architecture.
+3. **adj1_qwen9b** — `qwen3.5:9b` + adj=1 only. Clean isolation: is adj=1's architectural win generator-size-dependent?
+4. **c_stack_plus_qwen9b** — `qwen3.5:9b` + full stack (k=20 adj=1 llm-exp). Combines architecture with bigger gen.
+5. **c6_multihop_qwen9b** — `qwen3.5:9b` + `--multihop-decompose`. Directly tests whether multihop regression at 5B was sizing-bound.
+6. **qwen36_hlwq_k20** — Qwen3.6-35B-A3B HLWQ-CT-INT4 via vLLM (`expert-cache=2`). Novel 5-bit MoE quant, tests 35B MoE on 12 GB VRAM with expert offload.
+7. **qwen36_moe_k20** — `qwen3.6:35b-a3b-q4_K_M` via Ollama (CPU-offload MoE). Standard-quant baseline for the MoE.
+
+All gemma and qwen9b runs chain via a single `locomo_post_cstack.sh` script in screen `locomo-post-cstack`. HLWQ and Ollama-MoE watchers still need plumbing; tracked in queue.json for dashboard visibility.
 
 ### Meta
 - Open PRs: **#34** (this doc), **#35** (silent-failure fixes), **#36** (mempalace adapter), **#37** (parametric retrieval flags, landed on master at d89e349).
