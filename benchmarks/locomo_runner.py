@@ -140,7 +140,15 @@ async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
 
 
 async def _judge(client: httpx.AsyncClient, url: str, model: str,
-                 question: str, reference: str, predicted: str) -> float:
+                 question: str, reference: str, predicted: str) -> float | None:
+    """Return 1.0/0.0 on a YES/NO judgment, or None if the judge call itself
+    failed (timeout, network, HTTP error).
+
+    None is deliberately distinct from 0.0 — a transport failure is not a
+    wrong-answer verdict. Callers must treat None as "metric unavailable"
+    and exclude it from averages so that infra flakiness doesn't bias the
+    Judge score downward.
+    """
     try:
         reply = await _ollama_generate(
             client, url, model,
@@ -148,7 +156,7 @@ async def _judge(client: httpx.AsyncClient, url: str, model: str,
             temperature=0.0,
         )
     except Exception:
-        return 0.0
+        return None
     head = reply.strip().upper().split()
     return 1.0 if head and head[0].startswith("YES") else 0.0
 
@@ -431,45 +439,90 @@ async def _process_qa(
                              adjacent_turns_map=adj_map if adj_map else None)
 
     t1 = time.time()
+    generation_error: str | None = None
     try:
         predicted = await _ollama_generate(
             client, ollama_url, model,
             ANSWER_PROMPT.format(context=context, question=question),
         )
     except Exception as exc:
-        predicted = f"[generation_error: {exc}]"
+        predicted = ""
+        generation_error = f"{type(exc).__name__}: {exc}"
     gen_ms = (time.time() - t1) * 1000.0
 
-    judge = await _judge(client, ollama_url, model, question, reference, predicted)
+    # If generation failed, do NOT compute scores on a synthetic error string —
+    # that folds infra failures into the benchmark averages. Record None so
+    # _summary can exclude the row from F1/BLEU/Judge means. Retrieval-side
+    # metrics (evidence_hits, retrieval_ms) are still valid, keep them.
+    if generation_error is None:
+        judge = await _judge(client, ollama_url, model, question, reference, predicted)
+        f1_val = round(_f1(predicted, reference), 4)
+        bleu_val = round(_bleu1(predicted, reference), 4)
+        judge_val = round(judge, 4) if judge is not None else None
+    else:
+        f1_val = None
+        bleu_val = None
+        judge_val = None
 
-    return {
+    row: dict = {
         "conversation_id": conv_id,
         "question": question,
         "reference": reference,
         "predicted": predicted,
         "category": category,
-        "f1": round(_f1(predicted, reference), 4),
-        "bleu1": round(_bleu1(predicted, reference), 4),
-        "judge": round(judge, 4),
+        "f1": f1_val,
+        "bleu1": bleu_val,
+        "judge": judge_val,
         "retrieval_ms": round(retrieval_ms, 2),
         "gen_ms": round(gen_ms, 2),
         "evidence_hits": _evidence_hits(hits, evidence),
         "evidence_total": len(evidence),
     }
+    if generation_error is not None:
+        row["error"] = generation_error
+    return row
 
 
 def _summary(rows: list[dict]) -> dict:
+    """Aggregate per-category stats, skipping None-valued metrics.
+
+    Judge, F1, BLEU-1 can each be None on a row for two reasons:
+    (1) generation failed (the whole row has an `error` field), or
+    (2) the judge LLM call timed out.
+    Similarly, `evidence_hits`/`evidence_total` can be None when the memory
+    backend (e.g. mem0) doesn't round-trip per-turn IDs. In all these cases
+    the row is excluded from the corresponding mean so infra/adapter
+    artefacts don't bias the headline numbers.
+
+    Also reports `scored_count` (rows contributing to each metric) alongside
+    `count` (total rows) so callers can see the denominator honestly.
+    """
     if not rows:
-        return {"count": 0, "f1": 0.0, "bleu1": 0.0, "judge": 0.0, "retrieval_recall": 0.0}
+        return {"count": 0, "f1": 0.0, "bleu1": 0.0, "judge": 0.0,
+                "retrieval_recall": 0.0, "judge_scored": 0, "recall_scored": 0}
     n = len(rows)
-    hit_rows = [r for r in rows if r.get("evidence_total", 0) > 0]
-    recall = (sum(1 for r in hit_rows if r["evidence_hits"] > 0) / len(hit_rows)) if hit_rows else 0.0
+
+    f1_vals = [r["f1"] for r in rows if r.get("f1") is not None]
+    bleu_vals = [r["bleu1"] for r in rows if r.get("bleu1") is not None]
+    judge_vals = [r["judge"] for r in rows if r.get("judge") is not None]
+
+    recall_rows = [
+        r for r in rows
+        if r.get("evidence_total") is not None and r.get("evidence_hits") is not None
+        and r["evidence_total"] > 0
+    ]
+    recall = (
+        sum(1 for r in recall_rows if r["evidence_hits"] > 0) / len(recall_rows)
+    ) if recall_rows else 0.0
+
     return {
         "count": n,
-        "f1": round(sum(r["f1"] for r in rows) / n, 4),
-        "bleu1": round(sum(r["bleu1"] for r in rows) / n, 4),
-        "judge": round(sum(r["judge"] for r in rows) / n, 4),
+        "f1": round(sum(f1_vals) / len(f1_vals), 4) if f1_vals else 0.0,
+        "bleu1": round(sum(bleu_vals) / len(bleu_vals), 4) if bleu_vals else 0.0,
+        "judge": round(sum(judge_vals) / len(judge_vals), 4) if judge_vals else 0.0,
         "retrieval_recall": round(recall, 4),
+        "judge_scored": len(judge_vals),
+        "recall_scored": len(recall_rows),
     }
 
 
@@ -561,6 +614,12 @@ async def run(args: argparse.Namespace) -> int:
                     print(f"  qa failed: {e!r}", flush=True)
                 return None
         if outcome is not None:
+            # Rows with an `error` field had a generation failure — count
+            # them as failed so the JSON's failed_qa reflects reality, not
+            # zero just because _process_qa swallowed the exception.
+            if outcome.get("error"):
+                async with progress_lock:
+                    failed_qa += 1
             async with progress_lock:
                 total_seen += 1
                 if total_seen % 25 == 0:
