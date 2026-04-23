@@ -122,10 +122,14 @@ async def call_judge(client, url, model, rec, timeout) -> tuple[str, object]:
         reference=rec.get("reference", ""),
         predicted=rec.get("predicted", ""),
     )
-    # think=false disables reasoning mode on Qwen3/3.5/3.6 judges — same
-    # speedup rationale as the runner. Judge verdicts are yes/no, hidden
-    # reasoning doesn't change the output but 20x slower to produce.
-    payload = {"model": model, "prompt": prompt, "stream": False, "think": False}
+    # NOTE: do NOT pass think=false here. On qwen3:4b (our default judge)
+    # the Ollama think parameter has inverted semantics vs the generation
+    # models — it EXPOSES reasoning tokens in the response rather than
+    # suppressing them. That breaks parse_judge_reply's startswith("yes")
+    # check because the response now begins with "Okay, the user is asking…".
+    # Leaving thinking-mode on here gives a clean yes/no reply in the same
+    # ~7-10s per judgement that the full external-judge run relied on.
+    payload = {"model": model, "prompt": prompt, "stream": False}
     try:
         resp = await client.post(f"{url}/api/generate", json=payload, timeout=timeout)
         resp.raise_for_status()
