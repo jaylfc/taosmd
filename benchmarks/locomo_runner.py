@@ -130,9 +130,14 @@ def _bleu1(pred: str, ref: str) -> float:
 
 async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
                            prompt: str, temperature: float = 0.2) -> str:
+    # think=false disables reasoning mode for Qwen3/3.5/3.6 and other
+    # thinking-capable models. Without it, the model emits 200+ hidden
+    # reasoning tokens per call (Ollama strips them from the response but
+    # bills generation time), making benchmarks 10-20x slower than needed.
     resp = await client.post(
         f"{url}/api/generate",
         json={"model": model, "prompt": prompt, "stream": False,
+              "think": False,
               "options": {"temperature": temperature}},
     )
     resp.raise_for_status()
