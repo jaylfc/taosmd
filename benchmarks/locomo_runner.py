@@ -385,6 +385,7 @@ async def _process_qa(
     llm_query_expansion: bool,
     reranker: object | None,
     multihop_decompose: bool,
+    full_context: bool,
     turn_index: dict[str, dict],
 ) -> dict | None:
     if "answer" not in qa:
@@ -394,39 +395,59 @@ async def _process_qa(
     category = int(qa.get("category", 0))
     evidence = qa.get("evidence", []) or []
 
-    # --- optional LLM query expansion ---
-    retrieval_query = question
-    if llm_query_expansion:
-        try:
-            from taosmd.query_expansion import expand_query_llm
-            expansion = await expand_query_llm(question, llm_url=ollama_url, model=model)
-            reformulations = expansion.get("reformulations", [])
-            if reformulations:
-                retrieval_query = reformulations[0]
-        except Exception:
-            pass  # fall through to original question
-
-    t0 = time.time()
-
-    if multihop_decompose:
-        sub_queries = await _decompose_query(client, ollama_url, retrieval_query)
-        seen_texts: set[str] = set()
-        all_hits: list[dict] = []
-        for sq in sub_queries:
-            sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker)
-            for h in sq_hits:
-                t = h.get("text", "")
-                if t not in seen_texts:
-                    seen_texts.add(t)
-                    all_hits.append(h)
-        # Cap at retrieval_top_k, preserving order
-        hits = all_hits[:retrieval_top_k]
+    if full_context:
+        # Bypass retrieval entirely; pass every turn of the current conversation
+        # as context in turn-order. Intended for large-context generators
+        # (Qwen3.6-MoE) to measure retrieval vs raw-context.
+        hits = [
+            {
+                "text": meta.get("text", ""),
+                "metadata": {
+                    "turn_idx": int(idx_str),
+                    "datetime": meta.get("datetime", ""),
+                    "speaker": meta.get("speaker", ""),
+                    "dia_id": meta.get("dia_id", ""),
+                },
+            }
+            for idx_str, meta in sorted(turn_index.items(), key=lambda kv: int(kv[0]))
+        ]
+        retrieval_ms = 0.0
+        adj_map: dict[str, list[str]] = {}
     else:
-        hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker)
+        # --- optional LLM query expansion ---
+        retrieval_query = question
+        if llm_query_expansion:
+            try:
+                from taosmd.query_expansion import expand_query_llm
+                expansion = await expand_query_llm(question, llm_url=ollama_url, model=model)
+                reformulations = expansion.get("reformulations", [])
+                if reformulations:
+                    retrieval_query = reformulations[0]
+            except Exception:
+                pass  # fall through to original question
 
-    retrieval_ms = (time.time() - t0) * 1000.0
+        t0 = time.time()
 
-    adj_map = _build_adjacent_map(hits, turn_index, adjacent_turns)
+        if multihop_decompose:
+            sub_queries = await _decompose_query(client, ollama_url, retrieval_query)
+            seen_texts: set[str] = set()
+            all_hits: list[dict] = []
+            for sq in sub_queries:
+                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker)
+                for h in sq_hits:
+                    t = h.get("text", "")
+                    if t not in seen_texts:
+                        seen_texts.add(t)
+                        all_hits.append(h)
+            # Cap at retrieval_top_k, preserving order
+            hits = all_hits[:retrieval_top_k]
+        else:
+            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker)
+
+        retrieval_ms = (time.time() - t0) * 1000.0
+
+        adj_map = _build_adjacent_map(hits, turn_index, adjacent_turns)
+
     context = _build_context(hits, context_format=context_format,
                              adjacent_turns_map=adj_map if adj_map else None)
 
@@ -553,6 +574,7 @@ async def run(args: argparse.Namespace) -> int:
                     llm_query_expansion=args.llm_query_expansion,
                     reranker=reranker,
                     multihop_decompose=args.multihop_decompose,
+                    full_context=args.full_context,
                     turn_index=turn_index,
                 )
             except Exception as e:
@@ -618,6 +640,7 @@ async def run(args: argparse.Namespace) -> int:
         "llm_query_expansion": args.llm_query_expansion,
         "reranker": args.reranker,
         "multihop_decompose": args.multihop_decompose,
+        "full_context": args.full_context,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -704,6 +727,14 @@ def _parse_args() -> argparse.Namespace:
                         "then union and dedupe the results up to --retrieval-top-k. "
                         "Falls back to single-query retrieval if decomposition fails "
                         "or returns fewer than 2 lines. Default off.")
+    p.add_argument("--full-context", action="store_true",
+                   help="Skip retrieval entirely. Feed the full conversation "
+                        "(every turn, in order) as context to the generator. "
+                        "Use on large-context-window generators (Qwen3.6-MoE, "
+                        "long-context builds) to measure retrieval vs. raw-context "
+                        "performance. --retrieval-top-k, --adjacent-turns, "
+                        "--llm-query-expansion, and --multihop-decompose are "
+                        "ignored when this flag is set.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
