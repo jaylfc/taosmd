@@ -129,17 +129,18 @@ def _bleu1(pred: str, ref: str) -> float:
 
 
 async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
-                           prompt: str, temperature: float = 0.2) -> str:
-    # think=false disables reasoning mode for Qwen3/3.5/3.6 and other
-    # thinking-capable models. Without it, the model emits 200+ hidden
-    # reasoning tokens per call (Ollama strips them from the response but
-    # bills generation time), making benchmarks 10-20x slower than needed.
-    resp = await client.post(
-        f"{url}/api/generate",
-        json={"model": model, "prompt": prompt, "stream": False,
-              "think": False,
-              "options": {"temperature": temperature}},
-    )
+                           prompt: str, temperature: float = 0.2,
+                           thinking_mode: bool = False) -> str:
+    # Default: think=false disables reasoning mode on Qwen3/3.5/3.6 generators
+    # (10-20x faster; hidden reasoning adds no visible content but bills full
+    # generation time). Set thinking_mode=True (via --thinking-mode on the CLI)
+    # to measure whether reasoning-on improves answer quality. Slow — expect
+    # ~150s per call vs ~5s with thinking off.
+    payload = {"model": model, "prompt": prompt, "stream": False,
+               "options": {"temperature": temperature}}
+    if not thinking_mode:
+        payload["think"] = False
+    resp = await client.post(f"{url}/api/generate", json=payload)
     resp.raise_for_status()
     return (resp.json().get("response") or "").strip()
 
@@ -391,6 +392,7 @@ async def _process_qa(
     reranker: object | None,
     multihop_decompose: bool,
     full_context: bool,
+    thinking_mode: bool,
     turn_index: dict[str, dict],
 ) -> dict | None:
     if "answer" not in qa:
@@ -461,6 +463,7 @@ async def _process_qa(
         predicted = await _ollama_generate(
             client, ollama_url, model,
             ANSWER_PROMPT.format(context=context, question=question),
+            thinking_mode=thinking_mode,
         )
     except Exception as exc:
         predicted = f"[generation_error: {exc}]"
@@ -580,6 +583,7 @@ async def run(args: argparse.Namespace) -> int:
                     reranker=reranker,
                     multihop_decompose=args.multihop_decompose,
                     full_context=args.full_context,
+                    thinking_mode=args.thinking_mode,
                     turn_index=turn_index,
                 )
             except Exception as e:
@@ -646,6 +650,7 @@ async def run(args: argparse.Namespace) -> int:
         "reranker": args.reranker,
         "multihop_decompose": args.multihop_decompose,
         "full_context": args.full_context,
+        "thinking_mode": args.thinking_mode,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -740,6 +745,13 @@ def _parse_args() -> argparse.Namespace:
                         "performance. --retrieval-top-k, --adjacent-turns, "
                         "--llm-query-expansion, and --multihop-decompose are "
                         "ignored when this flag is set.")
+    p.add_argument("--thinking-mode", action="store_true",
+                   help="Enable reasoning-mode on the generator (do not pass "
+                        "think=false). For Qwen3/3.5/3.6 this lets the model "
+                        "emit hidden reasoning tokens before the answer. "
+                        "Slow — expect ~150s per call vs ~5s with thinking "
+                        "off — but useful to test whether chain-of-thought "
+                        "improves answer quality. Default off.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
