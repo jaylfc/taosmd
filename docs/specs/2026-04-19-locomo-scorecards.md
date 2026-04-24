@@ -164,6 +164,35 @@ answer prompt (prompt-opt baseline). Only the flag under test changes.
 Runner commit: `d89e349` (feat/locomo-param-configs, PR #37).
 Chain script: `/home/jay/locomo_matrix_chain.sh` (local to Fedora host, not checked in).
 
+**Retraction (2026-04-23):** the `adj2_k20` prediction of 0.513 was wrong. The actual measurement was **0.477** — below `adj=2` alone (0.499). At adj=2 the retrieval context already saturates the 5B generator's attention capacity; adding k=20 floods it and performance regresses. This is the opposite pattern from adj=1 where k=20 is additive (+0.014). Stacking behaviour is adj-dependent at the 5B tier; the "context token budget has a sweet spot" interpretation supersedes the naive additive model.
+
+---
+
+## qwen3.5:9b generator block (2026-04-24)
+
+Same retrieval architecture as the gemma4:e2b matrix; generator swapped to qwen3.5:9b dense (6.6 GB Ollama weights on our 12 GB 3060). `think=false` on the generator (PR #42) to suppress reasoning-mode token blowup — 20× throughput gain; external judge (qwen3:4b) runs in default thinking mode (PR #43 reverted the think=false-on-judge after it corrupted 1452 judgements silently).
+
+| Config | Ext Judge | Δ vs 5B same-config | Δ vs baseline-opt (0.410) |
+|---|---|---|---|
+| **c_stack_plus_qwen9b** (k=20 + adj=1 + llm-exp) | **0.509** | **+0.027** (5B stack was 0.482) | **+0.099 — new overall leader** |
+| adj1_qwen9b (adj=1 only) | 0.481 | +0.016 (5B adj=1 was 0.465) | +0.071 |
+| qwen9b_k20 (k=20 only) | 0.458 | ≈ flat (5B k=20 was 0.453) | +0.048 |
+
+**Headline finding: stacking is more effective at larger scale.** The full stack (k=20 + adj=1 + llm-exp) gained +0.017 over adj=1 alone at 5B, and **+0.028 over adj=1 alone at 9B**. The larger model actually uses the wider retrieval surface instead of getting overwhelmed by it — exactly the attention-capacity hypothesis that explained the 5B adj=2 × k=20 regression.
+
+**Tier crossover:** at **0.509 we reach the Letta / LangMem / OpenAI-memory band (0.50–0.52)** that they report on gpt-4o-mini. We match that band on a local 12 GB GPU using a 9B quant with an open-source retrieval architecture and no cloud round-trip. Mem0 paper (0.66) and Zep audited (0.584) remain ahead at cross-tier scale — that's the remaining positioning gap.
+
+**Generator-size alone is a weak lever at this retrieval baseline.** qwen3.5:9b + k=20 alone (0.458) is *worse* than gemma4:e2b + adj=1 alone (0.465). Doubling generator parameters gives ≤ +0.005 unless architecture scales with it. Architecture dominates model-size in this range.
+
+**Caveat on `think=false`:** these 9B runs have reasoning-mode disabled for bench throughput (20× speedup; projected ~64h → measured ~1h bench per run). A `qwen9b_k20_thinking_on` control run is queued as a final POSTMATRIX follow-up (~21h bench + 3.5h rescore). If chain-of-thought materially changes answer quality, the 9B numbers above will shift; how much is an open question.
+
+**Result files:**
+- `benchmarks/results/locomo_20260423_195915_qwen9b_k20.rescored_v2.json` (re-rescored after PR #43 fix)
+- `benchmarks/results/locomo_20260424_040536_adj1_qwen9b.rescored_v2.json`
+- `benchmarks/results/locomo_20260424_084318_c_stack_plus_qwen9b.rescored_v2.json`
+
+Runner commits: `af84076` (PR #42, `think=false` on generator), `9bd07d9` (PR #44, `--thinking-mode` opt-in flag).
+
 ---
 
 ## Known data artefacts
@@ -277,24 +306,27 @@ Chain script: `/home/jay/locomo_matrix_chain.sh` (local to Fedora host, not chec
 - **2026-04-21 11:55 BST** — C4 llm_expansion rescore: **0.425**.
 - **2026-04-21 17:41 BST** — C6 multihop_decompose rescore: **0.317** (regression, -0.093 vs baseline-opt).
 - **2026-04-21 17:41 BST** — MATRIX DONE. All 5 C configs complete; C5 (bge reranker) deferred.
-- **2026-04-21 23:43 BST** — c_stack_k20_adj1_llm rescore: **0.482** (stacking additive, partial earlier read of 0.465 was misleading).
-- **2026-04-22 05:12 BST** — adj_sweep_adj2 rescore: **0.499** (**new leader**).
-- **2026-04-22 10:42 BST** — adj_sweep_adj3 rescore: **0.487** (slight regression vs adj=2, diminishing past 2).
+- **2026-04-21 23:43 BST** — c_stack_k20_adj1_llm rescore: **0.482** (stacking additive at adj=1).
+- **2026-04-22 05:12 BST** — adj_sweep_adj2 rescore: **0.499** (5B leader at the time).
+- **2026-04-22 10:42 BST** — adj_sweep_adj3 rescore: **0.487** (slight regression vs adj=2).
 - **2026-04-22 16:17 BST** — adj1_k20 rescore: **0.479** (k=20 adds +0.014 on adj=1).
+- **2026-04-22 22:03 BST** — adj1_llm rescore: **0.458** (llm-exp on adj=1 is actually slightly negative, not flat).
+- **2026-04-23 03:50 BST** — adj2_k20 rescore: **0.477** (adj=2 + k=20 regresses from adj=2 alone — retracted the 0.513 prediction).
+- **2026-04-24 04:05 BST** — qwen9b_k20 rescore: **0.458** (9B gen alone barely matches 5B k=20).
+- **2026-04-24 08:43 BST** — adj1_qwen9b rescore: **0.481** (9B + adj=1, only +0.016 over 5B).
+- **2026-04-24 15:36 BST** — **c_stack_plus_qwen9b rescore: 0.509 — NEW OVERALL LEADER** (9B + full stack).
 
 ### In flight
-- **adj1_llm** — gemma4:e2b, adj=1 + llm-exp. RESCORE started 2026-04-22 18:28 BST. Partial at 1202/1540 reads **0.464** (llm-exp on adj=1 looks flat). ETA: final ~21:30 BST.
+- **c6_multihop_qwen9b** — qwen3.5:9b, `--multihop-decompose`. BENCH started 2026-04-24 15:36 BST. Tests whether the C6 regression at 5B was sizing-bound. ETA: rescore done ~22:00 BST.
 
 ### Queued (fire-on-prior-done)
-1. **adj2_k20** — gemma4:e2b + `--adjacent-turns 2 --retrieval-top-k 20`. Tests stacking additivity at the new sweet-spot adj value. Predicted ~0.513 if k=20's +0.014 contribution from adj=1 carries to adj=2.
-2. **qwen9b_k20** — `qwen3.5:9b` dense + `--retrieval-top-k 20`. Tests generator-size ceiling on the baseline architecture.
-3. **adj1_qwen9b** — `qwen3.5:9b` + adj=1 only. Clean isolation: is adj=1's architectural win generator-size-dependent?
-4. **c_stack_plus_qwen9b** — `qwen3.5:9b` + full stack (k=20 adj=1 llm-exp). Combines architecture with bigger gen.
-5. **c6_multihop_qwen9b** — `qwen3.5:9b` + `--multihop-decompose`. Directly tests whether multihop regression at 5B was sizing-bound.
-6. **qwen36_hlwq_k20** — Qwen3.6-35B-A3B HLWQ-CT-INT4 via vLLM (`expert-cache=2`). Novel 5-bit MoE quant, tests 35B MoE on 12 GB VRAM with expert offload.
-7. **qwen36_moe_k20** — `qwen3.6:35b-a3b-q4_K_M` via Ollama (CPU-offload MoE). Standard-quant baseline for the MoE.
+1. **qwen35_9b_full_context** — `qwen3.5:9b` + `--full-context` (no retrieval). Tests the defining positioning question: does retrieval earn its keep when the conversation fits in context? 128 K context headroom, LoCoMo conversations ~30–60 K tokens.
+2. **qwen36_hlwq_k20** — Qwen3.6-35B-A3B HLWQ-CT-INT4 via vLLM (`expert-cache=2`). Novel 5-bit MoE quant, tests 35B MoE on 12 GB VRAM with expert offload.
+3. **qwen36_moe_k20** — `qwen3.6:35b-a3b-q4_K_M` via Ollama (CPU-offload MoE). Standard-quant baseline for the MoE.
+4. **qwen36_moe_full_context** — MoE + `--full-context`. 262 K context headroom. Final retrieval-vs-raw-context comparison at the largest generator.
+5. **qwen9b_k20_thinking_on** — `qwen3.5:9b` + `--retrieval-top-k 20 --thinking-mode`. Post-POSTMATRIX control run. Tests whether reasoning-mode recovers additional 9B quality vs the `think=false` runs above. Expensive (~21h bench + 3.5h rescore) but the definitive answer.
 
-All gemma and qwen9b runs chain via a single `locomo_post_cstack.sh` script in screen `locomo-post-cstack`. HLWQ and Ollama-MoE watchers still need plumbing; tracked in queue.json for dashboard visibility.
+Chain watchers: `locomo-chain` (screen) runs `locomo_post_cstack_v3.sh` for the remaining qwen3.5:9b runs; `locomo-thinking-on` (screen) waits on POSTMATRIX DONE and then fires the thinking-on control run. HLWQ and Ollama-MoE watchers still need plumbing; tracked in queue.json for dashboard visibility.
 
 ### Meta
 - Open PRs: **#34** (this doc), **#35** (silent-failure fixes), **#36** (mempalace adapter), **#37** (parametric retrieval flags, landed on master at d89e349).
