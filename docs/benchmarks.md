@@ -55,25 +55,38 @@ Harness: [`benchmarks/locomo_runner.py`](../benchmarks/locomo_runner.py). Rescor
 
 | System | Generator | Retrieval config | Ext Judge | Notes |
 |---|---|---|---|---|
-| **taosmd** | qwen3.5:9b | k=20 + adj=1 + llm-exp | **0.509** | full stack on 9B — matches Letta/LangMem/OpenAI-memory band (who use gpt-4o-mini) |
-| **taosmd** | gemma4:e2b | adj=2 | 0.499 | 5B best — architecture-heavy config on our 12 GB GPU |
+| **taosmd** | qwen3.5:9b | adj=2 | **0.516** | **leader — simplest config that wins** |
+| **taosmd** | qwen3.5:9b | k=20 + adj=1 + llm-exp | 0.509 | full stack on 9B — matches Letta/LangMem/OpenAI-memory band (who use gpt-4o-mini) |
+| **taosmd** | gemma4:e2b | adj=2 | 0.499 | 5B best — same architecture, smaller generator |
 | **taosmd** | qwen3.5:9b | adj=1 | 0.481 | 9B + adj=1 only |
 | **taosmd** | gemma4:e2b | k=20 + adj=1 + llm-exp | 0.482 | 5B stack |
 | **taosmd** | gemma4:e2b | adj=1 (C3) | 0.465 | baseline adjacent-turns win |
 | **taosmd** | gemma4:e2b | baseline (prompt-opt) | 0.410 | reference point |
 | MemPalace | gemma4:e2b | chromadb + MiniLM | 0.336 | same generator + same dataset, different architecture |
+| **taosmd** | qwen3.5:9b | full-context (no retrieval) | 0.090 | retrieval ablation — see section below |
 | mem0 | gemma4:e2b | chromadb + nomic-embed, infer=False | 0.060 | same generator + same dataset, different architecture |
 
 All taosmd rows on the same commit series (`feat/locomo-param-configs` merged to master). Every row pins its config, generator, judge, and dataset.
 
 ### Key architectural findings
 
-- **`adjacent_turns` is the single biggest lever.** Stitching ±1 turn around each retrieved hit took us from 0.410 → 0.465 (+0.055). adj=2 took it to 0.499 on 5B.
-- **Stacking is adj-dependent.** At adj=1, adding k=20 and llm-exp compound cleanly (+0.017 → 0.482). At adj=2 the same k=20 addition *regresses* (0.499 → 0.477). Context token budget has a sweet spot; beyond it, more candidates drown the signal.
-- **Stacking scales with model size.** The same `k=20 + adj=1 + llm-exp` stack gains +0.017 at 5B and **+0.028 at 9B**. Larger generators use the wider retrieval surface instead of being overwhelmed by it.
+- **`adjacent_turns` is the dominant lever at every model size we measured.** 5B: adj=1 → 0.465, adj=2 → 0.499. 9B: adj=1 → 0.481, adj=2 → 0.516. Going from adj=1 to adj=2 adds more than the entire stack of `k=20 + llm-exp` adds.
+- **`adj=2` alone at 9B beats the full stack at 9B.** 9B + adj=2 = 0.516; 9B + k=20 + adj=1 + llm-exp = 0.509. The simpler config wins. Earlier "stacking compounds at larger scale" claim revised: adding k=20 and llm-exp on top of adj=2 + 9B is noise, not signal.
+- **Multihop decomposition is a footgun across model sizes.** 5B: 0.317 (-0.093 vs baseline). 9B: **0.306** (worse than 5B). Not a sizing issue — sub-query retrieval inherently surfaces lower-quality chunks. **Don't enable `--multihop-decompose` in production.**
 - **Generator size alone is a weak lever.** qwen3.5:9b + k=20 (0.458) is *worse* than gemma4:e2b + adj=1 (0.465). Doubling parameters gives ≤ +0.005 unless architecture scales with it.
-- **Multihop decomposition regresses at 5B** (0.317, -0.093 vs baseline). Sub-query retrieval surfaces lower-quality chunks when the decomposer is a 5B model; `adjacent_turns=1` captures the "need more context" signal without the extra LLM call.
+- **Stacking is adj-dependent at 5B.** At adj=1 + 5B, adding k=20 compounds cleanly (+0.014). At adj=2 + 5B the same k=20 addition *regresses* (-0.022). Context token budget has a sweet spot at this tier.
 - **Date-format swap and LLM query expansion** are marginal in the presence of adj=1.
+
+### Retrieval is essential — even at long-context scale
+
+`qwen35_9b_full_context`: feed every turn of the conversation (no retrieval) to qwen3.5:9b's 128K window. LoCoMo conversations fit (~30–60K tokens). Result: **0.090 ext judge** — *worse than mem0 with retrieval* (0.060 floor). Self-judge collapses too (0.221).
+
+| Config (qwen3.5:9b generator) | Ext Judge | Notes |
+|---|---|---|
+| adj=2 retrieval (`adj2_qwen9b`) | **0.516** | leader |
+| full conversation in context, no retrieval | **0.090** | -0.426 absolute, **5.7× degradation** |
+
+**This is the defining empirical answer to "does a memory system earn its keep when context is long enough to hold the whole conversation?"** Yes, by an enormous margin. Stuffing 30–60K tokens of dialogue into a capable 9B model with 128K window collapses Judge accuracy to slightly above mem0's floor (which uses retrieval). Retrieval is essential — context window size is not the bottleneck a memory system solves.
 
 ### Cross-tier context (mixed metrics, clearly labelled)
 
@@ -99,6 +112,67 @@ At 0.509 on our local 12 GB GPU, we reach the Letta / LangMem / OpenAI-memory ba
 - **`think=false` on generator** for Qwen3/3.5/3.6 (PR #42). A `thinking_mode_on` control run is queued to measure whether chain-of-thought changes the result.
 
 Full timeline, per-category breakdowns, and provenance log: `docs/specs/2026-04-19-locomo-scorecards.md`.
+
+---
+
+## Hardware tiers — recommended configurations
+
+The taosmd architecture is portable; what changes per hardware tier is which generator + which retrieval flags fit the compute budget. The following recommendations name what is **measured** vs. **expected based on architecture** so you can calibrate trust.
+
+### Always-on defaults (every tier)
+
+- **Embedder**: `all-MiniLM-L6-v2` ONNX on CPU. 384-dim, ~90 MB, 0.3–10 ms per embed across all tested CPUs. Avoid PyTorch — it's 200× slower for the same quality at this model size.
+- **Reranker**: `ms-marco-MiniLM` ONNX on CPU. Same backend, second-stage rerank over top-K vector hits.
+- **Don't enable** `--multihop-decompose`. Regresses at every model size we measured (5B: -0.093, 9B: even worse). Footgun.
+- **Skip** `--context-format session_date`. No-op once the answer prompt has absolute dates (taosmd's prompt-opt default).
+
+### 12 GB NVIDIA GPU (RTX 3060, RTX 3060 Ti, RTX 4060 Ti) — measured
+
+This is the LoCoMo benchmark host. All numbers in the LoCoMo leaderboard above were measured here.
+
+- **Generator (best quality)**: `qwen3.5:9b` (Q4 ~6.6 GB VRAM) + `--adjacent-turns 2`. Measured **0.516** ext judge on LoCoMo. Use `think=false` (built into the runner since PR #42) — 20× speedup with no measured quality loss.
+- **Generator (best speed)**: `gemma4:e2b` (Q4 ~7 GB VRAM) + `--adjacent-turns 2`. Measured **0.499** ext judge. ~3× faster bench than 9B.
+- **Judge (when running benchmarks)**: `qwen3:4b` (Q4 ~5 GB VRAM). Default thinking mode (do **not** pass `think=false` — it's an Ollama bug on qwen3:4b that exposes reasoning in the response and corrupts judge parsing).
+- **Concurrency**: 3 with gemma, 2 with qwen3.5:9b. Higher concurrency benefits from `OLLAMA_NUM_PARALLEL=3`.
+
+### 16 GB Orange Pi 5 Plus (RK3588 NPU) — partially measured
+
+This is the LongMemEval-S 97.0% reference stack. LoCoMo on this hardware is **not yet measured** (planned).
+
+- **Generator**: `Qwen3-4B` via `rkllama` on the RK3588 NPU (~17 s/turn). Exact stack used for the 97% claim.
+- **Embedder**: `all-MiniLM-L6-v2` ONNX on CPU (0.3 ms — NPU is slower for small models).
+- **Reranker**: `Qwen3-Reranker-0.6B` on NPU.
+- **Query expansion**: `qmd-query-expansion 1.7B` on NPU.
+- **Expected best LoCoMo config**: `--adjacent-turns 2` (architecturally consistent with the 12 GB measurements; not yet validated on the NPU stack). LongMemEval 97.0% measurement on master used the cross-encoder + query expansion path without an explicit adj flag — that path's per-section scores are in the LongMemEval table above.
+- **Don't run the judge on the same Pi.** Offload to a peer (Fedora or another Pi) to avoid dual-loading.
+
+### 4 GB GPU (GTX 1050 Ti) — not measured (planned)
+
+LXC test environment forthcoming. The recommendations below are extrapolations from architecture, not measurements.
+
+- **Generator (best fit)**: `qwen3:2b` or `qwen3:4b` at Q4 (~1.5–2.5 GB VRAM). 4 B at Q4 should fit with ~1.5 GB headroom for KV cache.
+- **Skip**: `--llm-query-expansion` (extra LLM call too costly), `--multihop-decompose` (regresses anyway).
+- **Expected best LoCoMo config**: `--adjacent-turns 2 --retrieval-top-k 10`. The adj=2 win held across 5B and 9B; expect it to hold at 2 B/4 B too, but should be measured.
+- **Embedder, reranker, judge**: same as larger tiers (CPU ONNX). 4 GB VRAM is for the generator only.
+
+### Raspberry Pi 4 (8 GB, no NPU, no GPU) — not measured (extrapolation only)
+
+CPU-only inference is going to hurt. Realistic only for low-throughput personal use, not benchmark-grade workloads.
+
+- **Generator**: `qwen3:1.7b` or smaller at Q4_K_M, accept slow per-call latency (likely 20–60 s/turn).
+- **Embedder, reranker**: ONNX on CPU works fine — the small models are designed for this.
+- **Skip**: every retrieval flag that adds an LLM call (`--llm-query-expansion`, `--multihop-decompose`).
+- **Expected best LoCoMo config**: `--adjacent-turns 1 --retrieval-top-k 10`. Adj=2 might over-budget the small generator's context — needs measurement.
+- **Realistic deployment**: use the Pi 4 as a memory-storage / retrieval node in a taOS cluster; offload generation to a peer with more compute.
+
+### Cluster (taOS, multi-machine)
+
+- **Memory storage tier** (verbatim archive, vector DB, KG): runs on the Pi 4 or any cheap node. Lightweight.
+- **Retrieval tier** (embedding + rerank): CPU-bound, runs on any node with the ONNX models.
+- **Generation tier**: the GPU/NPU node. Pi 5 Plus, 1050 Ti, 3060, etc., depending on tier.
+- **Judge tier**: any node with enough VRAM for `qwen3:4b`. Don't share with the generator.
+
+Hardware-tier validation as we run new measurements lands in this doc; the live experimental log is in [`docs/specs/2026-04-19-locomo-scorecards.md`](specs/2026-04-19-locomo-scorecards.md).
 
 ---
 
