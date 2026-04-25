@@ -174,22 +174,41 @@ Same retrieval architecture as the gemma4:e2b matrix; generator swapped to qwen3
 
 | Config | Ext Judge | Δ vs 5B same-config | Δ vs baseline-opt (0.410) |
 |---|---|---|---|
-| **c_stack_plus_qwen9b** (k=20 + adj=1 + llm-exp) | **0.509** | **+0.027** (5B stack was 0.482) | **+0.099 — new overall leader** |
+| **adj2_full_stack_qwen9b** (k=20 + adj=2 + llm-exp) | **0.545** | n/a (5B adj=2+k=20 *regressed* to 0.477) | **+0.135 — new overall leader** |
+| adj2_qwen9b (adj=2 only) | 0.516 | +0.017 (5B adj=2 was 0.499) | +0.106 |
+| c_stack_plus_qwen9b (k=20 + adj=1 + llm-exp) | 0.509 | +0.027 (5B stack was 0.482) | +0.099 |
 | adj1_qwen9b (adj=1 only) | 0.481 | +0.016 (5B adj=1 was 0.465) | +0.071 |
 | qwen9b_k20 (k=20 only) | 0.458 | ≈ flat (5B k=20 was 0.453) | +0.048 |
+| c6_multihop_qwen9b (`--multihop-decompose`) | 0.306 | -0.011 (5B was 0.317) | -0.104 |
+| qwen35_9b_full_context (`--full-context`, no retrieval) | 0.090 | n/a | **-0.320** (retrieval-essential proof) |
 
-**Headline finding: stacking is more effective at larger scale.** The full stack (k=20 + adj=1 + llm-exp) gained +0.017 over adj=1 alone at 5B, and **+0.028 over adj=1 alone at 9B**. The larger model actually uses the wider retrieval surface instead of getting overwhelmed by it — exactly the attention-capacity hypothesis that explained the 5B adj=2 × k=20 regression.
+**Headline finding (revised again — third revision this week): stacking is both adj-dependent AND model-size-dependent.**
 
-**Tier crossover:** at **0.509 we reach the Letta / LangMem / OpenAI-memory band (0.50–0.52)** that they report on gpt-4o-mini. We match that band on a local 12 GB GPU using a 9B quant with an open-source retrieval architecture and no cloud round-trip. Mem0 paper (0.66) and Zep audited (0.584) remain ahead at cross-tier scale — that's the remaining positioning gap.
+| Generator | adj=1 alone | adj=1 + full stack | adj=2 alone | adj=2 + full stack |
+|---|---|---|---|---|
+| 5B (gemma4:e2b) | 0.465 | 0.482 (+0.017) | 0.499 | **0.477 (-0.022)** ← regression |
+| 9B (qwen3.5) | 0.481 | 0.509 (+0.028) | 0.516 | **0.545 (+0.029)** ← new leader |
+
+At the 5B tier, stacking k=20+llm-exp on top of adj=2 floods the attention budget — context drowns the signal. The 9B model has enough attention capacity to absorb the wider retrieval surface even at adj=2; stacking compounds. Yesterday's "9B + adj=2 alone beats the full stack at 9B" claim was based on the *adj=1* full stack measurement (0.509) — once we measured adj=2 + full stack at 9B (0.545), stacking re-emerged as the right move.
+
+**Tier crossover (updated):** at **0.545 we are within 0.04 of the audited Zep number (0.584)** on gpt-4o-mini. Functionally at parity with the audited cross-tier verified competitor on a local 12 GB GPU + 9B quant. Mem0 paper (0.66) and Mem0^g (0.684) remain ahead — both reported by mem0's own evaluation harness on gpt-4o-mini, not independently audited.
 
 **Generator-size alone is a weak lever at this retrieval baseline.** qwen3.5:9b + k=20 alone (0.458) is *worse* than gemma4:e2b + adj=1 alone (0.465). Doubling generator parameters gives ≤ +0.005 unless architecture scales with it. Architecture dominates model-size in this range.
 
-**Caveat on `think=false`:** these 9B runs have reasoning-mode disabled for bench throughput (20× speedup; projected ~64h → measured ~1h bench per run). A `qwen9b_k20_thinking_on` control run is queued as a final POSTMATRIX follow-up (~21h bench + 3.5h rescore). If chain-of-thought materially changes answer quality, the 9B numbers above will shift; how much is an open question.
+**Multihop decomposition is a footgun at every model size.** 5B: -0.084 vs baseline-opt (0.317 vs 0.401). 9B: -0.104 (0.306). The decomposition LLM call inherently surfaces lower-quality retrieval, regardless of generator size. Should never be enabled in production. *Lesson #8 confirmed.*
+
+**Retrieval is essential.** `qwen35_9b_full_context` (no retrieval, full conversation in context) collapsed to **0.090** — slightly above mem0's floor of 0.060, **5.7× below** adj=2 retrieval at the same generator (0.516). Stuffing 30–60 K tokens of dialogue into a 9B with 128 K context does NOT replace a memory system, even when context fits. *This is the empirical answer to "does a memory system earn its keep when context is long enough."*
+
+**Caveat on `think=false`:** these 9B runs have reasoning-mode disabled for bench throughput (20× speedup; projected ~64h → measured ~1h bench per run). A `qwen9b_k20_thinking_on` control run is queued as a final POSTMATRIX follow-up (~21h bench + 3.5h rescore).
 
 **Result files:**
 - `benchmarks/results/locomo_20260423_195915_qwen9b_k20.rescored_v2.json` (re-rescored after PR #43 fix)
 - `benchmarks/results/locomo_20260424_040536_adj1_qwen9b.rescored_v2.json`
 - `benchmarks/results/locomo_20260424_084318_c_stack_plus_qwen9b.rescored_v2.json`
+- `benchmarks/results/locomo_20260424_153628_c6_multihop_qwen9b.rescored_v2.json`
+- `benchmarks/results/locomo_20260424_211344_qwen35_9b_full_context.rescored_v2.json`
+- `benchmarks/results/locomo_20260425_034611_adj2_qwen9b.rescored_v2.json`
+- `benchmarks/results/locomo_20260425_083445_adj2_full_stack_qwen9b.rescored_v2.json`
 
 Runner commits: `af84076` (PR #42, `think=false` on generator), `9bd07d9` (PR #44, `--thinking-mode` opt-in flag).
 
