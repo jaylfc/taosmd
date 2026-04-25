@@ -138,7 +138,9 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 ## Benchmark Results
 
-**97.0% end-to-end Judge accuracy on LongMemEval-S** (500 questions, standard test set). Harness: `benchmarks/longmemeval_runner.py`. Methodology notes and comparison against other published systems: [docs/benchmarks.md](docs/benchmarks.md).
+**97.0% end-to-end Judge accuracy on LongMemEval-S** (500 questions, standard test set). Harness: `benchmarks/longmemeval_runner.py`.
+
+See [docs/benchmarks.md](docs/benchmarks.md) for the full LongMemEval-S breakdown, the LoCoMo (1540-QA multi-session) measurements with retrieval-architecture ablations, methodology, and per-hardware-tier configuration recommendations (12 GB GPU, Orange Pi NPU, RPi 4, low-end GPU).
 
 ### Per-Category Breakdown
 
