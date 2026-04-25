@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import re
 import subprocess
@@ -314,20 +315,63 @@ def _load_reranker(reranker_choice: str) -> object | None:
         return CrossEncoderReranker(onnx_path=onnx_path)
 
     if reranker_choice == "bge-v2-m3":
+        # CrossEncoderReranker is generic — it loads any HF cross-encoder via
+        # ONNX + AutoTokenizer from the model dir. BGE-v2-m3 is a 568M XLM-R
+        # cross-encoder; same input/output shape as ms-marco-MiniLM, just
+        # multilingual and stronger. Drop-in.
+        from taosmd.cross_encoder import CrossEncoderReranker
         bge_path = os.path.join(_REPO_ROOT, "models", "bge-reranker-v2-m3-onnx")
         if not Path(bge_path).exists():
             raise FileNotFoundError(
                 f"BGE reranker model not found at {bge_path}.\n"
                 "Pull it with:\n"
-                "  huggingface-cli download BAAI/bge-reranker-v2-m3 "
+                "  hf download BAAI/bge-reranker-v2-m3 "
                 f"--local-dir {bge_path}"
             )
-        raise NotImplementedError(
-            "bge-v2-m3 reranker: model directory found but ONNX integration "
-            "is not yet wired up. Use --reranker ms-marco or --reranker off."
-        )
+        return CrossEncoderReranker(onnx_path=bge_path)
 
     raise ValueError(f"Unknown reranker choice: {reranker_choice!r}")
+
+
+def _apply_temporal_recency_boost(
+    hits: list[dict], turn_index: dict[str, dict], decay_lambda: float = 0.02
+) -> list[dict]:
+    """Multiply each hit's score by an exponential recency factor.
+
+    The boost biases retrieval toward later turns within a conversation, on the
+    hypothesis that LoCoMo questions disproportionately reference the most
+    recent state of an entity (e.g. "what does Alice think about X *now*").
+
+    decay_lambda controls how aggressive the bias is. With turn indices
+    spanning ~600 turns and lambda=0.02, the oldest turn's score is multiplied
+    by exp(-12) ≈ 6e-6 — effectively dropped — while turns within ~50 of the
+    most recent are scored at >0.37 of their original.
+
+    No-op when turn_index is empty (e.g. ingest didn't populate it).
+    """
+    if not turn_index or not hits:
+        return hits
+    max_idx = max(int(k) for k in turn_index)
+    boosted = []
+    for h in hits:
+        meta = h.get("metadata", {}) or {}
+        idx = meta.get("turn_idx")
+        if idx is None:
+            boosted.append(h)
+            continue
+        try:
+            idx_int = int(idx)
+        except (ValueError, TypeError):
+            boosted.append(h)
+            continue
+        age = max_idx - idx_int
+        factor = math.exp(-decay_lambda * age)
+        new_h = dict(h)
+        new_h["score"] = h.get("score", 0.0) * factor
+        new_h["recency_factor"] = round(factor, 4)
+        boosted.append(new_h)
+    boosted.sort(key=lambda r: r.get("score", 0.0), reverse=True)
+    return boosted
 
 
 async def _decompose_query(
@@ -393,6 +437,7 @@ async def _process_qa(
     multihop_decompose: bool,
     full_context: bool,
     thinking_mode: bool,
+    temporal_boost: float,
     turn_index: dict[str, dict],
 ) -> dict | None:
     if "answer" not in qa:
@@ -450,6 +495,13 @@ async def _process_qa(
             hits = all_hits[:retrieval_top_k]
         else:
             hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker)
+
+        # Optional temporal-recency boost — re-rank hits with an exponential
+        # decay over turn-index age. Applied AFTER retrieval/rerank so the
+        # cross-encoder's relevance signal stays the primary axis but
+        # break-ties favour later turns.
+        if temporal_boost and temporal_boost > 0.0:
+            hits = _apply_temporal_recency_boost(hits, turn_index, temporal_boost)
 
         retrieval_ms = (time.time() - t0) * 1000.0
 
@@ -584,6 +636,7 @@ async def run(args: argparse.Namespace) -> int:
                     multihop_decompose=args.multihop_decompose,
                     full_context=args.full_context,
                     thinking_mode=args.thinking_mode,
+                    temporal_boost=args.temporal_boost,
                     turn_index=turn_index,
                 )
             except Exception as e:
@@ -651,6 +704,7 @@ async def run(args: argparse.Namespace) -> int:
         "multihop_decompose": args.multihop_decompose,
         "full_context": args.full_context,
         "thinking_mode": args.thinking_mode,
+        "temporal_boost": args.temporal_boost,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -752,6 +806,13 @@ def _parse_args() -> argparse.Namespace:
                         "Slow — expect ~150s per call vs ~5s with thinking "
                         "off — but useful to test whether chain-of-thought "
                         "improves answer quality. Default off.")
+    p.add_argument("--temporal-boost", type=float, default=0.0,
+                   metavar="LAMBDA",
+                   help="Apply exponential recency decay to retrieval scores "
+                        "after vector + cross-encoder ranking. LAMBDA is the "
+                        "decay rate per turn-index age (0.0 disables, 0.02 "
+                        "down-weights the oldest turn in a 600-turn convo by "
+                        "~6e-6, 0.005 by ~0.05). Default 0.0.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
