@@ -176,13 +176,21 @@ def _session_keys(conversation: dict) -> list[tuple[str, str]]:
 
 
 async def _ingest_conversation(
-    vmem: VectorMemory, conv: dict
+    vmem: VectorMemory, conv: dict, multi_level: bool = False,
 ) -> tuple[int, float, dict[str, dict]]:
     """Ingest conversation turns into vmem.
 
     Returns (added_count, elapsed_s, turn_index) where turn_index maps a
     sequential turn index (across all sessions) to its metadata dict, for use
     with --adjacent-turns.
+
+    When multi_level=True, also ingests two additional retrieval levels:
+      - session_summary entries (Episode-level, ~300-char narrative per session)
+      - event_summary entries (Fact-level, structured per-speaker events)
+    Both come pre-computed from the LoCoMo dataset — no LLM cost. The vmem's
+    RRF fusion at retrieval naturally surfaces whichever level is most
+    relevant for a given question. Equivalent to HyperMem's coarse-to-fine
+    Topic/Episode/Fact hierarchy without the LLM-driven construction.
     """
     conversation = conv.get("conversation", conv)
     t0 = time.time()
@@ -204,6 +212,7 @@ async def _ingest_conversation(
                     "datetime": dt,
                     "speaker": speaker,
                     "turn_idx": global_idx,
+                    "level": "turn",
                 },
             )
             turn_index[str(global_idx)] = {
@@ -214,6 +223,51 @@ async def _ingest_conversation(
             }
             global_idx += 1
             added += 1
+
+    if multi_level:
+        # Episode level — session_summary entries.
+        sess_summaries = conv.get("session_summary") or {}
+        for key, summary_text in sess_summaries.items():
+            if not summary_text:
+                continue
+            session_id = key.replace("_summary", "")  # e.g. session_1
+            dt = conversation.get(f"{session_id}_date_time", "")
+            await vmem.add(
+                f"[session-summary {session_id}] {summary_text}",
+                metadata={
+                    "session": session_id,
+                    "datetime": dt,
+                    "level": "session_summary",
+                },
+            )
+            added += 1
+
+        # Fact level — event_summary entries (per-speaker events).
+        event_summaries = conv.get("event_summary") or {}
+        for key, events_dict in event_summaries.items():
+            if not isinstance(events_dict, dict):
+                continue
+            session_id = key.replace("events_", "")  # events_session_1 -> session_1
+            event_date = events_dict.get("date", "")
+            for speaker, events in events_dict.items():
+                if speaker == "date" or not events:
+                    continue
+                if isinstance(events, str):
+                    events = [events]
+                for event_text in events:
+                    if not event_text:
+                        continue
+                    await vmem.add(
+                        f"[event {session_id}] {speaker}: {event_text}",
+                        metadata={
+                            "session": session_id,
+                            "datetime": event_date,
+                            "speaker": speaker,
+                            "level": "event",
+                        },
+                    )
+                    added += 1
+
     return added, time.time() - t0, turn_index
 
 
@@ -668,7 +722,9 @@ async def run(args: argparse.Namespace) -> int:
                 onnx_path=args.onnx_path,
             )
             await vmem.init(http_client=client)
-            added, ingest_s, turn_index = await _ingest_conversation(vmem, conv)
+            added, ingest_s, turn_index = await _ingest_conversation(
+                vmem, conv, multi_level=args.multi_level_retrieval
+            )
             print(f"[{conv_id}] ingested {added} turns in {ingest_s:.1f}s", flush=True)
 
             # Pick eligible QAs up-front. --per-conv-limit caps QAs per
@@ -712,6 +768,7 @@ async def run(args: argparse.Namespace) -> int:
         "thinking_mode": args.thinking_mode,
         "temporal_boost": args.temporal_boost,
         "fusion": args.fusion,
+        "multi_level_retrieval": args.multi_level_retrieval,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -828,6 +885,15 @@ def _parse_args() -> argparse.Namespace:
                         "ranked lists (the 2026 LoCoMo recipe — already implemented "
                         "in VectorMemory.search but never invoked from the bench).\n"
                         "  none: pure semantic cosine (MemPalace-equivalent).")
+    p.add_argument("--multi-level-retrieval", action="store_true",
+                   help="Ingest three levels into vmem instead of one: raw turns "
+                        "(default), session_summary entries (Episode-level, "
+                        "narrative summaries pre-computed in the LoCoMo dataset), "
+                        "and event_summary entries (Fact-level, per-speaker events). "
+                        "RRF fusion at retrieval naturally surfaces the most "
+                        "relevant level. HyperMem-inspired (arxiv:2604.08256) "
+                        "but reuses LoCoMo's pre-computed summaries — zero LLM "
+                        "ingest cost.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
