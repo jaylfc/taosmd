@@ -404,9 +404,13 @@ async def _retrieve(
     vmem: VectorMemory,
     top_k: int,
     reranker: object | None = None,
+    fusion: str = "boost",
 ) -> list[dict]:
     if strategy == "vector-only":
-        raw = await vmem.search(query, limit=top_k)
+        # fusion: "boost" (default, legacy additive keyword boost) | "rrf"
+        # (Reciprocal Rank Fusion across semantic + keyword) | "none" (pure
+        # semantic cosine). The fusion logic lives in VectorMemory.search.
+        raw = await vmem.search(query, limit=top_k, fusion=fusion)
         hits = [{"text": r["text"], "metadata": r.get("metadata", {}),
                  "score": r.get("similarity", 0.0)} for r in raw]
         if reranker is not None and getattr(reranker, "available", False):
@@ -438,6 +442,7 @@ async def _process_qa(
     full_context: bool,
     thinking_mode: bool,
     temporal_boost: float,
+    fusion: str,
     turn_index: dict[str, dict],
 ) -> dict | None:
     if "answer" not in qa:
@@ -485,7 +490,7 @@ async def _process_qa(
             seen_texts: set[str] = set()
             all_hits: list[dict] = []
             for sq in sub_queries:
-                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker)
+                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker, fusion=fusion)
                 for h in sq_hits:
                     t = h.get("text", "")
                     if t not in seen_texts:
@@ -494,7 +499,7 @@ async def _process_qa(
             # Cap at retrieval_top_k, preserving order
             hits = all_hits[:retrieval_top_k]
         else:
-            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker)
+            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion)
 
         # Optional temporal-recency boost — re-rank hits with an exponential
         # decay over turn-index age. Applied AFTER retrieval/rerank so the
@@ -637,6 +642,7 @@ async def run(args: argparse.Namespace) -> int:
                     full_context=args.full_context,
                     thinking_mode=args.thinking_mode,
                     temporal_boost=args.temporal_boost,
+                    fusion=args.fusion,
                     turn_index=turn_index,
                 )
             except Exception as e:
@@ -705,6 +711,7 @@ async def run(args: argparse.Namespace) -> int:
         "full_context": args.full_context,
         "thinking_mode": args.thinking_mode,
         "temporal_boost": args.temporal_boost,
+        "fusion": args.fusion,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -813,6 +820,14 @@ def _parse_args() -> argparse.Namespace:
                         "decay rate per turn-index age (0.0 disables, 0.02 "
                         "down-weights the oldest turn in a 600-turn convo by "
                         "~6e-6, 0.005 by ~0.05). Default 0.0.")
+    p.add_argument("--fusion", choices=["boost", "rrf", "none"], default="boost",
+                   help="Vector + keyword fusion mode (vector-only strategy):\n"
+                        "  boost: legacy additive keyword boost (0.3 * overlap, our "
+                        "current default in the matrix runs).\n"
+                        "  rrf: Reciprocal Rank Fusion across semantic + keyword "
+                        "ranked lists (the 2026 LoCoMo recipe — already implemented "
+                        "in VectorMemory.search but never invoked from the bench).\n"
+                        "  none: pure semantic cosine (MemPalace-equivalent).")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
