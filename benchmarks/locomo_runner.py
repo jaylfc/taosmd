@@ -67,6 +67,12 @@ MULTIHOP_PROMPT = """Split this question into 2 or 3 shorter, focused sub-querie
 
 Question: {question}"""
 
+HYDE_PROMPT = """You are imagining what a relevant memory might look like for the following question. Write a single 1-2 sentence passage that, if found in a conversation log, would directly answer this question. Be concrete with names, dates, and details — invent plausible specifics. Just the passage, no preamble or hedging.
+
+Question: {question}
+
+Hypothetical passage:"""
+
 _PUNCT = re.compile(r"[^\w\s]")
 
 
@@ -497,6 +503,7 @@ async def _process_qa(
     thinking_mode: bool,
     temporal_boost: float,
     fusion: str,
+    hyde: bool,
     turn_index: dict[str, dict],
 ) -> dict | None:
     if "answer" not in qa:
@@ -536,6 +543,27 @@ async def _process_qa(
                     retrieval_query = reformulations[0]
             except Exception:
                 pass  # fall through to original question
+
+        # --- optional HyDE (Hypothetical Document Embeddings) ---
+        # Gao et al. 2022. Ask the generator for a hypothetical 1-2 sentence
+        # passage that *would* answer the question; embed THAT instead of the
+        # question. Embedding-space match against the corpus is closer than
+        # Q-to-A. One extra LLM call (~5s with think=false on 9B). Composes
+        # with llm_query_expansion (HyDE replaces retrieval_query whether it
+        # was already expanded or not).
+        if hyde:
+            try:
+                hypothetical = await _ollama_generate(
+                    client, ollama_url, model,
+                    HYDE_PROMPT.format(question=question),
+                    temperature=0.3,
+                    thinking_mode=thinking_mode,
+                )
+                hypothetical = hypothetical.strip()
+                if hypothetical:
+                    retrieval_query = hypothetical
+            except Exception:
+                pass  # fall through
 
         t0 = time.time()
 
@@ -697,6 +725,7 @@ async def run(args: argparse.Namespace) -> int:
                     thinking_mode=args.thinking_mode,
                     temporal_boost=args.temporal_boost,
                     fusion=args.fusion,
+                    hyde=args.hyde,
                     turn_index=turn_index,
                 )
             except Exception as e:
@@ -769,6 +798,7 @@ async def run(args: argparse.Namespace) -> int:
         "temporal_boost": args.temporal_boost,
         "fusion": args.fusion,
         "multi_level_retrieval": args.multi_level_retrieval,
+        "hyde": args.hyde,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -894,6 +924,15 @@ def _parse_args() -> argparse.Namespace:
                         "relevant level. HyperMem-inspired (arxiv:2604.08256) "
                         "but reuses LoCoMo's pre-computed summaries — zero LLM "
                         "ingest cost.")
+    p.add_argument("--hyde", action="store_true",
+                   help="HyDE (Hypothetical Document Embeddings, Gao et al. 2022). "
+                        "Before retrieval, ask the generator to write a 1-2 "
+                        "sentence hypothetical answer with concrete details. "
+                        "Embed THAT instead of the question — embedding-space "
+                        "match against the corpus is closer than Q-to-A. One "
+                        "extra LLM call per question (~5s with think=false on "
+                        "9B). Composes with --llm-query-expansion (HyDE wins "
+                        "if both are set).")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
