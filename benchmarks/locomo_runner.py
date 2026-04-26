@@ -137,15 +137,27 @@ def _bleu1(pred: str, ref: str) -> float:
 
 async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
                            prompt: str, temperature: float = 0.2,
-                           thinking_mode: bool = False) -> str:
-    # Default: think=false disables reasoning mode on Qwen3/3.5/3.6 generators
-    # (10-20x faster; hidden reasoning adds no visible content but bills full
-    # generation time). Set thinking_mode=True (via --thinking-mode on the CLI)
-    # to measure whether reasoning-on improves answer quality. Slow — expect
-    # ~150s per call vs ~5s with thinking off.
-    payload = {"model": model, "prompt": prompt, "stream": False,
+                           thinking_mode: bool = False,
+                           no_think_prefix: bool = False) -> str:
+    # Three thinking-suppression modes — choose one per generator:
+    #
+    #   default (no flag): passes think=false in JSON. Works on qwen3.5:9b
+    #     (20x speedup, response is the answer only). BROKEN on qwen3:4b /
+    #     qwen3:1.7b — Ollama's chat template treats think=false as INVERTED
+    #     on those models so the visible response becomes verbose CoT that
+    #     never finalises within timeout.
+    #
+    #   --no-think-prefix: prepends "/no_think\n\n" to the prompt and does
+    #     NOT pass think=false. Works on qwen3:4b/1.7b — terse final answer.
+    #     Slower than think=false on qwen3.5:9b but still produces a clean
+    #     answer; use only when the default is broken on the target model.
+    #
+    #   --thinking-mode: neither — model emits reasoning in the response.
+    #     Slow; tests whether chain-of-thought changes answer quality.
+    payload_prompt = ("/no_think\n\n" + prompt) if no_think_prefix else prompt
+    payload = {"model": model, "prompt": payload_prompt, "stream": False,
                "options": {"temperature": temperature}}
-    if not thinking_mode:
+    if not thinking_mode and not no_think_prefix:
         payload["think"] = False
     resp = await client.post(f"{url}/api/generate", json=payload)
     resp.raise_for_status()
@@ -501,6 +513,7 @@ async def _process_qa(
     multihop_decompose: bool,
     full_context: bool,
     thinking_mode: bool,
+    no_think_prefix: bool,
     temporal_boost: float,
     fusion: str,
     hyde: bool,
@@ -558,6 +571,7 @@ async def _process_qa(
                     HYDE_PROMPT.format(question=question),
                     temperature=0.3,
                     thinking_mode=thinking_mode,
+                    no_think_prefix=no_think_prefix,
                 )
                 hypothetical = hypothetical.strip()
                 if hypothetical:
@@ -603,6 +617,7 @@ async def _process_qa(
             client, ollama_url, model,
             ANSWER_PROMPT.format(context=context, question=question),
             thinking_mode=thinking_mode,
+            no_think_prefix=no_think_prefix,
         )
     except Exception as exc:
         predicted = f"[generation_error: {exc}]"
@@ -723,6 +738,7 @@ async def run(args: argparse.Namespace) -> int:
                     multihop_decompose=args.multihop_decompose,
                     full_context=args.full_context,
                     thinking_mode=args.thinking_mode,
+                    no_think_prefix=args.no_think_prefix,
                     temporal_boost=args.temporal_boost,
                     fusion=args.fusion,
                     hyde=args.hyde,
@@ -799,6 +815,7 @@ async def run(args: argparse.Namespace) -> int:
         "fusion": args.fusion,
         "multi_level_retrieval": args.multi_level_retrieval,
         "hyde": args.hyde,
+        "no_think_prefix": args.no_think_prefix,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -933,6 +950,15 @@ def _parse_args() -> argparse.Namespace:
                         "extra LLM call per question (~5s with think=false on "
                         "9B). Composes with --llm-query-expansion (HyDE wins "
                         "if both are set).")
+    p.add_argument("--no-think-prefix", action="store_true",
+                   help="Prepend '/no_think\\n\\n' to every generator prompt and "
+                        "DO NOT pass think=false in the JSON. Workaround for "
+                        "Ollama qwen3:4b / qwen3:1.7b where think=false has "
+                        "INVERTED semantics (keeps thinking enabled, response "
+                        "becomes verbose CoT). For those models, /no_think "
+                        "prefix is the real off-switch. Slightly slower than "
+                        "think=false on qwen3.5:9b — only set when default "
+                        "is broken on the target model.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
