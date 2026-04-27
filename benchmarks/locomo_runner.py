@@ -67,6 +67,35 @@ MULTIHOP_PROMPT = """Split this question into 2 or 3 shorter, focused sub-querie
 
 Question: {question}"""
 
+# Few-shot exemplars — synthetic (no LoCoMo overlap), one per question category,
+# each demonstrating the expected terse-answer format.
+FEW_SHOT_EXAMPLES = """Example 1:
+Context:
+[3:14 pm on 2 March, 2024] [Alex] Started my new job at Stripe last week as a software engineer.
+[3:15 pm on 2 March, 2024] [Sam] Congrats! Big move from finance.
+
+Question: What is Alex's current job?
+Answer: Software engineer at Stripe.
+
+Example 2:
+Context:
+[10:22 am on 12 March, 2024] [Bob] Just landed in Tokyo for the conference.
+[6:48 pm on 14 March, 2024] [Alice] How was Tokyo?
+[6:50 pm on 14 March, 2024] [Bob] Got back yesterday, jet-lagged but inspired.
+
+Question: When did Bob travel to Tokyo?
+Answer: 12 March, 2024.
+
+Example 3:
+Context:
+[8:00 am on 5 January, 2024] [Carol] First day at Stanford grad school today.
+[7:30 pm on 5 January, 2024] [Carol] Marine biology classes are intense already.
+
+Question: What is Carol studying and where?
+Answer: Marine biology at Stanford.
+
+"""
+
 HYDE_PROMPT = """You are imagining what a relevant memory might look like for the following question. Write a single 1-2 sentence passage that, if found in a conversation log, would directly answer this question. Be concrete with names, dates, and details — invent plausible specifics. Just the passage, no preamble or hedging.
 
 Question: {question}
@@ -517,6 +546,7 @@ async def _process_qa(
     temporal_boost: float,
     fusion: str,
     hyde: bool,
+    few_shot: bool,
     turn_index: dict[str, dict],
 ) -> dict | None:
     if "answer" not in qa:
@@ -613,9 +643,12 @@ async def _process_qa(
 
     t1 = time.time()
     try:
+        answer_prompt = ANSWER_PROMPT.format(context=context, question=question)
+        if few_shot:
+            answer_prompt = FEW_SHOT_EXAMPLES + answer_prompt
         predicted = await _ollama_generate(
             client, ollama_url, model,
-            ANSWER_PROMPT.format(context=context, question=question),
+            answer_prompt,
             thinking_mode=thinking_mode,
             no_think_prefix=no_think_prefix,
         )
@@ -742,6 +775,7 @@ async def run(args: argparse.Namespace) -> int:
                     temporal_boost=args.temporal_boost,
                     fusion=args.fusion,
                     hyde=args.hyde,
+                    few_shot=args.few_shot,
                     turn_index=turn_index,
                 )
             except Exception as e:
@@ -816,6 +850,7 @@ async def run(args: argparse.Namespace) -> int:
         "multi_level_retrieval": args.multi_level_retrieval,
         "hyde": args.hyde,
         "no_think_prefix": args.no_think_prefix,
+        "few_shot": args.few_shot,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -959,6 +994,14 @@ def _parse_args() -> argparse.Namespace:
                         "prefix is the real off-switch. Slightly slower than "
                         "think=false on qwen3.5:9b — only set when default "
                         "is broken on the target model.")
+    p.add_argument("--few-shot", action="store_true",
+                   help="Prepend 3 synthetic example QA pairs (one per "
+                        "category — single-hop, temporal, multi-hop) before "
+                        "the actual context+question, demonstrating the "
+                        "expected terse-answer format. Examples are "
+                        "synthetic (no LoCoMo overlap, no test-set leakage). "
+                        "~250 token prompt tax per QA. Known to lift small "
+                        "instruction-tuned models +0.02-0.04 on factual QA.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
