@@ -55,10 +55,15 @@ Harness: [`benchmarks/locomo_runner.py`](../benchmarks/locomo_runner.py). Rescor
 
 | System | Generator | Retrieval config | Ext Judge | Notes |
 |---|---|---|---|---|
-| **taosmd** | qwen3.5:9b | adj=2 | **0.516** | **leader — simplest config that wins** |
-| **taosmd** | qwen3.5:9b | k=20 + adj=1 + llm-exp | 0.509 | full stack on 9B — matches Letta/LangMem/OpenAI-memory band (who use gpt-4o-mini) |
+| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF | **0.557** | **leader — full stack with RRF fusion** |
+| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp | 0.545 | previous leader (no RRF) |
+| **taosmd** | qwen3.5:9b | adj=3 | 0.532 | broader context window |
+| **taosmd** | qwen3.5:9b | adj=2 + multi-level retrieval | 0.524 | turns + summaries + events |
+| **taosmd** | qwen3.5:9b | adj=2 + BGE-v2-m3 reranker | 0.522 | stronger cross-encoder, marginal lift at this tier |
+| **taosmd** | qwen3.5:9b | adj=2 | 0.516 | simplest 9B leader |
+| **taosmd** | qwen3.5:9b | k=20 + adj=1 + llm-exp | 0.509 | full stack at adj=1 |
 | **taosmd** | gemma4:e2b | adj=2 | 0.499 | 5B best — same architecture, smaller generator |
-| **taosmd** | qwen3.5:9b | adj=1 | 0.481 | 9B + adj=1 only |
+| **taosmd** | qwen3.5:9b | adj=1 | 0.481 | |
 | **taosmd** | gemma4:e2b | k=20 + adj=1 + llm-exp | 0.482 | 5B stack |
 | **taosmd** | gemma4:e2b | adj=1 (C3) | 0.465 | baseline adjacent-turns win |
 | **taosmd** | gemma4:e2b | baseline (prompt-opt) | 0.410 | reference point |
@@ -76,6 +81,22 @@ All taosmd rows on the same commit series (`feat/locomo-param-configs` merged to
 - **Generator size alone is a weak lever.** qwen3.5:9b + k=20 (0.458) is *worse* than gemma4:e2b + adj=1 (0.465). Doubling parameters gives ≤ +0.005 unless architecture scales with it.
 - **Stacking is adj-dependent at 5B.** At adj=1 + 5B, adding k=20 compounds cleanly (+0.014). At adj=2 + 5B the same k=20 addition *regresses* (-0.022). Context token budget has a sweet spot at this tier.
 - **Date-format swap and LLM query expansion** are marginal in the presence of adj=1.
+
+### Architecture matters more at smaller compute tiers
+
+The same retrieval improvement, applied to two generators on identical hardware-class infrastructure, can lift the smaller-model tier by an order of magnitude more than the larger-model tier:
+
+| Improvement | At qwen3.5:9b (Fedora 12 GB GPU) | At qwen3-4b-chat RKLLM (Orange Pi NPU) | Ratio |
+|---|---|---|---|
+| **BGE-reranker-v2-m3 swap** | +0.006 (0.516 → 0.522) | **+0.074** (0.382 → 0.456) | **~12×** |
+| **Multi-level retrieval + RRF** | ~flat (mid-flight) | +0.043 (0.382 → 0.425) | meaningful |
+| **HyDE** | (pending) | -0.057 — *regression* on small generators | n/a |
+
+The interpretation: smaller in-weight knowledge means the generator depends more on retrieval quality. A stronger cross-encoder gives the 4 B model on the Pi NPU much more useful candidates than its baseline already retrieves; the 9 B model on the 12 GB GPU was already doing fine on the simpler reranker. This is the architectural argument for why a "memory system designed for SBC-class hardware" is worth building, not just a port of the cloud-tier system at lower precision.
+
+Same dataset (LoCoMo-10), same external `qwen3:4b` judge, same answer prompt across both tiers.
+
+HyDE is an interesting opposite signal: small generators write *worse* hypothetical passages than the question itself contains, so embedding-match against the corpus degrades. HyDE's "imagine the answer" trick assumes a generator strong enough to imagine well — small models don't qualify.
 
 ### Retrieval is essential — even at long-context scale
 
@@ -135,7 +156,24 @@ This is the LoCoMo benchmark host. All numbers in the LoCoMo leaderboard above w
 - **Judge (when running benchmarks)**: `qwen3:4b` (Q4 ~5 GB VRAM). Default thinking mode (do **not** pass `think=false` — it's an Ollama bug on qwen3:4b that exposes reasoning in the response and corrupts judge parsing).
 - **Concurrency**: 3 with gemma, 2 with qwen3.5:9b. Higher concurrency benefits from `OLLAMA_NUM_PARALLEL=3`.
 
-### 16 GB Orange Pi 5 Plus (RK3588 NPU) — partially measured
+### 16 GB Orange Pi 5 Plus (RK3588 NPU) — measured
+
+Both LongMemEval-S 97.0% reference stack AND LoCoMo measurements now exist on this tier. Same external `qwen3:4b` judge as the 12 GB benchmarks → directly comparable.
+
+LoCoMo measurements (qwen3-4b-chat via rkllama on the NPU, all with `--adjacent-turns 2`):
+
+| Config | Ext Judge | Δ vs Pi baseline (0.382) |
+|---|---|---|
+| **adj=2 + BGE-reranker-v2-m3** | **0.456** | **+0.074** |
+| adj=2 + multi-level retrieval + RRF | 0.425 | +0.043 |
+| adj=2 (baseline) | 0.382 | — |
+| adj=2 + HyDE | 0.325 | -0.057 (HyDE regresses on small generators) |
+
+The +0.074 BGE-v2-m3 lift on this tier is ~12× the lift the same swap gives on the 12 GB GPU at qwen3.5:9b — see the "Architecture matters more at smaller compute tiers" finding above.
+
+Practical operational notes (learned the hard way): use the official ≥4 A USB-C PSU and active cooling under sustained inference workloads. The combined NPU + CPU + co-tenant load (e.g. running scrypted on the same Pi) will overdraw a stock charger and cause silent power-related kernel hangs after many hours of continuous load. Use the Pi as a dedicated AI worker if you can — co-tenant services should ideally run on a separate machine.
+
+
 
 This is the LongMemEval-S 97.0% reference stack. LoCoMo on this hardware is **not yet measured** (planned).
 
