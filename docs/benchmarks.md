@@ -59,6 +59,8 @@ Harness: [`benchmarks/locomo_runner.py`](../benchmarks/locomo_runner.py). Rescor
 | **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp | 0.545 | previous leader (no RRF) |
 | **taosmd** | qwen3.5:9b | adj=3 | 0.532 | broader context window |
 | **taosmd** | qwen3.5:9b | adj=2 + multi-level retrieval | 0.524 | turns + summaries + events |
+| **taosmd** | qwen3.5:9b | adj=2 + RRF only | 0.500 | RRF without scaffolding regresses at 9B |
+| **taosmd** | qwen3.5:9b | adj=2 + multi-level + RRF | 0.495 | negative interaction without k=20 scaffolding |
 | **taosmd** | qwen3.5:9b | adj=2 + BGE-v2-m3 reranker | 0.522 | stronger cross-encoder, marginal lift at this tier |
 | **taosmd** | qwen3.5:9b | adj=2 | 0.516 | simplest 9B leader |
 | **taosmd** | qwen3.5:9b | k=20 + adj=1 + llm-exp | 0.509 | full stack at adj=1 |
@@ -76,7 +78,7 @@ All taosmd rows on the same commit series (`feat/locomo-param-configs` merged to
 ### Key architectural findings
 
 - **`adjacent_turns` is the dominant lever at every model size we measured.** 5B: adj=1 → 0.465, adj=2 → 0.499. 9B: adj=1 → 0.481, adj=2 → 0.516. Going from adj=1 to adj=2 adds more than the entire stack of `k=20 + llm-exp` adds.
-- **`adj=2` alone at 9B beats the full stack at 9B.** 9B + adj=2 = 0.516; 9B + k=20 + adj=1 + llm-exp = 0.509. The simpler config wins. Earlier "stacking compounds at larger scale" claim revised: adding k=20 and llm-exp on top of adj=2 + 9B is noise, not signal.
+- **At 9B, individual retrieval levers need the full-stack scaffolding to express their value.** Adding RRF *alone* on top of adj=2 regresses (0.500 vs 0.516); adding multi-level retrieval *alone* on top of adj=2 helps modestly (0.524); combining the two without k=20 + llm-exp scaffolding is *worse* than either alone (0.495). But the same components inside the full stack — k=20 + adj=2 + llm-exp + RRF — give the leader at 0.557. The wider candidate pool from k=20 is what gives the fusion something useful to merge; without it RRF over-smooths a narrow ranked list.
 - **Multihop decomposition is a footgun across model sizes.** 5B: 0.317 (-0.093 vs baseline). 9B: **0.306** (worse than 5B). Not a sizing issue — sub-query retrieval inherently surfaces lower-quality chunks. **Don't enable `--multihop-decompose` in production.**
 - **Generator size alone is a weak lever.** qwen3.5:9b + k=20 (0.458) is *worse* than gemma4:e2b + adj=1 (0.465). Doubling parameters gives ≤ +0.005 unless architecture scales with it.
 - **Stacking is adj-dependent at 5B.** At adj=1 + 5B, adding k=20 compounds cleanly (+0.014). At adj=2 + 5B the same k=20 addition *regresses* (-0.022). Context token budget has a sweet spot at this tier.
@@ -89,7 +91,7 @@ The same retrieval improvement, applied to two generators on identical hardware-
 | Improvement | At qwen3.5:9b (Fedora 12 GB GPU) | At qwen3-4b-chat RKLLM (Orange Pi NPU) | Ratio |
 |---|---|---|---|
 | **BGE-reranker-v2-m3 swap** | +0.006 (0.516 → 0.522) | **+0.074** (0.382 → 0.456) | **~12×** |
-| **Multi-level retrieval + RRF** | ~flat (mid-flight) | +0.043 (0.382 → 0.425) | meaningful |
+| **Multi-level retrieval + RRF** | -0.021 (0.516 → 0.495, *regresses*) | +0.043 (0.382 → 0.425) | direction-flip |
 | **HyDE** | (pending) | -0.057 — *regression* on small generators | n/a |
 
 The interpretation: smaller in-weight knowledge means the generator depends more on retrieval quality. A stronger cross-encoder gives the 4 B model on the Pi NPU much more useful candidates than its baseline already retrieves; the 9 B model on the 12 GB GPU was already doing fine on the simpler reranker. This is the architectural argument for why a "memory system designed for SBC-class hardware" is worth building, not just a port of the cloud-tier system at lower precision.
