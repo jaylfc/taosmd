@@ -56,7 +56,8 @@ Harness: [`benchmarks/locomo_runner.py`](../benchmarks/locomo_runner.py). Rescor
 | System | Generator | Retrieval config | Ext Judge | Notes |
 |---|---|---|---|---|
 | **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF | **0.557** | **leader — full stack with RRF fusion** |
-| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp | 0.545 | previous leader (no RRF) |
+| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF + multi-level | 0.552 | adding multi-level on top of leader regresses by -0.005 |
+| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp | 0.545 | full stack without RRF |
 | **taosmd** | qwen3.5:9b | adj=3 | 0.532 | broader context window |
 | **taosmd** | qwen3.5:9b | adj=2 + multi-level retrieval | 0.524 | turns + summaries + events |
 | **taosmd** | qwen3.5:9b | adj=2 + RRF only | 0.500 | RRF without scaffolding regresses at 9B |
