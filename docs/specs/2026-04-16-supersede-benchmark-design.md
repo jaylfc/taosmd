@@ -4,11 +4,9 @@
 **Depends on:** Phase A baseline LoCoMo result (so we have a fair comparison)
 **Replaces:** Axis A in `eval/librarian_eval.py` (which flat-lined because the fixtures were synthetic and didn't exercise real temporal conflict)
 
-**2026-04-29 update — pivoted to synthetic dataset.** A 20-question spot-check of LoCoMo cat-2 (temporal) questions found **0 / 20 require supersede-chain disambiguation** — every cat-2 question is a "when did X happen" single-event lookup, not "which X is current" with contradictory facts. LoCoMo doesn't exercise the supersede failure mode at all.
+**2026-04-29 update — pivoted to LongMemEval `knowledge-update` subset.** A 20-question spot-check of LoCoMo cat-2 (temporal) found **0 / 20 require supersede disambiguation** — LoCoMo doesn't exercise the failure mode. *But* a research pass discovered that **LongMemEval-S has a `knowledge-update` category — 78 questions, multi-session dialogue, multiple `answer_session_ids` per QA, license MIT** — that is exactly the supersede shape, and we already run LongMemEval-S at 97.0%. The right benchmark already exists; we just need to filter to KU and add the comparison configs.
 
-Three honest paths considered: (1) defer indefinitely; (2) build proper synthetic fixtures that *actually* exercise the failure mode (Axis A's mistake was the fixture quality, not synthetic-ness itself); (3) keep only the routing benchmark.
-
-Decision: **option 2.** We built supersede chains because we believe they help; we owe ourselves a measurement before claiming users benefit. Below: the methodology to make synthetic fixtures real enough to measure something useful.
+Plan: report KU subset as headline (third-party citation-friendly), keep the synthetic-fixture path as supplementary (covers domains LME-KU might miss). Synthetic supplement is auxiliary, not primary.
 
 ## How this differs from Axis A's failure
 
@@ -45,46 +43,40 @@ These are ready-made supersede scenarios. The dataset already has the temporal g
 | **baseline** | none | `VectorMemory.search` only | none |
 | **full+supersede** | LLM extracts facts into KG, `is_fact_superseded_prompt` runs on conflicting facts to build supersede chains | `retrieve(strategy="thorough", sources={"vector": vmem, "kg": kg})` with KG temporal filters respecting supersede chains | `query_expansion_prompt` per the existing Librarian run |
 
-## Implementation plan (post-pivot)
+## Implementation plan (post-pivot to LongMemEval-KU)
 
-**Phase 1 — fixture generation (~1 day):**
+**Phase 1 — runner (~half day):**
 
-1. Write `benchmarks/supersede_fixtures/generate.py` — uses qwen3.5:9b on Fedora to generate ~80 candidate scenarios (oversample, we'll cull to 50 after review). Each scenario: 4–8 sessions spanning ~3 months, 30+ turns total, one fact that changes mid-conversation, and a question explicitly asking for the *current* state.
-2. Persist to `benchmarks/supersede_fixtures/scenarios.jsonl` with schema:
-   ```
-   {
-     "id": "scn_001",
-     "domain": "jobs",
-     "sessions": [{"date": "2024-03-12", "turns": [{"speaker": "...", "text": "..."}, ...]}, ...],
-     "outdated_fact": "Jay works at Stripe",
-     "current_fact": "Jay works at OpenAI",
-     "question": "Where does Jay currently work?",
-     "answer": "OpenAI"
-   }
-   ```
-3. Manual review pass: I sample-read 20% of generated scenarios and accept/reject. Document the reject criteria so the methodology is reproducible. Reject if: the contradiction is implausible, the answer is given in the same session as the question, or the surrounding turns trivially contain the answer.
+Fork `benchmarks/longmemeval_runner.py` → `benchmarks/longmemeval_ku_runner.py`. Key differences:
 
-**Phase 2 — runner (~1 day):**
+- Filter to `question_type == "knowledge-update"` only (78 of 500 questions).
+- Three configs to compare:
+  - `baseline-vector`: `VectorMemory.search` only — what we measure today.
+  - `vector+kg`: ingest with `process_conversation_turn` to populate KG, retrieve via `retrieve(strategy="thorough", sources={"vector": vmem, "kg": kg})` *without* supersede edge traversal.
+  - `full+supersede`: same as vector+kg, but with `is_fact_superseded_prompt` run on conflicting facts at ingest time, and retrieval respects supersede edges (returns *only* the latest fact in a chain, or marks the older one explicitly).
+- External judge via `locomo_rescore_streaming.py` with `qwen3:4b` (same as LoCoMo).
+- Track supersede-specific metrics on top of F1 + LLM-Judge:
+  - `current_hit_rate`: fraction where retrieval surfaced the *current* fact (most recent answer_session_id chain endpoint).
+  - `outdated_only_rate`: fraction where retrieval *only* surfaced the older fact (the failure mode we're catching).
+  - `chain_traversal_count`: count of QAs where a supersede edge was consulted at retrieval time.
 
-Fork `benchmarks/locomo_runner.py` → `benchmarks/supersede_runner.py`. Key differences:
+**Phase 2 — run on Fedora (~half day):**
 
-- Ingest path adds KG fact-extraction via `taosmd.memory_extractor.process_conversation_turn` for the `full+supersede` config. ~50 scenarios × ~30 turns × 2-5s extraction = 25-125min total ingest. Acceptable.
-- Three configs to compare: `baseline-vector` (vmem only), `vector+kg` (no supersede chain check, just KG retrieval), `full+supersede` (KG + `is_fact_superseded_prompt` + supersede-aware retrieval).
-- Per-scenario: ingest → ask question → check whether retrieved facts include the **current** fact and *not* the outdated one (or include both with supersede metadata).
-- Metrics: F1 + LLM-Judge as in LoCoMo, plus **supersede-specific metrics**:
-  - `current_hit_rate`: fraction where retrieval surfaced the current fact
-  - `outdated_filter_rate`: fraction where retrieval correctly *excluded* the outdated fact (or marked it as superseded)
-  - `chain_traversal_count`: how often the supersede edge was actually consulted
+78 questions × 3 configs × ~10s/answer = ~40min generation + ~30-60min external rescore (much smaller than full LoCoMo). Slot into the running chain after `kitchen_sink` lands. Output JSON shipped through the existing rescore pipeline.
 
-**Phase 3 — run + analyse (~half day):**
+**Phase 3 — synthetic supplement (optional, ~1 day):**
 
-50 scenarios × 3 configs × ~10s/answer = ~25min generation + ~2-3h external rescore. Output `docs/specs/2026-04-29-supersede-benchmark-results.md` with the methodology disclosed up front.
+If LME-KU shows the supersede mechanism is helping, build a smaller synthetic supplement (~30 cases) covering domains LME-KU might miss (medical history, evolving relationships, possessions changing hands). Reported as auxiliary evidence — third-party LME-KU is the headline, synthetic is the depth-confirmation.
 
-## Success criteria (revised for synthetic dataset)
+If LME-KU shows supersede is *not* helping, the synthetic supplement becomes diagnostic — does it fail because the failure mode doesn't exist in real conversations, or because our mechanism doesn't catch it? The supplement gives us an answer.
 
-**Honest bar:** `full+supersede` must beat `vector+kg` (no supersede check) on `current_hit_rate` by at least **+15 absolute points**. Smaller deltas are noise on a 50-scenario set.
+## Success criteria
 
-**Failure case:** if supersede doesn't beat plain KG retrieval on this construct-to-test fixture set, the supersede mechanism is either not wired correctly or doesn't add value beyond what raw KG retrieval already provides. Either way, this measurement is the gating evidence — don't claim supersede is a feature in the README until this benchmark passes.
+**Honest bar:** `full+supersede` must beat `vector+kg` on `current_hit_rate` by at least **+10 absolute points** on the 78-question KU subset. Smaller deltas are within noise on this sample size.
+
+**Headline number for the README:** LongMemEval-S `knowledge-update` external-Judge accuracy under `full+supersede`, alongside the 97.0% overall LME-S number. Citation: LongMemEval (Wu et al., ICLR 2025), arxiv 2410.10813.
+
+**Failure case:** if supersede doesn't beat plain KG retrieval on the LME-KU subset, the mechanism is either not wired correctly, not surfacing the right facts at retrieval, or not actually needed (KG retrieval alone might already disambiguate by recency-of-extraction). In any failure case: do NOT claim supersede is a feature in the README until we either fix the mechanism or pivot the claim ("we use a KG with temporal ordering" rather than "we use supersede chains").
 
 ## What needs to exist before this is runnable
 
