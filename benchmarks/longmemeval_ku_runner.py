@@ -42,7 +42,7 @@ import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from taosmd.archive_store import ArchiveStore  # noqa: E402
+from taosmd.archive import ArchiveStore  # noqa: E402
 from taosmd.knowledge_graph import TemporalKnowledgeGraph  # noqa: E402
 from taosmd.memory_extractor import process_conversation_turn  # noqa: E402
 from taosmd.vector_memory import VectorMemory  # noqa: E402
