@@ -203,6 +203,7 @@ async def process_conversation_turn(
     llm_url: str = "",
     http_client=None,
     use_llm: bool = True,
+    auto_resolve_contradictions: bool = True,
 ) -> dict:
     """Extract facts from a conversation turn and store in the KG.
 
@@ -237,13 +238,16 @@ async def process_conversation_turn(
 
     for fact in facts:
         try:
-            # Use contradiction-aware insertion for singular predicates
+            # Use contradiction-aware insertion for singular predicates.
+            # auto_resolve_contradictions=True (default): older contradicting
+            # triples get superseded — supersede chains form. False: facts
+            # coexist; ablation needed to measure whether supersede helps.
             result = await kg.add_triple_with_contradiction_check(
                 subject=fact["subject"],
                 predicate=fact["predicate"],
                 obj=fact["object"],
                 source=f"{source}:{agent_name or 'user'}",
-                auto_resolve=True,
+                auto_resolve=auto_resolve_contradictions,
             )
             triple_ids.append(result["triple_id"])
             contradictions += result["contradictions_resolved"]
