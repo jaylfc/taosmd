@@ -80,7 +80,7 @@ async def _ingest_session(
     session_turns: list[dict], session_idx: int,
     vmem: VectorMemory, kg: TemporalKnowledgeGraph | None,
     archive: ArchiveStore | None, llm_url: str, http_client,
-    config: str,
+    config: str, extraction_model: str = "default",
 ):
     """Ingest one session's turns into vmem (always) + KG (configs 2, 3)."""
     session_text = ""
@@ -103,6 +103,7 @@ async def _ingest_session(
                 http_client=http_client,
                 use_llm=True,
                 auto_resolve_contradictions=(config == "full+supersede"),
+                extraction_model=extraction_model,
             )
 
     # Vector ingest — chunk session into ~100-word segments
@@ -176,7 +177,8 @@ async def _retrieve_context(
 
 
 async def run_one_question(item: dict, config: str, model: str,
-                           ollama_url: str, http_client) -> dict:
+                           ollama_url: str, http_client,
+                           extraction_model: str = "default") -> dict:
     """Process one KU question end-to-end. Returns a result dict."""
     question = item["question"]
     gold = item["answer"]
@@ -208,7 +210,8 @@ async def run_one_question(item: dict, config: str, model: str,
     t0 = time.time()
     for si, session in enumerate(sessions):
         await _ingest_session(session, si, vmem, kg, archive,
-                              ollama_url, http_client, config)
+                              ollama_url, http_client, config,
+                              extraction_model=extraction_model)
     ingest_s = time.time() - t0
 
     # Retrieve and generate
@@ -248,12 +251,14 @@ async def main():
     p.add_argument("--config", choices=["baseline-vector", "vector+kg", "full+supersede"],
                    required=True)
     p.add_argument("--model", default="qwen3.5:9b")
+    p.add_argument("--extraction-model", default="qwen3:4b",
+                   help="Ollama model used for LLM-based fact extraction during KG ingest")
     p.add_argument("--ollama-url", default=os.environ.get("TAOSMD_OLLAMA_URL", "http://localhost:11434"))
     p.add_argument("--limit", type=int, default=0,
                    help="Cap number of KU questions (0 = all 78). For smoke tests.")
     p.add_argument("--out", required=True)
     p.add_argument("--run-id", default="")
-    p.add_argument("--timeout", type=float, default=180.0)
+    p.add_argument("--timeout", type=float, default=600.0)
     args = p.parse_args()
 
     with open(DATA_PATH) as f:
@@ -266,16 +271,6 @@ async def main():
     print(f"config={args.config}  model={args.model}  questions={len(ku)}")
     print()
 
-    results = []
-    async with httpx.AsyncClient(timeout=args.timeout) as client:
-        for i, item in enumerate(ku, 1):
-            r = await run_one_question(item, args.config, args.model, args.ollama_url, client)
-            results.append(r)
-            print(f"[{i}/{len(ku)}] ingest={r['ingest_s']}s gen={r['gen_s']}s "
-                  f"kg_active={r['retrieval']['kg_active_facts']} "
-                  f"kg_superseded={r['retrieval']['kg_superseded_facts']} | "
-                  f"REF: {r['reference'][:60]} | PRED: {r['predicted'][:60]}")
-
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     meta = {
         "benchmark": "longmemeval_knowledge_update",
@@ -283,25 +278,45 @@ async def main():
         "run_id": args.run_id or args.config,
         "timestamp": timestamp,
         "model": args.model,
-        "total_qa": len(results),
+        "total_qa": len(ku),
         "dataset": str(DATA_PATH),
     }
-    out = {
-        "meta": meta,
-        "overall": {
-            "count": len(results),
-            "judge": 0.0,
-            "ingest_s_mean": round(sum(r["ingest_s"] for r in results) / max(len(results), 1), 2),
-            "gen_s_mean": round(sum(r["gen_s"] for r in results) / max(len(results), 1), 2),
-            "kg_superseded_facts_mean": round(
-                sum(r["retrieval"]["kg_superseded_facts"] for r in results) / max(len(results), 1), 2,
-            ),
-        },
-        "results": results,
-    }
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(json.dumps(out, indent=2))
-    print(f"\nwrote {args.out}")
+
+    def _write(results: list[dict]) -> None:
+        out_obj = {
+            "meta": {**meta, "total_qa": len(results)},
+            "overall": {
+                "count": len(results),
+                "judge": 0.0,
+                "ingest_s_mean": round(sum(r["ingest_s"] for r in results) / max(len(results), 1), 2),
+                "gen_s_mean": round(sum(r["gen_s"] for r in results) / max(len(results), 1), 2),
+                "kg_superseded_facts_mean": round(
+                    sum(r["retrieval"]["kg_superseded_facts"] for r in results) / max(len(results), 1), 2,
+                ),
+            },
+            "results": results,
+        }
+        Path(args.out).write_text(json.dumps(out_obj, indent=2))
+
+    results: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=args.timeout) as client:
+            for i, item in enumerate(ku, 1):
+                r = await run_one_question(item, args.config, args.model, args.ollama_url, client,
+                                           extraction_model=args.extraction_model)
+                results.append(r)
+                ref_s = str(r["reference"]) if r["reference"] is not None else ""
+                pred_s = str(r["predicted"]) if r["predicted"] is not None else ""
+                print(f"[{i}/{len(ku)}] ingest={r['ingest_s']}s gen={r['gen_s']}s "
+                      f"kg_active={r['retrieval']['kg_active_facts']} "
+                      f"kg_superseded={r['retrieval']['kg_superseded_facts']} | "
+                      f"REF: {ref_s[:60]} | PRED: {pred_s[:60]}", flush=True)
+                _write(results)
+    finally:
+        if results:
+            _write(results)
+            print(f"\nwrote {args.out} ({len(results)}/{len(ku)} questions)")
 
 
 if __name__ == "__main__":

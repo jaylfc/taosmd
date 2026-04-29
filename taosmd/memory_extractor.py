@@ -204,6 +204,7 @@ async def process_conversation_turn(
     http_client=None,
     use_llm: bool = True,
     auto_resolve_contradictions: bool = True,
+    extraction_model: str = "default",
 ) -> dict:
     """Extract facts from a conversation turn and store in the KG.
 
@@ -225,7 +226,11 @@ async def process_conversation_turn(
         )
         use_llm = False
     if use_llm and llm_url and http_client:
-        facts = await extract_facts_with_llm(text, llm_url, http_client)
+        facts = await extract_facts_with_llm(
+            text, llm_url, http_client,
+            agent_name=agent_name or "default",
+            model=extraction_model,
+        )
         if facts:
             method = "llm"
         else:
