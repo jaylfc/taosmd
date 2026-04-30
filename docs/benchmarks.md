@@ -66,6 +66,7 @@ Harness: [`benchmarks/locomo_runner.py`](../benchmarks/locomo_runner.py). Rescor
 | **taosmd** | qwen3.5:9b | adj=2 | 0.516 | simplest 9B leader |
 | **taosmd** | qwen3.5:9b | k=20 + adj=1 + llm-exp | 0.509 | full stack at adj=1 |
 | **taosmd** | gemma4:e2b | adj=2 | 0.499 | 5B best — same architecture, smaller generator |
+| **taosmd** | qwen3.5:9b | adj=2 + HyDE + full stack | 0.486 | HyDE drags the leader recipe down — see negative results |
 | **taosmd** | qwen3.5:9b | adj=1 | 0.481 | |
 | **taosmd** | gemma4:e2b | k=20 + adj=1 + llm-exp | 0.482 | 5B stack |
 | **taosmd** | gemma4:e2b | adj=1 (C3) | 0.465 | baseline adjacent-turns win |
@@ -85,6 +86,21 @@ All taosmd rows on the same commit series (`feat/locomo-param-configs` merged to
 - **Stacking is adj-dependent at 5B.** At adj=1 + 5B, adding k=20 compounds cleanly (+0.014). At adj=2 + 5B the same k=20 addition *regresses* (-0.022). Context token budget has a sweet spot at this tier.
 - **Date-format swap and LLM query expansion** are marginal in the presence of adj=1.
 
+### Negative results — levers we tested that regressed at 9B + adj=2
+
+Running these as cells against the same external `qwen3:4b` judge gives the lever-effectiveness map below. Useful as guardrails: not every "smarter retrieval" idea helps, and stacking levers indiscriminately makes things worse.
+
+| Cell | Ext Judge | Δ vs 9B+adj=2 baseline (0.516) | Verdict |
+|---|---|---|---|
+| `kitchen_sink` (adj=2 + k=20 + llm-exp + RRF + multi-level + BGE + temporal-boost + HyDE) | 0.499 | -0.017 | piling levers on regresses |
+| `few_shot` (adj=2 + 5 exemplars in answer prompt) | 0.501 | -0.015 | exemplars don't help at 9B |
+| `temporal` (recency boost +0.005) | 0.500 | -0.016 | boost has no effect on memory recall |
+| `inverse_temporal` (recency boost -0.005) | 0.503 | -0.013 | small regression |
+| `hyde` (adj=2 + HyDE only) | 0.456 | -0.060 | **HyDE regresses standalone** |
+| `hyde_full_stack` (leader recipe + HyDE) | 0.486 | -0.030 vs baseline / -0.071 vs 0.557 leader | **HyDE poison-pill — drags any stack it joins** |
+
+Lesson: HyDE assumes the generator can imagine a good hypothetical answer; on memory-recall datasets a small generator hallucinates the answer's structure, the embedding lookup matches that hallucination, and recall collapses. Few-shot exemplars compete for context budget without adding retrieval signal. Generator-side bumps (35B-A3B via TurboQuant — `docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) are the next planned lever, since retrieval-side levers have plateaued.
+
 ### Architecture matters more at smaller compute tiers
 
 The same retrieval improvement, applied to two generators on identical hardware-class infrastructure, can lift the smaller-model tier by an order of magnitude more than the larger-model tier:
@@ -93,7 +109,7 @@ The same retrieval improvement, applied to two generators on identical hardware-
 |---|---|---|---|
 | **BGE-reranker-v2-m3 swap** | +0.006 (0.516 → 0.522) | **+0.074** (0.382 → 0.456) | **~12×** |
 | **Multi-level retrieval + RRF** | -0.021 (0.516 → 0.495, *regresses*) | +0.043 (0.382 → 0.425) | direction-flip |
-| **HyDE** | (pending) | -0.057 — *regression* on small generators | n/a |
+| **HyDE** | -0.060 (0.516 → 0.456) | -0.058 (0.382 → 0.325) | direction-consistent regression |
 
 The interpretation: smaller in-weight knowledge means the generator depends more on retrieval quality. A stronger cross-encoder gives the 4 B model on the Pi NPU much more useful candidates than its baseline already retrieves; the 9 B model on the 12 GB GPU was already doing fine on the simpler reranker. This is the architectural argument for why a "memory system designed for SBC-class hardware" is worth building, not just a port of the cloud-tier system at lower precision.
 
