@@ -58,6 +58,7 @@ Harness: [`benchmarks/locomo_runner.py`](../benchmarks/locomo_runner.py). Rescor
 | **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF | **0.557** | **leader — full stack with RRF fusion** |
 | **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF + multi-level | 0.552 | adding multi-level on top of leader regresses by -0.005 |
 | **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp | 0.545 | full stack without RRF |
+| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF + few-shot | 0.540 | few-shot on top of the leader regresses by -0.017 |
 | **taosmd** | qwen3.5:9b | adj=3 | 0.532 | broader context window |
 | **taosmd** | qwen3.5:9b | adj=2 + multi-level retrieval | 0.524 | turns + summaries + events |
 | **taosmd** | qwen3.5:9b | adj=2 + RRF only | 0.500 | RRF without scaffolding regresses at 9B |
@@ -99,7 +100,7 @@ Running these as cells against the same external `qwen3:4b` judge gives the leve
 | `hyde` (adj=2 + HyDE only) | 0.456 | -0.060 | **HyDE regresses standalone** |
 | `hyde_full_stack` (leader recipe + HyDE) | 0.486 | -0.030 vs baseline / -0.071 vs 0.557 leader | **HyDE poison-pill — drags any stack it joins** |
 
-Lesson: HyDE assumes the generator can imagine a good hypothetical answer; on memory-recall datasets a small generator hallucinates the answer's structure, the embedding lookup matches that hallucination, and recall collapses. Few-shot exemplars compete for context budget without adding retrieval signal. Generator-side bumps (35B-A3B via TurboQuant — `docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) are the next planned lever, since retrieval-side levers have plateaued.
+Lesson: HyDE assumes the generator can imagine a good hypothetical answer; on memory-recall datasets a small generator hallucinates the answer's structure, the embedding lookup matches that hallucination, and recall collapses. Few-shot exemplars compete for context budget without adding retrieval signal — and the same effect persists when stacked: `few_shot_full_stack` (leader recipe + 5 exemplars) lands at 0.540, -0.017 vs the 0.557 leader. Generator-side bumps (35B-A3B via TurboQuant — `docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) are the next planned lever, since retrieval-side levers have plateaued.
 
 ### Architecture matters more at smaller compute tiers
 
