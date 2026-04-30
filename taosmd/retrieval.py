@@ -427,6 +427,99 @@ def apply_verification_verdicts(
     return adjusted
 
 
+def _user_metadata(hit: dict) -> dict:
+    """Return the user-supplied metadata for a hit.
+
+    Normalised hits wrap the underlying source row under "metadata", and the
+    vector source row in turn carries its user-supplied metadata under a
+    nested "metadata" key. This helper unwraps that case so callers see the
+    user dict directly. Falls back to the top-level metadata when there is no
+    nesting (non-vector sources).
+    """
+    meta = hit.get("metadata", {}) or {}
+    inner = meta.get("metadata") if isinstance(meta, dict) else None
+    return inner if isinstance(inner, dict) else meta
+
+
+async def _attach_neighbors(
+    hits: list[dict],
+    sources: dict,
+    n: int,
+    position_key: str,
+    group_key: str | None,
+) -> list[dict]:
+    """Attach ±n positional neighbours to each hit as a "neighbors" field.
+
+    For each hit, reads ``user_metadata[position_key]`` (and optionally
+    ``[group_key]``) and asks the vector source for the rows at
+    ``position ± offset`` for offset in 1..n. A row that already appears as a
+    primary hit is skipped, and the same row is attached to at most one host
+    so the same neighbour is never duplicated across hits.
+
+    Mutates each hit in place. Returns the list. Hits without a
+    position-key entry are left unchanged. When the vector source does not
+    expose ``get_by_position`` (e.g. an older mock or alternative backend),
+    this is a silent no-op.
+    """
+    if n <= 0:
+        return hits
+    vmem = sources.get("vector") if sources else None
+    if vmem is None or not hasattr(vmem, "get_by_position"):
+        return hits
+
+    primary_keys: set[tuple] = set()
+    for hit in hits:
+        um = _user_metadata(hit)
+        pos = um.get(position_key)
+        if pos is None:
+            continue
+        group = um.get(group_key) if group_key is not None else None
+        try:
+            primary_keys.add((group, int(pos)))
+        except (TypeError, ValueError):
+            continue
+
+    seen: set[tuple] = set()
+    for hit in hits:
+        um = _user_metadata(hit)
+        pos = um.get(position_key)
+        if pos is None:
+            continue
+        try:
+            pos_int = int(pos)
+        except (TypeError, ValueError):
+            continue
+        group = um.get(group_key) if group_key is not None else None
+        neighbours: list[dict] = []
+        for offset in range(-n, n + 1):
+            if offset == 0:
+                continue
+            target = pos_int + offset
+            key = (group, target)
+            if key in primary_keys or key in seen:
+                continue
+            try:
+                row = await vmem.get_by_position(
+                    target,
+                    position_key=position_key,
+                    group_key=group_key,
+                    group_value=group,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "_attach_neighbors: get_by_position(%s=%s) failed: %s",
+                    position_key, target, exc,
+                )
+                continue
+            if row is None:
+                continue
+            seen.add(key)
+            neighbours.append(row)
+        if neighbours:
+            hit["neighbors"] = neighbours
+    return hits
+
+
 async def retrieve(
     query: str,
     strategy: str = "thorough",
@@ -438,6 +531,9 @@ async def retrieve(
     worker_capabilities: dict | None = None,
     agent_name: str = "",
     verify: bool = False,
+    adjacent_neighbors: int = 0,
+    position_key: str = "position",
+    group_key: str | None = None,
 ) -> list[dict]:
     """Retrieve relevant results from available memory sources.
 
@@ -459,6 +555,18 @@ async def retrieve(
         worker_capabilities: Dict describing the runtime worker, passed through
             to ``effective_fanout``. Recognised keys: ``gpu_vram_gb`` (float)
             and ``turboquant`` (bool). Pass ``None`` for Pi-class workers.
+        adjacent_neighbors: When > 0, attach ±N positional neighbours to each
+            surviving hit as a ``neighbors`` field. Looks up the vector source
+            via ``get_by_position`` using the hit's
+            ``metadata[position_key]`` (and optional ``[group_key]``).
+            Default 0 (off). Worth +0.089 on LoCoMo same-tier at adj=2 — see
+            ``docs/benchmarks.md``.
+        position_key: Metadata key holding the integer position used for
+            neighbour lookup (default ``"position"``).
+        group_key: Optional metadata key constraining neighbours to share the
+            same group as their host hit (e.g. ``"session"``). When ``None``
+            (default), neighbours can cross group boundaries — matches the
+            LoCoMo benchmark's behaviour where ``turn_idx`` is global.
 
     Returns:
         List of normalised result dicts, sorted by relevance, length <= limit.
@@ -501,7 +609,12 @@ async def retrieve(
         if verify and is_task_enabled(agent_name, "verification"):
             results = await _apply_verification(query, results, agent_name)
 
-        return results[:limit]
+        results = results[:limit]
+        if adjacent_neighbors > 0:
+            results = await _attach_neighbors(
+                results, sources, adjacent_neighbors, position_key, group_key,
+            )
+        return results
 
     elif strategy == "fast":
         strategy_info = get_search_strategy(query)
@@ -522,7 +635,12 @@ async def retrieve(
             merged = _rrf_merge([results, secondary_results])
             results = _deduplicate(merged)
 
-        return results[:limit]
+        results = results[:limit]
+        if adjacent_neighbors > 0:
+            results = await _attach_neighbors(
+                results, sources, adjacent_neighbors, position_key, group_key,
+            )
+        return results
 
     elif strategy == "minimal":
         strategy_info = get_search_strategy(query)
@@ -536,7 +654,12 @@ async def retrieve(
             first_name, first_src = next(iter(sources.items()))
             results = await _query_source(first_name, first_src, query, fetch_limit)
 
-        return results[:limit]
+        results = results[:limit]
+        if adjacent_neighbors > 0:
+            results = await _attach_neighbors(
+                results, sources, adjacent_neighbors, position_key, group_key,
+            )
+        return results
 
     elif strategy == "custom":
         if memory_layers is None:
@@ -564,7 +687,12 @@ async def retrieve(
         if reranker is not None and getattr(reranker, "available", False):
             results = reranker.rerank(query, results, limit)
 
-        return results[:limit]
+        results = results[:limit]
+        if adjacent_neighbors > 0:
+            results = await _attach_neighbors(
+                results, sources, adjacent_neighbors, position_key, group_key,
+            )
+        return results
 
     else:
         raise ValueError(f"Unknown strategy {strategy!r}. Must be one of: thorough, fast, minimal, custom.")
