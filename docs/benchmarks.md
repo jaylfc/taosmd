@@ -108,6 +108,7 @@ The same retrieval improvement, applied to two generators on identical hardware-
 
 | Improvement | At qwen3.5:9b (Fedora 12 GB GPU) | At qwen3-4b-chat RKLLM (Orange Pi NPU) | Ratio |
 |---|---|---|---|
+| **Full leader stack (k=20 + adj=2 + llm-exp + RRF)** | +0.041 (0.516 → 0.557) | **+0.108** (0.382 → 0.490) | **~2.6×** |
 | **BGE-reranker-v2-m3 swap** | +0.006 (0.516 → 0.522) | **+0.074** (0.382 → 0.456) | **~12×** |
 | **Multi-level retrieval + RRF** | -0.021 (0.516 → 0.495, *regresses*) | +0.043 (0.382 → 0.425) | direction-flip |
 | **HyDE** | -0.060 (0.516 → 0.456) | -0.058 (0.382 → 0.325) | direction-consistent regression |
@@ -184,7 +185,8 @@ LoCoMo measurements (qwen3-4b-chat via rkllama on the NPU, all with `--adjacent-
 
 | Config | Ext Judge | Δ vs Pi baseline (0.382) |
 |---|---|---|
-| **adj=2 + BGE-reranker-v2-m3** | **0.456** | **+0.074** |
+| **adj=2 + k=20 + llm-exp + RRF (full leader stack)** | **0.490** | **+0.108** |
+| adj=2 + BGE-reranker-v2-m3 | 0.456 | +0.074 |
 | adj=2 + multi-level retrieval + RRF | 0.425 | +0.043 |
 | adj=2 (baseline) | 0.382 | — |
 | adj=2 + HyDE | 0.325 | -0.057 (HyDE regresses on small generators) |
