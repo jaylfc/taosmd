@@ -145,11 +145,29 @@ def write_checkpoint(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+def _row_stats(rs: list[dict]) -> dict:
+    """Compute per-bucket metrics from a list of rescored results."""
+    f1 = statistics.mean(r["f1"] for r in rs)
+    orig = statistics.mean(r["judge"] for r in rs)
+    tol = statistics.mean(r.get("judge_tolerant", r["judge"]) for r in rs)
+    rv = [r["judge_rejudged"] for r in rs if r.get("judge_rejudged") is not None]
+    rj = statistics.mean(rv) if rv else float("nan")
+    delta = (rj - orig) if rv else 0.0
+    return {"f1": f1, "orig": orig, "tol": tol, "rj": rj, "rv": rv, "delta": delta}
+
+
 def print_scorecard(path: Path, data: dict, judge_model: str) -> None:
+    """Print a per-category and overall scorecard.
+
+    LoCoMo results carry integer category labels (1-4); LongMemEval-KU
+    results have no category field at all. Falls back to a single
+    "Overall" bucket when no LoCoMo categories match so the script
+    stays useful for both benchmarks instead of dividing by zero.
+    """
     results = data["results"]
     print()
     print("=" * 88)
-    print(f"LoCoMo Rescore (streaming) — {path.name}  [judge: {judge_model}]")
+    print(f"Rescore (streaming) — {path.name}  [judge: {judge_model}]")
     print("=" * 88)
     print(f"{'Category':<16} {'Count':>6} {'F1':>8} {'Orig':>8} {'Tol':>8} {'Rejudge':>10} {'Delta':>8}  Covered")
     print("-" * 88)
@@ -158,22 +176,50 @@ def print_scorecard(path: Path, data: dict, judge_model: str) -> None:
         rs = [r for r in results if r.get("category") == c]
         if not rs:
             continue
-        f1 = statistics.mean(r["f1"] for r in rs)
-        orig = statistics.mean(r["judge"] for r in rs)
-        tol = statistics.mean(r.get("judge_tolerant", r["judge"]) for r in rs)
-        rv = [r["judge_rejudged"] for r in rs if r.get("judge_rejudged") is not None]
-        rj = statistics.mean(rv) if rv else float("nan")
-        delta = (rj - orig) if rv else 0.0
-        cov = f"{len(rv)}/{len(rs)} ({100*len(rv)/len(rs):.0f}%)"
-        print(f"{CAT_NAMES[c]} ({c})   {len(rs):>6} {f1:>8.3f} {orig:>8.2f} {tol:>8.2f} {rj:>10.2f} {delta:>+8.2f}  {cov}")
+        s = _row_stats(rs)
+        cov = f"{len(s['rv'])}/{len(rs)} ({100*len(s['rv'])/len(rs):.0f}%)"
+        print(
+            f"{CAT_NAMES[c]} ({c})   {len(rs):>6} {s['f1']:>8.3f} {s['orig']:>8.2f} "
+            f"{s['tol']:>8.2f} {s['rj']:>10.2f} {s['delta']:>+8.2f}  {cov}"
+        )
         tot["count"] += len(rs)
-        tot["f1"] += f1 * len(rs)
-        tot["orig"] += orig * len(rs)
-        tot["tol"] += tol * len(rs)
-        tot["rj_sum"] += sum(rv)
-        tot["rj_n"] += len(rv)
+        tot["f1"] += s["f1"] * len(rs)
+        tot["orig"] += s["orig"] * len(rs)
+        tot["tol"] += s["tol"] * len(rs)
+        tot["rj_sum"] += sum(s["rv"])
+        tot["rj_n"] += len(s["rv"])
     print("-" * 88)
+    # Fold any uncategorised rows into Overall so a malformed/mixed dataset
+    # (some rows with category in {1,2,3,4}, some without) is fully counted
+    # rather than silently dropping the leftovers.
+    leftovers = [r for r in results if r.get("category") not in {1, 2, 3, 4}]
+    if tot["count"] > 0 and leftovers:
+        s = _row_stats(leftovers)
+        m = len(leftovers)
+        tot["count"] += m
+        tot["f1"] += s["f1"] * m
+        tot["orig"] += s["orig"] * m
+        tot["tol"] += s["tol"] * m
+        tot["rj_sum"] += sum(s["rv"])
+        tot["rj_n"] += len(s["rv"])
     n = tot["count"]
+    if n == 0:
+        # No LoCoMo categories matched and no rows at all — print a
+        # placeholder so benchmarks without integer category labels
+        # (e.g. LongMemEval-KU) still get a usable Overall row.
+        if not results:
+            print(f"{'Overall':<21} {0:>6}  (no results)")
+            print("=" * 88)
+            return
+        s = _row_stats(results)
+        n = len(results)
+        cov = f"{len(s['rv'])}/{n} ({100*len(s['rv'])/n:.0f}%)"
+        print(
+            f"{'Overall':<21} {n:>6} {s['f1']:>8.3f} {s['orig']:>8.2f} "
+            f"{s['tol']:>8.2f} {s['rj']:>10.2f} {s['delta']:>+8.2f}  {cov}"
+        )
+        print("=" * 88)
+        return
     all_f1 = tot["f1"] / n
     all_orig = tot["orig"] / n
     all_tol = tot["tol"] / n
