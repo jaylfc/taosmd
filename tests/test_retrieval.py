@@ -556,6 +556,34 @@ def test_attach_neighbors_group_filter():
     assert neighbours[0]["metadata"]["session"] == "A"
 
 
+def test_attach_neighbors_skips_hits_missing_required_group():
+    """When group_key is configured, a hit lacking that key must not pull cross-group neighbours.
+
+    Regression for the bug where group_value=None silently disabled the SQL
+    group filter, letting a group-less hit sample any group's neighbours.
+    """
+    rows = [
+        _row(1, "a1", position=0, session="A"),
+        _row(2, "a2", position=1, session="A"),
+        _row(3, "b1", position=0, session="B"),
+        _row(4, "b2", position=1, session="B"),
+    ]
+    sources = {"vector": PositionalVectorMemory(rows)}
+    hit = {
+        "text": "stray",
+        "source": "vector",
+        "source_id": "99",
+        # position is set but session is NOT — group filtering is requested
+        # by the caller, so this hit should be left alone, not pull
+        # arbitrary same-position rows from other sessions.
+        "metadata": {"id": 99, "metadata": {"position": 1}},
+    }
+
+    asyncio.run(_attach_neighbors([hit], sources, n=1, position_key="position", group_key="session"))
+
+    assert "neighbors" not in hit
+
+
 def test_attach_neighbors_zero_is_noop():
     rows = [_row(1, "x", position=0)]
     sources = {"vector": PositionalVectorMemory(rows)}

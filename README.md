@@ -257,7 +257,9 @@ hits = await retrieve(
     position_key="position",
     group_key="session",         # confine neighbours to the same session
 )
-# Each hit gains a hits[i]["neighbors"] list of nearby turns.
+# Each hit may include a hits[i]["neighbors"] list of nearby turns
+# (skipped at boundaries, when neighbours are themselves primary hits, or
+# when the hit lacks the configured position/group keys).
 ```
 
 ## Key Features

@@ -473,7 +473,16 @@ async def _attach_neighbors(
         pos = um.get(position_key)
         if pos is None:
             continue
-        group = um.get(group_key) if group_key is not None else None
+        if group_key is not None:
+            group = um.get(group_key)
+            if group is None:
+                # Refuse to populate primary_keys with (None, pos) when the
+                # caller requested group filtering — otherwise hits missing
+                # the group key would mask same-position neighbours from
+                # other groups during dedupe.
+                continue
+        else:
+            group = None
         try:
             primary_keys.add((group, int(pos)))
         except (TypeError, ValueError):
@@ -489,7 +498,16 @@ async def _attach_neighbors(
             pos_int = int(pos)
         except (TypeError, ValueError):
             continue
-        group = um.get(group_key) if group_key is not None else None
+        if group_key is not None:
+            group = um.get(group_key)
+            if group is None:
+                # Group filtering is requested but this hit has no group;
+                # skip rather than silently widening to cross-group lookup
+                # (get_by_position drops the group filter when group_value
+                # is None).
+                continue
+        else:
+            group = None
         neighbours: list[dict] = []
         for offset in range(-n, n + 1):
             if offset == 0:
