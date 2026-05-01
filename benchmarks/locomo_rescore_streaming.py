@@ -167,7 +167,7 @@ def print_scorecard(path: Path, data: dict, judge_model: str) -> None:
     results = data["results"]
     print()
     print("=" * 88)
-    print(f"LoCoMo Rescore (streaming) — {path.name}  [judge: {judge_model}]")
+    print(f"Rescore (streaming) — {path.name}  [judge: {judge_model}]")
     print("=" * 88)
     print(f"{'Category':<16} {'Count':>6} {'F1':>8} {'Orig':>8} {'Tol':>8} {'Rejudge':>10} {'Delta':>8}  Covered")
     print("-" * 88)
