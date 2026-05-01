@@ -79,6 +79,27 @@ def test_print_scorecard_empty_results():
     assert "no results" in out
 
 
+def test_print_scorecard_mixed_categories_includes_uncategorised_in_overall():
+    """Mixed datasets (some category=1-4, some category=None) must fold
+    uncategorised rows into Overall instead of silently dropping them."""
+    rescore = _load_rescore_module()
+    data = {
+        "results": [
+            # Two LoCoMo-shaped rows
+            {"category": 1, "f1": 0.5, "judge": 0.6, "judge_rejudged": 0.7},
+            {"category": 1, "f1": 0.4, "judge": 0.5, "judge_rejudged": 0.6},
+            # Two rows missing the category field
+            {"f1": 0.3, "judge": 0.4, "judge_rejudged": 0.5},
+            {"category": None, "f1": 0.2, "judge": 0.3, "judge_rejudged": 0.4},
+        ],
+    }
+    out = _capture(lambda: rescore.print_scorecard(Path("mixed.json"), data, "qwen3:4b"))
+    assert "Single-hop" in out  # the categorised rows still show
+    # Overall count must be 4 (all rows), not 2 (only the categorised ones)
+    overall_line = next(line for line in out.splitlines() if line.startswith("Overall"))
+    assert " 4 " in overall_line, f"Overall should count all 4 rows, got: {overall_line!r}"
+
+
 def test_print_scorecard_locomo_with_partial_rescore():
     """Partial rescore coverage (some judge_rejudged is None) still prints."""
     rescore = _load_rescore_module()

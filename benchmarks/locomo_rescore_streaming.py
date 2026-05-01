@@ -189,11 +189,24 @@ def print_scorecard(path: Path, data: dict, judge_model: str) -> None:
         tot["rj_sum"] += sum(s["rv"])
         tot["rj_n"] += len(s["rv"])
     print("-" * 88)
+    # Fold any uncategorised rows into Overall so a malformed/mixed dataset
+    # (some rows with category in {1,2,3,4}, some without) is fully counted
+    # rather than silently dropping the leftovers.
+    leftovers = [r for r in results if r.get("category") not in {1, 2, 3, 4}]
+    if tot["count"] > 0 and leftovers:
+        s = _row_stats(leftovers)
+        m = len(leftovers)
+        tot["count"] += m
+        tot["f1"] += s["f1"] * m
+        tot["orig"] += s["orig"] * m
+        tot["tol"] += s["tol"] * m
+        tot["rj_sum"] += sum(s["rv"])
+        tot["rj_n"] += len(s["rv"])
     n = tot["count"]
     if n == 0:
-        # No LoCoMo categories matched — score everything in one bucket so
-        # benchmarks without integer category labels (e.g. LongMemEval-KU)
-        # still produce a usable Overall row.
+        # No LoCoMo categories matched and no rows at all — print a
+        # placeholder so benchmarks without integer category labels
+        # (e.g. LongMemEval-KU) still get a usable Overall row.
         if not results:
             print(f"{'Overall':<21} {0:>6}  (no results)")
             print("=" * 88)
