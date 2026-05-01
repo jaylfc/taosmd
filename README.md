@@ -6,7 +6,7 @@
 
 **Framework-agnostic AI memory system. 97.0% end-to-end Judge accuracy on LongMemEval-S.**
 
-End-to-end Judge accuracy means retrieve → generate → LLM-grade against the reference answer. Runs entirely on a £170 Orange Pi 5 Plus with zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
+End-to-end Judge accuracy means retrieve → generate → LLM-grade against the reference answer. Runs offline on anything with 8 GB+ RAM and Python 3.10+ — a Pi 4B, an old laptop, an Intel mini PC, a Mac mini, or a 16 GB Orange Pi 5 Plus (our reference low-end). Zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
 
 ---
 
@@ -14,12 +14,12 @@ End-to-end Judge accuracy means retrieve → generate → LLM-grade against the 
 
 Most memory benchmarks run on hosted models (GPT-4o-mini, Claude, Gemini) behind an API key — fine for prototypes, not fine if you're:
 
-- **On modest hardware.** Running an agent on a £170 Orange Pi 5 Plus, an old laptop, or a Mac mini. No 24 GB 4090 — just an NPU or a CPU and ~16 GB RAM. The memory system has to fit *around* that, not on top of it.
+- **On modest hardware.** Running an agent on a Pi 4B, a £170 Orange Pi 5 Plus, an Intel mini PC, an old laptop, or a Mac mini. No 24 GB 4090 — 8 GB RAM minimum, 16 GB comfortable, NPU or GPU optional. The memory system has to fit *around* that, not on top of it.
 - **Distributed across a few small machines.** Pi + desktop + laptop, pooled by the taOS stack. The memory layer lives across those nodes without assuming any single "real" machine.
 - **Offline or air-gapped.** Forwarding a conversation turn to a third-party API is a compliance violation or a signal flare. Memory here can't mean "we shipped it to a hosted API".
 - **Zero-loss by default.** The verbatim transcript goes into an append-only archive first; summaries and structure are layered on top, never *over*. The source is still on the shelf byte-for-byte. Disagree with a summary? Read what was actually said.
 
-The 97.0% on LongMemEval-S was measured on the Orange Pi 5 Plus stack — the same hardware a user would actually deploy. No hidden hosted model doing the heavy lifting off-camera.
+The 97.0% on LongMemEval-S was measured on our reference low-end stack (Orange Pi 5 Plus, 16 GB RAM). The same code runs on a Pi 4B, an Intel mini PC, a Mac mini, an old laptop, or a workstation with a GPU — see [Hardware Tested](#hardware-tested). No hidden hosted model doing the heavy lifting off-camera.
 
 Zero cloud dependencies. Zero API keys. NPU if you have one, CPU if you don't, cluster if you want the throughput.
 
@@ -74,11 +74,11 @@ pip install -e .
 huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir models/minilm-onnx
 
 # 2. LLM for fact extraction + answering (required)
-# Option A: x86 / ARM without NPU — use Ollama
+# Option A (default): any Linux/macOS box with or without a GPU — use Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen3:4b
 
-# Option B: Orange Pi / RK3588 with NPU — use rkllama
+# Option B (NPU acceleration): Orange Pi / Rock 5 / Radxa with RK3588 — use rkllama
 # Install rkllama: https://github.com/NotPunchnox/rkllama
 huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
   Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
@@ -272,7 +272,7 @@ hits = await retrieve(
 - **Contradiction detection** — auto-resolve conflicting facts
 - **Zero-loss archive** — append-only, never modified, gzip compressed
 - **Intent-aware retrieval** — routes queries to optimal memory layer
-- **0.3ms embeddings** — ONNX Runtime on ARM CPU
+- **0.3ms embeddings** — ONNX Runtime on CPU (ARM or x86)
 - **Opt-in user tracking** — browsing history, app usage, search queries
 
 ## Embedding Model
@@ -300,13 +300,18 @@ Or download directly from [HuggingFace](https://huggingface.co/sentence-transfor
 
 ## Hardware Tested
 
-- Orange Pi 5 Plus (RK3588, 16GB RAM) — primary target
-- Fedora x86_64 (RTX 3060) — GPU worker for LLM extraction
-- Should work on any Linux system with Python 3.10+
+| Tier | Example | RAM | LLM runtime |
+|---|---|---|---|
+| **Reference low-end (primary author target)** | Orange Pi 5 Plus | 16 GB | rkllama on RK3588 NPU |
+| SBC | Raspberry Pi 4B / 5 | 8 GB | Ollama on CPU |
+| Mini PC / old laptop | Intel NUC, Mac mini, Lenovo Tiny | 8–16 GB | Ollama on CPU |
+| Desktop / workstation | Any Linux/macOS box with NVIDIA GPU | 16 GB+ | Ollama on GPU |
+
+Minimum: 8 GB RAM and Python 3.10+. NPU/GPU optional — they speed up LLM tasks but aren't required.
 
 ## Reference Setup (Orange Pi 5 Plus)
 
-The 97.0% benchmark was achieved on this exact stack:
+This is the author's primary deployment and the exact stack the 97.0% benchmark was measured on. Other tiers (Pi 4B, Intel mini, Mac mini, GPU box) run the same code — they swap the runtime (Ollama instead of rkllama, CPU/GPU instead of NPU) but keep the same models and the same architecture.
 
 | Component | Model | Purpose | Runtime |
 |-----------|-------|---------|---------|
@@ -319,7 +324,7 @@ The 97.0% benchmark was achieved on this exact stack:
 | **Full-Text Search** | SQLite FTS5 | Keyword search over archive | CPU |
 | **Knowledge Graph** | SQLite | Temporal entity-relationship triples | CPU |
 
-**Everything runs on the Pi. No external server needed.** The Qwen3-4B handles both fact extraction and question answering on the NPU. The ONNX embedding model runs in-process on the CPU. An optional GPU worker (e.g. Fedora with RTX 3060) can accelerate LLM tasks ~10x but is not required — the Pi is fully self-contained.
+**Everything in this reference stack runs on the Pi itself; no external server needed for this tier.** The Qwen3-4B handles both fact extraction and question answering on the NPU. The ONNX embedding model runs in-process on the CPU. An optional GPU worker (e.g. Fedora with RTX 3060) can accelerate LLM tasks ~10x but is not required — the Pi is fully self-contained.
 
 ### Model Files
 
@@ -332,6 +337,10 @@ The 97.0% benchmark was achieved on this exact stack:
 | Qwen3-4B RKLLM | 4.6GB | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) |
 
 ## Platform-Specific Setup
+
+### Linux / macOS / Windows (no NPU)
+
+The default Manual Install path. Ollama serves the LLM, ONNX Runtime serves embeddings on the CPU. No platform-specific steps beyond the standard install.
 
 ### RK3588 NPU (Orange Pi / Rock 5 / Radxa)
 
@@ -347,11 +356,11 @@ huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
 
 ### Optional: GPU Worker (x86 + NVIDIA)
 
-Not required — the Pi is fully self-contained. A GPU worker gives ~10x speed on LLM tasks:
+Not required for any tier — the LLM runs locally on whatever you've got. A GPU worker accelerates LLM tasks ~10x if you want to offload from a smaller node:
 
 ```bash
 # On your GPU machine
-ollama pull qwen3:4b  # Same model as the Pi — same quality
+ollama pull qwen3:4b  # Same model as the smaller node — same quality
 
 # Point taOSmd at the GPU worker
 export TAOSMD_LLM_URL=http://<gpu-machine>:11434
