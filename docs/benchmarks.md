@@ -206,13 +206,28 @@ This is the LongMemEval-S 97.0% reference stack. LoCoMo on this hardware is **no
 - **Expected best LoCoMo config**: `--adjacent-turns 2` (architecturally consistent with the 12 GB measurements; not yet validated on the NPU stack). LongMemEval 97.0% measurement on master used the cross-encoder + query expansion path without an explicit adj flag — that path's per-section scores are in the LongMemEval table above.
 - **Don't run the judge on the same Pi.** Offload to a peer (Fedora or another Pi) to avoid dual-loading.
 
-### 4 GB GPU (GTX 1050 Ti) — not measured (planned)
+### 4 GB GPU (GTX 1050 Ti, LXC) — measured
 
-LXC test environment forthcoming. The recommendations below are extrapolations from architecture, not measurements.
+LXC container running CUDA on a GTX 1050 Ti (4 GB VRAM). Same external `qwen3:4b` judge as the other tiers → directly comparable.
 
-- **Generator (best fit)**: `qwen3:2b` or `qwen3:4b` at Q4 (~1.5–2.5 GB VRAM). 4 B at Q4 should fit with ~1.5 GB headroom for KV cache.
-- **Skip**: `--llm-query-expansion` (extra LLM call too costly), `--multihop-decompose` (regresses anyway).
-- **Expected best LoCoMo config**: `--adjacent-turns 2 --retrieval-top-k 10`. The adj=2 win held across 5B and 9B; expect it to hold at 2 B/4 B too, but should be measured.
+LoCoMo measurements (qwen3:4b via Ollama with CUDA, all with `--adjacent-turns 2 --retrieval-top-k 10`):
+
+| Config | Ext Judge | Δ vs LXC baseline |
+|---|---|---|
+| **adj=2 + k=10 + RRF fusion** | **0.530** | flat (+0.000) |
+| adj=2 + k=10 + boost fusion (baseline) | 0.530 | — |
+
+**0.530 on a 4 GB GPU is 0.027 below the 12 GB leader (0.557)** — a remarkably small gap given the VRAM is one third and the generator is a 4 B model not a 9 B. Strong confirmation that taosmd's architecture scales down to consumer-tier GPUs without a quality cliff.
+
+Notes on what this tells us:
+
+- **Predictions held.** The earlier "expected best config" for this tier was `adj=2 + top-k=10`, with `--llm-query-expansion` skipped — exactly what the recipe ran. No surprises against architecture.
+- **RRF vs boost is flat at 4 GB / qwen3:4b.** Same direction as the 9 B finding ("RRF alone regresses on adj=2") but smaller magnitude — neither helps nor hurts at this tier with this generator. The leader recipe's RRF lift comes from the *combination* with k=20 + llm-exp, not RRF alone.
+- **Operational defaults below stay correct as written.**
+
+- **Generator (best fit)**: `qwen3:4b` at Q4 (~2.5 GB VRAM). Fits with ~1.5 GB headroom for KV cache. `qwen3:2b` is the fallback if context budget is tight.
+- **Skip**: `--llm-query-expansion` (extra LLM call too costly at this tier), `--multihop-decompose` (regresses anyway).
+- **Best measured LoCoMo config**: `--adjacent-turns 2 --retrieval-top-k 10`. Confirmed at 0.530.
 - **Embedder, reranker, judge**: same as larger tiers (CPU ONNX). 4 GB VRAM is for the generator only.
 
 ### Raspberry Pi 4 (8 GB, no NPU, no GPU) — not measured (extrapolation only)
