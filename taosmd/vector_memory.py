@@ -339,6 +339,42 @@ class VectorMemory:
             scored.sort(key=lambda x: x["similarity"], reverse=True)
             return scored[:limit]
 
+    async def get_by_position(
+        self,
+        position_value: int,
+        *,
+        position_key: str = "position",
+        group_key: str | None = None,
+        group_value=None,
+    ) -> dict | None:
+        """Return the row whose metadata[position_key] equals position_value.
+
+        When group_key and group_value are both supplied, also constrains
+        metadata[group_key] == group_value (so neighbours of a hit can be
+        confined to the same conversation/session/document).
+
+        Used by retrieve(adjacent_neighbors=N) to inject ±N positional
+        neighbours around each hit. Returns None when nothing matches.
+        """
+        sql = (
+            "SELECT id, text, metadata_json, created_at FROM vector_memory "
+            "WHERE json_extract(metadata_json, ?) = ?"
+        )
+        params: list = [f"$.{position_key}", position_value]
+        if group_key is not None and group_value is not None:
+            sql += " AND json_extract(metadata_json, ?) = ?"
+            params += [f"$.{group_key}", group_value]
+        sql += " LIMIT 1"
+        row = self._conn.execute(sql, params).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "text": row["text"],
+            "metadata": json.loads(row["metadata_json"]),
+            "created_at": row["created_at"],
+        }
+
     async def count(self) -> int:
         row = self._conn.execute("SELECT COUNT(*) as n FROM vector_memory").fetchone()
         return row["n"]

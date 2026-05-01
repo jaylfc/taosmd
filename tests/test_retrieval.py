@@ -8,8 +8,10 @@ from taosmd.retrieval import (
     _adapt_catalog,
     _adapt_kg,
     _adapt_vector,
+    _attach_neighbors,
     _deduplicate,
     _rrf_merge,
+    _user_metadata,
     retrieve,
 )
 
@@ -390,3 +392,252 @@ def test_retrieve_custom():
         assert r["source"] in allowed_sources, (
             f"Custom mode with memory_layers=['vector','kg'] returned source {r['source']!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# adjacent_neighbors — positional neighbour injection
+# ---------------------------------------------------------------------------
+
+
+class PositionalVectorMemory:
+    """Test double exposing both search() and get_by_position().
+
+    Backs onto an in-memory list of rows. Supports a single hit-by-position
+    lookup with optional group constraint, mirroring the SQLite implementation.
+    """
+
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+
+    async def search(self, query, limit=5, hybrid=True, fusion="rrf"):
+        # Return the first `limit` rows verbatim for a deterministic ranking.
+        return [
+            {
+                "id": r["id"],
+                "text": r["text"],
+                "similarity": 0.9 - 0.01 * i,
+                "metadata": r["metadata"],
+                "created_at": 0.0,
+            }
+            for i, r in enumerate(self._rows[:limit])
+        ]
+
+    async def get_by_position(
+        self,
+        position_value,
+        *,
+        position_key="position",
+        group_key=None,
+        group_value=None,
+    ):
+        for r in self._rows:
+            md = r["metadata"]
+            if md.get(position_key) != position_value:
+                continue
+            if group_key is not None and group_value is not None:
+                if md.get(group_key) != group_value:
+                    continue
+            return {
+                "id": r["id"],
+                "text": r["text"],
+                "metadata": md,
+                "created_at": 0.0,
+            }
+        return None
+
+
+def _row(rid: int, text: str, **meta) -> dict:
+    return {"id": rid, "text": text, "metadata": dict(meta)}
+
+
+def test_user_metadata_unwraps_vector_nesting():
+    """Vector hits keep user metadata under metadata.metadata; helper unwraps it."""
+    vector_hit = {
+        "text": "t",
+        "source": "vector",
+        "source_id": "1",
+        "rank": 0,
+        "source_score": 0.9,
+        "metadata": {"id": 1, "metadata": {"position": 7, "session": "s1"}},
+    }
+    assert _user_metadata(vector_hit) == {"position": 7, "session": "s1"}
+
+
+def test_user_metadata_passthrough_for_flat_metadata():
+    """Non-vector hits store user metadata at the top level."""
+    catalog_hit = {
+        "text": "t",
+        "source": "catalog",
+        "source_id": "1",
+        "rank": 0,
+        "source_score": 1.0,
+        "metadata": {"topic": "x", "category": "meeting"},
+    }
+    assert _user_metadata(catalog_hit) == {"topic": "x", "category": "meeting"}
+
+
+def test_attach_neighbors_basic_window():
+    """adj=2: each hit gets up to 4 surrounding neighbours, primaries excluded."""
+    rows = [_row(i, f"turn {i}", position=i) for i in range(10)]
+    sources = {"vector": PositionalVectorMemory(rows)}
+    hit = {
+        "text": "turn 5",
+        "source": "vector",
+        "source_id": "5",
+        "metadata": {"id": 5, "metadata": {"position": 5}},
+    }
+
+    result = asyncio.run(_attach_neighbors([hit], sources, n=2, position_key="position", group_key=None))
+
+    neighbours = result[0]["neighbors"]
+    positions = [n["metadata"]["position"] for n in neighbours]
+    assert sorted(positions) == [3, 4, 6, 7]
+
+
+def test_attach_neighbors_skips_primary_positions():
+    """Two adjacent primaries — neighbours of one must not duplicate the other."""
+    rows = [_row(i, f"turn {i}", position=i) for i in range(10)]
+    sources = {"vector": PositionalVectorMemory(rows)}
+    hits = [
+        {"text": "turn 5", "source": "vector", "source_id": "5",
+         "metadata": {"id": 5, "metadata": {"position": 5}}},
+        {"text": "turn 6", "source": "vector", "source_id": "6",
+         "metadata": {"id": 6, "metadata": {"position": 6}}},
+    ]
+
+    asyncio.run(_attach_neighbors(hits, sources, n=2, position_key="position", group_key=None))
+
+    pos_a = sorted(n["metadata"]["position"] for n in hits[0].get("neighbors", []))
+    pos_b = sorted(n["metadata"]["position"] for n in hits[1].get("neighbors", []))
+    # 5's neighbours are 3,4,7 (6 is a primary). 6's neighbours are 8 only
+    # (5 is a primary, 4 and 7 already attached to 5 via the dedupe `seen` set).
+    assert pos_a == [3, 4, 7]
+    assert pos_b == [8]
+
+
+def test_attach_neighbors_respects_boundaries():
+    """No neighbours beyond the smallest/largest stored position."""
+    rows = [_row(i, f"turn {i}", position=i) for i in range(3)]  # positions 0,1,2
+    sources = {"vector": PositionalVectorMemory(rows)}
+    hit = {
+        "text": "turn 0",
+        "source": "vector",
+        "source_id": "0",
+        "metadata": {"id": 0, "metadata": {"position": 0}},
+    }
+
+    asyncio.run(_attach_neighbors([hit], sources, n=2, position_key="position", group_key=None))
+
+    positions = sorted(n["metadata"]["position"] for n in hit.get("neighbors", []))
+    assert positions == [1, 2]  # -1 and -2 don't exist
+
+
+def test_attach_neighbors_group_filter():
+    """group_key constrains neighbours to share the host's group value."""
+    rows = [
+        _row(1, "a1", position=0, session="A"),
+        _row(2, "a2", position=1, session="A"),
+        _row(3, "b1", position=0, session="B"),
+        _row(4, "b2", position=1, session="B"),
+    ]
+    sources = {"vector": PositionalVectorMemory(rows)}
+    hit = {
+        "text": "a2",
+        "source": "vector",
+        "source_id": "2",
+        "metadata": {"id": 2, "metadata": {"position": 1, "session": "A"}},
+    }
+
+    asyncio.run(_attach_neighbors([hit], sources, n=1, position_key="position", group_key="session"))
+
+    neighbours = hit.get("neighbors", [])
+    assert len(neighbours) == 1
+    assert neighbours[0]["text"] == "a1"
+    assert neighbours[0]["metadata"]["session"] == "A"
+
+
+def test_attach_neighbors_skips_hits_missing_required_group():
+    """When group_key is configured, a hit lacking that key must not pull cross-group neighbours.
+
+    Regression for the bug where group_value=None silently disabled the SQL
+    group filter, letting a group-less hit sample any group's neighbours.
+    """
+    rows = [
+        _row(1, "a1", position=0, session="A"),
+        _row(2, "a2", position=1, session="A"),
+        _row(3, "b1", position=0, session="B"),
+        _row(4, "b2", position=1, session="B"),
+    ]
+    sources = {"vector": PositionalVectorMemory(rows)}
+    hit = {
+        "text": "stray",
+        "source": "vector",
+        "source_id": "99",
+        # position is set but session is NOT — group filtering is requested
+        # by the caller, so this hit should be left alone, not pull
+        # arbitrary same-position rows from other sessions.
+        "metadata": {"id": 99, "metadata": {"position": 1}},
+    }
+
+    asyncio.run(_attach_neighbors([hit], sources, n=1, position_key="position", group_key="session"))
+
+    assert "neighbors" not in hit
+
+
+def test_attach_neighbors_zero_is_noop():
+    rows = [_row(1, "x", position=0)]
+    sources = {"vector": PositionalVectorMemory(rows)}
+    hit = {"text": "x", "source": "vector", "source_id": "1",
+           "metadata": {"id": 1, "metadata": {"position": 0}}}
+
+    asyncio.run(_attach_neighbors([hit], sources, n=0, position_key="position", group_key=None))
+
+    assert "neighbors" not in hit
+
+
+def test_attach_neighbors_skipped_when_source_lacks_method():
+    """Older mocks without get_by_position must not crash retrieve()."""
+    sources = {"vector": MockVectorMemory()}  # no get_by_position
+    hit = {"text": "x", "source": "vector", "source_id": "1",
+           "metadata": {"id": 1, "metadata": {"position": 5}}}
+
+    asyncio.run(_attach_neighbors([hit], sources, n=2, position_key="position", group_key=None))
+
+    assert "neighbors" not in hit
+
+
+def test_attach_neighbors_skips_hits_without_position():
+    """Hits whose user metadata has no position_key are left untouched."""
+    rows = [_row(i, f"turn {i}", position=i) for i in range(5)]
+    sources = {"vector": PositionalVectorMemory(rows)}
+    hits = [
+        {"text": "turn 2", "source": "vector", "source_id": "2",
+         "metadata": {"id": 2, "metadata": {"position": 2}}},
+        {"text": "stray", "source": "vector", "source_id": "99",
+         "metadata": {"id": 99, "metadata": {"some_other_key": "x"}}},
+    ]
+
+    asyncio.run(_attach_neighbors(hits, sources, n=1, position_key="position", group_key=None))
+
+    assert "neighbors" in hits[0]
+    assert "neighbors" not in hits[1]
+
+
+def test_retrieve_thorough_attaches_neighbours():
+    """End-to-end: retrieve(adjacent_neighbors=N) attaches neighbours via the vector source."""
+    rows = [_row(i, f"turn {i}", position=i, session="conv1") for i in range(8)]
+    sources = {"vector": PositionalVectorMemory(rows)}
+    results = asyncio.run(retrieve(
+        query="anything",
+        strategy="thorough",
+        sources=sources,
+        limit=3,
+        adjacent_neighbors=2,
+        position_key="position",
+        group_key="session",
+    ))
+
+    assert results
+    # At least one of the survivors should have neighbours attached
+    with_neighbours = [r for r in results if "neighbors" in r]
+    assert with_neighbours, "expected at least one hit to gain neighbours"

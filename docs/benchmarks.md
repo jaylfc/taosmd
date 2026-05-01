@@ -58,6 +58,7 @@ Harness: [`benchmarks/locomo_runner.py`](../benchmarks/locomo_runner.py). Rescor
 | **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF | **0.557** | **leader — full stack with RRF fusion** |
 | **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF + multi-level | 0.552 | adding multi-level on top of leader regresses by -0.005 |
 | **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp | 0.545 | full stack without RRF |
+| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF + few-shot | 0.540 | few-shot on top of the leader regresses by -0.017 |
 | **taosmd** | qwen3.5:9b | adj=3 | 0.532 | broader context window |
 | **taosmd** | qwen3.5:9b | adj=2 + multi-level retrieval | 0.524 | turns + summaries + events |
 | **taosmd** | qwen3.5:9b | adj=2 + RRF only | 0.500 | RRF without scaffolding regresses at 9B |
@@ -79,7 +80,7 @@ All taosmd rows on the same commit series (`feat/locomo-param-configs` merged to
 
 ### Key architectural findings
 
-- **`adjacent_turns` is the dominant lever at every model size we measured.** 5B: adj=1 → 0.465, adj=2 → 0.499. 9B: adj=1 → 0.481, adj=2 → 0.516. Going from adj=1 to adj=2 adds more than the entire stack of `k=20 + llm-exp` adds.
+- **`adjacent_turns` is the dominant lever at every model size we measured.** 5B: adj=1 → 0.465, adj=2 → 0.499. 9B: adj=1 → 0.481, adj=2 → 0.516. Going from adj=1 to adj=2 adds more than the entire stack of `k=20 + llm-exp` adds. Available in core via `retrieve(adjacent_neighbors=N, position_key=..., group_key=...)` — see `taosmd/retrieval.py`. Default off; consumers opt in by populating an integer position field on each item's metadata at ingest time.
 - **At 9B, individual retrieval levers need the full-stack scaffolding to express their value.** Adding RRF *alone* on top of adj=2 regresses (0.500 vs 0.516); adding multi-level retrieval *alone* on top of adj=2 helps modestly (0.524); combining the two without k=20 + llm-exp scaffolding is *worse* than either alone (0.495). But the same components inside the full stack — k=20 + adj=2 + llm-exp + RRF — give the leader at 0.557. The wider candidate pool from k=20 is what gives the fusion something useful to merge; without it RRF over-smooths a narrow ranked list.
 - **Multihop decomposition is a footgun across model sizes.** 5B: 0.317 (-0.093 vs baseline). 9B: **0.306** (worse than 5B). Not a sizing issue — sub-query retrieval inherently surfaces lower-quality chunks. **Don't enable `--multihop-decompose` in production.**
 - **Generator size alone is a weak lever.** qwen3.5:9b + k=20 (0.458) is *worse* than gemma4:e2b + adj=1 (0.465). Doubling parameters gives ≤ +0.005 unless architecture scales with it.
@@ -99,7 +100,7 @@ Running these as cells against the same external `qwen3:4b` judge gives the leve
 | `hyde` (adj=2 + HyDE only) | 0.456 | -0.060 | **HyDE regresses standalone** |
 | `hyde_full_stack` (leader recipe + HyDE) | 0.486 | -0.030 vs baseline / -0.071 vs 0.557 leader | **HyDE poison-pill — drags any stack it joins** |
 
-Lesson: HyDE assumes the generator can imagine a good hypothetical answer; on memory-recall datasets a small generator hallucinates the answer's structure, the embedding lookup matches that hallucination, and recall collapses. Few-shot exemplars compete for context budget without adding retrieval signal. Generator-side bumps (35B-A3B via TurboQuant — `docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) are the next planned lever, since retrieval-side levers have plateaued.
+Lesson: HyDE assumes the generator can imagine a good hypothetical answer; on memory-recall datasets a small generator hallucinates the answer's structure, the embedding lookup matches that hallucination, and recall collapses. Few-shot exemplars compete for context budget without adding retrieval signal — and the same effect persists when stacked: `few_shot_full_stack` (leader recipe + 5 exemplars) lands at 0.540, -0.017 vs the 0.557 leader. Generator-side bumps (35B-A3B via TurboQuant — `docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) are the next planned lever, since retrieval-side levers have plateaued.
 
 ### Architecture matters more at smaller compute tiers
 

@@ -236,6 +236,32 @@ await archive.record("conversation", {"content": "Hello"}, summary="User greeted
 events = await archive.search_fts("hello")
 ```
 
+### Conversational adjacency (opt-in)
+
+For multi-turn data where surrounding turns add context, populate an integer position field at ingest and ask `retrieve()` for ±N positional neighbours. Worth +0.089 on LoCoMo same-tier — see [docs/benchmarks.md](docs/benchmarks.md).
+
+```python
+from taosmd import VectorMemory, retrieve
+
+vmem = VectorMemory("data/vectors.db")
+await vmem.init()
+
+# Tag each turn with its position (and optional group, e.g. session)
+for i, turn in enumerate(turns):
+    await vmem.add(turn["text"], metadata={"position": i, "session": "conv1"})
+
+hits = await retrieve(
+    "what was discussed about the deploy?",
+    sources={"vector": vmem},
+    adjacent_neighbors=2,        # default 0 — opt in for the lever
+    position_key="position",
+    group_key="session",         # confine neighbours to the same session
+)
+# Each hit may include a hits[i]["neighbors"] list of nearby turns
+# (skipped at boundaries, when neighbours are themselves primary hits, or
+# when the hit lacks the configured position/group keys).
+```
+
 ## Key Features
 
 - **97.0% end-to-end Judge accuracy** on LongMemEval-S benchmark (SOTA)
