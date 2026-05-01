@@ -18,6 +18,7 @@ from .reflect import InsightStore
 from .session_catalog import SessionCatalog
 from .catalog_pipeline import CatalogPipeline
 from .retrieval import retrieve
+from .api import ingest, search
 from .cross_encoder import CrossEncoderReranker
 from .access_tracker import AccessTracker
 from .preference_extractor import extract_preferences
@@ -74,6 +75,8 @@ __all__ = [
     "CatalogPipeline",
     # Retrieval
     "retrieve",
+    "ingest",
+    "search",
     "CrossEncoderReranker",
     "classify_intent",
     "get_search_strategy",
