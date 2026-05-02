@@ -552,8 +552,16 @@ async def _decompose_query(
         lines = [l.strip() for l in raw.splitlines() if l.strip()]
         if len(lines) >= 2:
             return lines
-    except Exception:
-        pass
+    except Exception as exc:
+        # Multihop is a small-utility-model call on Ollama (gemma4:e2b)
+        # regardless of the main generator's backend. Surface failure so
+        # a misconfigured Ollama URL is visible instead of silently
+        # falling through to the original question.
+        print(
+            f"[locomo_runner] _decompose_query failed (url={ollama_url!r}): "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
     return [question]
 
 
@@ -608,6 +616,7 @@ async def _process_qa(
     turn_index: dict[str, dict],
     llm_backend: str = "ollama",
     llama_server_url: str = "",
+    expansion_model: str = "",
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -642,14 +651,29 @@ async def _process_qa(
         # --- optional LLM query expansion ---
         retrieval_query = question
         if llm_query_expansion:
+            # expand_query_llm only speaks Ollama's /api/generate. When the
+            # main generator runs on llama-server (e.g. TurboQuant), the
+            # caller must supply an Ollama-served small model via
+            # --expansion-model; otherwise the GGUF name is meaningless to
+            # Ollama and the call fails. expansion_model defaults to the
+            # main model for back-compat with existing chains.
+            exp_model = expansion_model or model
             try:
                 from taosmd.query_expansion import expand_query_llm
-                expansion = await expand_query_llm(question, llm_url=ollama_url, model=model)
+                expansion = await expand_query_llm(question, llm_url=ollama_url, model=exp_model)
                 reformulations = expansion.get("reformulations", [])
                 if reformulations:
                     retrieval_query = reformulations[0]
-            except Exception:
-                pass  # fall through to original question
+            except Exception as exc:
+                # No silent failure — at minimum surface the error so a
+                # misconfigured backend (e.g. llama-server generator without
+                # --expansion-model) is visible in the bench log instead of
+                # quietly running with no expansion.
+                print(
+                    f"[locomo_runner] expand_query_llm failed (model={exp_model!r} "
+                    f"url={ollama_url!r}): {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
 
         # --- optional HyDE (Hypothetical Document Embeddings) ---
         # Gao et al. 2022. Ask the generator for a hypothetical 1-2 sentence
@@ -843,6 +867,7 @@ async def run(args: argparse.Namespace) -> int:
                     turn_index=turn_index,
                     llm_backend=args.llm_backend,
                     llama_server_url=args.llm_server_url,
+                    expansion_model=args.expansion_model,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -906,6 +931,7 @@ async def run(args: argparse.Namespace) -> int:
         "retrieval_top_k": retrieval_top_k,
         "llm_backend": args.llm_backend,
         "llm_server_url": args.llm_server_url if args.llm_backend == "llama-server" else "",
+        "expansion_model": args.expansion_model,
         "context_format": args.context_format,
         "adjacent_turns": args.adjacent_turns,
         "llm_query_expansion": args.llm_query_expansion,
@@ -979,6 +1005,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--llm-server-url", default="http://localhost:8085",
                    help="URL of llama-server when --llm-backend=llama-server (the rescore "
                         "step still hits Ollama via --ollama-url for the external judge).")
+    p.add_argument("--expansion-model", default="",
+                   help="Ollama model used by --llm-query-expansion. Defaults to --model "
+                        "for back-compat. Required when --llm-backend=llama-server, since "
+                        "expand_query_llm only speaks Ollama and --model in that case names "
+                        "a llama-server-only GGUF.")
     p.add_argument("--model", default="qwen3:4b")
     p.add_argument("--top-k", type=int, default=10)
     p.add_argument("--retrieval-top-k", type=int, default=None,
