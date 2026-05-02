@@ -193,11 +193,69 @@ async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
     return (resp.json().get("response") or "").strip()
 
 
+async def _llama_server_generate(client: httpx.AsyncClient, url: str, model: str,
+                                 prompt: str, temperature: float = 0.2,
+                                 thinking_mode: bool = False,
+                                 no_think_prefix: bool = False) -> str:
+    """OpenAI-compatible generator for llama-server (TurboQuant fork).
+
+    Used when ``--llm-backend llama-server`` is set so Qwen3.6-35B-A3B can
+    serve answers via llama.cpp's chat completions endpoint (the model
+    doesn't fit in Ollama at this quant on a 12 GB card without TurboQuant
+    KV-cache offload). ``thinking_mode`` and ``no_think_prefix`` keep their
+    semantics: with ``no_think_prefix`` we prepend ``/no_think`` so the
+    chat template can suppress reasoning tokens; with ``thinking_mode`` we
+    leave both off and let the generator emit CoT.
+    """
+    payload_prompt = ("/no_think\n\n" + prompt) if no_think_prefix else prompt
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": payload_prompt}],
+        "temperature": temperature,
+        "stream": False,
+    }
+    resp = await client.post(f"{url}/v1/chat/completions", json=payload)
+    resp.raise_for_status()
+    body = resp.json()
+    choices = body.get("choices") or []
+    if not choices:
+        return ""
+    msg = choices[0].get("message") or {}
+    return (msg.get("content") or "").strip()
+
+
+async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: str,
+                    prompt: str, temperature: float = 0.2,
+                    thinking_mode: bool = False,
+                    no_think_prefix: bool = False) -> str:
+    """Dispatch a generation call to the configured backend.
+
+    ``backend`` is either ``"ollama"`` (default — POSTs to ``{url}/api/generate``)
+    or ``"llama-server"`` (TurboQuant fork — POSTs to ``{url}/v1/chat/completions``).
+    Caller supplies the right URL for the chosen backend; the runner picks
+    one based on ``args.llm_backend`` plus the matching URL flag.
+    """
+    if backend == "llama-server":
+        return await _llama_server_generate(
+            client, url, model, prompt,
+            temperature=temperature,
+            thinking_mode=thinking_mode,
+            no_think_prefix=no_think_prefix,
+        )
+    return await _ollama_generate(
+        client, url, model, prompt,
+        temperature=temperature,
+        thinking_mode=thinking_mode,
+        no_think_prefix=no_think_prefix,
+    )
+
+
 async def _judge(client: httpx.AsyncClient, url: str, model: str,
-                 question: str, reference: str, predicted: str) -> float:
+                 question: str, reference: str, predicted: str,
+                 backend: str = "ollama") -> float:
     try:
-        reply = await _ollama_generate(
-            client, url, model,
+        reply = await _generate(
+            backend, client, url, model,
             JUDGE_PROMPT.format(question=question, reference=reference, predicted=predicted),
             temperature=0.0,
         )
@@ -494,8 +552,16 @@ async def _decompose_query(
         lines = [l.strip() for l in raw.splitlines() if l.strip()]
         if len(lines) >= 2:
             return lines
-    except Exception:
-        pass
+    except Exception as exc:
+        # Multihop is a small-utility-model call on Ollama (gemma4:e2b)
+        # regardless of the main generator's backend. Surface failure so
+        # a misconfigured Ollama URL is visible instead of silently
+        # falling through to the original question.
+        print(
+            f"[locomo_runner] _decompose_query failed (url={ollama_url!r}): "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
     return [question]
 
 
@@ -548,6 +614,9 @@ async def _process_qa(
     hyde: bool,
     few_shot: bool,
     turn_index: dict[str, dict],
+    llm_backend: str = "ollama",
+    llama_server_url: str = "",
+    expansion_model: str = "",
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -555,6 +624,10 @@ async def _process_qa(
     reference = str(qa["answer"])
     category = int(qa.get("category", 0))
     evidence = qa.get("evidence", []) or []
+
+    # Resolve which URL the generator and self-judge will hit. Computed once
+    # so both the retrieval and full-context branches reach a defined value.
+    gen_url = llama_server_url if llm_backend == "llama-server" else ollama_url
 
     if full_context:
         # Bypass retrieval entirely; pass every turn of the current conversation
@@ -578,14 +651,29 @@ async def _process_qa(
         # --- optional LLM query expansion ---
         retrieval_query = question
         if llm_query_expansion:
+            # expand_query_llm only speaks Ollama's /api/generate. When the
+            # main generator runs on llama-server (e.g. TurboQuant), the
+            # caller must supply an Ollama-served small model via
+            # --expansion-model; otherwise the GGUF name is meaningless to
+            # Ollama and the call fails. expansion_model defaults to the
+            # main model for back-compat with existing chains.
+            exp_model = expansion_model or model
             try:
                 from taosmd.query_expansion import expand_query_llm
-                expansion = await expand_query_llm(question, llm_url=ollama_url, model=model)
+                expansion = await expand_query_llm(question, llm_url=ollama_url, model=exp_model)
                 reformulations = expansion.get("reformulations", [])
                 if reformulations:
                     retrieval_query = reformulations[0]
-            except Exception:
-                pass  # fall through to original question
+            except Exception as exc:
+                # No silent failure — at minimum surface the error so a
+                # misconfigured backend (e.g. llama-server generator without
+                # --expansion-model) is visible in the bench log instead of
+                # quietly running with no expansion.
+                print(
+                    f"[locomo_runner] expand_query_llm failed (model={exp_model!r} "
+                    f"url={ollama_url!r}): {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
 
         # --- optional HyDE (Hypothetical Document Embeddings) ---
         # Gao et al. 2022. Ask the generator for a hypothetical 1-2 sentence
@@ -596,8 +684,8 @@ async def _process_qa(
         # was already expanded or not).
         if hyde:
             try:
-                hypothetical = await _ollama_generate(
-                    client, ollama_url, model,
+                hypothetical = await _generate(
+                    llm_backend, client, gen_url, model,
                     HYDE_PROMPT.format(question=question),
                     temperature=0.3,
                     thinking_mode=thinking_mode,
@@ -646,8 +734,8 @@ async def _process_qa(
         answer_prompt = ANSWER_PROMPT.format(context=context, question=question)
         if few_shot:
             answer_prompt = FEW_SHOT_EXAMPLES + answer_prompt
-        predicted = await _ollama_generate(
-            client, ollama_url, model,
+        predicted = await _generate(
+            llm_backend, client, gen_url, model,
             answer_prompt,
             thinking_mode=thinking_mode,
             no_think_prefix=no_think_prefix,
@@ -656,7 +744,7 @@ async def _process_qa(
         predicted = f"[generation_error: {exc}]"
     gen_ms = (time.time() - t1) * 1000.0
 
-    judge = await _judge(client, ollama_url, model, question, reference, predicted)
+    judge = await _judge(client, gen_url, model, question, reference, predicted, backend=llm_backend)
 
     return {
         "conversation_id": conv_id,
@@ -777,6 +865,9 @@ async def run(args: argparse.Namespace) -> int:
                     hyde=args.hyde,
                     few_shot=args.few_shot,
                     turn_index=turn_index,
+                    llm_backend=args.llm_backend,
+                    llama_server_url=args.llm_server_url,
+                    expansion_model=args.expansion_model,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -838,6 +929,9 @@ async def run(args: argparse.Namespace) -> int:
         "model": args.model,
         "top_k": args.top_k,
         "retrieval_top_k": retrieval_top_k,
+        "llm_backend": args.llm_backend,
+        "llm_server_url": args.llm_server_url if args.llm_backend == "llama-server" else "",
+        "expansion_model": args.expansion_model,
         "context_format": args.context_format,
         "adjacent_turns": args.adjacent_turns,
         "llm_query_expansion": args.llm_query_expansion,
@@ -904,6 +998,18 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--onnx-path", default=_DEFAULT_ONNX,
                    help=f"Path to MiniLM ONNX model directory. Env: TAOSMD_ONNX_PATH (default: {_DEFAULT_ONNX})")
     p.add_argument("--ollama-url", default="http://localhost:11434")
+    p.add_argument("--llm-backend", choices=["ollama", "llama-server"], default="ollama",
+                   help="Backend serving the generator (and self-judge). 'ollama' POSTs "
+                        "/api/generate; 'llama-server' POSTs /v1/chat/completions on the "
+                        "TurboQuant fork (used for Qwen3.6-35B-A3B with CPU-MoE offload).")
+    p.add_argument("--llm-server-url", default="http://localhost:8085",
+                   help="URL of llama-server when --llm-backend=llama-server (the rescore "
+                        "step still hits Ollama via --ollama-url for the external judge).")
+    p.add_argument("--expansion-model", default="",
+                   help="Ollama model used by --llm-query-expansion. Defaults to --model "
+                        "for back-compat. Required when --llm-backend=llama-server, since "
+                        "expand_query_llm only speaks Ollama and --model in that case names "
+                        "a llama-server-only GGUF.")
     p.add_argument("--model", default="qwen3:4b")
     p.add_argument("--top-k", type=int, default=10)
     p.add_argument("--retrieval-top-k", type=int, default=None,
