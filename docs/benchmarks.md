@@ -99,8 +99,9 @@ Running these as cells against the same external `qwen3:4b` judge gives the leve
 | `inverse_temporal` (recency boost -0.005) | 0.503 | -0.013 | small regression |
 | `hyde` (adj=2 + HyDE only) | 0.456 | -0.060 | **HyDE regresses standalone** |
 | `hyde_full_stack` (leader recipe + HyDE) | 0.486 | -0.030 vs baseline / -0.071 vs 0.557 leader | **HyDE poison-pill — drags any stack it joins** |
+| `thinking_on` (adj=2 + qwen3 thinking-mode, 200-QA subset) | 0.20 | **-0.32** | **chain-of-thought regresses catastrophically on memory-recall** |
 
-Lesson: HyDE assumes the generator can imagine a good hypothetical answer; on memory-recall datasets a small generator hallucinates the answer's structure, the embedding lookup matches that hallucination, and recall collapses. Few-shot exemplars compete for context budget without adding retrieval signal — and the same effect persists when stacked: `few_shot_full_stack` (leader recipe + 5 exemplars) lands at 0.540, -0.017 vs the 0.557 leader. Generator-side bumps (35B-A3B via TurboQuant — `docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) are the next planned lever, since retrieval-side levers have plateaued.
+Lesson: HyDE assumes the generator can imagine a good hypothetical answer; on memory-recall datasets a small generator hallucinates the answer's structure, the embedding lookup matches that hallucination, and recall collapses. Few-shot exemplars compete for context budget without adding retrieval signal — and the same effect persists when stacked: `few_shot_full_stack` (leader recipe + 5 exemplars) lands at 0.540, -0.017 vs the 0.557 leader. The same few-shot regression appears at the Pi NPU tier (-0.11 vs the Pi full-stack leader of 0.49) — direction-consistent across model sizes. Thinking-mode (qwen3 chain-of-thought ON, 200-QA subset) collapses to 0.20 — the model emits CoT that drifts off the retrieved context or fails to commit within the budget; **don't enable `--thinking-mode` on memory-recall benchmarks for this generator**. Generator-side bumps (35B-A3B via TurboQuant — `docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) are the next planned lever, since retrieval-side levers have plateaued.
 
 ### Architecture matters more at smaller compute tiers
 
@@ -188,7 +189,9 @@ LoCoMo measurements (qwen3-4b-chat via rkllama on the NPU, all with `--adjacent-
 | **adj=2 + k=20 + llm-exp + RRF (full leader stack)** | **0.490** | **+0.108** |
 | adj=2 + BGE-reranker-v2-m3 | 0.456 | +0.074 |
 | adj=2 + multi-level retrieval + RRF | 0.425 | +0.043 |
+| adj=2 + 5 few-shot exemplars | 0.39 | +0.01 (noise) |
 | adj=2 (baseline) | 0.382 | — |
+| adj=2 + leader stack + few-shot | 0.38 | -0.002 vs baseline / **-0.11 vs full_stack leader** |
 | adj=2 + HyDE | 0.325 | -0.057 (HyDE regresses on small generators) |
 
 The +0.074 BGE-v2-m3 lift on this tier is ~12× the lift the same swap gives on the 12 GB GPU at qwen3.5:9b — see the "Architecture matters more at smaller compute tiers" finding above.
