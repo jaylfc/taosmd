@@ -197,6 +197,38 @@ Methodology note on custom quants: all V3 quants in this table were built via `o
 
 Measured on Fedora 12 GB 3060 host, May 5 2026.
 
+### Answer-prompt variants — does prompt engineering raise Single-hop?
+
+Both candidate generators (qwen3.5:9b, llama3.1:8b) underperform on Single-hop relative to other LoCoMo categories. We swapped the production `ANSWER_PROMPT` for four alternative answer-prompt templates, holding everything else (retrieval stack, generator, dataset, external `qwen3:4b` rescore) constant. Goal: see whether prompt engineering — at the answer step, not the retrieval step — could raise Single-hop without architectural change.
+
+| Variant | What it instructs | Length target |
+|---|---|---|
+| `concise` | "answer in 5-6 words; just the fact, no explanation" | ≤ 5–6 words |
+| `refusal` | "only use facts directly stated in context; do NOT infer beyond what is written" | open |
+| `citation` | "answer in 5-10 words, then cite the supporting turn `[Speaker, date]`" | 5–10 words + citation |
+| `memobase` | brevity + "prioritise most recent on contradictions" + "don't confuse character names with users" | ≤ 5–6 words |
+
+| Generator | Variant | Ext rejudge | Δ vs default | Single-hop rejudge | F1 |
+|---|---|---|---|---|---|
+| qwen3.5:9b | **default** | **0.56** | — | ~0.34 | 0.226 |
+| qwen3.5:9b | concise | 0.39 | -0.17 | 0.23 | 0.433 |
+| qwen3.5:9b | refusal | 0.33 | -0.23 | 0.14 | 0.320 |
+| qwen3.5:9b | citation | 0.39 | -0.17 | 0.19 | 0.251 |
+| qwen3.5:9b | memobase | 0.41 | -0.15 | 0.23 | 0.446 |
+| llama3.1:8b | **default** | **0.54** | — | — | 0.294 |
+| llama3.1:8b | concise | 0.38 | -0.16 | 0.19 | 0.383 |
+| llama3.1:8b | refusal | 0.38 | -0.16 | 0.16 | 0.292 |
+| llama3.1:8b | citation | **0.53** | **-0.01** | 0.28 | 0.185 |
+| llama3.1:8b | memobase | 0.39 | -0.15 | 0.28 | 0.404 |
+
+Headlines:
+
+- **Single-hop hypothesis refuted.** No variant raised Single-hop rejudge on either model. The production `ANSWER_PROMPT` is locally optimal at this tier; the ceiling on Single-hop sits somewhere other than the answer prompt.
+- **Prompt × model interaction is real.** `citation` costs qwen3.5:9b -0.17 but only -0.01 on llama3.1:8b. Plausible reading: llama's default-prompt output is wordier than qwen's; forcing the `[Speaker, date]` citation forces brevity that the judge reads as more committed/correct. F1 collapses to 0.185 (the lowest of any variant) — the surface form is very different — but rejudge holds. Useful guardrail: a "good prompt" for one open generator can be a poison pill for another at the same tier.
+- **F1 ↑ / rejudge ↓ is a recurring pattern.** `concise` and `memobase` have the highest F1 (more lexical overlap with gold) but their rejudge regresses by 0.15–0.17 — short surface-aligned answers fool F1 but get marked wrong by the LLM judge. F1 alone misranks generators *and* prompts.
+
+Measured on Fedora 12 GB 3060 host, May 5 2026. Variants and the `--answer-style {default,concise,refusal,citation,memobase}` runner flag live on branch `feat/locomo-prompt-variants` for reproduction.
+
 ### Methodology disclosures
 
 - **Dataset**: LoCoMo-10, 1540 QAs, categories 1–4. Adversarial reserved.
@@ -264,11 +296,9 @@ The +0.074 BGE-v2-m3 lift on this tier is ~12× the lift the same swap gives on 
 
 Practical operational notes (learned the hard way): use the official ≥4 A USB-C PSU and active cooling under sustained inference workloads. The combined NPU + CPU + co-tenant load (e.g. running scrypted on the same Pi) will overdraw a stock charger and cause silent power-related kernel hangs after many hours of continuous load. Use the Pi as a dedicated AI worker if you can — co-tenant services should ideally run on a separate machine.
 
+This is also the LongMemEval-S 97.0% reference stack — same configuration as the LoCoMo measurements above.
 
-
-This is the LongMemEval-S 97.0% reference stack. LoCoMo on this hardware is **not yet measured** (planned).
-
-- **Generator**: `Qwen3-4B` via `rkllama` on the RK3588 NPU (~17 s/turn). Exact stack used for the 97% claim.
+- **Generator**: `Qwen3-4B` via `rkllama` on the RK3588 NPU (~17 s/turn). Exact stack used for both the 97 % LongMemEval-S claim and the LoCoMo measurements at this tier.
 - **Embedder**: `all-MiniLM-L6-v2` ONNX on CPU (0.3 ms — NPU is slower for small models).
 - **Reranker**: `Qwen3-Reranker-0.6B` on NPU.
 - **Query expansion**: `qmd-query-expansion 1.7B` on NPU.
