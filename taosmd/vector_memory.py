@@ -121,11 +121,27 @@ class VectorMemory:
         """Embed using ONNX Runtime (fast CPU inference, no PyTorch)."""
         import numpy as np
         try:
-            # Add task prefix for models that use it (nomic-embed)
-            # Detected by checking if the model config mentions "nomic" or has task_type support
             embed_text = text[:512]
-            if self._onnx_path and "nomic" in str(self._onnx_path).lower():
+            path_lower = str(self._onnx_path or "").lower()
+            is_query = task == "search_query"
+            if "nomic" in path_lower:
                 embed_text = f"{task}: {embed_text}"
+            elif "embeddinggemma" in path_lower or "embedding-gemma" in path_lower:
+                embed_text = (
+                    f"task: search result | query: {embed_text}"
+                    if is_query
+                    else f"title: none | text: {embed_text}"
+                )
+            elif "qwen3-embedding" in path_lower or "qwen3_embedding" in path_lower:
+                if is_query:
+                    embed_text = (
+                        "Instruct: Given a question about a conversation, "
+                        "retrieve relevant turns that answer the question\n"
+                        f"Query: {embed_text}"
+                    )
+            elif "arctic-embed" in path_lower:
+                if is_query:
+                    embed_text = f"query: {embed_text}"
 
             inputs = self._onnx_tokenizer(embed_text, return_tensors="np", padding=True, truncation=True)
             feed = {
