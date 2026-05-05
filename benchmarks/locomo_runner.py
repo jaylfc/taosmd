@@ -53,6 +53,65 @@ Context:
 Question: {question}
 Answer:"""
 
+# Alternative answer prompts for the prompt-engineering experiment.
+# Selected via --answer-style. The leader recipe stays "default".
+# Background: per-research, the LoCoMo judge accepts topically-adjacent answers
+# generously, but rewards concise reference-matching answers. Variants below
+# tighten or restructure the answer instruction to test this.
+ANSWER_PROMPT_CONCISE = """You are answering a question using retrieved conversation memory.
+Use the context below. Answer in 5-6 words or less. Just the fact, no explanation.
+For date/time questions, always answer with explicit absolute dates (e.g., "7 May 2023") — never relative references.
+If the answer is not in the context, respond exactly: I don't know.
+
+Context:
+{context}
+
+Question: {question}
+Answer:"""
+
+ANSWER_PROMPT_REFUSAL = """You are answering a question using retrieved conversation memory.
+Only use facts that are directly stated in the context. Do NOT infer beyond what is written.
+Answer in 5-10 words. For dates use explicit absolute format (e.g., "7 May 2023").
+If the context does not directly contain the answer, respond exactly: I don't know.
+
+Context:
+{context}
+
+Question: {question}
+Answer:"""
+
+ANSWER_PROMPT_CITATION = """You are answering a question using retrieved conversation memory.
+Answer in 5-10 words, then on a new line cite the supporting turn(s) like [Speaker, date].
+For dates use explicit absolute format. If not in the context, respond: I don't know.
+
+Context:
+{context}
+
+Question: {question}
+Answer:"""
+
+ANSWER_PROMPT_MEMOBASE = """You are an intelligent memory assistant tasked with retrieving accurate information from conversation memories.
+Formulate a precise, concise answer based solely on the evidence in the memories.
+The answer should be less than 5-6 words.
+For date/time questions, always answer with explicit absolute dates (e.g., "7 May 2023") — never relative references. Resolve relative time references using context (e.g., if a memory from "4 May 2022" mentions "went to India last year", the trip occurred in 2021).
+When contradictions exist, prioritize the most recent memory.
+Do not confuse character names mentioned in memories with the actual users who created those memories.
+If the context does not contain the answer, respond exactly: I don't know.
+
+Context:
+{context}
+
+Question: {question}
+Answer:"""
+
+ANSWER_PROMPT_VARIANTS = {
+    "default":       ANSWER_PROMPT,
+    "concise":       ANSWER_PROMPT_CONCISE,
+    "refusal":       ANSWER_PROMPT_REFUSAL,
+    "citation":      ANSWER_PROMPT_CITATION,
+    "memobase":      ANSWER_PROMPT_MEMOBASE,
+}
+
 JUDGE_PROMPT = """You are grading a predicted answer against a reference answer.
 Reply with a single token: YES if the predicted answer matches the reference
 (same facts, minor wording differences are fine), otherwise NO.
@@ -617,6 +676,7 @@ async def _process_qa(
     llm_backend: str = "ollama",
     llama_server_url: str = "",
     expansion_model: str = "",
+    answer_style: str = "default",
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -731,7 +791,8 @@ async def _process_qa(
 
     t1 = time.time()
     try:
-        answer_prompt = ANSWER_PROMPT.format(context=context, question=question)
+        answer_prompt_template = ANSWER_PROMPT_VARIANTS.get(answer_style, ANSWER_PROMPT)
+        answer_prompt = answer_prompt_template.format(context=context, question=question)
         if few_shot:
             answer_prompt = FEW_SHOT_EXAMPLES + answer_prompt
         predicted = await _generate(
@@ -864,6 +925,7 @@ async def run(args: argparse.Namespace) -> int:
                     fusion=args.fusion,
                     hyde=args.hyde,
                     few_shot=args.few_shot,
+                    answer_style=args.answer_style,
                     turn_index=turn_index,
                     llm_backend=args.llm_backend,
                     llama_server_url=args.llm_server_url,
@@ -945,6 +1007,7 @@ async def run(args: argparse.Namespace) -> int:
         "hyde": args.hyde,
         "no_think_prefix": args.no_think_prefix,
         "few_shot": args.few_shot,
+        "answer_style": args.answer_style,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -1100,6 +1163,13 @@ def _parse_args() -> argparse.Namespace:
                         "prefix is the real off-switch. Slightly slower than "
                         "think=false on qwen3.5:9b — only set when default "
                         "is broken on the target model.")
+    p.add_argument("--answer-style", choices=list(ANSWER_PROMPT_VARIANTS.keys()),
+                   default="default",
+                   help="Which ANSWER_PROMPT variant to use. 'default' is the "
+                        "leader-recipe prompt. 'concise' / 'memobase' enforce "
+                        "short answers (memobase-style). 'refusal' bans inference "
+                        "beyond stated facts. 'citation' requires citing the "
+                        "supporting turn. See ANSWER_PROMPT_VARIANTS in source.")
     p.add_argument("--few-shot", action="store_true",
                    help="Prepend 3 synthetic example QA pairs (one per "
                         "category — single-hop, temporal, multi-hop) before "
