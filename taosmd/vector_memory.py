@@ -114,34 +114,41 @@ class VectorMemory:
         if self._embed_mode == "onnx" and self._onnx_session is not None:
             return self._embed_onnx(text, task)
         if self._embed_mode == "local" and self._local_model is not None:
-            return self._embed_local(text)
+            return self._embed_local(text, task)
         return await self._embed_qmd(text)
+
+    def _apply_embed_prefix(self, text: str, task: str, identifier: str) -> str:
+        """Apply family-specific asymmetric prefix based on the model
+        identifier (the ONNX directory path for onnx mode, or the
+        sentence-transformers model name for local mode).
+        """
+        name_lower = (identifier or "").lower()
+        is_query = task == "search_query"
+        if "nomic" in name_lower:
+            return f"{task}: {text}"
+        if "embeddinggemma" in name_lower or "embedding-gemma" in name_lower:
+            return (
+                f"task: search result | query: {text}"
+                if is_query
+                else f"title: none | text: {text}"
+            )
+        if "qwen3-embedding" in name_lower or "qwen3_embedding" in name_lower:
+            if is_query:
+                return (
+                    "Instruct: Given a question about a conversation, "
+                    "retrieve relevant turns that answer the question\n"
+                    f"Query: {text}"
+                )
+        if "arctic-embed" in name_lower:
+            if is_query:
+                return f"query: {text}"
+        return text
 
     def _embed_onnx(self, text: str, task: str = "search_document") -> list[float]:
         """Embed using ONNX Runtime (fast CPU inference, no PyTorch)."""
         import numpy as np
         try:
-            embed_text = text[:512]
-            path_lower = str(self._onnx_path or "").lower()
-            is_query = task == "search_query"
-            if "nomic" in path_lower:
-                embed_text = f"{task}: {embed_text}"
-            elif "embeddinggemma" in path_lower or "embedding-gemma" in path_lower:
-                embed_text = (
-                    f"task: search result | query: {embed_text}"
-                    if is_query
-                    else f"title: none | text: {embed_text}"
-                )
-            elif "qwen3-embedding" in path_lower or "qwen3_embedding" in path_lower:
-                if is_query:
-                    embed_text = (
-                        "Instruct: Given a question about a conversation, "
-                        "retrieve relevant turns that answer the question\n"
-                        f"Query: {embed_text}"
-                    )
-            elif "arctic-embed" in path_lower:
-                if is_query:
-                    embed_text = f"query: {embed_text}"
+            embed_text = self._apply_embed_prefix(text[:512], task, self._onnx_path)
 
             inputs = self._onnx_tokenizer(embed_text, return_tensors="np", padding=True, truncation=True)
             feed = {
@@ -175,10 +182,11 @@ class VectorMemory:
             logger.debug("ONNX embedding failed: %s", e)
             return []
 
-    def _embed_local(self, text: str) -> list[float]:
+    def _embed_local(self, text: str, task: str = "search_document") -> list[float]:
         """Embed using local sentence-transformers model (CPU)."""
         try:
-            emb = self._local_model.encode(text[:512], convert_to_numpy=True)
+            embed_text = self._apply_embed_prefix(text[:512], task, self._local_model_name)
+            emb = self._local_model.encode(embed_text, convert_to_numpy=True)
             return emb.tolist()
         except Exception as e:
             logger.debug("Local embedding failed: %s", e)

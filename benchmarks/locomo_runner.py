@@ -889,6 +889,7 @@ async def run(args: argparse.Namespace) -> int:
                 db_path=os.path.join(tmp, "vmem.db"),
                 qmd_url=args.qmd_url,
                 embed_mode=args.embed_mode,
+                local_model=args.local_model,
                 onnx_path=args.onnx_path,
             )
             await vmem.init(http_client=client)
@@ -997,6 +998,9 @@ def _parse_args() -> argparse.Namespace:
                    help="Embedding backend. Default onnx (Fedora reference stack).")
     p.add_argument("--onnx-path", default=_DEFAULT_ONNX,
                    help=f"Path to MiniLM ONNX model directory. Env: TAOSMD_ONNX_PATH (default: {_DEFAULT_ONNX})")
+    p.add_argument("--local-model", default="all-MiniLM-L6-v2",
+                   help="Sentence-transformers model name for --embed-mode local. "
+                        "Examples: 'Qwen/Qwen3-Embedding-0.6B', 'Qwen/Qwen3-Embedding-4B'.")
     p.add_argument("--ollama-url", default="http://localhost:11434")
     p.add_argument("--llm-backend", choices=["ollama", "llama-server"], default="ollama",
                    help="Backend serving the generator (and self-judge). 'ollama' POSTs "
