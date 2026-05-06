@@ -208,6 +208,7 @@ class VectorMemory:
         limit: int = 5,
         hybrid: bool = True,
         fusion: str = "boost",
+        type_filter: int | None = None,
     ) -> list[dict]:
         """Semantic search with optional hybrid fusion.
 
@@ -217,6 +218,12 @@ class VectorMemory:
           "none"  — Pure semantic cosine similarity (MemPalace-equivalent)
 
         When hybrid=False, fusion mode is ignored and pure semantic is used.
+
+        ``type_filter`` is an optional integer bitmask consumed by the
+        ENGRAM-style typed retriever (see ``taosmd.engram_router``). When
+        set, only entries whose ``metadata.types`` shares at least one bit
+        with the mask are considered. Entries with no ``types`` field are
+        skipped. Default ``None`` (no filtering, original behaviour).
         """
         query_emb = await self.embed(query, task="search_query")
         if not query_emb:
@@ -245,6 +252,14 @@ class VectorMemory:
             emb_list = []
             for row in rows:
                 try:
+                    if type_filter is not None:
+                        try:
+                            md = json.loads(row["metadata_json"])
+                        except (json.JSONDecodeError, TypeError):
+                            md = {}
+                        row_types = md.get("types", 0) if isinstance(md, dict) else 0
+                        if not isinstance(row_types, int) or (row_types & type_filter) == 0:
+                            continue
                     emb = json.loads(row["embedding"])
                     if emb:
                         ids.append(row["id"])

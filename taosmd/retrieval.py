@@ -268,13 +268,47 @@ def _deduplicate(results: list[dict], threshold: float = 0.8) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-async def _query_source(name: str, source: object, query: str, limit: int) -> list[dict]:
+async def _query_typed_vector(source, query: str, limit: int) -> list[dict]:
+    """ENGRAM-style typed retrieval over a VectorMemory source.
+
+    Runs three independent top-k searches filtered by the
+    {episodic, semantic, procedural} bitmask metadata written at ingest
+    by ``EngramRouter``, then set-merges with dedup by source row ID
+    (preserving per-list order so the merged list still respects the
+    underlying cosine ranks). Adapts via ``_adapt_vector`` so the
+    downstream ``_rrf_merge`` pipeline doesn't need to care that the
+    candidates came from three sub-queries instead of one.
+    """
+    typed_lists = await asyncio.gather(
+        source.search(query, limit=limit, hybrid=True, type_filter=1),  # episodic
+        source.search(query, limit=limit, hybrid=True, type_filter=2),  # semantic
+        source.search(query, limit=limit, hybrid=True, type_filter=4),  # procedural
+        return_exceptions=True,
+    )
+    seen_ids = set()
+    merged: list[dict] = []
+    for results in typed_lists:
+        if isinstance(results, Exception):
+            continue
+        for r in results:
+            rid = r.get("id")
+            if rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            merged.append(r)
+    return _adapt_vector(merged)
+
+
+async def _query_source(name: str, source: object, query: str, limit: int,
+                        retrieval_mode: str = "default") -> list[dict]:
     """Query a single source and return adapted results.
 
     Returns an empty list if the query raises an exception.
     """
     try:
         if name == "vector":
+            if retrieval_mode == "engram_typed":
+                return await _query_typed_vector(source, query, limit)
             raw = await source.search(query, limit=limit, hybrid=True)
             return _adapt_vector(raw)
         elif name == "kg":
@@ -552,6 +586,7 @@ async def retrieve(
     adjacent_neighbors: int = 0,
     position_key: str = "position",
     group_key: str | None = None,
+    retrieval_mode: str = "default",
 ) -> list[dict]:
     """Retrieve relevant results from available memory sources.
 
@@ -606,7 +641,7 @@ async def retrieve(
         available = {k: v for k, v in sources.items()}
 
         tasks = [
-            asyncio.create_task(_query_source(name, src, query, fetch_limit))
+            asyncio.create_task(_query_source(name, src, query, fetch_limit, retrieval_mode=retrieval_mode))
             for name, src in available.items()
         ]
         results_per_source = await asyncio.gather(*tasks, return_exceptions=True)
@@ -642,14 +677,14 @@ async def retrieve(
         results: list[dict] = []
 
         if primary and primary in sources:
-            results = await _query_source(primary, sources[primary], query, fetch_limit)
+            results = await _query_source(primary, sources[primary], query, fetch_limit, retrieval_mode=retrieval_mode)
         elif sources:
             # Fall back to first available source
             first_name, first_src = next(iter(sources.items()))
-            results = await _query_source(first_name, first_src, query, fetch_limit)
+            results = await _query_source(first_name, first_src, query, fetch_limit, retrieval_mode=retrieval_mode)
 
         if len(results) < limit and secondary and secondary in sources:
-            secondary_results = await _query_source(secondary, sources[secondary], query, fetch_limit)
+            secondary_results = await _query_source(secondary, sources[secondary], query, fetch_limit, retrieval_mode=retrieval_mode)
             merged = _rrf_merge([results, secondary_results])
             results = _deduplicate(merged)
 
@@ -667,10 +702,10 @@ async def retrieve(
         results: list[dict] = []
 
         if primary and primary in sources:
-            results = await _query_source(primary, sources[primary], query, fetch_limit)
+            results = await _query_source(primary, sources[primary], query, fetch_limit, retrieval_mode=retrieval_mode)
         elif sources:
             first_name, first_src = next(iter(sources.items()))
-            results = await _query_source(first_name, first_src, query, fetch_limit)
+            results = await _query_source(first_name, first_src, query, fetch_limit, retrieval_mode=retrieval_mode)
 
         results = results[:limit]
         if adjacent_neighbors > 0:
@@ -687,7 +722,7 @@ async def retrieve(
         strategy_info = get_search_strategy(query)
 
         tasks = [
-            asyncio.create_task(_query_source(name, src, query, fetch_limit))
+            asyncio.create_task(_query_source(name, src, query, fetch_limit, retrieval_mode=retrieval_mode))
             for name, src in filtered_sources.items()
         ]
         results_per_source = await asyncio.gather(*tasks, return_exceptions=True)

@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from taosmd.vector_memory import VectorMemory  # noqa: E402
 from taosmd.retrieval import retrieve  # noqa: E402
+from taosmd.engram_router import EngramRouter, ALL_TYPES  # noqa: E402
 
 CATEGORY_NAMES = {
     1: "Single-hop (1)",
@@ -282,6 +283,7 @@ def _session_keys(conversation: dict) -> list[tuple[str, str]]:
 
 async def _ingest_conversation(
     vmem: VectorMemory, conv: dict, multi_level: bool = False,
+    engram_router: EngramRouter | None = None,
 ) -> tuple[int, float, dict[str, dict]]:
     """Ingest conversation turns into vmem.
 
@@ -302,6 +304,11 @@ async def _ingest_conversation(
     added = 0
     turn_index: dict[str, dict] = {}  # str(global_idx) -> {datetime, text, speaker, dia_id}
     global_idx = 0
+
+    # Phase 1: enumerate turns up front so the ENGRAM classifier (if any)
+    # can batch-classify before we touch vmem. ALL_TYPES default means
+    # turns ingested without a router still match every type filter.
+    turns_buffer: list[tuple[str, str, str, str, str]] = []
     for session_key, dt in _session_keys(conversation):
         for turn in conversation.get(session_key) or []:
             text = (turn.get("text") or "").strip()
@@ -309,25 +316,37 @@ async def _ingest_conversation(
                 continue
             speaker = turn.get("speaker", "")
             dia_id = turn.get("dia_id", "")
-            await vmem.add(
-                f"[{speaker}] {text}",
-                metadata={
-                    "dia_id": dia_id,
-                    "session": session_key,
-                    "datetime": dt,
-                    "speaker": speaker,
-                    "turn_idx": global_idx,
-                    "level": "turn",
-                },
-            )
-            turn_index[str(global_idx)] = {
-                "datetime": dt,
-                "text": f"[{speaker}] {text}",
-                "speaker": speaker,
+            turns_buffer.append((session_key, dt, speaker, dia_id, text))
+
+    if engram_router is not None and turns_buffer:
+        type_masks = await engram_router.classify_batch(
+            [f"[{spk}] {txt}" for (_, _, spk, _, txt) in turns_buffer]
+        )
+    else:
+        type_masks = [ALL_TYPES] * len(turns_buffer)
+
+    # Phase 2: ingest turns with their type masks.
+    for (session_key, dt, speaker, dia_id, text), mask in zip(turns_buffer, type_masks):
+        await vmem.add(
+            f"[{speaker}] {text}",
+            metadata={
                 "dia_id": dia_id,
-            }
-            global_idx += 1
-            added += 1
+                "session": session_key,
+                "datetime": dt,
+                "speaker": speaker,
+                "turn_idx": global_idx,
+                "level": "turn",
+                "types": int(mask),
+            },
+        )
+        turn_index[str(global_idx)] = {
+            "datetime": dt,
+            "text": f"[{speaker}] {text}",
+            "speaker": speaker,
+            "dia_id": dia_id,
+        }
+        global_idx += 1
+        added += 1
 
     if multi_level:
         # Episode level — session_summary entries.
@@ -343,6 +362,7 @@ async def _ingest_conversation(
                     "session": session_id,
                     "datetime": dt,
                     "level": "session_summary",
+                    "types": ALL_TYPES,
                 },
             )
             added += 1
@@ -369,6 +389,7 @@ async def _ingest_conversation(
                             "datetime": event_date,
                             "speaker": speaker,
                             "level": "event",
+                            "types": ALL_TYPES,
                         },
                     )
                     added += 1
@@ -572,6 +593,7 @@ async def _retrieve(
     top_k: int,
     reranker: object | None = None,
     fusion: str = "boost",
+    retrieval_mode: str = "default",
 ) -> list[dict]:
     if strategy == "vector-only":
         # fusion: "boost" (default, legacy additive keyword boost) | "rrf"
@@ -585,7 +607,8 @@ async def _retrieve(
         return hits
     # TODO: wire cross-encoder reranker for strategy="full"; for now reuse retrieve() with vector source only.
     hits = await retrieve(query, strategy="thorough", sources={"vector": vmem},
-                          limit=top_k, reranker=reranker, agent_name="locomo_eval")
+                          limit=top_k, reranker=reranker, agent_name="locomo_eval",
+                          retrieval_mode=retrieval_mode)
     return [{"text": h.get("text", ""),
              "metadata": h.get("metadata", {}).get("metadata", h.get("metadata", {})),
              "score": h.get("rrf_score", h.get("source_score", 0.0))} for h in hits]
@@ -617,6 +640,7 @@ async def _process_qa(
     llm_backend: str = "ollama",
     llama_server_url: str = "",
     expansion_model: str = "",
+    retrieval_mode: str = "default",
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -704,7 +728,7 @@ async def _process_qa(
             seen_texts: set[str] = set()
             all_hits: list[dict] = []
             for sq in sub_queries:
-                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker, fusion=fusion)
+                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker, fusion=fusion, retrieval_mode=retrieval_mode)
                 for h in sq_hits:
                     t = h.get("text", "")
                     if t not in seen_texts:
@@ -713,7 +737,7 @@ async def _process_qa(
             # Cap at retrieval_top_k, preserving order
             hits = all_hits[:retrieval_top_k]
         else:
-            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion)
+            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion, retrieval_mode=retrieval_mode)
 
         # Optional temporal-recency boost — re-rank hits with an exponential
         # decay over turn-index age. Applied AFTER retrieval/rerank so the
@@ -868,6 +892,7 @@ async def run(args: argparse.Namespace) -> int:
                     llm_backend=args.llm_backend,
                     llama_server_url=args.llm_server_url,
                     expansion_model=args.expansion_model,
+                    retrieval_mode=args.retrieval_mode,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -882,6 +907,19 @@ async def run(args: argparse.Namespace) -> int:
         return outcome
 
     async with httpx.AsyncClient(timeout=args.timeout) as client:
+        engram_router: EngramRouter | None = None
+        if args.retrieval_mode == "engram_typed":
+            engram_router = EngramRouter(
+                client=client,
+                ollama_url=args.ollama_url,
+                model=args.engram_classifier_model,
+                cache_path=args.engram_cache_path,
+                concurrency=4,
+                timeout=30.0,
+            )
+            print(f"[engram] classifier={args.engram_classifier_model} "
+                  f"cache={args.engram_cache_path}", flush=True)
+
         for conv in conversations:
             conv_id = conv.get("sample_id", "unknown")
             tmp = tempfile.mkdtemp(prefix=f"locomo_{conv_id}_")
@@ -893,9 +931,12 @@ async def run(args: argparse.Namespace) -> int:
             )
             await vmem.init(http_client=client)
             added, ingest_s, turn_index = await _ingest_conversation(
-                vmem, conv, multi_level=args.multi_level_retrieval
+                vmem, conv, multi_level=args.multi_level_retrieval,
+                engram_router=engram_router,
             )
             print(f"[{conv_id}] ingested {added} turns in {ingest_s:.1f}s", flush=True)
+            if engram_router is not None:
+                engram_router.flush_cache()
 
             # Pick eligible QAs up-front. --per-conv-limit caps QAs per
             # conversation (for balanced sampling); --limit is the global cap.
@@ -1108,6 +1149,18 @@ def _parse_args() -> argparse.Namespace:
                         "synthetic (no LoCoMo overlap, no test-set leakage). "
                         "~250 token prompt tax per QA. Known to lift small "
                         "instruction-tuned models +0.02-0.04 on factual QA.")
+    p.add_argument("--retrieval-mode", choices=["default", "engram_typed"], default="default",
+                   help="Retrieval strategy. 'default' is single vector store + leader recipe. "
+                        "'engram_typed' classifies each turn at ingest into "
+                        "{episodic, semantic, procedural} (3-bit mask) and runs per-type "
+                        "top-k searches with set-merge — based on the ENGRAM paper "
+                        "(arXiv:2511.12960). Adds an LLM call per turn at ingest time.")
+    p.add_argument("--engram-classifier-model", default="qwen3:4b",
+                   help="Model used by the ENGRAM ingest classifier when "
+                        "--retrieval-mode engram_typed is set. Default qwen3:4b.")
+    p.add_argument("--engram-cache-path", default="/tmp/engram_classifications.json",
+                   help="Cache file for ENGRAM classifications keyed by turn-text "
+                        "hash. Avoids re-classifying the same turn across re-runs.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
