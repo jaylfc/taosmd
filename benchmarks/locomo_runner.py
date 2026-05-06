@@ -599,7 +599,33 @@ async def _retrieve(
         # fusion: "boost" (default, legacy additive keyword boost) | "rrf"
         # (Reciprocal Rank Fusion across semantic + keyword) | "none" (pure
         # semantic cosine). The fusion logic lives in VectorMemory.search.
-        raw = await vmem.search(query, limit=top_k, fusion=fusion)
+        if retrieval_mode == "engram_typed":
+            # ENGRAM-style typed retrieval: 3 type-filtered top-k searches,
+            # set-merge by row id (preserving per-list order so the merged
+            # list still respects the underlying RRF/cosine ranks). Mirrors
+            # taosmd.retrieval._query_typed_vector but feeds the
+            # vector-only pipeline directly so the runner's "default"
+            # bench strategy can opt into typed retrieval without flipping
+            # to "thorough".
+            typed_lists = await asyncio.gather(
+                vmem.search(query, limit=top_k, fusion=fusion, type_filter=1),  # episodic
+                vmem.search(query, limit=top_k, fusion=fusion, type_filter=2),  # semantic
+                vmem.search(query, limit=top_k, fusion=fusion, type_filter=4),  # procedural
+                return_exceptions=True,
+            )
+            seen_ids: set = set()
+            raw: list[dict] = []
+            for results in typed_lists:
+                if isinstance(results, Exception):
+                    continue
+                for r in results:
+                    rid = r.get("id")
+                    if rid in seen_ids:
+                        continue
+                    seen_ids.add(rid)
+                    raw.append(r)
+        else:
+            raw = await vmem.search(query, limit=top_k, fusion=fusion)
         hits = [{"text": r["text"], "metadata": r.get("metadata", {}),
                  "score": r.get("similarity", 0.0)} for r in raw]
         if reranker is not None and getattr(reranker, "available", False):
