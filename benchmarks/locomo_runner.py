@@ -649,6 +649,20 @@ async def _process_qa(
     category = int(qa.get("category", 0))
     evidence = qa.get("evidence", []) or []
 
+    # 'oracle_routed' uses the dataset's known category to pick retrieval
+    # mode per question (Single-hop/Temporal → default leader; Multi-hop/
+    # Open-dom → engram_typed). It's the upper bound on what category-
+    # based routing can achieve — if a real query-time classifier later
+    # achieves close to this, we ship the routing; if the ceiling itself
+    # is flat, no classifier saves it. Categories outside 1-4 fall back
+    # to default mode.
+    effective_retrieval_mode = retrieval_mode
+    if retrieval_mode == "oracle_routed":
+        if category in (3, 4):
+            effective_retrieval_mode = "engram_typed"
+        else:
+            effective_retrieval_mode = "default"
+
     # Resolve which URL the generator and self-judge will hit. Computed once
     # so both the retrieval and full-context branches reach a defined value.
     gen_url = llama_server_url if llm_backend == "llama-server" else ollama_url
@@ -728,7 +742,7 @@ async def _process_qa(
             seen_texts: set[str] = set()
             all_hits: list[dict] = []
             for sq in sub_queries:
-                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker, fusion=fusion, retrieval_mode=retrieval_mode)
+                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker, fusion=fusion, retrieval_mode=effective_retrieval_mode)
                 for h in sq_hits:
                     t = h.get("text", "")
                     if t not in seen_texts:
@@ -737,7 +751,7 @@ async def _process_qa(
             # Cap at retrieval_top_k, preserving order
             hits = all_hits[:retrieval_top_k]
         else:
-            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion, retrieval_mode=retrieval_mode)
+            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion, retrieval_mode=effective_retrieval_mode)
 
         # Optional temporal-recency boost — re-rank hits with an exponential
         # decay over turn-index age. Applied AFTER retrieval/rerank so the
@@ -908,7 +922,7 @@ async def run(args: argparse.Namespace) -> int:
 
     async with httpx.AsyncClient(timeout=args.timeout) as client:
         engram_router: EngramRouter | None = None
-        if args.retrieval_mode == "engram_typed":
+        if args.retrieval_mode in ("engram_typed", "oracle_routed"):
             engram_router = EngramRouter(
                 client=client,
                 ollama_url=args.ollama_url,
@@ -1149,12 +1163,17 @@ def _parse_args() -> argparse.Namespace:
                         "synthetic (no LoCoMo overlap, no test-set leakage). "
                         "~250 token prompt tax per QA. Known to lift small "
                         "instruction-tuned models +0.02-0.04 on factual QA.")
-    p.add_argument("--retrieval-mode", choices=["default", "engram_typed"], default="default",
+    p.add_argument("--retrieval-mode", choices=["default", "engram_typed", "oracle_routed"], default="default",
                    help="Retrieval strategy. 'default' is single vector store + leader recipe. "
                         "'engram_typed' classifies each turn at ingest into "
                         "{episodic, semantic, procedural} (3-bit mask) and runs per-type "
                         "top-k searches with set-merge — based on the ENGRAM paper "
-                        "(arXiv:2511.12960). Adds an LLM call per turn at ingest time.")
+                        "(arXiv:2511.12960). 'oracle_routed' uses the dataset's known "
+                        "category (LoCoMo: 1=Single-hop, 2=Temporal, 3=Multi-hop, "
+                        "4=Open-dom) to pick mode per question — categories 3 & 4 use "
+                        "engram_typed (where typed retrieval helps), 1 & 2 use default "
+                        "(where it ties or regresses). Tests the upper bound of "
+                        "category-routing before building a real query-time classifier.")
     p.add_argument("--engram-classifier-model", default="qwen3:4b",
                    help="Model used by the ENGRAM ingest classifier when "
                         "--retrieval-mode engram_typed is set. Default qwen3:4b.")
