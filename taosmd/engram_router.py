@@ -108,13 +108,18 @@ class EngramRouter:
         return await asyncio.gather(*(self.classify(t) for t in turns))
 
     async def _llm_classify(self, turn_text: str) -> int:
-        prompt = CLASSIFY_PROMPT.format(turn_text=turn_text[:1024])
+        # Prepend /no_think to disable Qwen3 reasoning. The think=false JSON
+        # flag is broken on qwen3:4b / qwen3:1.7b in Ollama's chat template
+        # (it's treated as INVERTED — model emits ~2700 tokens of CoT and
+        # never finalises within timeout). The in-prompt /no_think marker
+        # works on every Qwen3 size we've tested. Documented in
+        # benchmarks/locomo_runner.py near _ollama_generate.
+        prompt = "/no_think\n\n" + CLASSIFY_PROMPT.format(turn_text=turn_text[:1024])
         payload = {
             "model": self._model,
             "prompt": prompt,
             "stream": False,
             "options": {"temperature": 0.0},
-            "think": False,
         }
         try:
             resp = await self._client.post(
