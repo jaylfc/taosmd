@@ -140,7 +140,7 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 **97.0% end-to-end Judge accuracy on LongMemEval-S** (500 questions, standard test set). Harness: `benchmarks/longmemeval_runner.py`.
 
-See [docs/benchmarks.md](docs/benchmarks.md) for the full LongMemEval-S breakdown, the LoCoMo (1540-QA multi-session) measurements with retrieval-architecture ablations, methodology, and per-hardware-tier configuration recommendations (12 GB GPU, Orange Pi NPU, RPi 4, low-end GPU).
+See [docs/benchmarks.md](docs/benchmarks.md) for the full LongMemEval-S breakdown, the LoCoMo (1540-QA multi-session) measurements with retrieval-architecture ablations, methodology, and per-hardware-tier configuration recommendations (12 / 8 / 4 GB GPU, Orange Pi NPU, RPi 4).
 
 ### Per-Category Breakdown
 
@@ -176,6 +176,19 @@ The Librarian adds LLM-assisted query expansion on top of the vector + cross-enc
 | **Full + Librarian** | **0.810** | **45%** | **55%** |
 
 **+15.4% on the vocabulary-gap axis.** The cross-encoder alone adds nothing when the target fact is excluded from its candidate pool — only the Librarian's expansion bridges category→specific-name gaps (e.g. query: *"code editor"*, fact: *"Neovim lua config done"*). These are preliminary results on one class of retrieval failure; we're actively working on tougher benchmarks to stress-test staleness detection and multi-store routing before drawing composite conclusions.
+
+### LoCoMo — same-tier leader on a 12 GB GPU
+
+LoCoMo-10 is a harder dataset than LongMemEval-S: 1540 QAs across multi-session conversations (50+ sessions, 400–700 turns), four categories, more pressure on the retrieval architecture. We run it on the smaller generators we actually target so the numbers reflect the hardware tier our users run on, not gpt-4o-mini.
+
+**0.557 ext rejudge on the full 1540-QA test set** (qwen3.5:9b + leader retrieval recipe `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`, external `qwen3:4b` judge — distinct from the generator).
+
+**Two preferred generators at the 12 GB GPU tier:**
+
+- **`qwen3.5:9b`** Q4_K_M (5.3 GB on disk) — **production default**. Best measured quality.
+- **`llama3.1:8b`** (4.9 GB on disk) — **fast-tier alternative**. -0.02 ext rejudge from the qwen leader, **2.4× faster per QA**. Right pick for realtime turn latency or running multiple agents on one card.
+
+May 5 2026 generator-candidate sweep (200 QAs, leader recipe): qwen3.5:9b 0.56, mistral-small3.2 0.56 (2.8× slower per QA — not promoted), llama3.1:8b 0.54, gemma4:e4b 0.51, granite4:tiny-h 0.41. Full table, the 9B quant cliff (8 quants from Q2 through Q6, including the 8 GB-tier IQ4_XS at 0.55), the answer-prompt-variants negative result, and per-hardware-tier configurations in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Architecture
 

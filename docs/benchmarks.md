@@ -146,6 +146,123 @@ Other memory systems publish LoCoMo Judge numbers using `gpt-4o-mini` as the gen
 
 At 0.509 on our local 12 GB GPU, we reach the Letta / LangMem / OpenAI-memory band *without* a cloud round-trip or a hosted frontier model. Mem0 paper (0.66) and Zep audited (0.584) remain ahead at cross-tier scale.
 
+### Generator candidates at the 12 GB GPU tier — same retrieval stack, different generators
+
+We took the leader recipe (`k=20 + adj=2 + llm-exp + RRF`) — proven on qwen3.5:9b — and ran six current open-source generators against the same 200-QA subset of LoCoMo, same external `qwen3:4b` rescore. The question being asked: at the 12 GB tier, is qwen3.5:9b actually the right default?
+
+| Generator | VRAM | Bench (s, 200 QAs) | Ext rejudge | F1 | Notes |
+|---|---|---|---|---|---|
+| **qwen3.5:9b** Q4_K_M | 5.3 GB | 1749 | **0.56** | 0.226 | reference / production |
+| mistral-small3.2 | ~5 GB | 4932 | **0.56** | 0.263 | ties qwen but 2.8× slower per QA |
+| **llama3.1:8b** | 4.9 GB | 743 | 0.54 | 0.294 | -0.02, **2.4× faster**, fast-tier rec |
+| gemma4:e4b | 9.6 GB | 1148 | 0.51 | 0.210 | -0.05 |
+| granite4:tiny-h | 4.2 GB | 593 | 0.41 | 0.227 | -0.15, smaller model shows it |
+| phi4-reasoning | — | timeout | — | — | reasoning tokens kill throughput at 200 QAs |
+
+Headlines:
+
+- **qwen3.5:9b stays as production default.** Best-in-class rejudge, no challenger meaningfully exceeds it, and it's faster than the only model that ties (mistral-small3.2 at 2.8× the wall-clock).
+- **llama3.1:8b is a strong fast-tier recommendation.** Only -0.02 from the leader, 2.4× faster bench, 0.4 GB smaller. Trading -0.02 quality for ~2× throughput is sensible for users who care about realtime turn latency or run multiple agents on one GPU.
+- **F1 vs rejudge divergence is real.** mistral-small3.2 has the highest F1 (0.263) of any 12 GB model — answers contain more lexical overlap with gold. Rejudge ties qwen at 0.56, so the extra wordiness doesn't translate to more correct answers — it just sounds more like the gold answer's surface text. Useful guardrail: F1 alone misranks generators.
+- **phi4-reasoning is unfit for memory-recall at this tier.** Generates thousands of CoT tokens per call; projected 10–15 h for 200 QAs and didn't finish a single conversation in the budget. Same failure pattern as `--thinking-mode` on qwen3 (see negative results).
+
+200-QA subset is a noisier estimate than the 1540-QA full leaderboard. The qwen3.5:9b row at Q4_K_M reproduces 0.56 here vs 0.557 on the full set — within noise. Subset numbers across generators on this table are directly comparable to each other (same 200 QAs) but should not be cross-compared to the full-1540 leaderboard rows without a ±0.01 caveat in mind.
+
+Measured on Fedora 12 GB 3060 host, May 5 2026.
+
+### 9B quant cliff — how much quality does each quant tier actually cost?
+
+Same 200-QA subset, same leader recipe, same rescore. This time the generator family is fixed (qwen3.5:9b architecture) and we vary the quantisation:
+
+| Quant | File size | Bench (s) | Ext rejudge | F1 | Δ vs Q4_K_M (0.56) |
+|---|---|---|---|---|---|
+| Q6_K | 7.6 GB | 2057 | 0.52 | 0.215 | -0.04 (counter-intuitive — see note) |
+| Q5_K_M | 6.6 GB | 1900 | **0.56** | 0.212 | 0 |
+| **Q4_K_M (production)** | 5.3 GB | 1749 | **0.56** | 0.226 | reference |
+| IQ4_XS | 4.81 GB | 1622 | **0.55** | 0.233 | -0.01 |
+| Q3_K_M | 4.7 GB | 1886 | 0.52 | 0.232 | -0.04 |
+| UD-Q2_K_XL | 3.84 GB | 1739 | 0.51 | 0.275 | -0.05 |
+| UD-IQ2_M | 3.4 GB | 1590 | 0.51 | 0.315 | -0.05 |
+| Q3_K_S | 4.4 GB | 1999 | 0.49 | 0.255 | -0.07 |
+
+Headlines:
+
+- **The cliff is shallow above Q3.** Q4_K_M, Q5_K_M and IQ4_XS all sit within ±0.01. Q6_K drops 0.04 — at 200 QAs that's within subset-noise but worth noting as a non-monotonicity.
+- **IQ4_XS is the 8 GB tier candidate.** 4.81 GB fits an 8 GB GPU with KV-cache headroom; -0.01 from production. IQ kernels run at K-quant speed on Ampere when the Modelfile is correct (see methodology note below) — 1622 s vs 1749 s for Q4_K_M.
+- **UD-IQ2_M is the smallest 9B-family quant we tested.** 3.4 GB at -0.05 from production. It can fit a 4 GB GPU with KV-cache headroom, but `qwen3:4b` (a different architecture, measured at 0.530 on the 1050 Ti tier) outperforms it on quality and runs faster — for 4 GB GPUs, the qwen3:4b path is the recommendation, not UD-IQ2_M. See the 4 GB GPU hardware-tier section.
+- **Q6_K's 0.52 is real but unexplained.** F1 (0.215) is also slightly lower than Q4_K_M's. Most likely subset-200 noise; the lower-bit Q5_K_M ties Q4_K_M at 0.56 in the same run. Reported as measured, not corrected for.
+- **Below Q3 the quality gap widens.** Q3_K_S at 0.49 (-0.07) is the floor where the 9B becomes meaningfully worse than the leader.
+
+Methodology note on custom quants: all V3 quants in this table were built via `ollama create` with full Modelfile metadata cloned from `ollama show qwen3.5:9b --modelfile` (TEMPLATE / RENDERER / PARSER / PARAMETER). A bare `FROM <gguf>` Modelfile silently applies the default Ollama chat template, which doesn't match the model's tuning, produces verbose non-terminating output, and looks indistinguishable from the kernel being slow. We measured ~130× per-QA latency on the first sweep before identifying the Modelfile root cause; the IQ-kernel-is-slow theory was incorrect.
+
+Measured on Fedora 12 GB 3060 host, May 5 2026.
+
+### Answer-prompt variants — does prompt engineering raise Single-hop?
+
+Both candidate generators (qwen3.5:9b, llama3.1:8b) underperform on Single-hop relative to other LoCoMo categories. We swapped the production `ANSWER_PROMPT` for four alternative answer-prompt templates, holding everything else (retrieval stack, generator, dataset, external `qwen3:4b` rescore) constant. Goal: see whether prompt engineering — at the answer step, not the retrieval step — could raise Single-hop without architectural change.
+
+| Variant | What it instructs | Length target |
+|---|---|---|
+| `concise` | "answer in 5-6 words; just the fact, no explanation" | ≤ 5–6 words |
+| `refusal` | "only use facts directly stated in context; do NOT infer beyond what is written" | open |
+| `citation` | "answer in 5-10 words, then cite the supporting turn `[Speaker, date]`" | 5–10 words + citation |
+| `memobase` | brevity + "prioritise most recent on contradictions" + "don't confuse character names with users" | ≤ 5–6 words |
+
+| Generator | Variant | Ext rejudge | Δ vs default | Single-hop rejudge | F1 |
+|---|---|---|---|---|---|
+| qwen3.5:9b | **default** | **0.56** | — | ~0.34 | 0.226 |
+| qwen3.5:9b | concise | 0.39 | -0.17 | 0.23 | 0.433 |
+| qwen3.5:9b | refusal | 0.33 | -0.23 | 0.14 | 0.320 |
+| qwen3.5:9b | citation | 0.39 | -0.17 | 0.19 | 0.251 |
+| qwen3.5:9b | memobase | 0.41 | -0.15 | 0.23 | 0.446 |
+| llama3.1:8b | **default** | **0.54** | — | — | 0.294 |
+| llama3.1:8b | concise | 0.38 | -0.16 | 0.19 | 0.383 |
+| llama3.1:8b | refusal | 0.38 | -0.16 | 0.16 | 0.292 |
+| llama3.1:8b | citation | **0.53** | **-0.01** | 0.28 | 0.185 |
+| llama3.1:8b | memobase | 0.39 | -0.15 | 0.28 | 0.404 |
+
+Headlines:
+
+- **Single-hop hypothesis refuted.** No variant raised Single-hop rejudge on either model. The production `ANSWER_PROMPT` is locally optimal at this tier; the ceiling on Single-hop sits somewhere other than the answer prompt.
+- **Prompt × model interaction is real.** `citation` costs qwen3.5:9b -0.17 but only -0.01 on llama3.1:8b. Plausible reading: llama's default-prompt output is wordier than qwen's; forcing the `[Speaker, date]` citation forces brevity that the judge reads as more committed/correct. F1 collapses to 0.185 (the lowest of any variant) — the surface form is very different — but rejudge holds. Useful guardrail: a "good prompt" for one open generator can be a poison pill for another at the same tier.
+- **F1 ↑ / rejudge ↓ is a recurring pattern.** `concise` and `memobase` have the highest F1 (more lexical overlap with gold) but their rejudge regresses by 0.15–0.17 — short surface-aligned answers fool F1 but get marked wrong by the LLM judge. F1 alone misranks generators *and* prompts.
+
+Measured on Fedora 12 GB 3060 host, May 5 2026. Variants and the `--answer-style {default,concise,refusal,citation,memobase}` runner flag live on branch `feat/locomo-prompt-variants` for reproduction.
+
+### Embedder swap — does a stronger embedder raise Single-hop?
+
+Same setup as the prompt-variant sweep but varying the *embedder* instead of the answer prompt. The motivation: Single-hop queries usually contain a specific noun phrase that needs precise retrieval, and our production embedder (MiniLM-L6, 22 M params, 384-dim) is small by 2026 standards. The hypothesis was that a larger 2025/2026-era retrieval-tuned embedder would lift Single-hop where prompt-engineering had failed.
+
+We picked four current candidates with available ONNX exports and asymmetric query/document prefixes plumbed in:
+
+| Candidate | Params | Dim | License | Released | Prefix scheme |
+|---|---|---|---|---|---|
+| **MiniLM-L6 v2** (production baseline) | 22 M | 384 | Apache 2.0 | 2021 | symmetric (no prefix) |
+| EmbeddingGemma-300m | 308 M | 768 (MRL) | Apache 2.0 | Sep 2025 | `task: search result \| query: …` / `title: none \| text: …` |
+| Snowflake Arctic Embed L v2.0 | 568 M | 1024 (MRL → 256) | Apache 2.0 | Dec 2024 | `query: …` for queries; no prefix for documents |
+| Nomic Embed v1.5 | 137 M | 768 (MRL) | Apache 2.0 | Feb 2024 | `search_query: …` / `search_document: …` |
+
+| Embedder | Overall rejudge | Δ vs leader | Single-hop | Temporal | Multi-hop | Open-dom | F1 |
+|---|---|---|---|---|---|---|---|
+| **MiniLM-L6 v2 (leader)** | **0.56** | — | ~0.34 | ~0.55 | ~0.4–0.5 | ~0.70 | 0.226 |
+| Arctic Embed L v2.0 | 0.55 | -0.01 | 0.26 | **0.65** | **0.62** | 0.62 | 0.243 |
+| EmbeddingGemma-300m | 0.54 | -0.02 | 0.26 | 0.63 | 0.31 | 0.64 | 0.238 |
+| Nomic Embed v1.5 | 0.54 | -0.02 | 0.26 | 0.59 | **0.62** | 0.63 | 0.237 |
+
+Headlines:
+
+- **No candidate lifted Single-hop.** Every embedder swap dropped Single-hop to 0.26 (-0.08 absolute from the typical baseline). Same direction across three independently-trained models — that's a strong null on this lever.
+- **Net overall change is small (-0.01 to -0.02).** Lifts on Temporal (Arctic +~0.10, EmbeddingGemma +~0.08, Nomic +~0.04) and Multi-hop (Arctic and Nomic both +~0.15) wash out against losses on Single-hop (-0.08) and Open-dom (-0.06 to -0.08).
+- **Category mix shifts but the ceiling holds.** Stronger embedders trade Single-hop / Open-dom recall for Temporal / Multi-hop quality — they rerank the failure modes rather than reducing them.
+- **EmbeddingGemma's Multi-hop collapse (0.31)** is interesting: half the Multi-hop score of the other two strong candidates despite being from the same generation. Something about how the asymmetric `title: none | text: …` document prefix interacts with multi-hop conversational turns appears to lose information that Arctic / Nomic preserve. Worth a follow-up.
+- **F1 ↑ / rejudge ≈ pattern repeats.** All three candidates produce slightly higher F1 (~0.24 vs 0.23 baseline) but rejudge holds flat or drops — same trap as the prompt-variant sweep. F1 alone misranks the embedder choice.
+
+Combined with the prompt-variant sweep, the takeaway across both negative results is: **the ceiling on Single-hop sits in the architecture, not in the answer prompt or the embedder.** Architectural levers (typed memory routing per ENGRAM, multi-vector retrieval, hybrid lexical+vector with stronger BM25) are the next slot.
+
+Pending: Qwen3-Embedding-0.6B and Qwen3-Embedding-4B — the `onnx-community` ONNX exports keep causal-LM KV-cache inputs that don't fit our embedder loader, so they're queued via `--embed-mode local` (sentence-transformers + PyTorch CPU) on the same recipe. Results will be appended to this section once the chain finishes.
+
+Measured on Fedora 12 GB 3060 host, May 6 2026. The asymmetric query/document prefix detection lives on branch `feat/embedder-asymmetric-prefixes-may5` for reproduction; full sweep summary at `/tmp/embedder_sweep_summary.tsv` on the bench host.
+
 ### Methodology disclosures
 
 - **Dataset**: LoCoMo-10, 1540 QAs, categories 1–4. Adversarial reserved.
@@ -173,10 +290,25 @@ The taosmd architecture is portable; what changes per hardware tier is which gen
 
 This is the LoCoMo benchmark host. All numbers in the LoCoMo leaderboard above were measured here.
 
-- **Generator (best quality)**: `qwen3.5:9b` (Q4 ~6.6 GB VRAM) + `--adjacent-turns 2`. Measured **0.516** ext judge on LoCoMo. Use `think=false` (built into the runner since PR #42) — 20× speedup with no measured quality loss.
-- **Generator (best speed)**: `gemma4:e2b` (Q4 ~7 GB VRAM) + `--adjacent-turns 2`. Measured **0.499** ext judge. ~3× faster bench than 9B.
+- **Generator (production default — best quality)**: `qwen3.5:9b` Q4_K_M (5.3 GB on disk, ~12 GB used at runtime) + leader recipe (`--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`). Measured **0.557** ext judge on full LoCoMo (1540 QAs) and 0.56 on the 200-QA subset — within noise. Use `think=false` (built into the runner since PR #42) — 20× speedup with no measured quality loss.
+- **Generator (fast-tier alternative within the same hardware)**: `llama3.1:8b` (4.9 GB on disk) + the same leader recipe. Measured **0.54** ext rejudge on 200 QAs — only -0.02 from the qwen leader, but **2.4× faster per QA** (743 s vs 1749 s). Right pick for users who care about realtime turn latency or run multiple agents on one GPU.
+- **Tied-but-slower (not promoted)**: `mistral-small3.2` matches qwen at 0.56 ext rejudge but takes 2.8× the wall-clock per QA, so the speed cost outweighs the no-quality-gain at this tier. Documented in the generator-candidates table above for completeness.
+- **Don't use at this tier**: `phi4-reasoning` — reasoning tokens kill throughput; same failure mode as `--thinking-mode` on qwen3 (see negative results).
+- **Smaller-quant fallback for tighter VRAM budgets**: `qwen3.5:9b` IQ4_XS (4.81 GB) at 0.55 — see the 9B quant cliff table. Useful if KV cache is hitting the ceiling at long contexts.
 - **Judge (when running benchmarks)**: `qwen3:4b` (Q4 ~5 GB VRAM). Default thinking mode (do **not** pass `think=false` — it's an Ollama bug on qwen3:4b that exposes reasoning in the response and corrupts judge parsing).
-- **Concurrency**: 3 with gemma, 2 with qwen3.5:9b. Higher concurrency benefits from `OLLAMA_NUM_PARALLEL=3`.
+- **Concurrency**: 2 with qwen3.5:9b or llama3.1:8b. Higher concurrency benefits from `OLLAMA_NUM_PARALLEL=3`.
+
+### 8 GB NVIDIA GPU (RTX 3050 8 GB, RTX 4060, RTX 2070, GTX 1070) — extrapolated from 9B quant data
+
+The 9B quant cliff sweep above gives us a defensible 8 GB-tier recommendation without a separate measurement: same architecture, same retrieval stack, smaller-bit weights. The dedicated benchmark on 8 GB hardware is queued as a follow-up.
+
+- **Generator (best fit)**: `qwen3.5:9b` IQ4_XS (4.81 GB on disk). Measured **0.55** ext rejudge on Fedora 12 GB at 200 QAs leader recipe — within 0.01 of the Q4_K_M production default at 5.3 GB. Fits an 8 GB GPU with ~3 GB headroom for KV cache, which holds for typical conversation lengths.
+- **Smaller-VRAM alternative**: `qwen3.5:9b` UD-Q2_K_XL (3.84 GB) at 0.51 — roughly -0.05 from production but leaves 4+ GB for the KV cache if you're running long contexts.
+- **Same retrieval stack as the 12 GB tier.** Leader recipe (`k=20 + adj=2 + llm-exp + RRF`) is what the IQ4_XS row was measured on; no separate tuning required for this tier.
+- **Don't use**: bare `FROM <gguf>` Modelfiles. The custom quants in our sweep needed full metadata (TEMPLATE / RENDERER / PARSER / PARAMETER) cloned from `ollama show qwen3.5:9b --modelfile` to behave correctly. Without it, output is verbose and doesn't terminate — looks 100×+ slower per QA than the kernel actually is.
+- **Concurrency**: 1 — at 4.81 GB plus KV cache an 8 GB card has no headroom for a parallel request without spilling.
+
+A native 8 GB measurement would replace the "extrapolated" label in the next pass; the architecture and quant numbers we have predict ~0.55 ext rejudge at this tier on the same retrieval stack.
 
 ### 16 GB Orange Pi 5 Plus (RK3588 NPU) — measured
 
@@ -198,11 +330,9 @@ The +0.074 BGE-v2-m3 lift on this tier is ~12× the lift the same swap gives on 
 
 Practical operational notes (learned the hard way): use the official ≥4 A USB-C PSU and active cooling under sustained inference workloads. The combined NPU + CPU + co-tenant load (e.g. running scrypted on the same Pi) will overdraw a stock charger and cause silent power-related kernel hangs after many hours of continuous load. Use the Pi as a dedicated AI worker if you can — co-tenant services should ideally run on a separate machine.
 
+This is also the LongMemEval-S 97.0% reference stack — same configuration as the LoCoMo measurements above.
 
-
-This is the LongMemEval-S 97.0% reference stack. LoCoMo on this hardware is **not yet measured** (planned).
-
-- **Generator**: `Qwen3-4B` via `rkllama` on the RK3588 NPU (~17 s/turn). Exact stack used for the 97% claim.
+- **Generator**: `Qwen3-4B` via `rkllama` on the RK3588 NPU (~17 s/turn). Exact stack used for both the 97 % LongMemEval-S claim and the LoCoMo measurements at this tier.
 - **Embedder**: `all-MiniLM-L6-v2` ONNX on CPU (0.3 ms — NPU is slower for small models).
 - **Reranker**: `Qwen3-Reranker-0.6B` on NPU.
 - **Query expansion**: `qmd-query-expansion 1.7B` on NPU.
