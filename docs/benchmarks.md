@@ -229,6 +229,40 @@ Headlines:
 
 Measured on Fedora 12 GB 3060 host, May 5 2026. Variants and the `--answer-style {default,concise,refusal,citation,memobase}` runner flag live on branch `feat/locomo-prompt-variants` for reproduction.
 
+### Embedder swap — does a stronger embedder raise Single-hop?
+
+Same setup as the prompt-variant sweep but varying the *embedder* instead of the answer prompt. The motivation: Single-hop queries usually contain a specific noun phrase that needs precise retrieval, and our production embedder (MiniLM-L6, 22 M params, 384-dim) is small by 2026 standards. The hypothesis was that a larger 2025/2026-era retrieval-tuned embedder would lift Single-hop where prompt-engineering had failed.
+
+We picked four current candidates with available ONNX exports and asymmetric query/document prefixes plumbed in:
+
+| Candidate | Params | Dim | License | Released | Prefix scheme |
+|---|---|---|---|---|---|
+| **MiniLM-L6 v2** (production baseline) | 22 M | 384 | Apache 2.0 | 2021 | symmetric (no prefix) |
+| EmbeddingGemma-300m | 308 M | 768 (MRL) | Apache 2.0 | Sep 2025 | `task: search result \| query: …` / `title: none \| text: …` |
+| Snowflake Arctic Embed L v2.0 | 568 M | 1024 (MRL → 256) | Apache 2.0 | Dec 2024 | `query: …` for queries; no prefix for documents |
+| Nomic Embed v1.5 | 137 M | 768 (MRL) | Apache 2.0 | Feb 2024 | `search_query: …` / `search_document: …` |
+
+| Embedder | Overall rejudge | Δ vs leader | Single-hop | Temporal | Multi-hop | Open-dom | F1 |
+|---|---|---|---|---|---|---|---|
+| **MiniLM-L6 v2 (leader)** | **0.56** | — | ~0.34 | ~0.55 | ~0.4–0.5 | ~0.70 | 0.226 |
+| Arctic Embed L v2.0 | 0.55 | -0.01 | 0.26 | **0.65** | **0.62** | 0.62 | 0.243 |
+| EmbeddingGemma-300m | 0.54 | -0.02 | 0.26 | 0.63 | 0.31 | 0.64 | 0.238 |
+| Nomic Embed v1.5 | 0.54 | -0.02 | 0.26 | 0.59 | **0.62** | 0.63 | 0.237 |
+
+Headlines:
+
+- **No candidate lifted Single-hop.** Every embedder swap dropped Single-hop to 0.26 (-0.08 absolute from the typical baseline). Same direction across three independently-trained models — that's a strong null on this lever.
+- **Net overall change is small (-0.01 to -0.02).** Lifts on Temporal (Arctic +~0.10, EmbeddingGemma +~0.08, Nomic +~0.04) and Multi-hop (Arctic and Nomic both +~0.15) wash out against losses on Single-hop (-0.08) and Open-dom (-0.06 to -0.08).
+- **Category mix shifts but the ceiling holds.** Stronger embedders trade Single-hop / Open-dom recall for Temporal / Multi-hop quality — they rerank the failure modes rather than reducing them.
+- **EmbeddingGemma's Multi-hop collapse (0.31)** is interesting: half the Multi-hop score of the other two strong candidates despite being from the same generation. Something about how the asymmetric `title: none | text: …` document prefix interacts with multi-hop conversational turns appears to lose information that Arctic / Nomic preserve. Worth a follow-up.
+- **F1 ↑ / rejudge ≈ pattern repeats.** All three candidates produce slightly higher F1 (~0.24 vs 0.23 baseline) but rejudge holds flat or drops — same trap as the prompt-variant sweep. F1 alone misranks the embedder choice.
+
+Combined with the prompt-variant sweep, the takeaway across both negative results is: **the ceiling on Single-hop sits in the architecture, not in the answer prompt or the embedder.** Architectural levers (typed memory routing per ENGRAM, multi-vector retrieval, hybrid lexical+vector with stronger BM25) are the next slot.
+
+Pending: Qwen3-Embedding-0.6B and Qwen3-Embedding-4B — the `onnx-community` ONNX exports keep causal-LM KV-cache inputs that don't fit our embedder loader, so they're queued via `--embed-mode local` (sentence-transformers + PyTorch CPU) on the same recipe. Results will be appended to this section once the chain finishes.
+
+Measured on Fedora 12 GB 3060 host, May 6 2026. The asymmetric query/document prefix detection lives on branch `feat/embedder-asymmetric-prefixes-may5` for reproduction; full sweep summary at `/tmp/embedder_sweep_summary.tsv` on the bench host.
+
 ### Methodology disclosures
 
 - **Dataset**: LoCoMo-10, 1540 QAs, categories 1–4. Adversarial reserved.
