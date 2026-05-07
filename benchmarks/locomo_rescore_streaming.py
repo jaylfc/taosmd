@@ -127,9 +127,19 @@ async def call_judge(client, url, model, rec, timeout) -> tuple[str, object]:
     # models — it EXPOSES reasoning tokens in the response rather than
     # suppressing them. That breaks parse_judge_reply's startswith("yes")
     # check because the response now begins with "Okay, the user is asking…".
-    # Leaving thinking-mode on here gives a clean yes/no reply in the same
-    # ~7-10s per judgement that the full external-judge run relied on.
-    payload = {"model": model, "prompt": prompt, "stream": False}
+    #
+    # Pin temperature=0 so the judge is deterministic across reruns
+    # (default 0.8 introduces noise on a yes/no task). num_predict cap
+    # of 4096 prevents qwen3-family thinking-mode from running unbounded
+    # CoT on edge cases — clean yes/no answers fit in ~600-1000 tokens
+    # with the qwen3:4b CoT preamble; cap stops runaway 4×-context
+    # generations on adversarial inputs.
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.0, "num_predict": 4096},
+    }
     try:
         resp = await client.post(f"{url}/api/generate", json=payload, timeout=timeout)
         resp.raise_for_status()
