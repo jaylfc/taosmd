@@ -319,6 +319,56 @@ The takeaway for anyone reading this doc: a single judge number is not a univers
 
 Measured on Fedora 12 GB 3060 host, May 6-7 2026. Multi-judge sweep scripts at `/tmp/multijudge_overnight.sh` and `/tmp/multijudge_phase2.sh` on the bench host; rescored JSONs at `benchmarks/results/locomo_*_engram3cell_leader_baseline_repro_*.rescored_judge_*.json` and equivalents for the qwen3.6-MoE Phase 1 output.
 
+#### Dual-judge results across May 7 architectural levers
+
+After the multi-judge experiment confirmed the strict-judge ceiling, we re-rescored every May 7 architectural-lever JSON under `gemma4:e2b` (lenient/published-SOTA-equivalent) alongside the existing `qwen3:4b` numbers. Same predictions, no re-generation — pure judge-strictness measurement on architectural choices.
+
+| Cell | Overall (q3:4b → g4:e2b) | Single-hop | Temporal | Multi-hop | Open-dom |
+|---|---|---|---|---|---|
+| rrf_baseline_heuristic (production) | 0.55 → **0.69** | 0.30 → 0.53 | 0.59 → 0.60 | 0.46 → 0.69 | 0.65 → 0.85 |
+| bm25_rrf_proper | 0.52 → **0.70** | 0.23 → 0.44 | 0.56 → 0.65 | 0.62 → 0.62 | 0.62 → 0.89 |
+| bm25_lemma_rrf | 0.52 → 0.68 | 0.21 → 0.49 | 0.60 → 0.60 | 0.31 → 0.38 | 0.65 → 0.88 |
+| **mem0_additive** | 0.54 → **0.70** | 0.26 → **0.56** | 0.54 → 0.59 | 0.69 → **0.77** | 0.65 → 0.85 |
+| cove_4step | 0.50 → 0.65 | 0.26 → 0.56 | 0.51 → 0.54 | 0.69 → 0.69 | 0.59 → 0.78 |
+
+Headlines:
+
+- **Every lever lifts +0.14 to +0.18 overall under gemma4:e2b judge.** Uniform shift confirms strict-judge was the ceiling, not the architecture.
+- **`mem0_additive` is the lever that wins under matched-judge.** 0.70 overall, 0.56 Single-hop, 0.77 Multi-hop — ties proper-BM25 on overall, beats it on the two categories that matter most for LoCoMo. The Mem0-style threshold-gated additive scoring (sigmoid-normalised BM25 + cosine, max_possible adapter) is doing real work that RRF flattens away.
+- **Proper BM25 vs the legacy substring heuristic is a wash overall.** 0.70 vs 0.69. The "real BM25 is what production memory systems use" story we ported was right *for principle* (lemmatised, IDF-weighted, length-normalised) but the lift over the heuristic is below subset-200 noise (~±0.02). Lemmatisation slightly hurt at our chat-turn granularity (over-stemmed proper nouns).
+- **CoVe at 4× wall-clock buys parity, not advantage.** Same 0.56 Single-hop as mem0_additive but 0.05 lower overall. The verifications surface answer-edits that gemma4:e2b waves through but don't compound into a win at our 9B tier. Don't ship.
+
+#### Dual-judge results across May 5 generator candidates
+
+Re-rescored the May 5 generator-candidate sweep JSONs under both judges so the README hardware-tier table can carry both attributions:
+
+| Generator | Overall (q3:4b → g4:e2b) | Single-hop | Temporal | Multi-hop | Open-dom | F1 |
+|---|---|---|---|---|---|---|
+| **qwen3.5:9b leader** | 0.54 → **0.71** | 0.28 → 0.53 | 0.59 → 0.62 | 0.77 → **0.85** | 0.60 → **0.86** | 0.231 |
+| mistral-small3.2 | 0.56 → 0.70 | 0.21 → 0.53 | 0.70 → **0.71** | 0.38 → 0.54 | 0.67 → 0.81 | 0.263 |
+| **llama3.1:8b** | 0.54 → 0.67 | — → **0.65** | — → 0.51 | — → 0.69 | — → 0.80 | **0.294** |
+| gemma4:e4b | 0.51 → 0.60 | — → 0.33 | — → 0.51 | — → 0.38 | — → 0.85 | 0.210 |
+| granite4:tiny-h | 0.41 → 0.56 | — → 0.42 | — → 0.35 | — → 0.54 | — → 0.79 | 0.227 |
+| gemma4:e2b (as generator) | 0.46 → 0.58 | 0.16 → 0.37 | 0.54 → 0.49 | 0.31 → 0.31 | 0.58 → 0.81 | 0.217 |
+
+Per-category headlines (gemma4:e2b judge):
+
+- **qwen3.5:9b is best on Overall (0.71)** and ties for best on Multi-hop (0.85) and Open-dom (0.86). Production generator stays.
+- **llama3.1:8b is best on Single-hop (0.65)** by a wide margin (+0.12 over qwen3.5:9b's 0.53). Closest we have to the published-SOTA band — only 0.18 below EMem's 0.83 (gpt-4o-mini judge). Single-hop is the most common factual-QA pattern, so for **factual recall workloads, llama3.1:8b is now the better pick**.
+- **mistral-small3.2 is best on Temporal (0.71)**. Time-anchored queries lean heavily on lexical-temporal cues that mistral handles well. The 2.8× wall-clock cost still rules it out for production, but for time-heavy specialty workloads it's a contender.
+- **gemma4:e4b and granite4:tiny-h** stay middle-of-pack regardless of judge — useful for tighter-VRAM tiers but not promotion candidates.
+
+The "qwen3.5:9b production / llama3.1:8b fast alternative" framing from the May 5 PR was right but underspecified. The matched-judge breakout shows it's actually a **per-workload pick at the 12 GB tier**:
+
+> **12 GB GPU production guidance (matched-judge methodology):**
+> - **Best overall quality** → `qwen3.5:9b` Q4_K_M (0.71 overall under gemma4:e2b)
+> - **Best factual recall (Single-hop)** → `llama3.1:8b` (0.65 Single-hop, 2.4× faster than qwen)
+> - **Best temporal reasoning** → `mistral-small3.2` (0.71 Temporal, but 2.8× slower than qwen)
+> - **Production default**: still `qwen3.5:9b` because Single-hop is one of four categories; broad workloads should optimise for Overall.
+> - **Specialty deployments**: pick the workload-matched generator above.
+
+Measured on Fedora 12 GB 3060 host, May 7 2026. Dual-rescore script at `/home/jay/dual_judge_rescore.sh`; full summary at `/tmp/dual_judge_rescore_summary.tsv`. The full leaderboard above (line 54+) was scored exclusively under `qwen3:4b` and is *not* retroactively rescored — every cell from May 7 onward carries both judge attributions explicitly.
+
 ### Methodology disclosures
 
 - **Dataset**: LoCoMo-10, 1540 QAs, categories 1–4. Adversarial reserved.
