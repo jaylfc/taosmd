@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from taosmd.vector_memory import VectorMemory  # noqa: E402
 from taosmd.retrieval import retrieve  # noqa: E402
+from taosmd.llm_rerank import llm_listwise_rerank  # noqa: E402
 
 CATEGORY_NAMES = {
     1: "Single-hop (1)",
@@ -653,6 +654,9 @@ async def _process_qa(
     llama_server_url: str = "",
     expansion_model: str = "",
     cove: bool = False,
+    llm_rerank: bool = False,
+    llm_rerank_model: str = "llama3.1:8b",
+    llm_rerank_top_k: int = 10,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -750,6 +754,17 @@ async def _process_qa(
             hits = all_hits[:retrieval_top_k]
         else:
             hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion)
+
+        # Optional LLM listwise rerank — runs AFTER the cross-encoder narrows.
+        # Single LLM call per QA scores all candidates as a list, returns
+        # top-N most relevant. Direct port of Mem0's reranker idea adapted
+        # for our local-tier latency budget (listwise instead of pointwise).
+        if llm_rerank and hits:
+            hits = await llm_listwise_rerank(
+                client, ollama_url, llm_rerank_model,
+                retrieval_query, hits, top_k=llm_rerank_top_k,
+                no_think_prefix=no_think_prefix,
+            )
 
         # Optional temporal-recency boost — re-rank hits with an exponential
         # decay over turn-index age. Applied AFTER retrieval/rerank so the
@@ -956,6 +971,9 @@ async def run(args: argparse.Namespace) -> int:
                     llm_backend=args.llm_backend,
                     llama_server_url=args.llm_server_url,
                     cove=args.cove,
+                    llm_rerank=args.llm_rerank,
+                    llm_rerank_model=args.llm_rerank_model,
+                    llm_rerank_top_k=args.llm_rerank_top_k,
                     expansion_model=args.expansion_model,
                 )
             except Exception as e:
@@ -1204,6 +1222,19 @@ def _parse_args() -> argparse.Namespace:
                         "answer. Adds 4 LLM calls per QA (3-4× wall-clock). "
                         "Direct attack on hallucination/wrong-fact errors. "
                         "Per Dhuliawala et al. arXiv:2309.11495.")
+    p.add_argument("--llm-rerank", action="store_true",
+                   help="LLM listwise rerank on top of the cross-encoder. "
+                        "Single LLM call per QA scores all candidates "
+                        "together, returns the top-N. Adapted from Mem0's "
+                        "reranker for our local-tier latency budget. "
+                        "Adds ~1 LLM call per QA (~5 s on llama3.1:8b).")
+    p.add_argument("--llm-rerank-model", default="llama3.1:8b",
+                   help="Model used for the LLM listwise rerank step. "
+                        "Default llama3.1:8b (good balance of speed and "
+                        "instruction-following on the rerank task).")
+    p.add_argument("--llm-rerank-top-k", type=int, default=10,
+                   help="Number of candidates to keep after the LLM listwise "
+                        "rerank. Default 10. Set lower for tighter context.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
