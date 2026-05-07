@@ -212,9 +212,18 @@ class VectorMemory:
         """Semantic search with optional hybrid fusion.
 
         Fusion modes:
-          "rrf"   — Reciprocal Rank Fusion across semantic + keyword ranked lists (default)
-          "boost" — Legacy additive keyword boost (0.3 * keyword_overlap)
-          "none"  — Pure semantic cosine similarity (MemPalace-equivalent)
+          "rrf"      — RRF over (semantic ranks, keyword-presence-heuristic ranks).
+                       Keyword arm is binary substring match — the legacy
+                       "hybrid" path used everywhere historically.
+          "bm25_rrf" — RRF over (semantic ranks, *proper BM25* ranks).
+                       Same RRF merge as "rrf" but the keyword arm is
+                       industrial BM25 (IDF + TF saturation + length norm,
+                       via the bm25s library). Adds ~50 ms/query of indexing
+                       overhead but gives proper lexical scoring on rare
+                       named entities — the regime where Single-hop questions
+                       live.
+          "boost"    — Legacy additive keyword boost (0.3 * keyword_overlap).
+          "none"     — Pure semantic cosine similarity (MemPalace-equivalent).
 
         When hybrid=False, fusion mode is ignored and pure semantic is used.
         """
@@ -267,7 +276,7 @@ class VectorMemory:
             # Dot product = cosine similarity (both normalised)
             similarities = emb_norms @ query_norm
 
-            if hybrid and keywords and fusion == "rrf":
+            if hybrid and keywords and fusion in ("rrf", "bm25_rrf"):
                 # Reciprocal Rank Fusion: combine semantic and keyword ranked lists
                 # RRF score = sum(1 / (k + rank)) across lists, k=60 (standard)
                 rrf_k = 60
@@ -276,12 +285,30 @@ class VectorMemory:
                 # Semantic ranking
                 semantic_ranks = np.argsort(np.argsort(-similarities))  # rank 0 = best
 
-                # Keyword ranking: score by keyword overlap ratio
-                keyword_scores = np.zeros(n, dtype=np.float32)
-                for i, text in enumerate(texts):
-                    text_lower = text.lower()
-                    keyword_scores[i] = sum(1 for kw in keywords if kw in text_lower) / max(len(keywords), 1)
-                keyword_ranks = np.argsort(np.argsort(-keyword_scores))
+                if fusion == "bm25_rrf":
+                    # Proper BM25 — IDF + TF saturation + length normalisation.
+                    # bm25s tokenises by lowercasing + splitting on non-word
+                    # characters, optional stemming. We skip the stemmer for
+                    # casual chat (LoCoMo turns) where it tends to over-merge.
+                    import bm25s
+                    corpus_tokens = bm25s.tokenize(texts, stopwords=None, stemmer=None)
+                    query_tokens = bm25s.tokenize([query], stopwords=None, stemmer=None)
+                    retriever = bm25s.BM25(k1=1.5, b=0.75)
+                    retriever.index(corpus_tokens)
+                    # retrieve over the full corpus to score every row
+                    bm25_results, bm25_scores = retriever.retrieve(query_tokens, k=n)
+                    # bm25_results[0] is array of indices ordered by score desc;
+                    # convert to per-index rank (rank 0 = best).
+                    keyword_ranks = np.empty(n, dtype=np.int64)
+                    for rank, idx in enumerate(bm25_results[0]):
+                        keyword_ranks[idx] = rank
+                else:
+                    # Legacy substring-presence heuristic.
+                    keyword_scores = np.zeros(n, dtype=np.float32)
+                    for i, text in enumerate(texts):
+                        text_lower = text.lower()
+                        keyword_scores[i] = sum(1 for kw in keywords if kw in text_lower) / max(len(keywords), 1)
+                    keyword_ranks = np.argsort(np.argsort(-keyword_scores))
 
                 # RRF fusion
                 rrf_scores = (1.0 / (rrf_k + semantic_ranks)) + (1.0 / (rrf_k + keyword_ranks))

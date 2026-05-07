@@ -1065,7 +1065,7 @@ def _parse_args() -> argparse.Namespace:
                         "decay rate per turn-index age (0.0 disables, 0.02 "
                         "down-weights the oldest turn in a 600-turn convo by "
                         "~6e-6, 0.005 by ~0.05). Default 0.0.")
-    p.add_argument("--fusion", choices=["boost", "rrf", "none"], default="boost",
+    p.add_argument("--fusion", choices=["boost", "rrf", "bm25_rrf", "none"], default="boost",
                    help="Vector + keyword fusion mode (vector-only strategy):\n"
                         "  boost: legacy additive keyword boost (0.3 * overlap, our "
                         "current default in the matrix runs).\n"
