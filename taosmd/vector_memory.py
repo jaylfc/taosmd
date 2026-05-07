@@ -212,18 +212,23 @@ class VectorMemory:
         """Semantic search with optional hybrid fusion.
 
         Fusion modes:
-          "rrf"      — RRF over (semantic ranks, keyword-presence-heuristic ranks).
-                       Keyword arm is binary substring match — the legacy
-                       "hybrid" path used everywhere historically.
-          "bm25_rrf" — RRF over (semantic ranks, *proper BM25* ranks).
-                       Same RRF merge as "rrf" but the keyword arm is
-                       industrial BM25 (IDF + TF saturation + length norm,
-                       via the bm25s library). Adds ~50 ms/query of indexing
-                       overhead but gives proper lexical scoring on rare
-                       named entities — the regime where Single-hop questions
-                       live.
-          "boost"    — Legacy additive keyword boost (0.3 * keyword_overlap).
-          "none"     — Pure semantic cosine similarity (MemPalace-equivalent).
+          "rrf"            — RRF over (semantic ranks, keyword-presence-
+                              heuristic ranks). Legacy "hybrid" path.
+          "bm25_rrf"       — RRF over (semantic ranks, proper BM25 ranks).
+                              Industrial BM25 (IDF + TF saturation + length
+                              norm via bm25s) on raw text.
+          "bm25_lemma_rrf" — Same as bm25_rrf but BM25 indexes and queries
+                              run on spaCy-lemmatised text (handles
+                              meetings/meeting, attending/attend etc.).
+                              ~+50 ms/query for spaCy on top of BM25.
+                              Falls back to bm25_rrf if spaCy unavailable.
+          "mem0_additive"  — Mem0-style additive scoring instead of RRF.
+                              (semantic + sigmoid-normalised BM25 lemma) / 2.
+                              Adaptive sigmoid params from query length.
+                              Keeps signal magnitudes calibrated rather than
+                              flattening to ranks.
+          "boost"          — Legacy additive keyword boost.
+          "none"           — Pure semantic cosine similarity.
 
         When hybrid=False, fusion mode is ignored and pure semantic is used.
         """
@@ -276,43 +281,74 @@ class VectorMemory:
             # Dot product = cosine similarity (both normalised)
             similarities = emb_norms @ query_norm
 
-            if hybrid and keywords and fusion in ("rrf", "bm25_rrf"):
-                # Reciprocal Rank Fusion: combine semantic and keyword ranked lists
-                # RRF score = sum(1 / (k + rank)) across lists, k=60 (standard)
+            if hybrid and keywords and fusion in ("rrf", "bm25_rrf", "bm25_lemma_rrf", "mem0_additive"):
                 rrf_k = 60
                 n = len(ids)
-
-                # Semantic ranking
                 semantic_ranks = np.argsort(np.argsort(-similarities))  # rank 0 = best
 
-                if fusion == "bm25_rrf":
-                    # Proper BM25 — IDF + TF saturation + length normalisation.
-                    # bm25s tokenises by lowercasing + splitting on non-word
-                    # characters, optional stemming. We skip the stemmer for
-                    # casual chat (LoCoMo turns) where it tends to over-merge.
+                if fusion in ("bm25_rrf", "bm25_lemma_rrf", "mem0_additive"):
+                    # Proper BM25. bm25s tokenises by lowercasing + splitting
+                    # on non-word characters; we skip stemming because spaCy
+                    # lemmatisation (when fusion in {bm25_lemma_rrf,
+                    # mem0_additive}) does the same job better.
                     import bm25s
-                    corpus_tokens = bm25s.tokenize(texts, stopwords=None, stemmer=None)
-                    query_tokens = bm25s.tokenize([query], stopwords=None, stemmer=None)
+                    if fusion in ("bm25_lemma_rrf", "mem0_additive"):
+                        from taosmd.utils.lemmatization import lemmatize_for_bm25
+                        bm25_texts = [lemmatize_for_bm25(t) for t in texts]
+                        bm25_query = lemmatize_for_bm25(query)
+                    else:
+                        bm25_texts = texts
+                        bm25_query = query
+                    corpus_tokens = bm25s.tokenize(bm25_texts, stopwords=None, stemmer=None)
+                    query_tokens = bm25s.tokenize([bm25_query], stopwords=None, stemmer=None)
                     retriever = bm25s.BM25(k1=1.5, b=0.75)
                     retriever.index(corpus_tokens)
-                    # retrieve over the full corpus to score every row
-                    bm25_results, bm25_scores = retriever.retrieve(query_tokens, k=n)
-                    # bm25_results[0] is array of indices ordered by score desc;
-                    # convert to per-index rank (rank 0 = best).
+                    bm25_indices, bm25_raw = retriever.retrieve(query_tokens, k=n)
+                    # ranks for RRF
                     keyword_ranks = np.empty(n, dtype=np.int64)
-                    for rank, idx in enumerate(bm25_results[0]):
+                    for rank, idx in enumerate(bm25_indices[0]):
                         keyword_ranks[idx] = rank
+                    # raw bm25 score per index, for additive scoring
+                    bm25_raw_per_idx = np.zeros(n, dtype=np.float32)
+                    for rank, idx in enumerate(bm25_indices[0]):
+                        bm25_raw_per_idx[idx] = float(bm25_raw[0, rank])
                 else:
-                    # Legacy substring-presence heuristic.
+                    # Legacy substring-presence heuristic (fusion == "rrf").
                     keyword_scores = np.zeros(n, dtype=np.float32)
                     for i, text in enumerate(texts):
                         text_lower = text.lower()
                         keyword_scores[i] = sum(1 for kw in keywords if kw in text_lower) / max(len(keywords), 1)
                     keyword_ranks = np.argsort(np.argsort(-keyword_scores))
+                    bm25_raw_per_idx = None
 
-                # RRF fusion
+                if fusion == "mem0_additive":
+                    # Mem0-style additive scoring: sigmoid-normalise BM25 to
+                    # [0, 1], add to semantic similarity, divide by 2 for
+                    # max_possible=2 (no entity boost in this base impl).
+                    # Threshold-gates on semantic >= 0.0 (i.e. always; we
+                    # over-fetch and let the reranker handle low-similarity).
+                    from taosmd.utils.scoring import get_bm25_params, normalize_bm25
+                    midpoint, steepness = get_bm25_params(query, lemmatized=lemmatize_for_bm25(query) if fusion in ("bm25_lemma_rrf", "mem0_additive") else None)
+                    bm25_norm = np.array(
+                        [normalize_bm25(float(s), midpoint, steepness) for s in bm25_raw_per_idx],
+                        dtype=np.float32,
+                    )
+                    additive_scores = (similarities + bm25_norm) / 2.0
+                    top_indices = np.argsort(additive_scores)[::-1][:limit]
+                    return [
+                        {
+                            "id": ids[i],
+                            "text": texts[i],
+                            "similarity": round(float(similarities[i]), 4),
+                            "rrf_score": round(float(additive_scores[i]), 6),
+                            "metadata": json.loads(metas[i]),
+                            "created_at": created[i],
+                        }
+                        for i in top_indices
+                    ]
+
+                # RRF fusion (default for rrf, bm25_rrf, bm25_lemma_rrf)
                 rrf_scores = (1.0 / (rrf_k + semantic_ranks)) + (1.0 / (rrf_k + keyword_ranks))
-
                 top_indices = np.argsort(rrf_scores)[::-1][:limit]
                 return [
                     {
