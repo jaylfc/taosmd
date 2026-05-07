@@ -102,6 +102,41 @@ Question: {question}
 
 Hypothetical passage:"""
 
+# Chain-of-Verification (CoVe) — multi-step answer with self-verification.
+# Per the original paper (Dhuliawala et al., 2023, arXiv:2309.11495) and
+# CoV-RAG follow-ups: draft → plan verification questions → answer them
+# independently → produce final answer informed by the verifications.
+# We adapt for context-grounded LoCoMo: every step uses the retrieved
+# context. Independence between verification answers is preserved by
+# isolating each call (no chain-of-thought between verifications).
+COVE_PLAN_PROMPT = """Given the draft answer below, write 2-3 short verification questions that test the specific factual claims in the draft. Each question should be answerable independently from the conversation context. No numbering, no commentary, one question per line.
+
+Context:
+{context}
+
+Original question: {question}
+Draft answer: {draft}
+
+Verification questions:"""
+
+COVE_VERIFY_PROMPT = """Answer this question using ONLY the context. Be concrete and brief (≤ 1 sentence). If the context does not directly support an answer, reply exactly "uncertain".
+
+Context:
+{context}
+
+Question: {verify_question}
+Answer:"""
+
+COVE_FINAL_PROMPT = """You drafted an answer to a question, then ran verification questions. Use the verification answers to produce a final, corrected answer. If verifications support the draft, keep it. If they contradict it, correct it. If verifications are "uncertain" or conflicting, prefer the most-supported claim.
+
+Original question: {question}
+Draft answer: {draft}
+
+Verification Q&A:
+{verifications}
+
+Final answer (1-2 short sentences, absolute dates only — never relative):"""
+
 _PUNCT = re.compile(r"[^\w\s]")
 
 
@@ -617,6 +652,7 @@ async def _process_qa(
     llm_backend: str = "ollama",
     llama_server_url: str = "",
     expansion_model: str = "",
+    cove: bool = False,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -734,12 +770,64 @@ async def _process_qa(
         answer_prompt = ANSWER_PROMPT.format(context=context, question=question)
         if few_shot:
             answer_prompt = FEW_SHOT_EXAMPLES + answer_prompt
-        predicted = await _generate(
+        draft = await _generate(
             llm_backend, client, gen_url, model,
             answer_prompt,
             thinking_mode=thinking_mode,
             no_think_prefix=no_think_prefix,
         )
+        if cove:
+            # Chain-of-Verification: plan verification questions, answer them
+            # independently, then produce final answer using the verifications.
+            try:
+                plan_prompt = COVE_PLAN_PROMPT.format(
+                    context=context, question=question, draft=draft,
+                )
+                plan_raw = await _generate(
+                    llm_backend, client, gen_url, model, plan_prompt,
+                    thinking_mode=thinking_mode, no_think_prefix=no_think_prefix,
+                )
+                # parse verification questions: one per line, drop empties
+                verify_qs = [
+                    q.strip().lstrip("-•0123456789. )")
+                    for q in plan_raw.splitlines()
+                    if q.strip() and len(q.strip()) > 5
+                ][:3]
+                if not verify_qs:
+                    predicted = draft
+                else:
+                    # answer each verification independently — no shared
+                    # CoT between them, that's the point of CoVe
+                    verify_tasks = [
+                        _generate(
+                            llm_backend, client, gen_url, model,
+                            COVE_VERIFY_PROMPT.format(
+                                context=context, verify_question=vq,
+                            ),
+                            thinking_mode=thinking_mode,
+                            no_think_prefix=no_think_prefix,
+                        )
+                        for vq in verify_qs
+                    ]
+                    verify_answers = await asyncio.gather(*verify_tasks, return_exceptions=True)
+                    verifications_text = "\n".join(
+                        f"Q: {q}\nA: {a if not isinstance(a, Exception) else 'uncertain'}"
+                        for q, a in zip(verify_qs, verify_answers)
+                    )
+                    final_prompt = COVE_FINAL_PROMPT.format(
+                        question=question, draft=draft,
+                        verifications=verifications_text,
+                    )
+                    predicted = await _generate(
+                        llm_backend, client, gen_url, model, final_prompt,
+                        thinking_mode=thinking_mode,
+                        no_think_prefix=no_think_prefix,
+                    )
+            except Exception as cove_exc:
+                # if any verification step fails, fall back to draft
+                predicted = draft
+        else:
+            predicted = draft
     except Exception as exc:
         predicted = f"[generation_error: {exc}]"
     gen_ms = (time.time() - t1) * 1000.0
@@ -867,6 +955,7 @@ async def run(args: argparse.Namespace) -> int:
                     turn_index=turn_index,
                     llm_backend=args.llm_backend,
                     llama_server_url=args.llm_server_url,
+                    cove=args.cove,
                     expansion_model=args.expansion_model,
                 )
             except Exception as e:
@@ -1108,6 +1197,13 @@ def _parse_args() -> argparse.Namespace:
                         "synthetic (no LoCoMo overlap, no test-set leakage). "
                         "~250 token prompt tax per QA. Known to lift small "
                         "instruction-tuned models +0.02-0.04 on factual QA.")
+    p.add_argument("--cove", action="store_true",
+                   help="Chain-of-Verification on the answer step. Generator "
+                        "drafts an answer → plans 2-3 verification questions → "
+                        "answers them independently → produces final verified "
+                        "answer. Adds 4 LLM calls per QA (3-4× wall-clock). "
+                        "Direct attack on hallucination/wrong-fact errors. "
+                        "Per Dhuliawala et al. arXiv:2309.11495.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
