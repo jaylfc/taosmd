@@ -657,6 +657,7 @@ async def _process_qa(
     llm_rerank: bool = False,
     llm_rerank_model: str = "llama3.1:8b",
     llm_rerank_top_k: int = 10,
+    gen_temp: float = 0.2,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -788,6 +789,7 @@ async def _process_qa(
         draft = await _generate(
             llm_backend, client, gen_url, model,
             answer_prompt,
+            temperature=gen_temp,
             thinking_mode=thinking_mode,
             no_think_prefix=no_think_prefix,
         )
@@ -800,6 +802,7 @@ async def _process_qa(
                 )
                 plan_raw = await _generate(
                     llm_backend, client, gen_url, model, plan_prompt,
+                    temperature=gen_temp,
                     thinking_mode=thinking_mode, no_think_prefix=no_think_prefix,
                 )
                 # parse verification questions: one per line, drop empties
@@ -819,6 +822,7 @@ async def _process_qa(
                             COVE_VERIFY_PROMPT.format(
                                 context=context, verify_question=vq,
                             ),
+                            temperature=gen_temp,
                             thinking_mode=thinking_mode,
                             no_think_prefix=no_think_prefix,
                         )
@@ -835,6 +839,7 @@ async def _process_qa(
                     )
                     predicted = await _generate(
                         llm_backend, client, gen_url, model, final_prompt,
+                        temperature=gen_temp,
                         thinking_mode=thinking_mode,
                         no_think_prefix=no_think_prefix,
                     )
@@ -974,6 +979,7 @@ async def run(args: argparse.Namespace) -> int:
                     llm_rerank=args.llm_rerank,
                     llm_rerank_model=args.llm_rerank_model,
                     llm_rerank_top_k=args.llm_rerank_top_k,
+                    gen_temp=args.gen_temp,
                     expansion_model=args.expansion_model,
                 )
             except Exception as e:
@@ -1235,6 +1241,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--llm-rerank-top-k", type=int, default=10,
                    help="Number of candidates to keep after the LLM listwise "
                         "rerank. Default 10. Set lower for tighter context.")
+    p.add_argument("--gen-temp", type=float, default=0.2,
+                   help="Generator sampling temperature (passed to ollama "
+                        "options.temperature for the answer step and any "
+                        "CoVe verification calls). Default 0.2 — the value "
+                        "every prior LoCoMo cell ran at; sweep 0.0 / 0.5 / "
+                        "0.8 to test sampling sensitivity.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
