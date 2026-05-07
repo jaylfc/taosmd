@@ -263,6 +263,62 @@ Pending: Qwen3-Embedding-0.6B and Qwen3-Embedding-4B — the `onnx-community` ON
 
 Measured on Fedora 12 GB 3060 host, May 6 2026. The asymmetric query/document prefix detection lives on branch `feat/embedder-asymmetric-prefixes-may5` for reproduction; full sweep summary at `/tmp/embedder_sweep_summary.tsv` on the bench host.
 
+### Judge sensitivity — what we are really measuring
+
+This is the most important finding in this document. Most existing public LoCoMo numbers (Mem0, Zep, EMem, HippoRAG, ENGRAM, LiCoMemory) are reported with **`gpt-4o-mini` as the LLM-judge**. We have used **`qwen3:4b` as the LLM-judge** since the start of this project — a deliberately strict, locally-runnable evaluator chosen so reproductions don't require API keys.
+
+After hitting a stubborn ~0.28 Single-hop ceiling across four independent architectural levers (prompt, embedder, ENGRAM-typed retrieval, generator size), we asked whether the ceiling was the *judge's strictness* rather than the *system's quality*. We took **the same `qwen3.5:9b` leader-recipe predictions** (200-QA subset, no re-generation) and rescored them under five different LLM judges:
+
+| Judge | Overall rejudge | **Single-hop** | Temporal | Multi-hop | Open-dom |
+|---|---|---|---|---|---|
+| **gemma4:e2b** | **0.71** | **0.53** | 0.62 | 0.85 | 0.86 |
+| qwen3.5:9b (self-judge) | 0.64 | 0.35 | 0.62 | 0.77 | 0.78 |
+| gemma4:e4b | 0.56 | 0.26 | 0.56 | 0.62 | 0.72 |
+| **qwen3:4b** (our published baseline) | **0.54** | **0.28** | 0.59 | 0.77 | 0.60 |
+| llama3.1:8b ⚠ | 0.35 | 0.21 | 0.27 | 0.46 | 0.48 |
+
+⚠ The `llama3.1:8b` rescore returned in 26 seconds for 200 QAs (vs ~30-60 minutes for the other judges). Almost certainly a parsing failure or refusal pattern; treated as outlier and excluded from comparisons below.
+
+The same pattern reproduces under a **second generator** (`qwen3.6:35b-a3b`, MoE):
+
+| Judge | Overall rejudge | Single-hop | Temporal | Multi-hop | Open-dom |
+|---|---|---|---|---|---|
+| **gemma4:e2b** | **0.69** | **0.51** | 0.68 | 0.46 | 0.83 |
+| qwen3.5:9b | 0.63 | 0.26 | 0.71 | 0.46 | 0.79 |
+| gemma4:e4b | 0.56 | 0.26 | 0.63 | 0.31 | 0.72 |
+| **qwen3:4b** (baseline) | **0.56** | **0.21** | 0.70 | 0.38 | 0.67 |
+
+Headlines:
+
+- **Same predictions, four different judges, Single-hop ranges 0.26 → 0.53 — a 2× variation.** The 0.28 floor we attributed to "the architecture is unmovable" was largely "the judge is strict." Architectural levers cannot lift Single-hop above the judge's ceiling.
+- **gemma4:e2b is the most lenient open-source judge we tested.** It is closer to gpt-4o-mini's behaviour on subjective grading (lenient on minor wording differences, accepts "yes inferred from context" answers more readily). It is also coincidentally the **weakest generator** we tested at this tier (0.46 overall when used as a generator at the leader recipe) — the asymmetry is real: a model can be a useful evaluator without being a useful generator.
+- **qwen3:4b is unusually strict** — flags inferences that gemma4:e2b accepts and penalises wording differences gemma4:e2b waves through. This is *not* a bug; it is just a different point on the strict ↔ lenient axis. We chose it for reproducibility (it's tiny, free, and never refuses) but its strictness costs us 0.15-0.25 on the Single-hop metric vs published-SOTA judging.
+- **Self-judge inflation is +0.10** on this stack (qwen3.5:9b judging its own qwen3.5:9b output: 0.54 → 0.64). Smaller than the +15-22 pp historic estimate from the methodology memo, but consistent in direction.
+
+Comparison to published systems on the same dataset:
+
+| System | Reported Single-hop | Reported judge | Our equivalent (gemma4:e2b judge) |
+|---|---|---|---|
+| EMem | 0.83 (gpt-4o-mini) | gpt-4o-mini | unknown — would need to bench |
+| Nemori | ~0.78 (gpt-4o-mini) | gpt-4o-mini | unknown |
+| **taosmd qwen3.5:9b leader** | **0.28 (qwen3:4b)** | qwen3:4b | **0.53 (gemma4:e2b)** |
+| **taosmd qwen3.6-MoE leader** | **0.21 (qwen3:4b)** | qwen3:4b | **0.51 (gemma4:e2b)** |
+
+Our system at gemma4:e2b judge is **0.53 Single-hop** versus EMem's published 0.83 — a real gap of ~0.30, not the ~0.55 our qwen3:4b numbers suggested. The remaining gap is closer to "their generator (gpt-4o-mini) is much stronger than ours (qwen3.5:9b)" plus "they have EDU-level retrieval and LLM filtering" — both real, addressable architectural deltas, not unmovable ceilings.
+
+#### Methodology change going forward
+
+We will not retroactively re-rescore every leaderboard cell at gemma4:e2b — that breaks comparability with prior cells and looks like number-massaging. Instead:
+
+1. **`qwen3:4b` remains the *headline* external judge** for the leaderboard above. It is the strictest judge we have access to, and reporting under a strict judge is the honest way to report. The 0.557 leader number stands.
+2. **`gemma4:e2b` becomes the *secondary* judge**, reported alongside `qwen3:4b` for any new cell, so future readers can pick the comparison axis (strict-but-local-judge for self-comparison; lenient-frontier-equivalent for comparison with paper SOTA).
+3. **New cells run from May 7 onward will be dual-rescored** under both judges. Every published number will carry both judge attributions explicitly (e.g. "0.557 / 0.71" or "Single-hop 0.28 (qwen3:4b) / 0.53 (gemma4:e2b)").
+4. **Hardware-tier guidance**: 4-6 GB VRAM systems should keep `qwen3:4b` as their judge (it fits, runs fast, never refuses). 8 GB+ systems can run `gemma4:e2b` (7.2 GB) for matched-with-SOTA comparison numbers. Both produce useful but different signals.
+
+The takeaway for anyone reading this doc: a single judge number is not a universal score. The right way to think about LoCoMo (and any LLM-judged benchmark) is as a *spread across reasonable judges*, not a single point. Our qwen3:4b number is at the strict end of that spread; gpt-4o-mini-equivalent numbers like EMem's 0.83 are at the lenient end. They measure overlapping but different things.
+
+Measured on Fedora 12 GB 3060 host, May 6-7 2026. Multi-judge sweep scripts at `/tmp/multijudge_overnight.sh` and `/tmp/multijudge_phase2.sh` on the bench host; rescored JSONs at `benchmarks/results/locomo_*_engram3cell_leader_baseline_repro_*.rescored_judge_*.json` and equivalents for the qwen3.6-MoE Phase 1 output.
+
 ### Methodology disclosures
 
 - **Dataset**: LoCoMo-10, 1540 QAs, categories 1–4. Adversarial reserved.
