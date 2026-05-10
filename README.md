@@ -181,14 +181,24 @@ The Librarian adds LLM-assisted query expansion on top of the vector + cross-enc
 
 LoCoMo-10 is a harder dataset than LongMemEval-S: 1540 QAs across multi-session conversations (50+ sessions, 400–700 turns), four categories, more pressure on the retrieval architecture. We run it on the smaller generators we actually target so the numbers reflect the hardware tier our users run on, not gpt-4o-mini.
 
-**0.557 ext rejudge on the full 1540-QA test set** (qwen3.5:9b + leader retrieval recipe `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`, external `qwen3:4b` judge — distinct from the generator).
+**0.557 ext rejudge** on the full 1540-QA test set under our strict default judge (`qwen3:4b`) — and **0.71 overall / 0.53 Single-hop** on the 200-QA subset under the lenient matched-with-paper-SOTA judge (`gemma4:e2b`). Same predictions, same recipe (qwen3.5:9b + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`), only the judge differs. Both numbers are honest measurements of the same system; published numbers from Mem0/EMem/Zep use a lenient frontier judge (gpt-4o-mini), so 0.71 is the more apples-to-apples comparison number with their headlines. See [docs/benchmarks.md](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring) for the full multi-judge analysis.
 
-**Two preferred generators at the 12 GB GPU tier:**
+**Recommended generators at the 12 GB GPU tier** (200-QA subset, leader recipe, dual-judge scored, temperature-tuned):
 
-- **`qwen3.5:9b`** Q4_K_M (5.3 GB on disk) — **production default**. Best measured quality.
-- **`llama3.1:8b`** (4.9 GB on disk) — **fast-tier alternative**. -0.02 ext rejudge from the qwen leader, **2.4× faster per QA**. Right pick for realtime turn latency or running multiple agents on one card.
+| Workload | Generator | Fusion | Temp | Overall (q3:4b / g4:e2b) | Single-hop (g4:e2b) | Notes |
+|---|---|---|---|---|---|---|
+| **Best overall** (default) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` | **0.2** | 0.54 / **0.71** | 0.56 | Best Multi-hop (0.77) under matched-judge. Production default. |
+| **Best factual recall** | `llama3.1:8b` (4.9 GB) | `rrf` | **0.2** | 0.54 / 0.67 | **0.65** | Wins Single-hop by +0.09 over qwen. **2.4× faster per QA**. RRF heuristic beats `mem0_additive` for *this* generator (-0.05 with mem0). |
+| Best mem0_additive Single-hop | `llama3.1:8b` | `mem0_additive` | **0.0** | 0.51 / 0.65 | 0.60 | Greedy decoding lifts llama Single-hop +0.13 vs temp 0.2. The biggest single-lever effect we've measured since the judge-strictness pivot. |
+| **Best temporal reasoning** | `mistral-small3.2` (~5 GB) | `rrf` | 0.2 | 0.56 / 0.70 | 0.53 | Wins Temporal (0.71). 2.8× slower than qwen — specialty pick only. |
 
-May 5 2026 generator-candidate sweep (200 QAs, leader recipe): qwen3.5:9b 0.56, mistral-small3.2 0.56 (2.8× slower per QA — not promoted), llama3.1:8b 0.54, gemma4:e4b 0.51, granite4:tiny-h 0.41. Full table, the 9B quant cliff (8 quants from Q2 through Q6, including the 8 GB-tier IQ4_XS at 0.55), the answer-prompt-variants negative result, and per-hardware-tier configurations in [docs/benchmarks.md](docs/benchmarks.md).
+Other measured 12 GB-tier generators (Overall under gemma4:e2b judge, leader recipe): `gemma4:e4b` 0.60 / 0.65 (best at temp 0.5), `gemma4:e2b` 0.60 (best at temp 0.5), `granite4:tiny-h` 0.56, `phi4-reasoning` timeout.
+
+> **Per-generator temp sweet spots** (matters more than we expected): `qwen3.5:9b` peaks at temp 0.2; `llama3.1:8b` prefers fully-greedy (0.0); `gemma4:e4b` prefers 0.5 for Overall; `gemma4:e2b` prefers 0.0 for Single-hop. There's no universal sampling temperature for our local-tier stack — the right temp interacts with the model's training distribution. See `docs/benchmarks.md` for the per-generator × per-temp breakdown.
+
+> **About the dual judge.** We score every new cell under two LLM judges: `qwen3:4b` (locally-runnable, deliberately strict, never refuses) and `gemma4:e2b` (lenient, calibrated closer to gpt-4o-mini). The *same predictions* score 0.28 vs 0.53 Single-hop respectively — judge strictness is a load-bearing variable in any LLM-judged benchmark. Reporting both is the honest middle ground between under-claiming under our strict judge and over-claiming under a frontier-API judge we can't afford to run on every cell. Hardware-tier defaults: 4-6 GB VRAM systems should keep `qwen3:4b` as their judge (fits comfortably, fast), 8 GB+ can run `gemma4:e2b` (7.2 GB) for matched-with-paper-SOTA comparison numbers.
+
+Full table, the 9B quant cliff (8 quants from Q2 through Q6, including the 8 GB-tier IQ4_XS at 0.55), the answer-prompt-variants and ENGRAM-typed-retrieval negative results, judge-sensitivity analysis, and per-hardware-tier configurations in [docs/benchmarks.md](docs/benchmarks.md). Tier breakouts for 4 GB / 8 GB / 16 GB Pi NPU tiers will land as those benches dual-rescore.
 
 ## Architecture
 
