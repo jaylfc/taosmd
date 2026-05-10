@@ -376,6 +376,100 @@ async def _ingest_conversation(
     return added, time.time() - t0, turn_index
 
 
+async def _build_hippo_index(
+    conv: dict, *,
+    http_client: httpx.AsyncClient, ollama_url: str, extract_model: str,
+    damping: float, linking_top_k: int, passage_node_weight: float,
+    vmem: VectorMemory,
+):
+    """Build a per-conversation HippoIndex from session-level OpenIE triples.
+
+    Triple extraction is one LLM call per session. Each turn is registered as
+    a passage node so retrieval returns turn-level hits with dia_id metadata,
+    matching the runner's evidence-recall accounting. A session whose
+    extraction errors out keeps its passages but contributes no facts; PPR
+    falls back gracefully (entity weight = 0 -> uniform passage seeds).
+    """
+    from taosmd.hipporag_index import (
+        HippoIndex, extract_session_triples, format_session_for_extraction,
+    )
+    import time as _time
+
+    t0 = _time.time()
+    conversation = conv.get("conversation", conv)
+    index = HippoIndex(
+        damping=damping,
+        linking_top_k=linking_top_k,
+        passage_node_weight=passage_node_weight,
+    )
+
+    speakers_seen: list[str] = []
+    for session_key, _dt in _session_keys(conversation):
+        for turn in conversation.get(session_key) or []:
+            sp = turn.get("speaker", "")
+            if sp and sp not in speakers_seen:
+                speakers_seen.append(sp)
+
+    for session_key, dt in _session_keys(conversation):
+        turns = conversation.get(session_key) or []
+        if not turns:
+            continue
+
+        session_first_passage_idx = len(index.passages)
+        registered_count = 0
+        for turn in turns:
+            text = (turn.get("text") or "").strip()
+            speaker = turn.get("speaker", "")
+            dia_id = turn.get("dia_id", "")
+            if not text:
+                continue
+            index.add_passage(
+                f"[{speaker}] {text}",
+                metadata={
+                    "dia_id": dia_id,
+                    "session": session_key,
+                    "datetime": dt,
+                    "speaker": speaker,
+                    "turn_idx": session_first_passage_idx + registered_count,
+                    "level": "turn",
+                },
+            )
+            registered_count += 1
+
+        if registered_count == 0:
+            continue
+        non_empty_turns = [t for t in turns if (t.get("text") or "").strip()]
+        session_text = format_session_for_extraction(non_empty_turns, dt)
+
+        triples: list[dict] = []
+        try:
+            triples = await extract_session_triples(
+                session_text, speakers_seen,
+                model=extract_model, ollama_url=ollama_url,
+                http_client=http_client,
+            )
+        except Exception as exc:
+            print(
+                f"[locomo_runner] HippoRAG triple extraction failed for "
+                f"{session_key}: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+
+        if triples:
+            index.add_triples(
+                triples, session_first_passage_idx, registered_count,
+            )
+
+    async def embed_batch(texts: list[str]) -> list[list[float]]:
+        out: list[list[float]] = []
+        for t in texts:
+            out.append(await vmem.embed(t, task="search_document"))
+        return out
+
+    await index.finalize(embed_batch)
+    return index, _time.time() - t0
+
+
 def _build_adjacent_map(
     hits: list[dict], turn_index: dict[str, dict], adjacent_turns: int
 ) -> dict[str, list[str]]:
@@ -617,6 +711,7 @@ async def _process_qa(
     llm_backend: str = "ollama",
     llama_server_url: str = "",
     expansion_model: str = "",
+    hippo_index=None,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -698,6 +793,45 @@ async def _process_qa(
                 pass  # fall through
 
         t0 = time.time()
+
+        # HippoRAG-PPR — bypass vmem.search and run Personalized PageRank
+        # over the per-conversation HippoIndex. Builds query embedding via
+        # vmem (so we share the embedder config) but the ranking signal is
+        # purely PPR over the OpenIE graph + entity-passage edges.
+        if hippo_index is not None:
+            query_emb = await vmem.embed(retrieval_query, task="search_query")
+            hits = await hippo_index.retrieve(retrieval_query, query_emb, top_k=retrieval_top_k)
+            retrieval_ms = (time.time() - t0) * 1000.0
+            adj_map = _build_adjacent_map(hits, turn_index, adjacent_turns)
+            context = _build_context(
+                hits, context_format=context_format,
+                adjacent_turns_map=adj_map if adj_map else None,
+            )
+            t1 = time.time()
+            try:
+                answer_prompt = ANSWER_PROMPT.format(context=context, question=question)
+                if few_shot:
+                    answer_prompt = FEW_SHOT_EXAMPLES + answer_prompt
+                predicted = await _generate(
+                    llm_backend, client, gen_url, model, answer_prompt,
+                    thinking_mode=thinking_mode, no_think_prefix=no_think_prefix,
+                )
+            except Exception as exc:
+                predicted = f"[generation_error: {exc}]"
+            gen_ms = (time.time() - t1) * 1000.0
+            judge = await _judge(client, gen_url, model, question, reference, predicted, backend=llm_backend)
+            return {
+                "conversation_id": conv_id, "question": question,
+                "reference": reference, "predicted": predicted,
+                "category": category,
+                "f1": round(_f1(predicted, reference), 4),
+                "bleu1": round(_bleu1(predicted, reference), 4),
+                "judge": round(judge, 4),
+                "retrieval_ms": round(retrieval_ms, 2),
+                "gen_ms": round(gen_ms, 2),
+                "evidence_hits": _evidence_hits(hits, evidence),
+                "evidence_total": len(evidence),
+            }
 
         if multihop_decompose:
             sub_queries = await _decompose_query(client, ollama_url, retrieval_query)
@@ -844,6 +978,7 @@ async def run(args: argparse.Namespace) -> int:
         vmem: VectorMemory,
         client: httpx.AsyncClient,
         turn_index: dict[str, dict],
+        hippo_index=None,
     ) -> dict | None:
         nonlocal total_seen, failed_qa
         async with sem:
@@ -868,6 +1003,7 @@ async def run(args: argparse.Namespace) -> int:
                     llm_backend=args.llm_backend,
                     llama_server_url=args.llm_server_url,
                     expansion_model=args.expansion_model,
+                    hippo_index=hippo_index,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -897,6 +1033,22 @@ async def run(args: argparse.Namespace) -> int:
             )
             print(f"[{conv_id}] ingested {added} turns in {ingest_s:.1f}s", flush=True)
 
+            hippo_index = None
+            if args.hipporag:
+                hippo_index, hippo_s = await _build_hippo_index(
+                    conv, http_client=client, ollama_url=args.ollama_url,
+                    extract_model=args.hipporag_extract_model,
+                    damping=args.hipporag_damping,
+                    linking_top_k=args.hipporag_linking_top_k,
+                    passage_node_weight=args.hipporag_passage_node_weight,
+                    vmem=vmem,
+                )
+                print(
+                    f"[{conv_id}] HippoRAG: {len(hippo_index.passages)} passages, "
+                    f"{len(hippo_index.facts)} facts in {hippo_s:.1f}s",
+                    flush=True,
+                )
+
             # Pick eligible QAs up-front. --per-conv-limit caps QAs per
             # conversation (for balanced sampling); --limit is the global cap.
             eligible: list[dict] = []
@@ -911,7 +1063,7 @@ async def run(args: argparse.Namespace) -> int:
                 eligible.append(qa)
 
             if eligible:
-                tasks = [_guarded(qa, conv_id, vmem, client, turn_index) for qa in eligible]
+                tasks = [_guarded(qa, conv_id, vmem, client, turn_index, hippo_index) for qa in eligible]
                 gathered = await asyncio.gather(*tasks, return_exceptions=True)
                 for outcome in gathered:
                     if isinstance(outcome, Exception) or outcome is None:
@@ -945,6 +1097,11 @@ async def run(args: argparse.Namespace) -> int:
         "hyde": args.hyde,
         "no_think_prefix": args.no_think_prefix,
         "few_shot": args.few_shot,
+        "hipporag": args.hipporag,
+        "hipporag_extract_model": args.hipporag_extract_model if args.hipporag else "",
+        "hipporag_damping": args.hipporag_damping if args.hipporag else 0.0,
+        "hipporag_linking_top_k": args.hipporag_linking_top_k if args.hipporag else 0,
+        "hipporag_passage_node_weight": args.hipporag_passage_node_weight if args.hipporag else 0.0,
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -1108,6 +1265,33 @@ def _parse_args() -> argparse.Namespace:
                         "synthetic (no LoCoMo overlap, no test-set leakage). "
                         "~250 token prompt tax per QA. Known to lift small "
                         "instruction-tuned models +0.02-0.04 on factual QA.")
+    p.add_argument("--hipporag", action="store_true",
+                   help="HippoRAG-style retrieval (arXiv:2405.14831, vector-only "
+                        "PPR variant). Per conversation: extract OpenIE triples "
+                        "via one LLM call per session, build an in-memory "
+                        "igraph with entity nodes + turn-passage nodes + fact "
+                        "edges. At query time embed the query, top-k facts via "
+                        "dot product, derive entity seed weights, run "
+                        "Personalized PageRank, return top-k turns. Bypasses "
+                        "the standard vmem retrieval path (RRF/BM25/reranker "
+                        "flags are ignored when --hipporag is set). Requires "
+                        "python-igraph on the runner host.")
+    p.add_argument("--hipporag-extract-model", default="llama3.1:8b",
+                   help="Model for per-session OpenIE triple extraction. "
+                        "Default llama3.1:8b (clean JSON, no qwen3 think-mode "
+                        "quirk).")
+    p.add_argument("--hipporag-damping", type=float, default=0.5,
+                   help="PPR damping factor (1-damping is the teleport "
+                        "probability). HippoRAG paper uses 0.5.")
+    p.add_argument("--hipporag-linking-top-k", type=int, default=5,
+                   help="Top-k facts to seed entity weights from (HippoRAG "
+                        "paper default). Lower = more focused, higher = "
+                        "broader propagation.")
+    p.add_argument("--hipporag-passage-node-weight", type=float, default=0.05,
+                   help="Uniform seed weight added to every passage node "
+                        "(HippoRAG paper default 0.05). Provides a baseline "
+                        "DPR-like signal so passages disconnected from any "
+                        "top-k fact still receive some PPR mass.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
