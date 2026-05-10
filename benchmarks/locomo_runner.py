@@ -282,6 +282,8 @@ def _session_keys(conversation: dict) -> list[tuple[str, str]]:
 
 async def _ingest_conversation(
     vmem: VectorMemory, conv: dict, multi_level: bool = False,
+    *, emem_edu: bool = False, emem_edu_extract_model: str = "",
+    ollama_url: str = "", http_client: "httpx.AsyncClient | None" = None,
 ) -> tuple[int, float, dict[str, dict]]:
     """Ingest conversation turns into vmem.
 
@@ -296,8 +298,25 @@ async def _ingest_conversation(
     RRF fusion at retrieval naturally surfaces whichever level is most
     relevant for a given question. Equivalent to HyperMem's coarse-to-fine
     Topic/Episode/Fact hierarchy without the LLM-driven construction.
+
+    When emem_edu=True, replaces the raw-turn ingest with EMem-style
+    Elementary Discourse Unit extraction (one LLM call per session, port of
+    arXiv:2511.17208). Each session's turns are decomposed into atomic,
+    self-contained EDUs with normalized entities and turn attribution.
+    `multi_level` is incompatible with `emem_edu` and is ignored when both
+    are set — EDUs replace the turn level rather than augmenting it.
     """
     conversation = conv.get("conversation", conv)
+    if emem_edu:
+        if not http_client or not ollama_url or not emem_edu_extract_model:
+            raise ValueError(
+                "emem_edu=True requires http_client, ollama_url, and "
+                "emem_edu_extract_model"
+            )
+        return await _ingest_conversation_edus(
+            vmem, conv, http_client=http_client, ollama_url=ollama_url,
+            extract_model=emem_edu_extract_model,
+        )
     t0 = time.time()
     added = 0
     turn_index: dict[str, dict] = {}  # str(global_idx) -> {datetime, text, speaker, dia_id}
@@ -372,6 +391,117 @@ async def _ingest_conversation(
                         },
                     )
                     added += 1
+
+    return added, time.time() - t0, turn_index
+
+
+async def _ingest_conversation_edus(
+    vmem: VectorMemory, conv: dict, *,
+    http_client: httpx.AsyncClient, ollama_url: str, extract_model: str,
+) -> tuple[int, float, dict[str, dict]]:
+    """EMem-style EDU ingest path. One LLM call per session.
+
+    Falls back to per-turn EDUs if extraction errors / parses-empty for a
+    session — never leaves a session unindexed. Returns (added, elapsed,
+    turn_index) with the same shape as the raw-turn path so the caller can
+    treat the modes interchangeably; turn_index here maps turn_idx -> turn
+    metadata covering all turns from all sessions, used for evidence-recall
+    bookkeeping (EDUs with multi-turn attribution still resolve dia_ids
+    correctly).
+    """
+    from taosmd.emem_edu import extract_session_edus, format_session_for_extraction
+
+    conversation = conv.get("conversation", conv)
+    t0 = time.time()
+    added = 0
+    turn_index: dict[str, dict] = {}
+    global_idx = 0
+
+    speakers_seen: list[str] = []
+    for session_key, _dt in _session_keys(conversation):
+        for turn in conversation.get(session_key) or []:
+            sp = turn.get("speaker", "")
+            if sp and sp not in speakers_seen:
+                speakers_seen.append(sp)
+
+    for session_key, dt in _session_keys(conversation):
+        turns = conversation.get(session_key) or []
+        if not turns:
+            continue
+
+        session_first_idx = global_idx
+        local_turn_meta: list[dict] = []
+        for turn in turns:
+            text = (turn.get("text") or "").strip()
+            speaker = turn.get("speaker", "")
+            dia_id = turn.get("dia_id", "")
+            local_turn_meta.append({
+                "text": text, "speaker": speaker, "dia_id": dia_id,
+            })
+            turn_index[str(global_idx)] = {
+                "datetime": dt,
+                "text": f"[{speaker}] {text}" if text else "",
+                "speaker": speaker,
+                "dia_id": dia_id,
+            }
+            global_idx += 1
+
+        non_empty_turns = [t for t in turns if (t.get("text") or "").strip()]
+        if not non_empty_turns:
+            continue
+        session_text = format_session_for_extraction(non_empty_turns, dt)
+
+        edus: list[dict] = []
+        try:
+            edus = await extract_session_edus(
+                session_text, speakers_seen,
+                model=extract_model, ollama_url=ollama_url,
+                http_client=http_client,
+            )
+        except Exception as exc:
+            print(
+                f"[locomo_runner] EDU extraction failed for {session_key}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+
+        if not edus:
+            for local_i, meta in enumerate(local_turn_meta):
+                if not meta["text"]:
+                    continue
+                edus.append({
+                    "edu_text": f"[{meta['speaker']}] {meta['text']}",
+                    "source_turn_ids": [local_i + 1],
+                })
+
+        for edu in edus:
+            edu_text = edu["edu_text"]
+            local_turn_ids = edu.get("source_turn_ids") or []
+            global_turn_ids: list[int] = []
+            primary_dia_id = ""
+            primary_speaker = ""
+            for ltid in local_turn_ids:
+                gidx = session_first_idx + (ltid - 1)
+                if str(gidx) in turn_index:
+                    global_turn_ids.append(gidx)
+                    if not primary_dia_id:
+                        primary_dia_id = turn_index[str(gidx)].get("dia_id", "")
+                        primary_speaker = turn_index[str(gidx)].get("speaker", "")
+            primary_global = global_turn_ids[0] if global_turn_ids else session_first_idx
+
+            await vmem.add(
+                edu_text,
+                metadata={
+                    "dia_id": primary_dia_id,
+                    "session": session_key,
+                    "datetime": dt,
+                    "speaker": primary_speaker,
+                    "turn_idx": primary_global,
+                    "level": "edu",
+                    "source_turn_ids": global_turn_ids,
+                },
+            )
+            added += 1
 
     return added, time.time() - t0, turn_index
 
@@ -617,6 +747,8 @@ async def _process_qa(
     llm_backend: str = "ollama",
     llama_server_url: str = "",
     expansion_model: str = "",
+    emem_edu_filter: bool = False,
+    emem_edu_filter_model: str = "",
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -723,6 +855,28 @@ async def _process_qa(
             hits = _apply_temporal_recency_boost(hits, turn_index, temporal_boost)
 
         retrieval_ms = (time.time() - t0) * 1000.0
+
+        # EMem LLM filter — runs AFTER retrieval/rerank, BEFORE adjacent-turn
+        # injection. Single LLM call per QA; passes the candidate EDU texts
+        # to the filter model and keeps only the relevant subset (preserving
+        # original ranking). Empty filter result -> fall back to unfiltered
+        # hits (otherwise we'd starve the generator on a filter parse error).
+        if emem_edu_filter and hits:
+            from taosmd.emem_edu import filter_edus
+            candidate_texts = [h.get("text", "") for h in hits]
+            kept = await filter_edus(
+                question, candidate_texts,
+                model=emem_edu_filter_model, ollama_url=ollama_url,
+                http_client=client,
+            )
+            if kept:
+                # Preserve the LLM's filter order — that's the rerank signal.
+                # Drop duplicates by first occurrence (multiple hits could
+                # share text, in pathological cases).
+                by_text: dict[str, dict] = {}
+                for h in hits:
+                    by_text.setdefault(h.get("text", ""), h)
+                hits = [by_text[t] for t in kept if t in by_text]
 
         adj_map = _build_adjacent_map(hits, turn_index, adjacent_turns)
 
@@ -868,6 +1022,8 @@ async def run(args: argparse.Namespace) -> int:
                     llm_backend=args.llm_backend,
                     llama_server_url=args.llm_server_url,
                     expansion_model=args.expansion_model,
+                    emem_edu_filter=(args.emem_edu and not args.emem_edu_no_filter),
+                    emem_edu_filter_model=args.emem_edu_filter_model or args.emem_edu_extract_model,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -893,9 +1049,14 @@ async def run(args: argparse.Namespace) -> int:
             )
             await vmem.init(http_client=client)
             added, ingest_s, turn_index = await _ingest_conversation(
-                vmem, conv, multi_level=args.multi_level_retrieval
+                vmem, conv, multi_level=args.multi_level_retrieval,
+                emem_edu=args.emem_edu,
+                emem_edu_extract_model=args.emem_edu_extract_model,
+                ollama_url=args.ollama_url,
+                http_client=client,
             )
-            print(f"[{conv_id}] ingested {added} turns in {ingest_s:.1f}s", flush=True)
+            unit = "EDUs" if args.emem_edu else "turns"
+            print(f"[{conv_id}] ingested {added} {unit} in {ingest_s:.1f}s", flush=True)
 
             # Pick eligible QAs up-front. --per-conv-limit caps QAs per
             # conversation (for balanced sampling); --limit is the global cap.
@@ -945,6 +1106,13 @@ async def run(args: argparse.Namespace) -> int:
         "hyde": args.hyde,
         "no_think_prefix": args.no_think_prefix,
         "few_shot": args.few_shot,
+        "emem_edu": args.emem_edu,
+        "emem_edu_extract_model": args.emem_edu_extract_model if args.emem_edu else "",
+        "emem_edu_filter": (args.emem_edu and not args.emem_edu_no_filter),
+        "emem_edu_filter_model": (
+            (args.emem_edu_filter_model or args.emem_edu_extract_model)
+            if args.emem_edu and not args.emem_edu_no_filter else ""
+        ),
         "strategy": args.strategy,
         "total_qa": len(results),
         "categories_included": sorted(include_cats),
@@ -1108,6 +1276,29 @@ def _parse_args() -> argparse.Namespace:
                         "synthetic (no LoCoMo overlap, no test-set leakage). "
                         "~250 token prompt tax per QA. Known to lift small "
                         "instruction-tuned models +0.02-0.04 on factual QA.")
+    p.add_argument("--emem-edu", action="store_true",
+                   help="EMem-style EDU ingest (arXiv:2511.17208, vector-only "
+                        "variant). Replaces raw-turn ingest with one LLM call "
+                        "per session that decomposes turns into atomic, "
+                        "self-contained Elementary Discourse Units with "
+                        "normalized entities and turn attribution. EDUs are "
+                        "stored at level='edu' in vmem; existing dense + "
+                        "fusion + reranker paths apply unchanged. Adds an "
+                        "LLM filter call per QA (see --emem-edu-no-filter to "
+                        "disable). Incompatible with --multi-level-retrieval.")
+    p.add_argument("--emem-edu-extract-model", default="llama3.1:8b",
+                   help="Model for per-session EDU extraction. Default "
+                        "llama3.1:8b (fast, clean JSON, no think-mode "
+                        "quirk). Must be served by the Ollama URL.")
+    p.add_argument("--emem-edu-filter-model", default="",
+                   help="Model for the per-QA EDU filter step. Defaults to "
+                        "--emem-edu-extract-model. Set explicitly when "
+                        "running extraction on a different tier than filter.")
+    p.add_argument("--emem-edu-no-filter", action="store_true",
+                   help="Run the EMem-EDU ingest path but SKIP the LLM "
+                        "filter step at retrieval time. Useful for A/B-ing "
+                        "EDU storage alone vs EDU+filter, since the filter "
+                        "is one extra LLM call per QA (~5-15s).")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
