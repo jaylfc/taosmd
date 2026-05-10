@@ -369,6 +369,36 @@ The "qwen3.5:9b production / llama3.1:8b fast alternative" framing from the May 
 
 Measured on Fedora 12 GB 3060 host, May 7 2026. Dual-rescore script at `/home/jay/dual_judge_rescore.sh`; full summary at `/tmp/dual_judge_rescore_summary.tsv`. The full leaderboard above (line 54+) was scored exclusively under `qwen3:4b` and is *not* retroactively rescored — every cell from May 7 onward carries both judge attributions explicitly.
 
+#### Generator-temperature sweep
+
+Until May 9 every LoCoMo cell ran at the runner's hardcoded `temperature=0.2`. We added a `--gen-temp` flag and swept four generators × three temperatures (0.0, 0.2, 0.5) at the leader recipe + `mem0_additive` fusion, subset 200, dual-rescored.
+
+| Generator | temp 0.0 | temp 0.2 (existing) | temp 0.5 | Sweet spot |
+|---|---|---|---|---|
+| **gemma4:e2b** | 0.59 / **0.49** | 0.57 / 0.37 | 0.60 / 0.35 | 0.0 for SH; 0.5 for Overall |
+| **llama3.1:8b** | 0.65 / **0.60** | 0.62 / 0.47 | 0.63 / 0.51 | **temp 0.0 across the board** |
+| **qwen3.5:9b** | 0.67 / 0.53 | **0.70** / **0.56** | 0.65 / 0.58 | **temp 0.2 sweet spot** |
+| **gemma4:e4b** | 0.62 / 0.53 | 0.61 / 0.42 | **0.65** / 0.51 | 0.5 for Overall, 0.0 for SH |
+
+Numbers are `Overall / Single-hop` under `gemma4:e2b` judge. Bold = peak per generator per metric.
+
+Headlines:
+
+- **Sampling temperature is per-generator, not universal.** qwen3.5:9b's training distribution prefers low-but-nonzero temp (0.2); llama3.1:8b prefers fully-greedy (0.0); gemma4:e4b prefers 0.5 for Overall but 0.0 for Single-hop; gemma4:e2b is similarly split. There's no "always use temp X" rule for our local-tier stack.
+- **llama3.1:8b at temp 0.0 + mem0_additive = 0.65 / 0.60 Single-hop.** The +0.13 Single-hop lift (0.47 → 0.60) just from temperature is the largest single-lever effect we've measured since the judge-strictness pivot. Greedy decoding lets llama commit to the most-likely token rather than sampling around the answer's exact form — which the judge then accepts more often.
+- **qwen3.5:9b + mem0_additive + temp 0.2 (0.70 / 0.56) is still the Overall leader.** No temp-sweep cell beat it on overall. Production default holds.
+- **Best Single-hop overall is still `llama3.1:8b` at RRF heuristic + temp 0.2 (0.65 SH, May 5 sweep).** mem0_additive *hurts* llama's Single-hop (-0.05 vs RRF heuristic) — the lever that helps qwen3.5:9b doesn't help llama. Different generators interact with different fusion modes differently. Per-generator + per-fusion + per-temp tuning is genuinely a thing here.
+
+Updated 12 GB tier guidance (matched-judge methodology, gemma4:e2b):
+
+> - **Best Overall** → `qwen3.5:9b` + `--fusion mem0_additive` + `--gen-temp 0.2` (0.70 / 0.56 SH)
+> - **Best Single-hop / factual recall** → `llama3.1:8b` + `--fusion rrf` + `--gen-temp 0.2` (0.67 / **0.65 SH**)
+> - **Best Single-hop within mem0_additive** → `llama3.1:8b` + `--fusion mem0_additive` + `--gen-temp 0.0` (0.65 / 0.60 SH)
+> - **Multi-hop / Temporal** → `qwen3.5:9b` + `mem0_additive` + temp 0.2 (0.77 / 0.59)
+> - **Production default**: `qwen3.5:9b` + `mem0_additive` + temp 0.2 — best Overall and within 0.01 of best Multi-hop / Open-dom.
+
+Measured on Fedora 12 GB 3060 host, May 8-9 2026. Bench script at `/home/jay/temp_sweep_bench.sh`; full summary at `/tmp/temp_sweep_bench_summary.tsv`. `--gen-temp` flag lives on branch `feat/gen-temp-flag` (commit `2bd1b21`) for reproduction.
+
 ### Methodology disclosures
 
 - **Dataset**: LoCoMo-10, 1540 QAs, categories 1–4. Adversarial reserved.

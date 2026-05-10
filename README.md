@@ -183,15 +183,18 @@ LoCoMo-10 is a harder dataset than LongMemEval-S: 1540 QAs across multi-session 
 
 **0.557 ext rejudge** on the full 1540-QA test set under our strict default judge (`qwen3:4b`) — and **0.71 overall / 0.53 Single-hop** on the 200-QA subset under the lenient matched-with-paper-SOTA judge (`gemma4:e2b`). Same predictions, same recipe (qwen3.5:9b + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`), only the judge differs. Both numbers are honest measurements of the same system; published numbers from Mem0/EMem/Zep use a lenient frontier judge (gpt-4o-mini), so 0.71 is the more apples-to-apples comparison number with their headlines. See [docs/benchmarks.md](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring) for the full multi-judge analysis.
 
-**Recommended generators at the 12 GB GPU tier** (200-QA subset, leader recipe, dual-judge scored):
+**Recommended generators at the 12 GB GPU tier** (200-QA subset, leader recipe, dual-judge scored, temperature-tuned):
 
-| Workload | Generator | Overall (q3:4b / g4:e2b) | Single-hop (g4:e2b) | Notes |
-|---|---|---|---|---|
-| **Best overall** (default) | `qwen3.5:9b` Q4_K_M (5.3 GB) | 0.54 / **0.71** | 0.53 | Best Multi-hop (0.85) and Open-dom (0.86). Production default. |
-| **Best factual recall** | `llama3.1:8b` (4.9 GB) | 0.54 / 0.67 | **0.65** | Wins Single-hop by +0.12, also **2.4× faster per QA** than qwen. Best for QA-heavy workloads. |
-| **Best temporal reasoning** | `mistral-small3.2` (~5 GB) | 0.56 / 0.70 | 0.53 | Wins Temporal (0.71). 2.8× slower than qwen — specialty pick only. |
+| Workload | Generator | Fusion | Temp | Overall (q3:4b / g4:e2b) | Single-hop (g4:e2b) | Notes |
+|---|---|---|---|---|---|---|
+| **Best overall** (default) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` | **0.2** | 0.54 / **0.71** | 0.56 | Best Multi-hop (0.77) under matched-judge. Production default. |
+| **Best factual recall** | `llama3.1:8b` (4.9 GB) | `rrf` | **0.2** | 0.54 / 0.67 | **0.65** | Wins Single-hop by +0.09 over qwen. **2.4× faster per QA**. RRF heuristic beats `mem0_additive` for *this* generator (-0.05 with mem0). |
+| Best mem0_additive Single-hop | `llama3.1:8b` | `mem0_additive` | **0.0** | 0.51 / 0.65 | 0.60 | Greedy decoding lifts llama Single-hop +0.13 vs temp 0.2. The biggest single-lever effect we've measured since the judge-strictness pivot. |
+| **Best temporal reasoning** | `mistral-small3.2` (~5 GB) | `rrf` | 0.2 | 0.56 / 0.70 | 0.53 | Wins Temporal (0.71). 2.8× slower than qwen — specialty pick only. |
 
-Other measured 12 GB-tier generators: `gemma4:e4b` (0.60 g4:e2b), `granite4:tiny-h` (0.56 g4:e2b), `phi4-reasoning` (timeout, not viable for memory recall).
+Other measured 12 GB-tier generators (Overall under gemma4:e2b judge, leader recipe): `gemma4:e4b` 0.60 / 0.65 (best at temp 0.5), `gemma4:e2b` 0.60 (best at temp 0.5), `granite4:tiny-h` 0.56, `phi4-reasoning` timeout.
+
+> **Per-generator temp sweet spots** (matters more than we expected): `qwen3.5:9b` peaks at temp 0.2; `llama3.1:8b` prefers fully-greedy (0.0); `gemma4:e4b` prefers 0.5 for Overall; `gemma4:e2b` prefers 0.0 for Single-hop. There's no universal sampling temperature for our local-tier stack — the right temp interacts with the model's training distribution. See `docs/benchmarks.md` for the per-generator × per-temp breakdown.
 
 > **About the dual judge.** We score every new cell under two LLM judges: `qwen3:4b` (locally-runnable, deliberately strict, never refuses) and `gemma4:e2b` (lenient, calibrated closer to gpt-4o-mini). The *same predictions* score 0.28 vs 0.53 Single-hop respectively — judge strictness is a load-bearing variable in any LLM-judged benchmark. Reporting both is the honest middle ground between under-claiming under our strict judge and over-claiming under a frontier-API judge we can't afford to run on every cell. Hardware-tier defaults: 4-6 GB VRAM systems should keep `qwen3:4b` as their judge (fits comfortably, fast), 8 GB+ can run `gemma4:e2b` (7.2 GB) for matched-with-paper-SOTA comparison numbers.
 
