@@ -399,6 +399,44 @@ Updated 12 GB tier guidance (matched-judge methodology, gemma4:e2b):
 
 Measured on Fedora 12 GB 3060 host, May 8-9 2026. Bench script at `/home/jay/temp_sweep_bench.sh`; full summary at `/tmp/temp_sweep_bench_summary.tsv`. `--gen-temp` flag lives on branch `feat/gen-temp-flag` (commit `2bd1b21`) for reproduction.
 
+### ENGRAM-style typed retrieval — does typed memory routing raise Single-hop?
+
+The third architectural lever we tested at this generator tier. Same setup as the prompt and embedder sweeps but varying the *retrieval routing*: instead of one undifferentiated vector store, classify each conversation turn into three typed memory stores at ingest, then fan out per-type top-k searches at retrieval and set-merge before the leader pipeline.
+
+Based on **[ENGRAM: Effective, Lightweight Memory Orchestration for Conversational Agents](https://arxiv.org/abs/2511.12960)** (Nov 2025), which reports **77.55 LLM-as-Judge** on LoCoMo with text-embedding-3-small + GPT-4o-mini and shows a **+31 absolute pp** ablation drop when typed separation is collapsed into a single store (77.55 → 46.56). The paper's claim: typed separation matters more than the embedder or generator choice.
+
+We replicated the architectural shape on our local stack:
+
+- **Per-turn classifier**: `llama3.1:8b` returns a 3-bit mask `{episodic, semantic, procedural}` per LoCoMo turn at ingest. Cached by SHA-256 of the turn text, so re-runs don't re-classify. ~290 ms/turn effective at 4-way concurrency.
+- **Storage**: each vector entry tagged with the mask in its metadata column.
+- **Retrieval**: new `--retrieval-mode engram_typed` runs three top-k vector searches (one per type bit), set-merges by row id with dedup, then runs the existing leader stack (cross-encoder rerank + RRF + adj=2) on the merged candidate pool.
+- **Question routing**: also tested an `oracle_routed` mode that uses the dataset's known `qa["category"]` to pick mode per question — categories 3 and 4 (Multi-hop / Open-dom) use `engram_typed`, categories 1 and 2 (Single-hop / Temporal) use `default`. This is the *upper bound* on category-routing; no real classifier can beat oracle.
+
+Three-cell experiment, all at the leader recipe (`k=20 + adj=2 + llm-exp + RRF`), 200 QAs subset, external `qwen3:4b` rescore:
+
+| cell | overall rejudge | single-hop | temporal | multi-hop | open-dom | F1 |
+|---|---|---|---|---|---|---|
+| **leader_baseline_repro** | **0.54** | 0.28 | 0.59 | **0.77** | 0.60 | 0.231 |
+| engram_typed | 0.53 | 0.30 | 0.57 | 0.54 | 0.62 | 0.226 |
+| oracle_routed | 0.53 | 0.33 | 0.60 | 0.46 | 0.58 | 0.225 |
+
+Classification distribution on LoCoMo turns (`llama3.1:8b` over 419 turns, conversation 26): **51.8 %** pure semantic, **28.6 %** episodic+semantic dual, **18.6 %** pure episodic, **~1 %** anything procedural. The three types are clearly differentiated — *not* a degenerate "everything is everything" mask — but procedural content is essentially absent in casual chat (matches the paper's expectation).
+
+Headlines:
+
+- **Overall is flat (-0.01).** Whatever the typed routing buys back on Open-dom (+0.02) and Single-hop (+0.02-0.05) is paid for by Multi-hop and Temporal regressions. Net moves are within subset-200 noise (~±0.02) on identical recipes.
+- **Multi-hop regresses HARD with typed retrieval (-0.23).** Counter-intuitive — Multi-hop is the category we expected to *win* most. The 3-way fanout brings in less-relevant turns (each type's per-type top-k can include weaker candidates than a single combined top-k would have surfaced), and the set-merge dilutes the cross-encoder's ranking signal across heterogeneous candidates. Same direction in both ENGRAM-using cells (engram_typed at 0.54, oracle_routed at 0.46), so it isn't noise — it's a real cost of the architectural choice at this scale.
+- **Single-hop is the third null lever.** 0.28 → 0.30 → 0.33 across the three cells is within subset noise on 43 questions. Combined with the prompt and embedder nulls, **the Single-hop ceiling at our generator tier is not in retrieval at all**. The hypothesis going into Phase 1 is that the bottleneck is generator extraction quality — getting the right fact out of an already-decent retrieved context — which is not what typed routing fixes.
+- **Oracle-routed is also flat (0.53).** Even with *perfect* category routing — engram_typed only where it might help — overall stays within ±0.01 of baseline. Per the decision rule, this rules out building a query-time classifier (Phase 2b): no real classifier can outperform the oracle ceiling.
+
+Why the gap with the paper's +31 pp: ENGRAM uses GPT-4o-mini as both generator and judge, with text-embedding-3-small for retrieval — a frontier-class generator paired with a hosted retrieval embedder. At that tier, retrieval and generation hit different failure modes, and typed routing recovers recall the large generator can already extract from. At our 9 B generator + 384-dim MiniLM-L6 + qwen3:4b external judge, the bottleneck distribution is different — the leader recipe already saturates retrieval recall for Multi-hop and Open-dom, and the remaining errors are generator-extraction failures that typed routing cannot address.
+
+Methodology note: the *first* engram_typed run on May 6 reported a +0.16 Multi-hop lift. That was a wiring bug — `--retrieval-mode` was silently ignored when `--strategy=vector-only` (the bench default) because the runner's `_retrieve` short-circuited to a direct `vmem.search` call before threading the mode through. Fixed in commit `9306bb2` on `feat/engram-typed-retrieval`; the pre-fix numbers were retracted internally. The table above is post-fix.
+
+The fourth lever — generator size — is the next experiment. `qwen3.6:35b-a3b` (Q4_K_M, ~23 GB, MoE: 35 B total / 3 B active) at the same leader recipe runs as Phase 1 on Fedora the night of May 6.
+
+Measured on Fedora 12 GB 3060 host, May 6 2026. Branch `feat/engram-typed-retrieval` carries the EngramRouter classifier, the `engram_typed` / `oracle_routed` retrieval modes, and the bench script `engram_routed_3cell.sh` for reproduction. Cached classifications at `/tmp/engram_classifications.json`, full sweep summary at `/tmp/engram_routed_3cell_summary.tsv` on the bench host.
+
 ### Methodology disclosures
 
 - **Dataset**: LoCoMo-10, 1540 QAs, categories 1–4. Adversarial reserved.
