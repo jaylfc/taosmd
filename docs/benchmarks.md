@@ -408,12 +408,20 @@ The May 7-9 temp-sweep cells were all measured at the 200-QA subset for chain th
 | **qwen3.5:9b + mem0_additive + temp 0.2** (leader) | 0.71 / 0.56 | **0.68 / 0.55** | −0.03 | −0.01 | **Generalises.** Production default holds. |
 | llama3.1:8b + RRF + temp 0.2 (subset SH pick) | 0.67 / 0.65 | 0.64 / 0.49 | −0.03 | **−0.16** | **Regression.** Subset 200 over-represented Single-hop questions where llama+RRF won. Removed from README. |
 
+Both cells now dual-judge complete:
+
+| Cell | qwen3:4b Overall / SH | gemma4:e2b Overall / SH |
+|---|---|---|
+| qwen3.5:9b + mem0_additive + temp 0.2 | 0.54 / 0.28 | 0.68 / 0.55 |
+| llama3.1:8b + RRF + temp 0.2 | 0.53 / 0.27 | 0.64 / 0.49 |
+
+The qwen3:4b rescore confirms the gemma4:e2b finding: llama+RRF Overall trails qwen+mem0 by 0.01 under the strict judge too (0.53 vs 0.54), and Single-hop trails by 0.01 (0.27 vs 0.28). Both judges agree the leader recipe wins both metrics at full 1540.
+
 Methodology takeaways:
 
 - **Overall drift is uniformly small (−0.03)** across both recipes — subset 200 is a fair Overall sampler.
-- **Single-hop drift is recipe-dependent.** qwen+mem0 holds within noise (−0.01). llama+RRF collapses (−0.16). Subset 200 happened to over-represent the Single-hop questions where llama+RRF won at our recipe / generator pairing.
+- **Single-hop drift is recipe-dependent.** qwen+mem0 holds within noise (−0.01). llama+RRF collapses (−0.16) under gemma4:e2b. Subset 200 happened to over-represent the Single-hop questions where llama+RRF won at our recipe / generator pairing.
 - **Subset 200 is no longer sufficient for promoting a workload-specific recommendation** — particularly per-category picks. Subset → full validation is now required before any README claim that names a specific recipe as "best at X."
-- **Cell-3 (qwen+mem0) dual-judge complete:** qwen3:4b 0.54 / 0.28 SH, gemma4:e2b 0.68 / 0.55 SH. **Cell-4 (llama+RRF) qwen3:4b rescore is still running at the time of this update; only the gemma4:e2b half is reflected in the table above.** The qwen3:4b rescore for cell 4 will be added as a follow-up commit once it lands.
 
 Measured on Fedora 12 GB 3060 host, May 10-11 2026. Bench script at `/tmp/llama_rrf_gapfill_bench.sh`; full summary at `/tmp/llama_rrf_gapfill_summary.tsv` on the bench host.
 
