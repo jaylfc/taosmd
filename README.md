@@ -181,16 +181,19 @@ The Librarian adds LLM-assisted query expansion on top of the vector + cross-enc
 
 LoCoMo-10 is a harder dataset than LongMemEval-S: 1540 QAs across multi-session conversations (50+ sessions, 400–700 turns), four categories, more pressure on the retrieval architecture. We run it on the smaller generators we actually target so the numbers reflect the hardware tier our users run on, not gpt-4o-mini.
 
-**0.557 ext rejudge** on the full 1540-QA test set under our strict default judge (`qwen3:4b`) — and **0.71 overall / 0.53 Single-hop** on the 200-QA subset under the lenient matched-with-paper-SOTA judge (`gemma4:e2b`). Same predictions, same recipe (qwen3.5:9b + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`), only the judge differs. Both numbers are honest measurements of the same system; published numbers from Mem0/EMem/Zep use a lenient frontier judge (gpt-4o-mini), so 0.71 is the more apples-to-apples comparison number with their headlines. See [docs/benchmarks.md](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring) for the full multi-judge analysis.
+**0.557 ext rejudge** on the full 1540-QA test set under our strict default judge (`qwen3:4b`) — and **0.68 overall / 0.55 Single-hop** on the **full 1540 QAs** under the lenient matched-with-paper-SOTA judge (`gemma4:e2b`). Same predictions, same recipe (qwen3.5:9b + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion mem0_additive --gen-temp 0.2`), only the judge differs. Both numbers are honest measurements of the same system; published numbers from Mem0/EMem/Zep use a lenient frontier judge (gpt-4o-mini), so 0.68 is the more apples-to-apples comparison number with their headlines. See [docs/benchmarks.md](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring) for the full multi-judge analysis.
 
-**Recommended generators at the 12 GB GPU tier** (200-QA subset, leader recipe, dual-judge scored, temperature-tuned):
+> **Subset 200 ≠ full 1540 for every recipe.** Earlier versions of this table reported subset-200 numbers for some rows. Validating those at full 1540 found the leader recipe (qwen+mem0+temp 0.2) generalises within −0.01 SH, but the previously-listed "Best Single-hop" pick (llama3.1:8b + RRF + temp 0.2) regressed by −0.16 SH at full scale and has been removed below. All ranks shown here are now validated at full 1540 before promotion; the asterisked rows are explicit about which scale they were measured at.
+
+**Recommended generators at the 12 GB GPU tier** (leader recipe, dual-judge scored, temperature-tuned):
 
 | Workload | Generator | Fusion | Temp | Overall (q3:4b / g4:e2b) | Single-hop (g4:e2b) | Notes |
 |---|---|---|---|---|---|---|
-| **Best overall** (default) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` | **0.2** | 0.54 / **0.71** | 0.56 | Best Multi-hop (0.77) under matched-judge. Production default. |
-| **Best factual recall** | `llama3.1:8b` (4.9 GB) | `rrf` | **0.2** | 0.54 / 0.67 | **0.65** | Wins Single-hop by +0.09 over qwen. **2.4× faster per QA**. RRF heuristic beats `mem0_additive` for *this* generator (-0.05 with mem0). |
-| Best mem0_additive Single-hop | `llama3.1:8b` | `mem0_additive` | **0.0** | 0.51 / 0.65 | 0.60 | Greedy decoding lifts llama Single-hop +0.13 vs temp 0.2. The biggest single-lever effect we've measured since the judge-strictness pivot. |
-| **Best temporal reasoning** | `mistral-small3.2` (~5 GB) | `rrf` | 0.2 | 0.56 / 0.70 | 0.53 | Wins Temporal (0.71). 2.8× slower than qwen — specialty pick only. |
+| **Best overall** (default) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` | **0.2** | 0.54 / **0.68** | **0.55** | **Validated at full 1540.** Wins Overall and Single-hop on full scale. Production default. |
+| Best mem0_additive Single-hop† | `llama3.1:8b` (4.9 GB) | `mem0_additive` | **0.0** | 0.51 / 0.65 | 0.60 | Subset 200. Greedy decoding lifted llama Single-hop +0.13 vs temp 0.2 in the temp sweep. Full-1540 validation pending. |
+| **Best temporal reasoning**† | `mistral-small3.2` (~5 GB) | `rrf` | 0.2 | 0.56 / 0.70 | 0.53 | Subset 200. Wins Temporal (0.71). 2.8× slower than qwen — specialty pick only. Full-1540 validation pending. |
+
+† Subset-200 measurement; the leader row is the only one currently validated at full 1540. The llama3.1:8b + RRF row from earlier versions of this table was removed after its full-1540 Single-hop measured at 0.49 (vs 0.65 on subset 200), failing the validation threshold.
 
 Other measured 12 GB-tier generators (Overall under gemma4:e2b judge, leader recipe): `gemma4:e4b` 0.60 / 0.65 (best at temp 0.5), `gemma4:e2b` 0.60 (best at temp 0.5), `granite4:tiny-h` 0.56, `phi4-reasoning` timeout.
 

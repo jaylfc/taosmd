@@ -399,6 +399,24 @@ Updated 12 GB tier guidance (matched-judge methodology, gemma4:e2b):
 
 Measured on Fedora 12 GB 3060 host, May 8-9 2026. Bench script at `/home/jay/temp_sweep_bench.sh`; full summary at `/tmp/temp_sweep_bench_summary.tsv`. `--gen-temp` flag lives on branch `feat/gen-temp-flag` (commit `2bd1b21`) for reproduction.
 
+#### Subset 200 → full 1540 validation
+
+The May 7-9 temp-sweep cells were all measured at the 200-QA subset for chain throughput. On May 10-11 we re-ran the two cells that were headline picks in the README at full 1540 QAs so a public-facing ranking isn't sitting on subset noise.
+
+| Recipe | Subset 200 (g4e2b) Overall / SH | Full 1540 (g4e2b) Overall / SH | Δ Overall | Δ SH | Verdict |
+|---|---|---|---|---|---|
+| **qwen3.5:9b + mem0_additive + temp 0.2** (leader) | 0.71 / 0.56 | **0.68 / 0.55** | −0.03 | −0.01 | **Generalises.** Production default holds. |
+| llama3.1:8b + RRF + temp 0.2 (subset SH pick) | 0.67 / 0.65 | 0.64 / 0.49 | −0.03 | **−0.16** | **Regression.** Subset 200 over-represented Single-hop questions where llama+RRF won. Removed from README. |
+
+Methodology takeaways:
+
+- **Overall drift is uniformly small (−0.03)** across both recipes — subset 200 is a fair Overall sampler.
+- **Single-hop drift is recipe-dependent.** qwen+mem0 holds within noise (−0.01). llama+RRF collapses (−0.16). Subset 200 happened to over-represent the Single-hop questions where llama+RRF won at our recipe / generator pairing.
+- **Subset 200 is no longer sufficient for promoting a workload-specific recommendation** — particularly per-category picks. Subset → full validation is now required before any README claim that names a specific recipe as "best at X."
+- **Cell-3 (qwen+mem0) dual-judge complete:** qwen3:4b 0.54 / 0.28 SH, gemma4:e2b 0.68 / 0.55 SH. **Cell-4 (llama+RRF) qwen3:4b rescore is still running at the time of this update; only the gemma4:e2b half is reflected in the table above.** The qwen3:4b rescore for cell 4 will be added as a follow-up commit once it lands.
+
+Measured on Fedora 12 GB 3060 host, May 10-11 2026. Bench script at `/tmp/llama_rrf_gapfill_bench.sh`; full summary at `/tmp/llama_rrf_gapfill_summary.tsv` on the bench host.
+
 ### ENGRAM-style typed retrieval — does typed memory routing raise Single-hop?
 
 The third architectural lever we tested at this generator tier. Same setup as the prompt and embedder sweeps but varying the *retrieval routing*: instead of one undifferentiated vector store, classify each conversation turn into three typed memory stores at ingest, then fan out per-type top-k searches at retrieval and set-merge before the leader pipeline.
