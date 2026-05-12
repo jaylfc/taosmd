@@ -247,11 +247,28 @@ async def filter_edus(
         return []
 
     selected = parsed.get("selected_edus", []) or []
-    candidate_set = set(candidate_edus)
+    if not selected:
+        return []
+
+    # Fuzzy-match selected -> candidate. Smaller open-source models paraphrase
+    # the EDU when writing JSON (truncate, drop punctuation, slight reword)
+    # often enough that exact-string lookup silently drops most candidates.
+    # HippoRAG's reference uses difflib.get_close_matches with cutoff=0.0;
+    # we use 0.6 to keep unrelated EDUs out on pure noise. Each selected
+    # entry resolves to at most one candidate; candidates are emitted only
+    # once even if the model lists them twice.
+    import difflib
     keep_in_order: list[str] = []
-    seen: set[str] = set()
+    seen_idx: set[int] = set()
     for edu in selected:
-        if isinstance(edu, str) and edu in candidate_set and edu not in seen:
-            keep_in_order.append(edu)
-            seen.add(edu)
+        if not isinstance(edu, str) or not edu.strip():
+            continue
+        matches = difflib.get_close_matches(edu, candidate_edus, n=1, cutoff=0.6)
+        if not matches:
+            continue
+        idx = candidate_edus.index(matches[0])
+        if idx in seen_idx:
+            continue
+        seen_idx.add(idx)
+        keep_in_order.append(candidate_edus[idx])
     return keep_in_order
