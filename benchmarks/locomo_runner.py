@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from taosmd.vector_memory import VectorMemory  # noqa: E402
 from taosmd.retrieval import retrieve  # noqa: E402
+from taosmd.llm_rerank import llm_listwise_rerank  # noqa: E402
 
 CATEGORY_NAMES = {
     1: "Single-hop (1)",
@@ -101,6 +102,41 @@ HYDE_PROMPT = """You are imagining what a relevant memory might look like for th
 Question: {question}
 
 Hypothetical passage:"""
+
+# Chain-of-Verification (CoVe) — multi-step answer with self-verification.
+# Per the original paper (Dhuliawala et al., 2023, arXiv:2309.11495) and
+# CoV-RAG follow-ups: draft → plan verification questions → answer them
+# independently → produce final answer informed by the verifications.
+# We adapt for context-grounded LoCoMo: every step uses the retrieved
+# context. Independence between verification answers is preserved by
+# isolating each call (no chain-of-thought between verifications).
+COVE_PLAN_PROMPT = """Given the draft answer below, write 2-3 short verification questions that test the specific factual claims in the draft. Each question should be answerable independently from the conversation context. No numbering, no commentary, one question per line.
+
+Context:
+{context}
+
+Original question: {question}
+Draft answer: {draft}
+
+Verification questions:"""
+
+COVE_VERIFY_PROMPT = """Answer this question using ONLY the context. Be concrete and brief (≤ 1 sentence). If the context does not directly support an answer, reply exactly "uncertain".
+
+Context:
+{context}
+
+Question: {verify_question}
+Answer:"""
+
+COVE_FINAL_PROMPT = """You drafted an answer to a question, then ran verification questions. Use the verification answers to produce a final, corrected answer. If verifications support the draft, keep it. If they contradict it, correct it. If verifications are "uncertain" or conflicting, prefer the most-supported claim.
+
+Original question: {question}
+Draft answer: {draft}
+
+Verification Q&A:
+{verifications}
+
+Final answer (1-2 short sentences, absolute dates only — never relative):"""
 
 _PUNCT = re.compile(r"[^\w\s]")
 
@@ -617,6 +653,11 @@ async def _process_qa(
     llm_backend: str = "ollama",
     llama_server_url: str = "",
     expansion_model: str = "",
+    cove: bool = False,
+    llm_rerank: bool = False,
+    llm_rerank_model: str = "llama3.1:8b",
+    llm_rerank_top_k: int = 10,
+    gen_temp: float = 0.2,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -715,6 +756,17 @@ async def _process_qa(
         else:
             hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion)
 
+        # Optional LLM listwise rerank — runs AFTER the cross-encoder narrows.
+        # Single LLM call per QA scores all candidates as a list, returns
+        # top-N most relevant. Direct port of Mem0's reranker idea adapted
+        # for our local-tier latency budget (listwise instead of pointwise).
+        if llm_rerank and hits:
+            hits = await llm_listwise_rerank(
+                client, ollama_url, llm_rerank_model,
+                retrieval_query, hits, top_k=llm_rerank_top_k,
+                no_think_prefix=no_think_prefix,
+            )
+
         # Optional temporal-recency boost — re-rank hits with an exponential
         # decay over turn-index age. Applied AFTER retrieval/rerank so the
         # cross-encoder's relevance signal stays the primary axis but
@@ -734,12 +786,68 @@ async def _process_qa(
         answer_prompt = ANSWER_PROMPT.format(context=context, question=question)
         if few_shot:
             answer_prompt = FEW_SHOT_EXAMPLES + answer_prompt
-        predicted = await _generate(
+        draft = await _generate(
             llm_backend, client, gen_url, model,
             answer_prompt,
+            temperature=gen_temp,
             thinking_mode=thinking_mode,
             no_think_prefix=no_think_prefix,
         )
+        if cove:
+            # Chain-of-Verification: plan verification questions, answer them
+            # independently, then produce final answer using the verifications.
+            try:
+                plan_prompt = COVE_PLAN_PROMPT.format(
+                    context=context, question=question, draft=draft,
+                )
+                plan_raw = await _generate(
+                    llm_backend, client, gen_url, model, plan_prompt,
+                    temperature=gen_temp,
+                    thinking_mode=thinking_mode, no_think_prefix=no_think_prefix,
+                )
+                # parse verification questions: one per line, drop empties
+                verify_qs = [
+                    q.strip().lstrip("-•0123456789. )")
+                    for q in plan_raw.splitlines()
+                    if q.strip() and len(q.strip()) > 5
+                ][:3]
+                if not verify_qs:
+                    predicted = draft
+                else:
+                    # answer each verification independently — no shared
+                    # CoT between them, that's the point of CoVe
+                    verify_tasks = [
+                        _generate(
+                            llm_backend, client, gen_url, model,
+                            COVE_VERIFY_PROMPT.format(
+                                context=context, verify_question=vq,
+                            ),
+                            temperature=gen_temp,
+                            thinking_mode=thinking_mode,
+                            no_think_prefix=no_think_prefix,
+                        )
+                        for vq in verify_qs
+                    ]
+                    verify_answers = await asyncio.gather(*verify_tasks, return_exceptions=True)
+                    verifications_text = "\n".join(
+                        f"Q: {q}\nA: {a if not isinstance(a, Exception) else 'uncertain'}"
+                        for q, a in zip(verify_qs, verify_answers)
+                    )
+                    final_prompt = COVE_FINAL_PROMPT.format(
+                        question=question, draft=draft,
+                        verifications=verifications_text,
+                    )
+                    predicted = await _generate(
+                        llm_backend, client, gen_url, model, final_prompt,
+                        temperature=gen_temp,
+                        thinking_mode=thinking_mode,
+                        no_think_prefix=no_think_prefix,
+                    )
+            except Exception as cove_exc:
+                # if any verification step fails, fall back to draft
+                predicted = draft
+        else:
+            predicted = draft
     except Exception as exc:
         predicted = f"[generation_error: {exc}]"
     gen_ms = (time.time() - t1) * 1000.0
@@ -867,6 +975,11 @@ async def run(args: argparse.Namespace) -> int:
                     turn_index=turn_index,
                     llm_backend=args.llm_backend,
                     llama_server_url=args.llm_server_url,
+                    cove=args.cove,
+                    llm_rerank=args.llm_rerank,
+                    llm_rerank_model=args.llm_rerank_model,
+                    llm_rerank_top_k=args.llm_rerank_top_k,
+                    gen_temp=args.gen_temp,
                     expansion_model=args.expansion_model,
                 )
             except Exception as e:
@@ -1065,7 +1178,7 @@ def _parse_args() -> argparse.Namespace:
                         "decay rate per turn-index age (0.0 disables, 0.02 "
                         "down-weights the oldest turn in a 600-turn convo by "
                         "~6e-6, 0.005 by ~0.05). Default 0.0.")
-    p.add_argument("--fusion", choices=["boost", "rrf", "none"], default="boost",
+    p.add_argument("--fusion", choices=["boost", "rrf", "bm25_rrf", "bm25_lemma_rrf", "mem0_additive", "none"], default="boost",
                    help="Vector + keyword fusion mode (vector-only strategy):\n"
                         "  boost: legacy additive keyword boost (0.3 * overlap, our "
                         "current default in the matrix runs).\n"
@@ -1108,6 +1221,32 @@ def _parse_args() -> argparse.Namespace:
                         "synthetic (no LoCoMo overlap, no test-set leakage). "
                         "~250 token prompt tax per QA. Known to lift small "
                         "instruction-tuned models +0.02-0.04 on factual QA.")
+    p.add_argument("--cove", action="store_true",
+                   help="Chain-of-Verification on the answer step. Generator "
+                        "drafts an answer → plans 2-3 verification questions → "
+                        "answers them independently → produces final verified "
+                        "answer. Adds 4 LLM calls per QA (3-4× wall-clock). "
+                        "Direct attack on hallucination/wrong-fact errors. "
+                        "Per Dhuliawala et al. arXiv:2309.11495.")
+    p.add_argument("--llm-rerank", action="store_true",
+                   help="LLM listwise rerank on top of the cross-encoder. "
+                        "Single LLM call per QA scores all candidates "
+                        "together, returns the top-N. Adapted from Mem0's "
+                        "reranker for our local-tier latency budget. "
+                        "Adds ~1 LLM call per QA (~5 s on llama3.1:8b).")
+    p.add_argument("--llm-rerank-model", default="llama3.1:8b",
+                   help="Model used for the LLM listwise rerank step. "
+                        "Default llama3.1:8b (good balance of speed and "
+                        "instruction-following on the rerank task).")
+    p.add_argument("--llm-rerank-top-k", type=int, default=10,
+                   help="Number of candidates to keep after the LLM listwise "
+                        "rerank. Default 10. Set lower for tighter context.")
+    p.add_argument("--gen-temp", type=float, default=0.2,
+                   help="Generator sampling temperature (passed to ollama "
+                        "options.temperature for the answer step and any "
+                        "CoVe verification calls). Default 0.2 — the value "
+                        "every prior LoCoMo cell ran at; sweep 0.0 / 0.5 / "
+                        "0.8 to test sampling sensitivity.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
