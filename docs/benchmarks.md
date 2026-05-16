@@ -425,6 +425,43 @@ Methodology takeaways:
 
 Measured on Fedora 12 GB 3060 host, May 10-11 2026. Bench script at `/tmp/llama_rrf_gapfill_bench.sh`; full summary at `/tmp/llama_rrf_gapfill_summary.tsv` on the bench host.
 
+#### May 12-16 architectural levers — EMem-EDU and HippoRAG-PPR (preliminary, subset 200)
+
+Two architectural lever ports tested alongside the May 7-9 fusion + temp sweeps. Both run with the full leader stack (`qwen3.5:9b + --retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion mem0_additive --gen-temp 0.2`) so the only varying axis is the new lever. Full-1540 validation for the promotion candidate is in flight at time of writing.
+
+**EMem-EDU (vector-only variant)** — port of arXiv:2511.17208. One LLM call per session at ingest decomposes turns into atomic Elementary Discourse Units (EDUs) with normalized entities and turn attribution. Optional per-QA LLM filter step then narrows the candidate pool.
+
+| Cell | qwen3:4b Overall / SH | gemma4:e2b Overall / SH | Δ vs baseline (g4e2b) |
+|---|---|---|---|
+| subset200_baseline (leader, no EMem) | 0.50 / 0.21 | 0.67 / 0.53 | — |
+| subset200_emem_filter (EMem + LLM filter) | 0.49 / 0.23 | 0.65 / 0.53 | −0.02 / 0.00 |
+| **subset200_emem_nofilter (EMem storage only)** | **0.51 / 0.35** | **0.68 / 0.58** | **+0.01 / +0.05** |
+
+Headlines:
+
+- **EMem-EDU storage alone is the first new architectural lever to beat baseline since `adjacent_turns` landed.** +0.05 SH under gemma4:e2b judge, **+0.14 SH under qwen3:4b** (0.21 → 0.35). Strict judge especially rewards the cleaner EDU-form answers — atomic propositions with normalized entities resolve fewer wording-mismatch penalties than raw turn quotes.
+- **The LLM filter step is net-negative at our model tier.** Two regressions visible: −0.05 SH g4e2b vs no-filter, and even with the May 14 `difflib.get_close_matches(cutoff=0.6)` fuzz-match fix (parses now succeed), filter step ranks below ingest-only. `mem0_additive` already handles candidate selection well; adding an LLM filter on top costs latency and quality.
+- **First May 11 chain reported regressions vs leader** because the bench script stripped `--adjacent-turns 2 --llm-query-expansion --fusion mem0_additive` — the actual leader levers. Real signal is the May 14 rerun with fair flags, shown above.
+
+**HippoRAG-PPR (vector-only variant)** — port of arXiv:2405.14831. One LLM call per session at ingest extracts OpenIE (s, p, o, turn_ids) triples. In-memory igraph with entity-nodes + turn-passage-nodes + fact-edges. At query time: dot-product query embedding against pre-embedded facts → top-k facts seed entity weights → `igraph.personalized_pagerank` ranks turns.
+
+| Cell | qwen3:4b Overall / SH | gemma4:e2b Overall / SH | Δ vs baseline (g4e2b) |
+|---|---|---|---|
+| subset200_fair (linking-top-k=5, fair flags) | 0.33 / 0.23 | 0.47 / 0.47 | −0.20 / −0.06 |
+| subset200_fair_top10 (linking-top-k=10) | 0.38 / 0.26 | 0.53 / 0.53 | **−0.14 / 0.00** |
+
+Headlines:
+
+- **HippoRAG-PPR ties baseline on Single-hop at `--hipporag-linking-top-k 10`** (0.53 g4e2b, both) but regresses Overall by −0.14. PPR graph traversal helps factual single-fact lookups (which the SH category measures) but underperforms on multi-evidence aggregation tasks (Temporal / Multi-hop / Open-dom).
+- **Top-k seed count matters.** Going from 5 → 10 seeds adds +0.06 g4e2b Overall and +0.06 SH. Suggests our small-corpus per-conversation KG is sparse enough that broader seeding meaningfully changes the propagation landscape.
+- **EMem-EDU subsumes HippoRAG's SH win cheaply.** Both lift SH similarly under matched flags (EMem +0.05, Hippo 0.00) but EMem doesn't pay the per-conversation igraph-build cost and isn't a regression on Overall. HippoRAG-PPR is not promotion-worthy as a default at our tier; possibly a future `--retrieval-mode hipporag` opt-in for factual-recall-only workloads.
+
+**Promotion gating:** EMem-EDU (no filter) full-1540 validation queued (`ememfull` chain — runs after hippo2 completes). Per the May 10-11 subset→full lesson, no README promotion until the full-1540 numbers land. Production default on master remains `qwen3.5:9b + mem0_additive + temp 0.2` baseline until then.
+
+**`mem0_additive` + `--gen-temp` are now defaults on master** as of PR #69 (e1e3fc2). Previously these flags lived only on feature branches (`feat/bm25-hybrid`, `feat/gen-temp-flag`) and could not be reproduced from master without checking out the feature branch — a footgun for any external user trying to reproduce the leader recipe. Three benches in this period crashed at argparse for this reason; consolidated to master to close that footgun permanently.
+
+Measured on Fedora 12 GB 3060 host, May 12-16 2026. Bench scripts at `/tmp/emem_edu_bench2.sh` (EMem) and `/tmp/hipporag_bench2.sh` (Hippo) on the bench host; summaries at `/tmp/emem_edu_bench2_summary.tsv` and `/tmp/hipporag_bench2_summary.tsv`. Branches: `feat/emem-edu-filter` (commit `24fcf6f` — fuzzy-match fix in `filter_edus` + merge of `gen-temp-flag`) and `feat/hipporag-ppr` (commit `e7745f9`).
+
 ### ENGRAM-style typed retrieval — does typed memory routing raise Single-hop?
 
 The third architectural lever we tested at this generator tier. Same setup as the prompt and embedder sweeps but varying the *retrieval routing*: instead of one undifferentiated vector store, classify each conversation turn into three typed memory stores at ingest, then fan out per-type top-k searches at retrieval and set-merge before the leader pipeline.
