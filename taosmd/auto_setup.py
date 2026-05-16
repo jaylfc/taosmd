@@ -191,25 +191,42 @@ def _install_cron(data_dir: str):
         print("  ⚠ crontab not available — skip nightly librarian install")
 
 
-# Recommended models per hardware tier — kept in sync with README.md's
-# install message. The pre-flight check only warns; it never blocks setup.
-_RECOMMENDED_ENRICHER_MODELS = [
+# Recommended enricher models per backend. The librarian / CatalogPipeline
+# probes Ollama (11434) first, then rkllama/qmd on RK3588 NPU (7832 or 8080).
+# Models are different formats per backend — Ollama uses GGUF via ``ollama
+# pull``; rkllama uses RKLLM files downloaded from HuggingFace.
+_RECOMMENDED_OLLAMA_MODELS = [
     "qwen3.5:9b",           # 12 GB GPU tier (production leader)
-    "llama3.1:8b",          # 12 GB GPU tier (alt / EDU extractor)
-    "qwen3:4b",             # 4-8 GB tier (Pi NPU, low-end CPU)
+    "llama3.1:8b",          # 12 GB GPU tier (alt / EDU + KG extractor)
+    "qwen3:4b",             # 4-8 GB tier (low-end CPU / small GPU)
     "gemma4:e2b",           # judge + small-tier generator
     "gemma4:e4b",           # mid-tier generator
 ]
 
+# RK3588 NPU recipe per scripts/setup.sh — model lives in
+# ~/.rkllama/models/qwen3-4b-chat after huggingface-cli download.
+_RECOMMENDED_RKLLAMA_MODEL = "qwen3-4b-chat (Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm)"
+_RKLLAMA_PULL_CMD = (
+    "huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base "
+    "Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm "
+    "--local-dir ~/.rkllama/models/qwen3-4b-chat"
+)
+
 
 def _preflight_enricher_model(
     ollama_url: str = "http://localhost:11434",
+    rkllama_urls: tuple[str, ...] = ("http://localhost:7832", "http://localhost:8080"),
     interactive: bool = True,
 ) -> None:
-    """Check that at least one recommended enricher model is installed.
+    """Check that at least one recommended enricher model is reachable.
+
+    Probes Ollama first (GPU/CPU users — the common case), then rkllama/qmd
+    on the standard RK3588 NPU ports (Orange Pi / Rock 5 / Radxa users).
+    Reports which backend has which recommended models; warns with the
+    right pull command per backend if nothing recommended is installed.
 
     Doesn't block setup — only warns. The librarian's ResourceManager will
-    fall back to whatever IS available, but with no installed models the
+    fall back to whatever IS available, but with no installed model the
     nightly crystallize step degrades to a no-op and the user wouldn't
     know without reading the cron logs.
     """
@@ -217,31 +234,65 @@ def _preflight_enricher_model(
     import urllib.request
 
     print("  Checking enricher model availability...", end="", flush=True)
+
+    ollama_recs: list[str] = []
+    ollama_reachable = False
     try:
         with urllib.request.urlopen(f"{ollama_url}/api/tags", timeout=3) as resp:
             data = json.load(resp)
+        ollama_reachable = True
+        installed_full = {m.get("name") for m in data.get("models", [])}
+        ollama_recs = [r for r in _RECOMMENDED_OLLAMA_MODELS if r in installed_full]
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-        print("\n  ⚠ Ollama not reachable at "
-              f"{ollama_url} — nightly librarian's LLM steps "
-              "(crystallize, contradiction-detect) will be no-ops until "
-              "Ollama is running with a recommended model.")
+        ollama_reachable = False
+
+    rkllama_url: str | None = None
+    for url in rkllama_urls:
+        try:
+            with urllib.request.urlopen(f"{url}/health", timeout=2) as resp:
+                if resp.status == 200:
+                    rkllama_url = url
+                    break
+        except (urllib.error.URLError, TimeoutError):
+            continue
+
+    if ollama_recs:
+        print(f" ✓ Ollama: {len(ollama_recs)} recommended found "
+              f"({', '.join(ollama_recs)})")
+        if rkllama_url:
+            print(f"  ✓ rkllama also reachable at {rkllama_url} "
+                  "(NPU enrichment path available)")
         return
-
-    installed = {(m.get("name") or "").split(":")[0]: m.get("name") for m in data.get("models", [])}
-    installed_full = {m.get("name") for m in data.get("models", [])}
-    available_recs = [r for r in _RECOMMENDED_ENRICHER_MODELS if r in installed_full]
-
-    if available_recs:
-        print(f" ✓ ({len(available_recs)} recommended found: {', '.join(available_recs)})")
+    if rkllama_url:
+        print(f" ✓ rkllama reachable at {rkllama_url} "
+              "(NPU enrichment path available)")
+        if not ollama_reachable:
+            print("    Note: Ollama is NOT reachable. The librarian will use "
+                  "the NPU backend for enrichment.")
         return
 
     print()  # break from the "..." line
-    print(f"  ⚠ None of the recommended enricher models are installed on {ollama_url}.")
-    print(f"    Recommended (pick one matching your hardware tier):")
-    for m in _RECOMMENDED_ENRICHER_MODELS:
-        print(f"      ollama pull {m}")
-    print("    Setup will continue — the librarian falls back to whatever IS")
-    print("    installed, but crystallize quality drops without a recommended model.")
+    print("  ⚠ No recommended enricher model is reachable.")
+    if ollama_reachable:
+        print(f"     Ollama IS reachable at {ollama_url} but has no recommended model installed.")
+        print("     For GPU / CPU hardware, pick one matching your tier:")
+        for m in _RECOMMENDED_OLLAMA_MODELS:
+            print(f"       ollama pull {m}")
+    else:
+        print(f"     Ollama not reachable at {ollama_url}.")
+        print("     For GPU / CPU: install Ollama (https://ollama.com/install)")
+        print("     then pull one of:")
+        for m in _RECOMMENDED_OLLAMA_MODELS:
+            print(f"       ollama pull {m}")
+    print()
+    print("     For RK3588 NPU (Orange Pi / Rock 5 / Radxa): use rkllama instead.")
+    print(f"     Recommended: {_RECOMMENDED_RKLLAMA_MODEL}")
+    print(f"       {_RKLLAMA_PULL_CMD}")
+    print()
+    print("     Setup will continue — the librarian falls back to whatever")
+    print("     IS available, but crystallize / contradiction-detect quality")
+    print("     drops without a recommended model.")
+
     if interactive:
         resp = input("    Continue anyway? [Y/n]: ").strip().lower()
         if resp == "n":
