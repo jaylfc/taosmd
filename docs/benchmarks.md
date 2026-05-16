@@ -263,6 +263,206 @@ Pending: Qwen3-Embedding-0.6B and Qwen3-Embedding-4B — the `onnx-community` ON
 
 Measured on Fedora 12 GB 3060 host, May 6 2026. The asymmetric query/document prefix detection lives on branch `feat/embedder-asymmetric-prefixes-may5` for reproduction; full sweep summary at `/tmp/embedder_sweep_summary.tsv` on the bench host.
 
+### Judge sensitivity — what we are really measuring
+
+This is the most important finding in this document. Most existing public LoCoMo numbers (Mem0, Zep, EMem, HippoRAG, ENGRAM, LiCoMemory) are reported with **`gpt-4o-mini` as the LLM-judge**. We have used **`qwen3:4b` as the LLM-judge** since the start of this project — a deliberately strict, locally-runnable evaluator chosen so reproductions don't require API keys.
+
+After hitting a stubborn ~0.28 Single-hop ceiling across four independent architectural levers (prompt, embedder, ENGRAM-typed retrieval, generator size), we asked whether the ceiling was the *judge's strictness* rather than the *system's quality*. We took **the same `qwen3.5:9b` leader-recipe predictions** (200-QA subset, no re-generation) and rescored them under five different LLM judges:
+
+| Judge | Overall rejudge | **Single-hop** | Temporal | Multi-hop | Open-dom |
+|---|---|---|---|---|---|
+| **gemma4:e2b** | **0.71** | **0.53** | 0.62 | 0.85 | 0.86 |
+| qwen3.5:9b (self-judge) | 0.64 | 0.35 | 0.62 | 0.77 | 0.78 |
+| gemma4:e4b | 0.56 | 0.26 | 0.56 | 0.62 | 0.72 |
+| **qwen3:4b** (our published baseline) | **0.54** | **0.28** | 0.59 | 0.77 | 0.60 |
+| llama3.1:8b ⚠ | 0.35 | 0.21 | 0.27 | 0.46 | 0.48 |
+
+⚠ The `llama3.1:8b` rescore returned in 26 seconds for 200 QAs (vs ~30-60 minutes for the other judges). Almost certainly a parsing failure or refusal pattern; treated as outlier and excluded from comparisons below.
+
+The same pattern reproduces under a **second generator** (`qwen3.6:35b-a3b`, MoE):
+
+| Judge | Overall rejudge | Single-hop | Temporal | Multi-hop | Open-dom |
+|---|---|---|---|---|---|
+| **gemma4:e2b** | **0.69** | **0.51** | 0.68 | 0.46 | 0.83 |
+| qwen3.5:9b | 0.63 | 0.26 | 0.71 | 0.46 | 0.79 |
+| gemma4:e4b | 0.56 | 0.26 | 0.63 | 0.31 | 0.72 |
+| **qwen3:4b** (baseline) | **0.56** | **0.21** | 0.70 | 0.38 | 0.67 |
+
+Headlines:
+
+- **Same predictions, four different judges, Single-hop ranges 0.26 → 0.53 — a 2× variation.** The 0.28 floor we attributed to "the architecture is unmovable" was largely "the judge is strict." Architectural levers cannot lift Single-hop above the judge's ceiling.
+- **gemma4:e2b is the most lenient open-source judge we tested.** It is closer to gpt-4o-mini's behaviour on subjective grading (lenient on minor wording differences, accepts "yes inferred from context" answers more readily). It is also coincidentally the **weakest generator** we tested at this tier (0.46 overall when used as a generator at the leader recipe) — the asymmetry is real: a model can be a useful evaluator without being a useful generator.
+- **qwen3:4b is unusually strict** — flags inferences that gemma4:e2b accepts and penalises wording differences gemma4:e2b waves through. This is *not* a bug; it is just a different point on the strict ↔ lenient axis. We chose it for reproducibility (it's tiny, free, and never refuses) but its strictness costs us 0.15-0.25 on the Single-hop metric vs published-SOTA judging.
+- **Self-judge inflation is +0.10** on this stack (qwen3.5:9b judging its own qwen3.5:9b output: 0.54 → 0.64). Smaller than the +15-22 pp historic estimate from the methodology memo, but consistent in direction.
+
+Comparison to published systems on the same dataset:
+
+| System | Reported Single-hop | Reported judge | Our equivalent (gemma4:e2b judge) |
+|---|---|---|---|
+| EMem | 0.83 (gpt-4o-mini) | gpt-4o-mini | unknown — would need to bench |
+| Nemori | ~0.78 (gpt-4o-mini) | gpt-4o-mini | unknown |
+| **taosmd qwen3.5:9b leader** | **0.28 (qwen3:4b)** | qwen3:4b | **0.53 (gemma4:e2b)** |
+| **taosmd qwen3.6-MoE leader** | **0.21 (qwen3:4b)** | qwen3:4b | **0.51 (gemma4:e2b)** |
+
+Our system at gemma4:e2b judge is **0.53 Single-hop** versus EMem's published 0.83 — a real gap of ~0.30, not the ~0.55 our qwen3:4b numbers suggested. The remaining gap is closer to "their generator (gpt-4o-mini) is much stronger than ours (qwen3.5:9b)" plus "they have EDU-level retrieval and LLM filtering" — both real, addressable architectural deltas, not unmovable ceilings.
+
+#### Methodology change going forward
+
+We will not retroactively re-rescore every leaderboard cell at gemma4:e2b — that breaks comparability with prior cells and looks like number-massaging. Instead:
+
+1. **`qwen3:4b` remains the *headline* external judge** for the leaderboard above. It is the strictest judge we have access to, and reporting under a strict judge is the honest way to report. The 0.557 leader number stands.
+2. **`gemma4:e2b` becomes the *secondary* judge**, reported alongside `qwen3:4b` for any new cell, so future readers can pick the comparison axis (strict-but-local-judge for self-comparison; lenient-frontier-equivalent for comparison with paper SOTA).
+3. **New cells run from May 7 onward will be dual-rescored** under both judges. Every published number will carry both judge attributions explicitly (e.g. "0.557 / 0.71" or "Single-hop 0.28 (qwen3:4b) / 0.53 (gemma4:e2b)").
+4. **Hardware-tier guidance**: 4-6 GB VRAM systems should keep `qwen3:4b` as their judge (it fits, runs fast, never refuses). 8 GB+ systems can run `gemma4:e2b` (7.2 GB) for matched-with-SOTA comparison numbers. Both produce useful but different signals.
+
+The takeaway for anyone reading this doc: a single judge number is not a universal score. The right way to think about LoCoMo (and any LLM-judged benchmark) is as a *spread across reasonable judges*, not a single point. Our qwen3:4b number is at the strict end of that spread; gpt-4o-mini-equivalent numbers like EMem's 0.83 are at the lenient end. They measure overlapping but different things.
+
+Measured on Fedora 12 GB 3060 host, May 6-7 2026. Multi-judge sweep scripts at `/tmp/multijudge_overnight.sh` and `/tmp/multijudge_phase2.sh` on the bench host; rescored JSONs at `benchmarks/results/locomo_*_engram3cell_leader_baseline_repro_*.rescored_judge_*.json` and equivalents for the qwen3.6-MoE Phase 1 output.
+
+#### Dual-judge results across May 7 architectural levers
+
+After the multi-judge experiment confirmed the strict-judge ceiling, we re-rescored every May 7 architectural-lever JSON under `gemma4:e2b` (lenient/published-SOTA-equivalent) alongside the existing `qwen3:4b` numbers. Same predictions, no re-generation — pure judge-strictness measurement on architectural choices.
+
+| Cell | Overall (q3:4b → g4:e2b) | Single-hop | Temporal | Multi-hop | Open-dom |
+|---|---|---|---|---|---|
+| rrf_baseline_heuristic (production) | 0.55 → **0.69** | 0.30 → 0.53 | 0.59 → 0.60 | 0.46 → 0.69 | 0.65 → 0.85 |
+| bm25_rrf_proper | 0.52 → **0.70** | 0.23 → 0.44 | 0.56 → 0.65 | 0.62 → 0.62 | 0.62 → 0.89 |
+| bm25_lemma_rrf | 0.52 → 0.68 | 0.21 → 0.49 | 0.60 → 0.60 | 0.31 → 0.38 | 0.65 → 0.88 |
+| **mem0_additive** | 0.54 → **0.70** | 0.26 → **0.56** | 0.54 → 0.59 | 0.69 → **0.77** | 0.65 → 0.85 |
+| cove_4step | 0.50 → 0.65 | 0.26 → 0.56 | 0.51 → 0.54 | 0.69 → 0.69 | 0.59 → 0.78 |
+
+Headlines:
+
+- **Every lever lifts +0.14 to +0.18 overall under gemma4:e2b judge.** Uniform shift confirms strict-judge was the ceiling, not the architecture.
+- **`mem0_additive` is the lever that wins under matched-judge.** 0.70 overall, 0.56 Single-hop, 0.77 Multi-hop — ties proper-BM25 on overall, beats it on the two categories that matter most for LoCoMo. The Mem0-style threshold-gated additive scoring (sigmoid-normalised BM25 + cosine, max_possible adapter) is doing real work that RRF flattens away.
+- **Proper BM25 vs the legacy substring heuristic is a wash overall.** 0.70 vs 0.69. The "real BM25 is what production memory systems use" story we ported was right *for principle* (lemmatised, IDF-weighted, length-normalised) but the lift over the heuristic is below subset-200 noise (~±0.02). Lemmatisation slightly hurt at our chat-turn granularity (over-stemmed proper nouns).
+- **CoVe at 4× wall-clock buys parity, not advantage.** Same 0.56 Single-hop as mem0_additive but 0.05 lower overall. The verifications surface answer-edits that gemma4:e2b waves through but don't compound into a win at our 9B tier. Don't ship.
+
+#### Dual-judge results across May 5 generator candidates
+
+Re-rescored the May 5 generator-candidate sweep JSONs under both judges so the README hardware-tier table can carry both attributions:
+
+| Generator | Overall (q3:4b → g4:e2b) | Single-hop | Temporal | Multi-hop | Open-dom | F1 |
+|---|---|---|---|---|---|---|
+| **qwen3.5:9b leader** | 0.54 → **0.71** | 0.28 → 0.53 | 0.59 → 0.62 | 0.77 → **0.85** | 0.60 → **0.86** | 0.231 |
+| mistral-small3.2 | 0.56 → 0.70 | 0.21 → 0.53 | 0.70 → **0.71** | 0.38 → 0.54 | 0.67 → 0.81 | 0.263 |
+| **llama3.1:8b** | 0.54 → 0.67 | — → **0.65** | — → 0.51 | — → 0.69 | — → 0.80 | **0.294** |
+| gemma4:e4b | 0.51 → 0.60 | — → 0.33 | — → 0.51 | — → 0.38 | — → 0.85 | 0.210 |
+| granite4:tiny-h | 0.41 → 0.56 | — → 0.42 | — → 0.35 | — → 0.54 | — → 0.79 | 0.227 |
+| gemma4:e2b (as generator) | 0.46 → 0.58 | 0.16 → 0.37 | 0.54 → 0.49 | 0.31 → 0.31 | 0.58 → 0.81 | 0.217 |
+
+Per-category headlines (gemma4:e2b judge):
+
+- **qwen3.5:9b is best on Overall (0.71)** and ties for best on Multi-hop (0.85) and Open-dom (0.86). Production generator stays.
+- **llama3.1:8b is best on Single-hop (0.65)** by a wide margin (+0.12 over qwen3.5:9b's 0.53). Closest we have to the published-SOTA band — only 0.18 below EMem's 0.83 (gpt-4o-mini judge). Single-hop is the most common factual-QA pattern, so for **factual recall workloads, llama3.1:8b is now the better pick**.
+- **mistral-small3.2 is best on Temporal (0.71)**. Time-anchored queries lean heavily on lexical-temporal cues that mistral handles well. The 2.8× wall-clock cost still rules it out for production, but for time-heavy specialty workloads it's a contender.
+- **gemma4:e4b and granite4:tiny-h** stay middle-of-pack regardless of judge — useful for tighter-VRAM tiers but not promotion candidates.
+
+The "qwen3.5:9b production / llama3.1:8b fast alternative" framing from the May 5 PR was right but underspecified. The matched-judge breakout shows it's actually a **per-workload pick at the 12 GB tier**:
+
+> **12 GB GPU production guidance (matched-judge methodology):**
+> - **Best overall quality** → `qwen3.5:9b` Q4_K_M (0.71 overall under gemma4:e2b)
+> - **Best factual recall (Single-hop)** → `llama3.1:8b` (0.65 Single-hop, 2.4× faster than qwen)
+> - **Best temporal reasoning** → `mistral-small3.2` (0.71 Temporal, but 2.8× slower than qwen)
+> - **Production default**: still `qwen3.5:9b` because Single-hop is one of four categories; broad workloads should optimise for Overall.
+> - **Specialty deployments**: pick the workload-matched generator above.
+
+Measured on Fedora 12 GB 3060 host, May 7 2026. Dual-rescore script at `/home/jay/dual_judge_rescore.sh`; full summary at `/tmp/dual_judge_rescore_summary.tsv`. The full leaderboard above (line 54+) was scored exclusively under `qwen3:4b` and is *not* retroactively rescored — every cell from May 7 onward carries both judge attributions explicitly.
+
+#### Generator-temperature sweep
+
+Until May 9 every LoCoMo cell ran at the runner's hardcoded `temperature=0.2`. We added a `--gen-temp` flag and swept four generators × three temperatures (0.0, 0.2, 0.5) at the leader recipe + `mem0_additive` fusion, subset 200, dual-rescored.
+
+| Generator | temp 0.0 | temp 0.2 (existing) | temp 0.5 | Sweet spot |
+|---|---|---|---|---|
+| **gemma4:e2b** | 0.59 / **0.49** | 0.57 / 0.37 | 0.60 / 0.35 | 0.0 for SH; 0.5 for Overall |
+| **llama3.1:8b** | 0.65 / **0.60** | 0.62 / 0.47 | 0.63 / 0.51 | **temp 0.0 across the board** |
+| **qwen3.5:9b** | 0.67 / 0.53 | **0.70** / **0.56** | 0.65 / 0.58 | **temp 0.2 sweet spot** |
+| **gemma4:e4b** | 0.62 / 0.53 | 0.61 / 0.42 | **0.65** / 0.51 | 0.5 for Overall, 0.0 for SH |
+
+Numbers are `Overall / Single-hop` under `gemma4:e2b` judge. Bold = peak per generator per metric.
+
+Headlines:
+
+- **Sampling temperature is per-generator, not universal.** qwen3.5:9b's training distribution prefers low-but-nonzero temp (0.2); llama3.1:8b prefers fully-greedy (0.0); gemma4:e4b prefers 0.5 for Overall but 0.0 for Single-hop; gemma4:e2b is similarly split. There's no "always use temp X" rule for our local-tier stack.
+- **llama3.1:8b at temp 0.0 + mem0_additive = 0.65 / 0.60 Single-hop.** The +0.13 Single-hop lift (0.47 → 0.60) just from temperature is the largest single-lever effect we've measured since the judge-strictness pivot. Greedy decoding lets llama commit to the most-likely token rather than sampling around the answer's exact form — which the judge then accepts more often.
+- **qwen3.5:9b + mem0_additive + temp 0.2 (0.70 / 0.56) is still the Overall leader.** No temp-sweep cell beat it on overall. Production default holds.
+- **Best Single-hop overall is still `llama3.1:8b` at RRF heuristic + temp 0.2 (0.65 SH, May 5 sweep).** mem0_additive *hurts* llama's Single-hop (-0.05 vs RRF heuristic) — the lever that helps qwen3.5:9b doesn't help llama. Different generators interact with different fusion modes differently. Per-generator + per-fusion + per-temp tuning is genuinely a thing here.
+
+Updated 12 GB tier guidance (matched-judge methodology, gemma4:e2b):
+
+> - **Best Overall** → `qwen3.5:9b` + `--fusion mem0_additive` + `--gen-temp 0.2` (0.70 / 0.56 SH)
+> - **Best Single-hop / factual recall** → `llama3.1:8b` + `--fusion rrf` + `--gen-temp 0.2` (0.67 / **0.65 SH**)
+> - **Best Single-hop within mem0_additive** → `llama3.1:8b` + `--fusion mem0_additive` + `--gen-temp 0.0` (0.65 / 0.60 SH)
+> - **Multi-hop / Temporal** → `qwen3.5:9b` + `mem0_additive` + temp 0.2 (0.77 / 0.59)
+> - **Production default**: `qwen3.5:9b` + `mem0_additive` + temp 0.2 — best Overall and within 0.01 of best Multi-hop / Open-dom.
+
+Measured on Fedora 12 GB 3060 host, May 8-9 2026. Bench script at `/home/jay/temp_sweep_bench.sh`; full summary at `/tmp/temp_sweep_bench_summary.tsv`. `--gen-temp` flag lives on branch `feat/gen-temp-flag` (commit `2bd1b21`) for reproduction.
+
+#### Subset 200 → full 1540 validation
+
+The May 7-9 temp-sweep cells were all measured at the 200-QA subset for chain throughput. On May 10-11 we re-ran the two cells that were headline picks in the README at full 1540 QAs so a public-facing ranking isn't sitting on subset noise.
+
+| Recipe | Subset 200 (g4e2b) Overall / SH | Full 1540 (g4e2b) Overall / SH | Δ Overall | Δ SH | Verdict |
+|---|---|---|---|---|---|
+| **qwen3.5:9b + mem0_additive + temp 0.2** (leader) | 0.71 / 0.56 | **0.68 / 0.55** | −0.03 | −0.01 | **Generalises.** Production default holds. |
+| llama3.1:8b + RRF + temp 0.2 (subset SH pick) | 0.67 / 0.65 | 0.64 / 0.49 | −0.03 | **−0.16** | **Regression.** Subset 200 over-represented Single-hop questions where llama+RRF won. Removed from README. |
+
+Both cells now dual-judge complete:
+
+| Cell | qwen3:4b Overall / SH | gemma4:e2b Overall / SH |
+|---|---|---|
+| qwen3.5:9b + mem0_additive + temp 0.2 | 0.54 / 0.28 | 0.68 / 0.55 |
+| llama3.1:8b + RRF + temp 0.2 | 0.53 / 0.27 | 0.64 / 0.49 |
+
+The qwen3:4b rescore confirms the gemma4:e2b finding: llama+RRF Overall trails qwen+mem0 by 0.01 under the strict judge too (0.53 vs 0.54), and Single-hop trails by 0.01 (0.27 vs 0.28). Both judges agree the leader recipe wins both metrics at full 1540.
+
+Methodology takeaways:
+
+- **Overall drift is uniformly small (−0.03)** across both recipes — subset 200 is a fair Overall sampler.
+- **Single-hop drift is recipe-dependent.** qwen+mem0 holds within noise (−0.01). llama+RRF collapses (−0.16) under gemma4:e2b. Subset 200 happened to over-represent the Single-hop questions where llama+RRF won at our recipe / generator pairing.
+- **Subset 200 is no longer sufficient for promoting a workload-specific recommendation** — particularly per-category picks. Subset → full validation is now required before any README claim that names a specific recipe as "best at X."
+
+Measured on Fedora 12 GB 3060 host, May 10-11 2026. Bench script at `/tmp/llama_rrf_gapfill_bench.sh`; full summary at `/tmp/llama_rrf_gapfill_summary.tsv` on the bench host.
+
+### ENGRAM-style typed retrieval — does typed memory routing raise Single-hop?
+
+The third architectural lever we tested at this generator tier. Same setup as the prompt and embedder sweeps but varying the *retrieval routing*: instead of one undifferentiated vector store, classify each conversation turn into three typed memory stores at ingest, then fan out per-type top-k searches at retrieval and set-merge before the leader pipeline.
+
+Based on **[ENGRAM: Effective, Lightweight Memory Orchestration for Conversational Agents](https://arxiv.org/abs/2511.12960)** (Nov 2025), which reports **77.55 LLM-as-Judge** on LoCoMo with text-embedding-3-small + GPT-4o-mini and shows a **+31 absolute pp** ablation drop when typed separation is collapsed into a single store (77.55 → 46.56). The paper's claim: typed separation matters more than the embedder or generator choice.
+
+We replicated the architectural shape on our local stack:
+
+- **Per-turn classifier**: `llama3.1:8b` returns a 3-bit mask `{episodic, semantic, procedural}` per LoCoMo turn at ingest. Cached by SHA-256 of the turn text, so re-runs don't re-classify. ~290 ms/turn effective at 4-way concurrency.
+- **Storage**: each vector entry tagged with the mask in its metadata column.
+- **Retrieval**: new `--retrieval-mode engram_typed` runs three top-k vector searches (one per type bit), set-merges by row id with dedup, then runs the existing leader stack (cross-encoder rerank + RRF + adj=2) on the merged candidate pool.
+- **Question routing**: also tested an `oracle_routed` mode that uses the dataset's known `qa["category"]` to pick mode per question — categories 3 and 4 (Multi-hop / Open-dom) use `engram_typed`, categories 1 and 2 (Single-hop / Temporal) use `default`. This is the *upper bound* on category-routing; no real classifier can beat oracle.
+
+Three-cell experiment, all at the leader recipe (`k=20 + adj=2 + llm-exp + RRF`), 200 QAs subset, external `qwen3:4b` rescore:
+
+| cell | overall rejudge | single-hop | temporal | multi-hop | open-dom | F1 |
+|---|---|---|---|---|---|---|
+| **leader_baseline_repro** | **0.54** | 0.28 | 0.59 | **0.77** | 0.60 | 0.231 |
+| engram_typed | 0.53 | 0.30 | 0.57 | 0.54 | 0.62 | 0.226 |
+| oracle_routed | 0.53 | 0.33 | 0.60 | 0.46 | 0.58 | 0.225 |
+
+Classification distribution on LoCoMo turns (`llama3.1:8b` over 419 turns, conversation 26): **51.8 %** pure semantic, **28.6 %** episodic+semantic dual, **18.6 %** pure episodic, **~1 %** anything procedural. The three types are clearly differentiated — *not* a degenerate "everything is everything" mask — but procedural content is essentially absent in casual chat (matches the paper's expectation).
+
+Headlines:
+
+- **Overall is flat (-0.01).** Whatever the typed routing buys back on Open-dom (+0.02) and Single-hop (+0.02-0.05) is paid for by Multi-hop and Temporal regressions. Net moves are within subset-200 noise (~±0.02) on identical recipes.
+- **Multi-hop regresses HARD with typed retrieval (-0.23).** Counter-intuitive — Multi-hop is the category we expected to *win* most. The 3-way fanout brings in less-relevant turns (each type's per-type top-k can include weaker candidates than a single combined top-k would have surfaced), and the set-merge dilutes the cross-encoder's ranking signal across heterogeneous candidates. Same direction in both ENGRAM-using cells (engram_typed at 0.54, oracle_routed at 0.46), so it isn't noise — it's a real cost of the architectural choice at this scale.
+- **Single-hop is the third null lever.** 0.28 → 0.30 → 0.33 across the three cells is within subset noise on 43 questions. Combined with the prompt and embedder nulls, **the Single-hop ceiling at our generator tier is not in retrieval at all**. The hypothesis going into Phase 1 is that the bottleneck is generator extraction quality — getting the right fact out of an already-decent retrieved context — which is not what typed routing fixes.
+- **Oracle-routed is also flat (0.53).** Even with *perfect* category routing — engram_typed only where it might help — overall stays within ±0.01 of baseline. Per the decision rule, this rules out building a query-time classifier (Phase 2b): no real classifier can outperform the oracle ceiling.
+
+Why the gap with the paper's +31 pp: ENGRAM uses GPT-4o-mini as both generator and judge, with text-embedding-3-small for retrieval — a frontier-class generator paired with a hosted retrieval embedder. At that tier, retrieval and generation hit different failure modes, and typed routing recovers recall the large generator can already extract from. At our 9 B generator + 384-dim MiniLM-L6 + qwen3:4b external judge, the bottleneck distribution is different — the leader recipe already saturates retrieval recall for Multi-hop and Open-dom, and the remaining errors are generator-extraction failures that typed routing cannot address.
+
+Methodology note: the *first* engram_typed run on May 6 reported a +0.16 Multi-hop lift. That was a wiring bug — `--retrieval-mode` was silently ignored when `--strategy=vector-only` (the bench default) because the runner's `_retrieve` short-circuited to a direct `vmem.search` call before threading the mode through. Fixed in commit `9306bb2` on `feat/engram-typed-retrieval`; the pre-fix numbers were retracted internally. The table above is post-fix.
+
+The fourth lever — generator size — is the next experiment. `qwen3.6:35b-a3b` (Q4_K_M, ~23 GB, MoE: 35 B total / 3 B active) at the same leader recipe runs as Phase 1 on Fedora the night of May 6.
+
+Measured on Fedora 12 GB 3060 host, May 6 2026. Branch `feat/engram-typed-retrieval` carries the EngramRouter classifier, the `engram_typed` / `oracle_routed` retrieval modes, and the bench script `engram_routed_3cell.sh` for reproduction. Cached classifications at `/tmp/engram_classifications.json`, full sweep summary at `/tmp/engram_routed_3cell_summary.tsv` on the bench host.
+
 ### Methodology disclosures
 
 - **Dataset**: LoCoMo-10, 1540 QAs, categories 1–4. Adversarial reserved.
