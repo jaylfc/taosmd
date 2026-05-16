@@ -134,6 +134,176 @@ def _agent_rm(registry: AgentRegistry, name: str, drop_data: bool) -> int:
     return 0
 
 
+_RESOLUTION_BY_ACTION = {
+    "accept": "accepted",
+    "reject": "rejected",
+    "modify": "modified",
+}
+
+
+def _review_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd review`` subcommand."""
+    import asyncio
+    from pathlib import Path
+    from .pending_decisions import PendingDecisionsStore
+    from .knowledge_graph import TemporalKnowledgeGraph
+
+    kg_path = Path(args.data_dir) / "knowledge-graph.db"
+    if not kg_path.exists():
+        print(f"error: knowledge-graph.db not found at {kg_path}", file=sys.stderr)
+        print("  Run `python -m taosmd.auto_setup` first.", file=sys.stderr)
+        return 2
+
+    async def _run() -> int:
+        store = PendingDecisionsStore(db_path=kg_path)
+        await store.init()
+        try:
+            if args.resolve_id is not None:
+                return await _review_resolve_single(store, args, kg_path)
+            return await _review_browse(store, args, kg_path)
+        finally:
+            await store.close()
+
+    return asyncio.run(_run())
+
+
+async def _review_resolve_single(
+    store, args: argparse.Namespace, kg_path,
+) -> int:
+    if args.action is None:
+        print("error: --resolve requires --action {accept|reject|modify}", file=sys.stderr)
+        return 2
+    resolution = _RESOLUTION_BY_ACTION[args.action]
+    decision = await store.get(args.resolve_id)
+    if decision is None:
+        print(f"error: no pending decision with id {args.resolve_id!r}", file=sys.stderr)
+        return 2
+
+    # Apply the KG mutation that the resolution implies. The store records
+    # the resolution either way; if the KG mutation fails the user sees the
+    # error and can retry.
+    if resolution == "accepted" and decision["suggested_action"] == "invalidate_old_add_new":
+        from .knowledge_graph import TemporalKnowledgeGraph
+        kg = TemporalKnowledgeGraph(db_path=kg_path)
+        await kg.init()
+        try:
+            for old_id in decision["old_triple_ids"]:
+                await kg.invalidate(old_id)
+            await kg.add_triple(
+                subject=decision["subject"],
+                predicate=decision["predicate"],
+                obj=decision["new_object"],
+                confidence=decision["new_triple_confidence"],
+                source=decision["source"],
+            )
+        finally:
+            await kg.close()
+
+    ok = await store.resolve(args.resolve_id, resolution=resolution, note=args.note)
+    if not ok:
+        print(f"error: decision {args.resolve_id} was already resolved", file=sys.stderr)
+        return 1
+    print(f"Decision {args.resolve_id} -> {resolution}")
+    return 0
+
+
+async def _review_browse(
+    store, args: argparse.Namespace, kg_path,
+) -> int:
+    pending = await store.list_pending(subject=args.subject, limit=args.limit)
+
+    if args.review_json:
+        print(json.dumps(pending, indent=2))
+        return 0
+
+    if not pending:
+        print("No pending decisions. KG is in sync.")
+        return 0
+
+    if args.review_list:
+        for d in pending:
+            print(_format_decision_short(d))
+        print(f"\n{len(pending)} pending decision(s). Run `taosmd review` without --list to resolve interactively.")
+        return 0
+
+    # Interactive mode
+    print(f"{len(pending)} pending decision(s). Press y to accept, n to reject, "
+          "s to skip, q to quit, ? for help.\n")
+    accepted = rejected = skipped = 0
+    for i, decision in enumerate(pending, 1):
+        print(f"--- Decision {i}/{len(pending)} (id: {decision['id']}) ---")
+        print(_format_decision_full(decision))
+        while True:
+            resp = input("\n[y]es accept / [n]o reject / [s]kip / [q]uit / [?] help: ").strip().lower()
+            if resp in {"y", "n", "s", "q", "?"}:
+                break
+            print("  Please enter y, n, s, q, or ?")
+        if resp == "?":
+            print(_review_help())
+            continue
+        if resp == "q":
+            break
+        if resp == "s":
+            skipped += 1
+            continue
+        note = input("  Note (optional, ENTER to skip): ").strip()
+        action = "accept" if resp == "y" else "reject"
+        sub_args = argparse.Namespace(
+            data_dir=args.data_dir,
+            resolve_id=decision["id"],
+            action=action,
+            note=note,
+        )
+        rc = await _review_resolve_single(store, sub_args, kg_path)
+        if rc == 0:
+            if resp == "y":
+                accepted += 1
+            else:
+                rejected += 1
+        print()
+
+    print(f"Done. Accepted: {accepted}, Rejected: {rejected}, Skipped: {skipped}.")
+    return 0
+
+
+def _format_decision_short(d: dict) -> str:
+    return (
+        f"  {d['id']}  {d['kind']:<25}  "
+        f"{d['subject']} {d['predicate']} -> {d['new_object']!r}"
+    )
+
+
+def _format_decision_full(d: dict) -> str:
+    created = datetime.fromtimestamp(d["created_at"], tz=timezone.utc).isoformat(timespec="seconds")
+    lines = [
+        f"  Kind:        {d['kind']}",
+        f"  Subject:     {d['subject']}",
+        f"  Predicate:   {d['predicate']}",
+        f"  New object:  {d['new_object']}",
+        f"  Confidence:  {d['new_triple_confidence']:.2f}",
+        f"  Detected:    {created}",
+        f"  Source:      {d['source'] or '(none)'}",
+    ]
+    if d.get("evidence"):
+        lines.append(f"  Evidence:    {d['evidence']}")
+    if d.get("old_triple_ids"):
+        lines.append(f"  Conflicts with: {len(d['old_triple_ids'])} existing triple(s)")
+    lines.append(f"  Suggested:   {d['suggested_action']}")
+    return "\n".join(lines)
+
+
+def _review_help() -> str:
+    return (
+        "\n  y (accept)  apply the suggested action: invalidate the old triple(s),\n"
+        "              write the new one with the recorded confidence.\n"
+        "  n (reject)  leave the KG alone. The new claim is recorded as rejected\n"
+        "              so it doesn't re-queue.\n"
+        "  s (skip)    decide later; the decision stays in the queue.\n"
+        "  q (quit)    stop reviewing. Anything you already accepted/rejected\n"
+        "              stays applied.\n"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="taosmd")
     parser.add_argument(
@@ -214,8 +384,45 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    # ----- review subcommand (pending-decisions queue) -------------------
+    review_p = sub.add_parser(
+        "review",
+        help="Review pending KG-update decisions deferred by the nightly librarian",
+    )
+    review_p.add_argument(
+        "--list", dest="review_list", action="store_true",
+        help="Print pending decisions and exit (no interactive prompt)",
+    )
+    review_p.add_argument(
+        "--json", dest="review_json", action="store_true",
+        help="Output as JSON (implies --list)",
+    )
+    review_p.add_argument(
+        "--limit", type=int, default=20,
+        help="Max pending decisions to show / iterate over (default 20)",
+    )
+    review_p.add_argument(
+        "--subject", default=None,
+        help="Filter pending decisions to a specific subject entity",
+    )
+    review_p.add_argument(
+        "--resolve", dest="resolve_id", default=None,
+        help="Resolve a single decision by ID (non-interactive)",
+    )
+    review_p.add_argument(
+        "--action", choices=["accept", "reject", "modify"], default=None,
+        help="Resolution action when using --resolve",
+    )
+    review_p.add_argument(
+        "--note", default="",
+        help="Free-form note attached to the resolution",
+    )
+
     args = parser.parse_args(argv)
     registry = AgentRegistry(args.data_dir)
+
+    if args.cmd == "review":
+        return _review_cmd(args)
 
     if args.cmd == "agent":
         if args.agent_cmd == "list":

@@ -385,15 +385,59 @@ class TemporalKnowledgeGraph:
         subject_type: str = "unknown",
         object_type: str = "unknown",
         auto_resolve: bool = True,
+        pending_store=None,
+        defer_below_confidence: float = 0.0,
+        evidence: str = "",
     ) -> dict:
         """Add a triple, checking for contradictions first.
 
-        If auto_resolve is True and a contradiction is found for a singular
-        predicate, the old triple is automatically invalidated and replaced.
+        Resolution policy:
+          1. No contradictions  -> add the new triple unconditionally.
+          2. Contradictions, ``confidence < defer_below_confidence``, AND a
+             ``pending_store`` is provided -> defer to the queue WITHOUT
+             writing the new triple or invalidating the old one. The user
+             will resolve via ``taosmd review``.
+          3. Contradictions and ``auto_resolve`` is True -> invalidate the
+             old triple(s), write the new one. (Legacy fast path; safe for
+             high-confidence user-supplied facts.)
+          4. Contradictions and ``auto_resolve`` is False -> write the new
+             triple but leave the old one(s) active too. Caller decides
+             what to do with them.
 
-        Returns {triple_id, contradictions_found, contradictions_resolved}.
+        Returns a dict whose ``status`` field is one of ``written``,
+        ``deferred``, or ``written_with_conflicts``. ``triple_id`` is empty
+        when status is ``deferred``.
         """
         contradictions = await self.detect_contradictions(subject, predicate, obj)
+
+        if (
+            contradictions
+            and pending_store is not None
+            and confidence < defer_below_confidence
+        ):
+            pending_id = await pending_store.defer(
+                kind="contradiction",
+                subject=subject,
+                predicate=predicate,
+                new_object=obj,
+                old_triple_ids=[c["id"] for c in contradictions],
+                suggested_action="invalidate_old_add_new",
+                evidence=evidence,
+                source=source,
+                new_triple_confidence=confidence,
+                detection_confidence=1.0,
+            )
+            return {
+                "status": "deferred",
+                "triple_id": "",
+                "pending_id": pending_id,
+                "contradictions_found": len(contradictions),
+                "contradictions_resolved": 0,
+                "contradictions": [
+                    {"id": c["id"], "object": c["object_name"], "predicate": predicate}
+                    for c in contradictions
+                ],
+            }
 
         if contradictions and auto_resolve:
             for c in contradictions:
@@ -405,8 +449,13 @@ class TemporalKnowledgeGraph:
             subject_type=subject_type, object_type=object_type,
         )
 
+        status = "written" if not contradictions else (
+            "written" if auto_resolve else "written_with_conflicts"
+        )
         return {
+            "status": status,
             "triple_id": tid,
+            "pending_id": "",
             "contradictions_found": len(contradictions),
             "contradictions_resolved": len(contradictions) if auto_resolve else 0,
             "contradictions": [
