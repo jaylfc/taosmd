@@ -203,6 +203,63 @@ def test_kg_defers_low_confidence_contradictions(tmp_path):
     assert queue[0]["new_object"] == "paris"
 
 
+def test_process_conversation_turn_defers_low_confidence(tmp_path):
+    """Agent ingest path threads pending_store + defer_below_confidence through."""
+    from taosmd.memory_extractor import process_conversation_turn
+
+    async def go():
+        kg = TemporalKnowledgeGraph(db_path=tmp_path / "kg.db")
+        pending = PendingDecisionsStore(db_path=tmp_path / "kg.db")
+        await kg.init()
+        await pending.init()
+        try:
+            # Seed an existing high-confidence preference. "prefers" is in
+            # SINGULAR_PREDICATES so a new "prefers" for the same subject
+            # triggers the contradiction check.
+            await kg.add_triple(
+                subject="alice", predicate="prefers", obj="vim",
+                confidence=1.0, source="user-direct",
+            )
+
+            # New regex-extracted fact contradicts but at confidence 0.5
+            # (below the 0.8 threshold) -> goes to the pending queue
+            # instead of overwriting the existing fact.
+            result = await process_conversation_turn(
+                text="Alice prefers emacs.",
+                agent_name="testbot",
+                kg=kg,
+                archive=None,
+                source="nightly-summary",
+                use_llm=False,                       # force regex extractor
+                pending_store=pending,
+                defer_below_confidence=0.8,
+                default_fact_confidence=0.5,
+            )
+            active = await kg.query_entity("alice")
+            queue = await pending.list_pending()
+            return result, active, queue
+        finally:
+            await pending.close()
+            await kg.close()
+
+    result, active, queue = _run(go())
+
+    assert result["facts_extracted"] == 1
+    assert result["deferred"] == 1
+    assert result["triples_created"] == 0
+    assert result["deferred_ids"]
+
+    # The old fact survives because the new claim was deferred.
+    objs = {t["object_name"] for t in active}
+    assert "vim" in objs
+    assert "emacs" not in objs
+
+    assert len(queue) == 1
+    assert queue[0]["subject"] == "Alice"
+    assert queue[0]["predicate"] == "prefers"
+    assert queue[0]["new_object"] == "emacs"
+
+
 def test_kg_auto_resolves_high_confidence_even_with_pending_store(tmp_path):
     """A direct user statement (confidence=1.0) auto-resolves."""
     async def go():
