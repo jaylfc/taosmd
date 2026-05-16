@@ -116,7 +116,9 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 > from taosmd import VectorMemory
 > vmem = VectorMemory("~/.taosmd/vector-memory.db", embed_mode="onnx", onnx_path="<taosmd-dir>/models/minilm-onnx")
 > await vmem.init()
-> results = await vmem.search("What did I say about Docker?", hybrid=True)
+> # fusion="mem0_additive" is the production leader on LoCoMo (0.68/0.55 SH).
+> # Falls back to hybrid keyword+vector if `hybrid=False`.
+> results = await vmem.search("What did I say about Docker?", hybrid=True, fusion="mem0_additive")
 > ```
 >
 > **Extract facts automatically from our conversations:**
@@ -129,10 +131,12 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 > ```python
 > facts = await kg.query_entity("User")
 > history = await archive.search_fts("relevant topic")
-> similar = await vmem.search("the question", hybrid=True)
+> similar = await vmem.search("the question", hybrid=True, fusion="mem0_additive")
 > ```
 >
 > The archive is append-only and kept forever. Every conversation, tool call, decision, and error should be recorded. Old archives are compressed to gzip daily at 3 AM. The knowledge graph tracks structured facts with temporal validity — update facts when they change, don't delete them.
+>
+> **Production leader recipe** for LoCoMo-class workloads: `qwen3.5:9b` generator + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion mem0_additive --gen-temp 0.2`. Reproduces 0.68 Overall / 0.55 Single-hop on full 1540 QAs under `gemma4:e2b` judge — see [docs/benchmarks.md](docs/benchmarks.md#locomo--multi-session-conversational-memory-1540-qas). All flags available on master as of PR #69.
 
 ---
 
