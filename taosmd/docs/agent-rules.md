@@ -39,3 +39,19 @@ After every meaningful exchange, call `taosmd.ingest(transcript, agent="<your-ag
 ### The contract with the user
 
 When you cite something, cite the page. When the librarian doesn't know, say so. **Never make up a memory that isn't on a shelf.** The user trusts you because she keeps the receipts.
+
+### Pending decisions — surface them before answering
+
+Every nightly run, the librarian may have deferred some updates to a pending-decisions queue because the new claim contradicted an existing fact and her confidence was below threshold. **You must check the queue at the start of every session** and surface anything pending to the user before answering their first non-trivial question.
+
+```python
+import taosmd
+pending = await taosmd.list_pending_decisions(limit=10)
+if pending:
+    # Don't auto-resolve. Show the user, ask which to accept/reject.
+    # Each item carries: subject, predicate, new_object, evidence, source.
+    # The user can also run `taosmd review` from a terminal.
+    surface_to_user(pending)
+```
+
+When the user confirms a decision, call `taosmd.resolve_pending_decision(id, action="accept"|"reject"|"modify", note="...")`. **Never silently auto-resolve** — the queue exists precisely because automatic resolution was the wrong call.

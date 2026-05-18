@@ -283,4 +283,84 @@ async def search(query: str, *, agent: str, limit: int = 5, data_dir=None) -> li
     return [_format_hit(hit) for hit in raw]
 
 
-__all__ = ["ingest", "search"]
+async def list_pending_decisions(
+    *, limit: int = 20, subject: str | None = None, data_dir=None,
+) -> list[dict]:
+    """Return unresolved KG-update decisions deferred by the librarian.
+
+    Per the agent-rules contract: call this at the start of every session
+    and surface any pending decisions to the user before answering their
+    first non-trivial question. Never silently auto-resolve — the queue
+    exists because automatic resolution was the wrong call.
+    """
+    from pathlib import Path
+    from taosmd.pending_decisions import PendingDecisionsStore
+    resolved = Path(_resolve_data_dir(data_dir))
+    store = PendingDecisionsStore(db_path=resolved / "knowledge-graph.db")
+    await store.init()
+    try:
+        return await store.list_pending(subject=subject, limit=limit)
+    finally:
+        await store.close()
+
+
+async def resolve_pending_decision(
+    pending_id: str,
+    *,
+    action: str,
+    note: str = "",
+    data_dir=None,
+) -> dict:
+    """Resolve a pending decision with the user's explicit choice.
+
+    ``action`` is one of ``accept`` / ``reject`` / ``modify``. ``accept``
+    invokes the matching KG mutation (e.g. invalidate the old triple +
+    write the new one for a contradiction). ``reject`` records the
+    resolution without touching the KG. ``modify`` records the resolution
+    and leaves any KG-side adjustment to the caller (a future agent UI
+    can offer free-form edits before re-writing).
+
+    Returns ``{ok: bool, applied_kg: bool, resolution: str}``.
+    """
+    from pathlib import Path
+    from taosmd.pending_decisions import PendingDecisionsStore
+    from taosmd.knowledge_graph import TemporalKnowledgeGraph
+
+    if action not in {"accept", "reject", "modify"}:
+        raise ValueError(f"action must be accept|reject|modify, got {action!r}")
+    resolution = {"accept": "accepted", "reject": "rejected", "modify": "modified"}[action]
+    resolved_data_dir = Path(_resolve_data_dir(data_dir))
+    kg_path = resolved_data_dir / "knowledge-graph.db"
+
+    store = PendingDecisionsStore(db_path=kg_path)
+    await store.init()
+    try:
+        decision = await store.get(pending_id)
+        if decision is None:
+            return {"ok": False, "applied_kg": False, "resolution": resolution}
+
+        applied_kg = False
+        if resolution == "accepted" and decision["suggested_action"] == "invalidate_old_add_new":
+            kg = TemporalKnowledgeGraph(db_path=kg_path)
+            await kg.init()
+            try:
+                for old_id in decision["old_triple_ids"]:
+                    await kg.invalidate(old_id)
+                await kg.add_triple(
+                    subject=decision["subject"],
+                    predicate=decision["predicate"],
+                    obj=decision["new_object"],
+                    confidence=decision["new_triple_confidence"],
+                    source=decision["source"],
+                )
+                applied_kg = True
+            finally:
+                await kg.close()
+
+        ok = await store.resolve(pending_id, resolution=resolution, note=note)
+        return {"ok": ok, "applied_kg": applied_kg, "resolution": resolution}
+    finally:
+        await store.close()
+
+
+__all__ = ["ingest", "search", "list_pending_decisions", "resolve_pending_decision"]
