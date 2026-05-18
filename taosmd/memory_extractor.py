@@ -205,13 +205,33 @@ async def process_conversation_turn(
     use_llm: bool = True,
     auto_resolve_contradictions: bool = True,
     extraction_model: str = "default",
+    pending_store=None,
+    defer_below_confidence: float = 0.0,
+    default_fact_confidence: float = 1.0,
 ) -> dict:
     """Extract facts from a conversation turn and store in the KG.
 
     Uses LLM extraction when available (higher quality), falls back to regex.
     Checks for contradictions before storing (Mem0-style ADD/UPDATE logic).
 
-    Returns {facts_extracted, triples_created, contradictions_resolved, triple_ids, method}.
+    Safety-net parameters (opt-in):
+      - ``pending_store``: a :class:`PendingDecisionsStore` to defer
+        low-confidence conflicts to. When None, the legacy auto-resolve
+        path runs unchanged.
+      - ``defer_below_confidence``: confidence threshold below which a
+        contradiction is deferred to the pending queue instead of being
+        auto-resolved. Default 0.0 -> never defer (legacy behaviour).
+        Suggested value when ``pending_store`` is set: 0.8.
+      - ``default_fact_confidence``: confidence assigned to each
+        extracted fact when the extractor doesn't supply one. Default
+        1.0 (treat agent / user-direct extraction as ground truth).
+        Callers that extract from less-certain sources (a nightly
+        catalog pass, a summary of a summary) should pass a lower
+        value -- e.g. 0.6 for regex on a session summary -- so the
+        deferral threshold can actually fire.
+
+    Returns ``{facts_extracted, triples_created, contradictions_resolved,
+    deferred, deferred_ids, triple_ids, method}``.
     """
     from .agents import is_task_enabled  # noqa: PLC0415
 
@@ -238,47 +258,66 @@ async def process_conversation_turn(
     else:
         facts = extract_facts_from_text(text)
 
-    triple_ids = []
+    triple_ids: list[str] = []
+    deferred_ids: list[str] = []
     contradictions = 0
 
     for fact in facts:
         try:
             # Use contradiction-aware insertion for singular predicates.
-            # auto_resolve_contradictions=True (default): older contradicting
-            # triples get superseded — supersede chains form. False: facts
-            # coexist; ablation needed to measure whether supersede helps.
+            # When pending_store is provided AND the fact's confidence is
+            # below defer_below_confidence, the new triple is queued for
+            # user review instead of auto-resolving against the existing
+            # fact — see taosmd/pending_decisions.py.
+            fact_confidence = float(fact.get("confidence", default_fact_confidence))
             result = await kg.add_triple_with_contradiction_check(
                 subject=fact["subject"],
                 predicate=fact["predicate"],
                 obj=fact["object"],
+                confidence=fact_confidence,
                 source=f"{source}:{agent_name or 'user'}",
                 auto_resolve=auto_resolve_contradictions,
+                pending_store=pending_store,
+                defer_below_confidence=defer_below_confidence,
+                evidence=text[:500],
             )
-            triple_ids.append(result["triple_id"])
-            contradictions += result["contradictions_resolved"]
+            if result.get("status") == "deferred":
+                deferred_ids.append(result["pending_id"])
+                continue
+            if result.get("triple_id"):
+                triple_ids.append(result["triple_id"])
+            contradictions += result.get("contradictions_resolved", 0)
         except Exception as e:
             logger.debug("Failed to add triple: %s", e)
 
     # Archive the extraction event
-    if archive and triple_ids:
+    if archive and (triple_ids or deferred_ids):
+        deferred_note = f", {len(deferred_ids)} deferred for review" if deferred_ids else ""
         await archive.record(
             event_type="memory_extraction",
             data={
                 "facts_extracted": len(facts),
                 "triples_created": len(triple_ids),
                 "contradictions_resolved": contradictions,
+                "deferred": len(deferred_ids),
+                "deferred_ids": deferred_ids,
                 "method": method,
                 "source": source,
                 "facts": facts,
             },
             agent_name=agent_name,
-            summary=f"Extracted {len(facts)} facts ({method}) from {source}, {contradictions} contradictions resolved",
+            summary=(
+                f"Extracted {len(facts)} facts ({method}) from {source}, "
+                f"{contradictions} contradictions resolved{deferred_note}"
+            ),
         )
 
     return {
         "facts_extracted": len(facts),
         "triples_created": len(triple_ids),
         "contradictions_resolved": contradictions,
+        "deferred": len(deferred_ids),
+        "deferred_ids": deferred_ids,
         "triple_ids": triple_ids,
         "method": method,
     }
