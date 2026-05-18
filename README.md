@@ -191,13 +191,14 @@ LoCoMo-10 is a harder dataset than LongMemEval-S: 1540 QAs across multi-session 
 
 **Recommended generators at the 12 GB GPU tier** (leader recipe, dual-judge scored, temperature-tuned):
 
-| Workload | Generator | Fusion | Temp | Overall (q3:4b / g4:e2b) | Single-hop (g4:e2b) | Notes |
+| Workload | Generator | Fusion + ingest | Temp | Overall (q3:4b / g4:e2b) | Single-hop (g4:e2b) | Notes |
 |---|---|---|---|---|---|---|
-| **Best overall** (default) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` | **0.2** | 0.54 / **0.68** | **0.55** | **Validated at full 1540.** Wins Overall and Single-hop on full scale. Production default. |
+| **Best overall** (default) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` | **0.2** | 0.54 / **0.68** | **0.55** | **Validated at full 1540.** Wins Overall on full scale. Production default. |
+| **Best Single-hop** (SH-heavy workloads) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` + `--emem-edu --emem-edu-no-filter` (extractor: `llama3.1:8b`) | **0.2** | 0.52 / 0.67 | **0.60** | **Validated at full 1540.** EMem-EDU ingest (one extra LLM call per session) trades −0.02 Overall for +0.07 SH vs the default. q3:4b SH lifts +0.10 (0.25 → 0.35). |
 | Best mem0_additive Single-hop† | `llama3.1:8b` (4.9 GB) | `mem0_additive` | **0.0** | 0.51 / 0.65 | 0.60 | Subset 200. Greedy decoding lifted llama Single-hop +0.13 vs temp 0.2 in the temp sweep. Full-1540 validation pending. |
 | **Best temporal reasoning**† | `mistral-small3.2` (~5 GB) | `rrf` | 0.2 | 0.56 / 0.70 | 0.53 | Subset 200. Wins Temporal (0.71). 2.8× slower than qwen — specialty pick only. Full-1540 validation pending. |
 
-† Subset-200 measurement; the leader row is the only one currently validated at full 1540. The llama3.1:8b + RRF row from earlier versions of this table was removed after its full-1540 Single-hop measured at 0.49 (vs 0.65 on subset 200), failing the validation threshold.
+† Subset-200 measurement; the top two rows are validated at full 1540. The llama3.1:8b + RRF row from earlier versions of this table was removed after its full-1540 Single-hop measured at 0.49 (vs 0.65 on subset 200), failing the validation threshold.
 
 Other measured 12 GB-tier generators (Overall under gemma4:e2b judge, leader recipe): `gemma4:e4b` 0.60 / 0.65 (best at temp 0.5), `gemma4:e2b` 0.60 (best at temp 0.5), `granite4:tiny-h` 0.56, `phi4-reasoning` timeout.
 

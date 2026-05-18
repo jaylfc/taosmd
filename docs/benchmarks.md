@@ -462,6 +462,28 @@ Headlines:
 
 Measured on Fedora 12 GB 3060 host, May 12-16 2026. Bench scripts at `/tmp/emem_edu_bench2.sh` (EMem) and `/tmp/hipporag_bench2.sh` (Hippo) on the bench host; summaries at `/tmp/emem_edu_bench2_summary.tsv` and `/tmp/hipporag_bench2_summary.tsv`. Branches: `feat/emem-edu-filter` (commit `24fcf6f` — fuzzy-match fix in `filter_edus` + merge of `gen-temp-flag`) and `feat/hipporag-ppr` (commit `e7745f9`).
 
+#### EMem-EDU full-1540 validation (May 17)
+
+The May 14-15 subset-200 results promoted EMem-EDU (no filter) as the first new architectural lever to clear baseline on Single-hop since `adjacent_turns`. Per the May 10-11 subset→full discipline (`llama+RRF` over-claimed at subset 200, regressed at full 1540), we re-ran both the baseline and the EMem-EDU candidate at the full 1540 QAs before any production promotion.
+
+| Cell | qwen3:4b Overall / SH | gemma4:e2b Overall / SH |
+|---|---|---|
+| baseline (qwen3.5:9b + mem0_additive + temp 0.2) | 0.52 / 0.25 | **0.69 / 0.53** |
+| **EMem-EDU no filter (same recipe)** | **0.52 / 0.35** | **0.67 / 0.60** |
+| Δ vs baseline | **+0.10 SH (q3:4b)**, 0.00 Overall | **+0.07 SH (g4:e2b)**, −0.02 Overall |
+
+Headlines:
+
+- **The subset-200 win generalises.** Subset 200 said +0.05 SH g4:e2b / +0.14 SH q3:4b; full 1540 lands at **+0.07 SH g4:e2b / +0.10 SH q3:4b**. Same direction, similar magnitude. The May 10-11 subset→full discipline catches over-claims (the llama+RRF cell collapsed −0.16 SH at full scale); this one passed.
+- **EMem-EDU is a Single-hop specialist, not a new universal default.** Trades −0.02 g4:e2b Overall for +0.07 SH (∼2× the SH gain vs the Overall cost). On q3:4b it ties Overall (0.52 vs 0.52) while gaining +0.10 SH — a clean win under the strict judge.
+- **The strict judge especially rewards EDU-form answers.** qwen3:4b's stricter accept policy resolves more EDU-style atomic-proposition answers as correct than full-turn quotes (0.25 → 0.35 SH = +0.10 absolute, a 40 % relative lift). The lenient g4:e2b judge sees a smaller but still real lift.
+- **Filter step stays net-negative at our model tier.** The May 14 difflib fuzz-match fix made filter calls parse correctly, but the LLM-filter cell still trailed the no-filter cell on subset 200. We did not re-run the LLM-filter cell at full 1540 since the subset result was clear; mem0_additive already does candidate selection that the LLM filter then over-cuts.
+- **Recipe is one extra ingest flag away from production.** Append `--emem-edu --emem-edu-extract-model llama3.1:8b --emem-edu-no-filter` to the leader-recipe bench call (or, programmatically, pass `emem_edu=True` to the equivalent runner / store init path on `feat/emem-edu-filter`). One LLM call per session at ingest (~5-10 s/session via llama3.1:8b on a 12 GB GPU). No per-query LLM cost at retrieval — filter step disabled.
+
+Promotion decision: **EMem-EDU (no filter) is the recommended retrieval mode for Single-hop-heavy workloads on the 12 GB GPU tier**; production default for general workloads stays `mem0_additive + temp 0.2` baseline pending more bench evidence on whether the −0.02 Overall trade-off matters for the user's task mix. Both options now have full-1540 dual-judge measurements.
+
+Measured on Fedora 12 GB 3060 host, May 17 2026. Bench script at `/tmp/emem_full1540_bench.sh`; full summary at `/tmp/emem_full1540_bench_summary.tsv`. Branch `feat/emem-edu-filter` (commit `24fcf6f`). Total wall time: 2 cells × (~5 h bench + ~9 h dual-rescore) ≈ 28 h.
+
 ### ENGRAM-style typed retrieval — does typed memory routing raise Single-hop?
 
 The third architectural lever we tested at this generator tier. Same setup as the prompt and embedder sweeps but varying the *retrieval routing*: instead of one undifferentiated vector store, classify each conversation turn into three typed memory stores at ingest, then fan out per-type top-k searches at retrieval and set-merge before the leader pipeline.
