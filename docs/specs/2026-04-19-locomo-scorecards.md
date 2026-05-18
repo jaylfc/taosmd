@@ -9,7 +9,7 @@ methodology.
 categories Single-hop (1) / Temporal (2) / Multi-hop (3) / Open-dom (4).
 Adversarial (cat 5) excluded — reported separately when run.
 
-**Host.** All runs on Fedora workstation (192.168.6.108), RTX 3060 12GB,
+**Host.** All runs on Fedora workstation, RTX 3060 12 GB,
 Ollama (`OLLAMA_NUM_PARALLEL=3`), ONNX embed backend, top-K=10.
 
 **Generator.** gemma4:e2b Q4_K_M (5.1B params actual) via Ollama unless
