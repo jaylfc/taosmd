@@ -16,6 +16,7 @@ from .graph_expansion import expand_from_results, format_expanded_context
 from .crystallize import CrystalStore
 from .reflect import InsightStore
 from .pending_decisions import PendingDecisionsStore
+from . import predicate_vocab
 from .session_catalog import SessionCatalog
 from .catalog_pipeline import CatalogPipeline
 from .retrieval import retrieve
