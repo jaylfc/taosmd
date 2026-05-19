@@ -885,6 +885,38 @@ def _summary(rows: list[dict]) -> dict:
     }
 
 
+def _print_checkpoint(results: list[dict], total: int) -> None:
+    """Print a compact per-category Judge-score snapshot mid-bench.
+
+    Called from the per-QA progress hook when ``--checkpoint-every`` fires.
+    Per-category recall is omitted since the runner only computes that for
+    the full result set; we'd duplicate aggregation cost for marginal value.
+
+    Caveat for the reader: at low ``total`` the first-N QAs come from the
+    earliest conversations in dataset order, so per-category numbers
+    aren't a balanced sample of the whole 1540 — wait until at least
+    ~40-50 % before reading SH trend with confidence.
+    """
+    if not results:
+        return
+    by_cat, overall = _aggregate(results)
+    print(
+        f"  [checkpoint @ {total} QAs]  "
+        f"Overall judge={overall['judge']:.3f}  f1={overall['f1']:.3f}  "
+        f"recall={overall['retrieval_recall']:.2f}",
+        flush=True,
+    )
+    for cat in sorted(by_cat.keys(), key=int):
+        s = by_cat[cat]
+        label = CATEGORY_NAMES.get(int(cat), f"cat-{cat}")
+        recall = "-" if int(cat) == 5 else f"{s['retrieval_recall']:.2f}"
+        print(
+            f"    {label:<18} n={s['count']:>4}  judge={s['judge']:.3f}  "
+            f"f1={s['f1']:.3f}  R@K={recall}",
+            flush=True,
+        )
+
+
 def _aggregate(results: list[dict]) -> tuple[dict, dict]:
     by_cat: dict[str, list[dict]] = {}
     for r in results:
@@ -992,6 +1024,12 @@ async def run(args: argparse.Namespace) -> int:
                 total_seen += 1
                 if total_seen % 25 == 0:
                     print(f"  progress: {total_seen} QAs processed", flush=True)
+                # Checkpoint: per-category breakdown every --checkpoint-every
+                # QAs. Cheap (just aggregates the in-memory results list)
+                # and lets the operator decide to abort early if SH or
+                # Overall is trending wrong. Skip if --checkpoint-every is 0.
+                if args.checkpoint_every and total_seen % args.checkpoint_every == 0:
+                    _print_checkpoint(results + [outcome], total_seen)
         return outcome
 
     async with httpx.AsyncClient(timeout=args.timeout) as client:
@@ -1259,6 +1297,19 @@ def _parse_args() -> argparse.Namespace:
         "--timeout", type=float, default=120.0,
         help="HTTP timeout for Ollama calls in seconds. Default 120 (was 60 — "
              "bumped after observing p95 latency of 52s under concurrency=3).",
+    )
+    p.add_argument(
+        "--checkpoint-every", type=int, default=0,
+        help=(
+            "Print a per-category Judge-score snapshot every N QAs. "
+            "0 (default) disables. Useful for early-abort decisions on "
+            "long full-1540 runs: a value of 100 yields ~15 checkpoints "
+            "and lets you pull the plug if SH or Overall is trending "
+            "wrong. Caveat: QAs come out in conversation order so the "
+            "first N aren't a balanced sample of the whole set — wait "
+            "until at least 40-50%% before reading SH trend with "
+            "confidence."
+        ),
     )
     return p.parse_args()
 
