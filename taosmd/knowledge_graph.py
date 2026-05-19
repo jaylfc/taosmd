@@ -159,8 +159,28 @@ class TemporalKnowledgeGraph:
         source: str = "",
         subject_type: str = "unknown",
         object_type: str = "unknown",
+        strict_vocab: bool = False,
     ) -> str:
-        """Add a relationship triple with temporal validity. Returns triple ID."""
+        """Add a relationship triple with temporal validity. Returns triple ID.
+
+        ``strict_vocab``: when True, the predicate is validated against the
+        closed vocab in :mod:`taosmd.predicate_vocab` and rejected with
+        ``ValueError`` if it isn't a known predicate (post-synonym
+        normalisation). Default False preserves the legacy free-form
+        behaviour; the predicate is still passed through ``normalise`` so
+        synonyms collapse onto their canonical form. A warning is logged
+        if the resulting predicate isn't in the vocab.
+        """
+        from .predicate_vocab import normalise, validate
+        if strict_vocab:
+            predicate = validate(predicate, strict=True)
+        else:
+            # Always normalise (lowercase, underscore, synonym-resolve) so
+            # downstream queries see consistent predicate spellings, even
+            # when the caller used free-form input. Log a warning if the
+            # predicate ends up outside the vocab — visible drift signal.
+            predicate = validate(predicate, strict=False)
+
         sub_id = await self.add_entity(subject, subject_type)
         obj_id = await self.add_entity(obj, object_type)
         now = time.time()
