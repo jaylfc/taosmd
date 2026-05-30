@@ -320,6 +320,9 @@ async def _ingest_conversation(
     vmem: VectorMemory, conv: dict, multi_level: bool = False,
     *, emem_edu: bool = False, emem_edu_extract_model: str = "",
     ollama_url: str = "", http_client: "httpx.AsyncClient | None" = None,
+    emem_edu_pass2_events: bool = False,
+    emem_edu_pass2_model: str = "",
+    kg=None,
 ) -> tuple[int, float, dict[str, dict]]:
     """Ingest conversation turns into vmem.
 
@@ -352,6 +355,9 @@ async def _ingest_conversation(
         return await _ingest_conversation_edus(
             vmem, conv, http_client=http_client, ollama_url=ollama_url,
             extract_model=emem_edu_extract_model,
+            pass2_events=emem_edu_pass2_events,
+            pass2_model=emem_edu_pass2_model or emem_edu_extract_model,
+            kg=kg,
         )
     t0 = time.time()
     added = 0
@@ -434,6 +440,9 @@ async def _ingest_conversation(
 async def _ingest_conversation_edus(
     vmem: VectorMemory, conv: dict, *,
     http_client: httpx.AsyncClient, ollama_url: str, extract_model: str,
+    pass2_events: bool = False,
+    pass2_model: str = "",
+    kg=None,
 ) -> tuple[int, float, dict[str, dict]]:
     """EMem-style EDU ingest path. One LLM call per session.
 
@@ -444,8 +453,18 @@ async def _ingest_conversation_edus(
     metadata covering all turns from all sessions, used for evidence-recall
     bookkeeping (EDUs with multi-turn attribution still resolve dia_ids
     correctly).
+
+    ``pass2_events``: when True (and ``kg`` is provided), each ingested
+    EDU is also lifted into ``{event_type, triples}`` via
+    :func:`taosmd.emem_event_lift.lift_edu_to_triples`. Triples are
+    written to the supplied KG with ``strict_vocab=True`` so any
+    predicate outside ALLOWED_PREDICATES raises rather than silently
+    drifting. Adds one LLM call per EDU (~5-15 s on llama3.1:8b at this
+    tier) so opt-in only — not the validated production recipe.
     """
     from taosmd.emem_edu import extract_session_edus, format_session_for_extraction
+    if pass2_events:
+        from taosmd.emem_event_lift import lift_edu_to_triples
 
     conversation = conv.get("conversation", conv)
     t0 = time.time()
@@ -538,6 +557,39 @@ async def _ingest_conversation_edus(
                 },
             )
             added += 1
+
+            # Pass-2: lift this EDU into typed (s, p, o) triples constrained
+            # by the closed vocab. Writes go straight into the KG with
+            # strict_vocab=True; the lifter has already dropped any
+            # invalid-predicate triples, so a ValueError here is signal of
+            # a genuine bug (e.g. vocab mutation between calls).
+            if pass2_events and kg is not None:
+                lift = await lift_edu_to_triples(
+                    edu_text,
+                    model=pass2_model,
+                    ollama_url=ollama_url,
+                    http_client=http_client,
+                )
+                for triple in lift.get("triples", []):
+                    try:
+                        await kg.add_triple(
+                            subject=triple["subject"],
+                            predicate=triple["predicate"],
+                            obj=triple["object"],
+                            source=f"emem_edu:pass2:{session_key}",
+                            confidence=0.7,
+                            strict_vocab=True,
+                        )
+                    except ValueError as exc:
+                        # strict_vocab rejected — log and move on rather
+                        # than fail the whole bench. Indicates either the
+                        # vocab needs a new predicate or the lifter's own
+                        # vocab filter has a gap.
+                        print(
+                            f"[locomo_runner] pass-2 triple rejected: "
+                            f"{triple!r} ({exc})",
+                            file=sys.stderr,
+                        )
 
     return added, time.time() - t0, turn_index
 
@@ -1199,15 +1251,33 @@ async def run(args: argparse.Namespace) -> int:
                 onnx_path=args.onnx_path,
             )
             await vmem.init(http_client=client)
+            kg = None
+            if args.emem_edu and args.emem_edu_pass2_events:
+                from taosmd.knowledge_graph import TemporalKnowledgeGraph
+                kg = TemporalKnowledgeGraph(db_path=os.path.join(tmp, "kg.db"))
+                await kg.init()
             added, ingest_s, turn_index = await _ingest_conversation(
                 vmem, conv, multi_level=args.multi_level_retrieval,
                 emem_edu=args.emem_edu,
                 emem_edu_extract_model=args.emem_edu_extract_model,
                 ollama_url=args.ollama_url,
                 http_client=client,
+                emem_edu_pass2_events=args.emem_edu_pass2_events,
+                emem_edu_pass2_model=args.emem_edu_pass2_model or args.emem_edu_extract_model,
+                kg=kg,
             )
             unit = "EDUs" if args.emem_edu else "turns"
-            print(f"[{conv_id}] ingested {added} {unit} in {ingest_s:.1f}s", flush=True)
+            if kg is not None:
+                kg_stats = await kg.stats()
+                print(
+                    f"[{conv_id}] ingested {added} {unit} in {ingest_s:.1f}s  "
+                    f"(pass2: {kg_stats['active_triples']} active triples, "
+                    f"{kg_stats['entities']} entities)",
+                    flush=True,
+                )
+                await kg.close()
+            else:
+                print(f"[{conv_id}] ingested {added} {unit} in {ingest_s:.1f}s", flush=True)
 
             # Pick eligible QAs up-front. --per-conv-limit caps QAs per
             # conversation (for balanced sampling); --limit is the global cap.
@@ -1476,6 +1546,21 @@ def _parse_args() -> argparse.Namespace:
                         "filter step at retrieval time. Useful for A/B-ing "
                         "EDU storage alone vs EDU+filter, since the filter "
                         "is one extra LLM call per QA (~5-15s).")
+    p.add_argument("--emem-edu-pass2-events", action="store_true",
+                   help="Pass-2 typed event lift on top of EMem-EDU ingest. "
+                        "After each EDU is stored, makes one LLM call to lift "
+                        "the EDU into (subject, predicate, object) triples "
+                        "constrained by the closed vocab in "
+                        "taosmd.predicate_vocab. Triples land in a per-conv "
+                        "transient KG (kg.db in the tempdir). Opt-in: pass-1 "
+                        "is the validated production recipe for retrieval, "
+                        "pass-2 populates the structured-KG side which "
+                        "LoCoMo doesn't measure but production agents query. "
+                        "Adds ~5-15 s LLM cost per EDU.")
+    p.add_argument("--emem-edu-pass2-model", default="",
+                   help="Model for the pass-2 event lift. Defaults to "
+                        "--emem-edu-extract-model. Set explicitly to use a "
+                        "different model for pass-2 than pass-1 extraction.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
