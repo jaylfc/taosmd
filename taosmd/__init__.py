@@ -18,6 +18,7 @@ from .reflect import InsightStore
 from .pending_decisions import PendingDecisionsStore
 from . import predicate_vocab
 from . import emem_event_lift
+from . import loaders
 from .session_catalog import SessionCatalog
 from .catalog_pipeline import CatalogPipeline
 from .retrieval import retrieve
