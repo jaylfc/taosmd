@@ -842,6 +842,8 @@ async def _process_qa(
     gen_temp: float = 0.2,
     emem_edu_filter: bool = False,
     emem_edu_filter_model: str = "",
+    chain_of_memory: bool = False,
+    com_model: str = "",
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -986,6 +988,25 @@ async def _process_qa(
 
     context = _build_context(hits, context_format=context_format,
                              adjacent_turns_map=adj_map if adj_map else None)
+
+    # Chain-of-Memory (arXiv:2601.14287) — lightweight fragment utilization.
+    # One LLM call reorganises the retrieved context into a reasoning-ordered
+    # inference path and prunes noise, BEFORE the answer prompt. Fail-safe:
+    # on transport/parse failure or an empty result we keep the original
+    # context (never answer on nothing). Opt-in via --chain-of-memory.
+    if chain_of_memory and not full_context and context.strip():
+        from taosmd.chain_of_memory import organize_fragments, fragments_from_context
+        frags = fragments_from_context(context)
+        com_model_resolved = com_model or model
+        organized = await organize_fragments(
+            question, frags,
+            model=com_model_resolved, ollama_url=ollama_url,
+            http_client=client, thinking_mode=thinking_mode,
+        )
+        # Keep originals if CoM failed (None) or judged everything irrelevant
+        # (empty) — answering on an empty context is worse than raw hits.
+        if organized:
+            context = "\n".join(organized)
 
     t1 = time.time()
     try:
@@ -1221,6 +1242,8 @@ async def run(args: argparse.Namespace) -> int:
                     expansion_model=args.expansion_model,
                     emem_edu_filter=(args.emem_edu and not args.emem_edu_no_filter),
                     emem_edu_filter_model=args.emem_edu_filter_model or args.emem_edu_extract_model,
+                    chain_of_memory=args.chain_of_memory,
+                    com_model=args.com_model,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -1561,6 +1584,17 @@ def _parse_args() -> argparse.Namespace:
                    help="Model for the pass-2 event lift. Defaults to "
                         "--emem-edu-extract-model. Set explicitly to use a "
                         "different model for pass-2 than pass-1 extraction.")
+    p.add_argument("--chain-of-memory", action="store_true",
+                   help="Chain-of-Memory (arXiv:2601.14287): after retrieval, "
+                        "one LLM call reorganises the retrieved context into a "
+                        "reasoning-ordered inference path and prunes noise "
+                        "BEFORE the answer prompt. Lightweight utilization "
+                        "instead of heavy construction. EXPERIMENTAL — pending "
+                        "validation. Fail-safe: keeps the raw context on any "
+                        "CoM failure. ~1 extra LLM call per QA.")
+    p.add_argument("--com-model", default="",
+                   help="Model for the Chain-of-Memory organize step. "
+                        "Defaults to the main --model.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
