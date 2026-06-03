@@ -228,7 +228,11 @@ async def _call_ollama_judge(
         reference=record.get("reference", ""),
         predicted=record.get("predicted", ""),
     )
-    payload = {"model": model, "prompt": prompt, "stream": False}
+    # Disable thinking for the rejudge call. Judge replies are a single
+    # GOOD/BAD token; chain-of-thought adds no accuracy but makes thinking
+    # models (e.g. qwen3:4b) ~6x slower per judgment. Ollama ignores "think"
+    # for non-thinking models, so this is safe across judges.
+    payload = {"model": model, "prompt": prompt, "stream": False, "think": False}
     try:
         resp = await client.post(f"{ollama_url}/api/generate", json=payload, timeout=timeout)
         resp.raise_for_status()
