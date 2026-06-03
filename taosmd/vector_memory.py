@@ -281,6 +281,18 @@ class VectorMemory:
             # Dot product = cosine similarity (both normalised)
             similarities = emb_norms @ query_norm
 
+            # Binary/Hamming quantization (opt-in, set via vmem.binary_quant).
+            # Binarise query + docs to sign bits (±1) and score by fraction of
+            # matching bits mapped to [0,1], instead of full-precision cosine.
+            # 32x smaller vectors, integer-friendly distance — an SBC-tier
+            # footprint/speed experiment (adapted from the information-theoretic
+            # binarization in moorcheh/memanto). Feeds the same fusion below.
+            if getattr(self, "binary_quant", False):
+                qb = np.where(query_norm >= 0.0, 1.0, -1.0).astype(np.float32)
+                eb = np.where(emb_norms >= 0.0, 1.0, -1.0).astype(np.float32)
+                dim = qb.shape[0]
+                similarities = ((eb @ qb) / dim + 1.0) / 2.0
+
             if hybrid and keywords and fusion in ("rrf", "bm25_rrf", "bm25_lemma_rrf", "mem0_additive"):
                 rrf_k = 60
                 n = len(ids)

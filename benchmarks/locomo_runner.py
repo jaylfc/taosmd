@@ -844,6 +844,9 @@ async def _process_qa(
     emem_edu_filter_model: str = "",
     chain_of_memory: bool = False,
     com_model: str = "",
+    clag: bool = False,
+    clag_clusters: int = 4,
+    clag_keep: int = 1,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -983,6 +986,19 @@ async def _process_qa(
                 for h in hits:
                     by_text.setdefault(h.get("text", ""), h)
                 hits = [by_text[t] for t in kept if t in by_text]
+
+        # CLAG (arXiv:2603.15421) — cluster-then-retrieve pre-filter. Groups the
+        # candidate hits into semantic clusters and keeps only the cluster(s)
+        # most aligned with the question, pruning plausible-but-irrelevant hits
+        # that disproportionately hurt small models. Runs AFTER rerank/EMem,
+        # BEFORE adjacent-turn injection. Fail-safe: returns hits unchanged on
+        # any error or too-few candidates. Opt-in via --clag. No extra LLM call.
+        if clag and hits:
+            from taosmd.clag import cluster_prefilter
+            hits = await cluster_prefilter(
+                question, hits, vmem,
+                n_clusters=clag_clusters, keep_clusters=clag_keep,
+            )
 
         adj_map = _build_adjacent_map(hits, turn_index, adjacent_turns)
 
@@ -1244,6 +1260,9 @@ async def run(args: argparse.Namespace) -> int:
                     emem_edu_filter_model=args.emem_edu_filter_model or args.emem_edu_extract_model,
                     chain_of_memory=args.chain_of_memory,
                     com_model=args.com_model,
+                    clag=args.clag,
+                    clag_clusters=args.clag_clusters,
+                    clag_keep=args.clag_keep,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -1274,6 +1293,8 @@ async def run(args: argparse.Namespace) -> int:
                 onnx_path=args.onnx_path,
             )
             await vmem.init(http_client=client)
+            # Opt-in binary/Hamming quantization in the vector-search stage.
+            vmem.binary_quant = args.binary_quant
             kg = None
             if args.emem_edu and args.emem_edu_pass2_events:
                 from taosmd.knowledge_graph import TemporalKnowledgeGraph
@@ -1595,6 +1616,24 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--com-model", default="",
                    help="Model for the Chain-of-Memory organize step. "
                         "Defaults to the main --model.")
+    p.add_argument("--clag", action="store_true",
+                   help="CLAG (arXiv:2603.15421): cluster-then-retrieve "
+                        "pre-filter. After retrieval/rerank, cosine k-means "
+                        "clusters the candidate hits and keeps only the "
+                        "cluster(s) most aligned with the question, pruning "
+                        "plausible-but-irrelevant hits that hurt small models. "
+                        "No extra LLM call. EXPERIMENTAL. Fail-safe: keeps all "
+                        "hits on any error.")
+    p.add_argument("--clag-clusters", type=int, default=4,
+                   help="CLAG: number of clusters to form (default 4).")
+    p.add_argument("--clag-keep", type=int, default=1,
+                   help="CLAG: number of top clusters to keep (default 1).")
+    p.add_argument("--binary-quant", action="store_true",
+                   help="Binarise embeddings (sign bits) and rank by Hamming "
+                        "similarity instead of full-precision cosine, in the "
+                        "vector-search stage. 32x smaller vectors, faster on "
+                        "CPU/SBC. EXPERIMENTAL — measures the recall hit vs "
+                        "full precision.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
