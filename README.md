@@ -347,7 +347,7 @@ This is the author's primary deployment and the exact stack the 97.0% benchmark 
 | Component | Model | Purpose | Runtime |
 |-----------|-------|---------|---------|
 | **Embedding** | all-MiniLM-L6-v2 (22M params) | Semantic vector search | ONNX Runtime on ARM CPU (0.3ms/embed) |
-| **Embedding (alt)** | Qwen3-Embedding-0.6B | NPU-accelerated embedding | rkllama on RK3588 NPU |
+| **Embedding (alt)** | embeddinggemma-300M | Higher-quality 768-dim embeddings (vs MiniLM 384-dim) | qmd serve (llama.cpp, CPU) |
 | **Reranker** | Qwen3-Reranker-0.6B | Result reranking | rkllama on RK3588 NPU |
 | **Query Expansion** | qmd-query-expansion 1.7B | Search query enrichment | rkllama on RK3588 NPU |
 | **LLM (extraction + answering)** | Qwen3-4B | Fact extraction (72% recall) + QA from context | rkllama on RK3588 NPU (17s/turn) |
@@ -362,7 +362,7 @@ This is the author's primary deployment and the exact stack the 97.0% benchmark 
 | Model | Size | Source |
 |-------|------|--------|
 | all-MiniLM-L6-v2 ONNX | 90MB | [onnx-models/all-MiniLM-L6-v2-onnx](https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx) |
-| Qwen3-Embedding-0.6B RKLLM | 935MB | Pre-installed with rkllama |
+| embeddinggemma-300M GGUF | ~320MB | Auto-fetched by `qmd` (CPU embedding backend) |
 | Qwen3-Reranker-0.6B RKLLM | 935MB | Pre-installed with rkllama |
 | qmd-query-expansion 1.7B RKLLM | 2.4GB | Custom conversion |
 | Qwen3-4B RKLLM | 4.6GB | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) |
@@ -452,7 +452,7 @@ MIT
 
 | Component | Source | Notes |
 |-----------|--------|-------|
-| QMD (reranking + query expansion) | [jaylfc/qmd](https://github.com/jaylfc/qmd) (fork) | Adds rkllama NPU backend and `qmd serve` mode. Upstream [tobi/qmd](https://github.com/tobi/qmd) doesn't have NPU support yet. |
+| QMD (embedding / reranking / query expansion) | [jaylfc/qmd](https://github.com/jaylfc/qmd) (fork, on npm as `@jaylfc/qmd`) | Tracks upstream [tobi/qmd](https://github.com/tobi/qmd) v2.5.3 and adds a pluggable model backend: `qmd serve` (HTTP model server) plus remote / Ollama-compatible backends (`--server`, `--backend ollama`) so embeddings, reranking and expansion can be served by an Ollama or NPU host. |
 | rkllama (NPU model serving) | [NotPunchnox/rkllama](https://github.com/NotPunchnox/rkllama) | Upstream with minor patches for rerank endpoint |
 | ONNX MiniLM | [onnx-models/all-MiniLM-L6-v2-onnx](https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx) | Standard pre-exported model |
 | Qwen3-4B RKLLM | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) | Community RK3588 conversion |
