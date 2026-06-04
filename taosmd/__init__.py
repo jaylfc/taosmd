@@ -53,6 +53,10 @@ from .agents import (
 )
 from . import prompts
 
+# Install-wide config — the memory/Librarian model is a global setting.
+from . import config
+from .config import get_memory_model, set_memory_model
+
 from importlib.resources import files
 
 
@@ -125,6 +129,9 @@ __all__ = [
     "is_task_enabled",
     "effective_fanout",
     "FANOUT_LEVELS",
+    # Global config — system-wide memory model
+    "get_memory_model",
+    "set_memory_model",
     # Librarian prompts
     "prompts",
 ]
