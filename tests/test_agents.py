@@ -225,7 +225,8 @@ def test_register_seeds_default_librarian(registry):
     registry.register_agent("alice")
     lib = registry.get_librarian("alice")
     assert lib["enabled"] is True
-    assert lib["model"] is None
+    # Model is now a system-wide setting — no per-agent "model" key.
+    assert "model" not in lib
     assert set(lib["tasks"].keys()) == set(LIBRARIAN_TASKS)
     assert all(lib["tasks"].values())
 
@@ -243,12 +244,22 @@ def test_set_librarian_master_switch(registry):
     assert registry.get_librarian("alice")["enabled"] is False
 
 
-def test_set_librarian_model_override_and_clear(registry):
+def test_set_librarian_model_redirects_to_global(registry, tmp_path, monkeypatch):
+    # The per-agent model is deprecated: set_librarian(model=...) now writes
+    # the system-wide config and never stores a per-agent "model" key.
+    import taosmd.config as config
+
+    monkeypatch.setenv("TAOSMD_DATA_DIR", str(tmp_path / "cfg"))
     registry.register_agent("alice")
-    registry.set_librarian("alice", model="ollama:qwen3:4b")
-    assert registry.get_librarian("alice")["model"] == "ollama:qwen3:4b"
-    registry.set_librarian("alice", clear_model=True)
-    assert registry.get_librarian("alice")["model"] is None
+
+    with pytest.warns(DeprecationWarning):
+        registry.set_librarian("alice", model="ollama:qwen3:4b")
+    assert "model" not in registry.get_librarian("alice")
+    assert config.get_memory_model() == "ollama:qwen3:4b"
+
+    with pytest.warns(DeprecationWarning):
+        registry.set_librarian("alice", clear_model=True)
+    assert config.get_memory_model() is None
 
 
 def test_set_librarian_per_task_toggles(registry):

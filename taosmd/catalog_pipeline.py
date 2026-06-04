@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from .agents import run_if_enabled
+from .config import resolve_memory_model
 from .prompts import intake_classification_prompt
 from .session_catalog import SessionCatalog
 from .crystallize import CrystalStore
@@ -163,6 +164,10 @@ class CatalogPipeline:
         sessions_created = split_result.get("sessions_created", 0)
 
         tier, model = await self.detect_best_tier()
+        # The memory model is a system-wide setting. When configured it
+        # overrides the auto-detected model; when unset, the detected model
+        # (prior behaviour) is kept as the fallback.
+        model = resolve_memory_model(model)
 
         # --- Stage 1b: Intake Classification (taxonomy filing) ---
         classify_results = []

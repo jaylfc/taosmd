@@ -82,15 +82,25 @@ def _default_fanout() -> dict:
 
 
 def _default_librarian() -> dict:
+    # The memory/Librarian model used to live here as a per-agent "model"
+    # key; it is now a system-wide setting (see taosmd.config). Records that
+    # still carry a legacy "model" key get it stripped on read (see
+    # _strip_legacy_model), so it disappears on the next write.
     return {
         "enabled": True,
-        # Provider:model string (e.g. "ollama:qwen3:4b") or None to use the
-        # taosmd install default. Per-agent override lives here so a single
-        # install can run different models per agent.
-        "model": None,
         "tasks": {t: True for t in LIBRARIAN_TASKS},
         "fanout": _default_fanout(),
     }
+
+
+def _strip_legacy_model(lib: dict) -> dict:
+    """Drop the deprecated per-agent ``model`` key from a librarian dict.
+
+    Old records persisted ``librarian.model``; the model is now global, so
+    we ignore the stored value on read. Mutates and returns the dict.
+    """
+    lib.pop("model", None)
+    return lib
 
 
 def _ensure_fanout(lib: dict) -> dict:
@@ -135,7 +145,7 @@ class AgentRecord:
             created_at=int(data.get("created_at", 0)),
             last_ingest_at=int(data.get("last_ingest_at", 0)),
             total_chunks=int(data.get("total_chunks", 0)),
-            librarian=_ensure_fanout(raw_lib),
+            librarian=_strip_legacy_model(_ensure_fanout(raw_lib)),
         )
 
 
@@ -289,7 +299,7 @@ class AgentRegistry:
         """
         agent = self.get_agent(name)
         lib = agent.get("librarian") or _default_librarian()
-        return _ensure_fanout(lib)
+        return _strip_legacy_model(_ensure_fanout(lib))
 
     def set_librarian(
         self,
@@ -306,8 +316,10 @@ class AgentRegistry:
 
         - ``enabled``: master on/off switch. When False, every LLM
           enrichment task is skipped regardless of per-task settings.
-        - ``model``: provider:model override (e.g. "ollama:qwen3:4b").
-          Pass ``clear_model=True`` to revert to the install default.
+        - ``model`` / ``clear_model``: **deprecated**. The memory model is
+          now a system-wide setting; passing either redirects to
+          :func:`taosmd.set_memory_model` and emits a ``DeprecationWarning``.
+          Nothing is stored on the agent.
         - ``tasks``: dict of per-task switches. Keys must come from
           :data:`LIBRARIAN_TASKS`. Unknown keys raise ValueError.
         - ``fanout``: fan-out level — one of ``off | low | med | high``.
@@ -322,6 +334,21 @@ class AgentRegistry:
                     f"unknown librarian task(s): {sorted(unknown)}. "
                     f"Valid tasks: {LIBRARIAN_TASKS}"
                 )
+
+        # Deprecated per-agent model shim: redirect to the global setting.
+        # The model is no longer stored on the agent record.
+        if clear_model or model is not None:
+            import warnings  # noqa: PLC0415
+            from . import config as _config  # noqa: PLC0415
+
+            warnings.warn(
+                "per-agent librarian model is deprecated; the memory model "
+                "is now global — use taosmd.set_memory_model()",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            _config.set_memory_model(model or "", clear=clear_model)
+
         if fanout is not None and fanout not in FANOUT_LEVELS:
             raise ValueError(
                 f"unknown fanout level {fanout!r}. "
@@ -332,13 +359,9 @@ class AgentRegistry:
         for a in data["agents"]:
             if a["name"] == name:
                 lib = a.get("librarian") or _default_librarian()
-                lib = _ensure_fanout(lib)
+                lib = _strip_legacy_model(_ensure_fanout(lib))
                 if enabled is not None:
                     lib["enabled"] = bool(enabled)
-                if clear_model:
-                    lib["model"] = None
-                elif model is not None:
-                    lib["model"] = model
                 if tasks is not None:
                     # Preserve unset tasks; only patch the keys provided.
                     lib_tasks = lib.get("tasks") or {t: True for t in LIBRARIAN_TASKS}

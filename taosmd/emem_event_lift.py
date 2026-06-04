@@ -110,7 +110,7 @@ def _system_prompt() -> str:
 async def lift_edu_to_triples(
     edu_text: str,
     *,
-    model: str,
+    model: str | None = None,
     ollama_url: str,
     http_client: httpx.AsyncClient,
     timeout: float = 120.0,
@@ -128,7 +128,16 @@ async def lift_edu_to_triples(
     Returns ``{"event_type": "none", "triples": []}`` on transport / JSON
     error — caller can treat empty as "nothing extracted" without needing
     to differentiate "nothing there" from "extractor failed".
+
+    ``model`` is a ``provider:model`` (or bare model) string. When omitted
+    it resolves to the system-wide memory model (see :mod:`taosmd.config`),
+    falling back to ``llama3.1:8b`` — the prior pass-2 default — when no
+    global is configured.
     """
+    if not model:
+        from .config import resolve_memory_model  # noqa: PLC0415
+
+        model = resolve_memory_model("llama3.1:8b")
     messages = [
         {"role": "system", "content": _system_prompt()},
         {"role": "user", "content": _ONESHOT_INPUT},
@@ -165,7 +174,7 @@ async def lift_edu_to_triples(
 async def lift_edus_to_events(
     edus: list[dict],
     *,
-    model: str,
+    model: str | None = None,
     ollama_url: str,
     http_client: httpx.AsyncClient,
     timeout: float = 120.0,

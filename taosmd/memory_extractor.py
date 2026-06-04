@@ -246,10 +246,19 @@ async def process_conversation_turn(
         )
         use_llm = False
     if use_llm and llm_url and http_client:
+        # The memory model is a system-wide setting. When the caller didn't
+        # pin a model (unset or the literal "default" sentinel), defer to the
+        # global config; if that's also unset, fall back to the prior
+        # "default" behaviour so standalone installs are unchanged.
+        from .config import get_memory_model  # noqa: PLC0415
+
+        resolved_model = extraction_model
+        if not resolved_model or resolved_model == "default":
+            resolved_model = get_memory_model() or "default"
         facts = await extract_facts_with_llm(
             text, llm_url, http_client,
             agent_name=agent_name or "default",
-            model=extraction_model,
+            model=resolved_model,
         )
         if facts:
             method = "llm"

@@ -73,10 +73,8 @@ def _librarian_show(registry: AgentRegistry, name: str, json_out: bool) -> int:
         print(json.dumps(lib, indent=2))
         return 0
     enabled = "ON" if lib.get("enabled", True) else "OFF"
-    model = lib.get("model") or "(install default)"
     print(f"Agent:      {name}")
     print(f"Librarian:  {enabled}")
-    print(f"Model:      {model}")
     print("Tasks:")
     tasks = lib.get("tasks", {})
     for t in LIBRARIAN_TASKS:
@@ -89,8 +87,6 @@ def _librarian_set(
     registry: AgentRegistry,
     name: str,
     enabled: bool | None,
-    model: str | None,
-    clear_model: bool,
     enable_tasks: list[str],
     disable_tasks: list[str],
     fanout: str | None = None,
@@ -105,9 +101,7 @@ def _librarian_set(
         lib = registry.set_librarian(
             name,
             enabled=enabled,
-            model=model,
             tasks=tasks or None,
-            clear_model=clear_model,
             fanout=fanout,
             fanout_auto_scale=fanout_auto_scale,
         )
@@ -118,6 +112,32 @@ def _librarian_set(
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(lib, indent=2))
+    return 0
+
+
+def _memory_model_get() -> int:
+    from . import config  # noqa: PLC0415
+
+    model = config.get_memory_model()
+    print(model if model else "(default)")
+    return 0
+
+
+def _memory_model_set(model: str | None, clear: bool) -> int:
+    from . import config  # noqa: PLC0415
+
+    if not clear and not model:
+        print("error: provide --model <provider:model> or --clear", file=sys.stderr)
+        return 2
+    try:
+        config.set_memory_model(model or "", clear=clear)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if clear:
+        print("Memory model cleared (using default).")
+    else:
+        print(f"Memory model set: {model}")
     return 0
 
 
@@ -347,14 +367,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Master switch OFF (only verbatim archive + vector + keyword)",
     )
     set_p.add_argument(
-        "--model", default=None,
-        help="provider:model override (e.g. ollama:qwen3:4b)",
-    )
-    set_p.add_argument(
-        "--clear-model", action="store_true",
-        help="Revert to the install default model",
-    )
-    set_p.add_argument(
         "--enable", action="append", default=[], metavar="TASK",
         help=f"Enable a specific task. Repeat for multiple. Tasks: {', '.join(LIBRARIAN_TASKS)}",
     )
@@ -382,6 +394,25 @@ def main(argv: list[str] | None = None) -> int:
             "Auto-scale fanout tier on workers with GPU + TurboQuant + ≥12 GB VRAM. "
             "When on, low→med and med→high automatically on capable workers."
         ),
+    )
+
+    # ----- memory-model subcommand (system-wide model) ------------------
+    mm_p = sub.add_parser(
+        "memory-model",
+        help="Get/set the system-wide memory (Librarian) model",
+    )
+    mm_sub = mm_p.add_subparsers(dest="memory_model_cmd", required=True)
+
+    mm_sub.add_parser("get", help="Print the current memory model (or '(default)')")
+
+    mm_set_p = mm_sub.add_parser("set", help="Set or clear the memory model")
+    mm_set_p.add_argument(
+        "--model", default=None,
+        help="provider:model string (e.g. ollama:qwen3:4b)",
+    )
+    mm_set_p.add_argument(
+        "--clear", action="store_true",
+        help="Unset the memory model (revert to default)",
     )
 
     # ----- review subcommand (pending-decisions queue) -------------------
@@ -453,13 +484,17 @@ def main(argv: list[str] | None = None) -> int:
                 registry,
                 args.name,
                 enabled,
-                args.model,
-                args.clear_model,
                 args.enable,
                 args.disable,
                 fanout=args.fanout,
                 fanout_auto_scale=fanout_auto_scale,
             )
+
+    if args.cmd == "memory-model":
+        if args.memory_model_cmd == "get":
+            return _memory_model_get()
+        if args.memory_model_cmd == "set":
+            return _memory_model_set(args.model, args.clear)
 
     parser.print_help()
     return 1
