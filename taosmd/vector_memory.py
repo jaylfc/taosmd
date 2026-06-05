@@ -7,6 +7,7 @@ Vectors stored in SQLite for persistence — no external vector DB needed.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import math
@@ -38,6 +39,19 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def pack_sign_bits(embedding: list[float]) -> str:
+    """Pack an embedding into a base64 string of sign bits (1 bit/dim).
+
+    Each dimension becomes a single bit (1 if >= 0, else 0), so a 768-dim
+    float32 vector (3072 bytes) stores as 96 bytes — the 32x footprint of the
+    binary-quant path. Decode + score with :func:`hamming_similarity`.
+    """
+    import numpy as np
+
+    bits = np.packbits(np.asarray(embedding, dtype=np.float32) >= 0.0)
+    return base64.b64encode(bits.tobytes()).decode("ascii")
+
+
 class VectorMemory:
     """SQLite-backed vector store with pluggable embeddings.
 
@@ -62,8 +76,11 @@ class VectorMemory:
         self._onnx_path = onnx_path
         # Score retrieval by sign-bit Hamming similarity instead of full-precision
         # cosine. Off by default — opt-in footprint/speed option for memory- or
-        # CPU-constrained (SBC) deployments. Recall-neutral on LoCoMo-1540
-        # (see docs/benchmarks.md). Public attribute: read/set after construction.
+        # CPU-constrained (SBC) deployments: vectors are stored as packed sign
+        # bits (1 bit/dim, 32x smaller) and scored by XOR+popcount. Recall-neutral
+        # on LoCoMo-1540 (see docs/benchmarks.md). Must be fixed for a store's
+        # lifetime — a binary-quant store persists bit blobs, not float vectors,
+        # so you cannot flip an existing DB between modes.
         self.binary_quant = binary_quant
         self._conn: sqlite3.Connection | None = None
         self._http = None
@@ -200,10 +217,16 @@ class VectorMemory:
         if not embedding:
             return -1
 
+        # In binary-quant mode store only the packed sign bits (1 bit/dim, 32x
+        # smaller) — the full-precision floats are intentionally discarded, that
+        # footprint saving is the point of the mode. Cosine mode stores the
+        # float vector as JSON as before.
+        embedding_text = pack_sign_bits(embedding) if self.binary_quant else json.dumps(embedding)
+
         now = time.time()
         cursor = self._conn.execute(
             "INSERT INTO vector_memory (text, embedding, metadata_json, created_at) VALUES (?, ?, ?, ?)",
-            (text, json.dumps(embedding), json.dumps(metadata or {}), now),
+            (text, embedding_text, json.dumps(metadata or {}), now),
         )
         self._conn.commit()
         return cursor.lastrowid
@@ -257,7 +280,8 @@ class VectorMemory:
         try:
             import numpy as np
 
-            # Parse all embeddings into a matrix
+            # Parse all stored embeddings. In binary-quant mode the column holds
+            # base64 packed sign bits; in cosine mode it holds a JSON float list.
             ids = []
             texts = []
             metas = []
@@ -265,39 +289,41 @@ class VectorMemory:
             emb_list = []
             for row in rows:
                 try:
-                    emb = json.loads(row["embedding"])
+                    raw = row["embedding"]
+                    emb = base64.b64decode(raw) if self.binary_quant else json.loads(raw)
                     if emb:
                         ids.append(row["id"])
                         texts.append(row["text"])
                         metas.append(row["metadata_json"])
                         created.append(row["created_at"])
                         emb_list.append(emb)
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError, ValueError, base64.binascii.Error):
                     continue
 
             if not emb_list:
                 return []
 
-            # Batch cosine similarity with numpy
-            query_vec = np.array(query_emb, dtype=np.float32)
-            emb_matrix = np.array(emb_list, dtype=np.float32)
-            # Normalise
-            query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
-            emb_norms = emb_matrix / (np.linalg.norm(emb_matrix, axis=1, keepdims=True) + 1e-8)
-            # Dot product = cosine similarity (both normalised)
-            similarities = emb_norms @ query_norm
-
-            # Optional binary/Hamming quantization (off by default — set
-            # binary_quant=True). Binarise query + docs to sign bits (±1) and
-            # score by the fraction of matching bits mapped to [0,1], instead of
-            # full-precision cosine. 32x smaller vectors and integer-friendly
-            # distance for SBC/CPU-constrained tiers; recall-neutral on
-            # LoCoMo-1540 (see docs/benchmarks.md). Feeds the same fusion below.
             if self.binary_quant:
-                qb = np.where(query_norm >= 0.0, 1.0, -1.0).astype(np.float32)
-                eb = np.where(emb_norms >= 0.0, 1.0, -1.0).astype(np.float32)
-                dim = qb.shape[0]
-                similarities = ((eb @ qb) / dim + 1.0) / 2.0
+                # Hamming similarity over packed sign bits. similarity =
+                # 1 - popcount(query_bits XOR doc_bits) / dim, which is bit-for-bit
+                # identical to the sign-agreement score ((eb·qb)/dim + 1)/2 the
+                # recall-neutral LoCoMo-1540 result was measured on — packing only
+                # changes storage/speed, not ranking (see docs/benchmarks.md).
+                dim = len(query_emb)
+                query_bits = np.packbits(np.asarray(query_emb, dtype=np.float32) >= 0.0)
+                doc_bits = np.frombuffer(b"".join(emb_list), dtype=np.uint8).reshape(len(emb_list), -1)
+                xor = np.bitwise_xor(doc_bits, query_bits[None, :])
+                hamming = np.unpackbits(xor, axis=1).sum(axis=1).astype(np.float32)
+                similarities = 1.0 - hamming / dim
+            else:
+                # Batch cosine similarity with numpy
+                query_vec = np.array(query_emb, dtype=np.float32)
+                emb_matrix = np.array(emb_list, dtype=np.float32)
+                # Normalise
+                query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-8)
+                emb_norms = emb_matrix / (np.linalg.norm(emb_matrix, axis=1, keepdims=True) + 1e-8)
+                # Dot product = cosine similarity (both normalised)
+                similarities = emb_norms @ query_norm
 
             if hybrid and keywords and fusion in ("rrf", "bm25_rrf", "bm25_lemma_rrf", "mem0_additive"):
                 rrf_k = 60
@@ -402,7 +428,11 @@ class VectorMemory:
                 for i in top_indices
             ]
         except ImportError:
-            # Fallback to Python loop if numpy not available
+            # Fallback to Python loop if numpy not available. Binary-quant needs
+            # numpy (packbits/popcount) and stores non-JSON bit blobs, so it has
+            # no meaningful pure-Python path.
+            if self.binary_quant:
+                raise RuntimeError("binary_quant=True requires numpy for packed-bit search")
             scored = []
             for row in rows:
                 try:
