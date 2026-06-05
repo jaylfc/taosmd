@@ -842,6 +842,7 @@ async def _process_qa(
     gen_temp: float = 0.2,
     emem_edu_filter: bool = False,
     emem_edu_filter_model: str = "",
+    inline_judge: bool = True,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -1058,7 +1059,13 @@ async def _process_qa(
         predicted = f"[generation_error: {exc}]"
     gen_ms = (time.time() - t1) * 1000.0
 
-    judge = await _judge(client, gen_url, model, question, reference, predicted, backend=llm_backend)
+    # Inline self-judge (generator judges its own answer). Off when --no-inline-judge:
+    # it's a full extra generation per QA, and our verdicts come from the external
+    # dual-judge rescore (locomo_rescore.py), so for probe runs it's wasted cost.
+    judge = (
+        await _judge(client, gen_url, model, question, reference, predicted, backend=llm_backend)
+        if inline_judge else 0.0
+    )
 
     return {
         "conversation_id": conv_id,
@@ -1221,6 +1228,7 @@ async def run(args: argparse.Namespace) -> int:
                     expansion_model=args.expansion_model,
                     emem_edu_filter=(args.emem_edu and not args.emem_edu_no_filter),
                     emem_edu_filter_model=args.emem_edu_filter_model or args.emem_edu_extract_model,
+                    inline_judge=not args.no_inline_judge,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -1586,6 +1594,15 @@ def _parse_args() -> argparse.Namespace:
             "first N aren't a balanced sample of the whole set — wait "
             "until at least 40-50%% before reading SH trend with "
             "confidence."
+        ),
+    )
+    p.add_argument(
+        "--no-inline-judge", action="store_true",
+        help=(
+            "Skip the inline self-judge (generator judging its own answer) — a "
+            "full extra generation per QA. Verdicts come from the external "
+            "dual-judge rescore (locomo_rescore.py) anyway, so this ~halves "
+            "probe run time. Inline 'judge' field is recorded as 0.0."
         ),
     )
     p.add_argument(
