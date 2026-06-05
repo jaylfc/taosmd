@@ -53,12 +53,18 @@ class VectorMemory:
         embed_mode: str = "qmd",  # "qmd", "local", or "onnx"
         local_model: str = "all-MiniLM-L6-v2",
         onnx_path: str = "",
+        binary_quant: bool = False,
     ):
         self._db_path = str(db_path)
         self._qmd_url = qmd_url
         self._embed_mode = embed_mode
         self._local_model_name = local_model
         self._onnx_path = onnx_path
+        # Score retrieval by sign-bit Hamming similarity instead of full-precision
+        # cosine. Off by default — opt-in footprint/speed option for memory- or
+        # CPU-constrained (SBC) deployments. Recall-neutral on LoCoMo-1540
+        # (see docs/benchmarks.md). Public attribute: read/set after construction.
+        self.binary_quant = binary_quant
         self._conn: sqlite3.Connection | None = None
         self._http = None
         self._local_model = None
@@ -280,6 +286,18 @@ class VectorMemory:
             emb_norms = emb_matrix / (np.linalg.norm(emb_matrix, axis=1, keepdims=True) + 1e-8)
             # Dot product = cosine similarity (both normalised)
             similarities = emb_norms @ query_norm
+
+            # Optional binary/Hamming quantization (off by default — set
+            # binary_quant=True). Binarise query + docs to sign bits (±1) and
+            # score by the fraction of matching bits mapped to [0,1], instead of
+            # full-precision cosine. 32x smaller vectors and integer-friendly
+            # distance for SBC/CPU-constrained tiers; recall-neutral on
+            # LoCoMo-1540 (see docs/benchmarks.md). Feeds the same fusion below.
+            if self.binary_quant:
+                qb = np.where(query_norm >= 0.0, 1.0, -1.0).astype(np.float32)
+                eb = np.where(emb_norms >= 0.0, 1.0, -1.0).astype(np.float32)
+                dim = qb.shape[0]
+                similarities = ((eb @ qb) / dim + 1.0) / 2.0
 
             if hybrid and keywords and fusion in ("rrf", "bm25_rrf", "bm25_lemma_rrf", "mem0_additive"):
                 rrf_k = 60

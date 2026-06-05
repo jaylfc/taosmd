@@ -293,6 +293,21 @@ hits = await retrieve(
 # when the hit lacks the configured position/group keys).
 ```
 
+### Binary embedding quantization (opt-in, for SBC / low-memory tiers)
+
+Score retrieval by sign-bit Hamming similarity instead of full-precision cosine. Each vector collapses to **1 bit per dimension (32× smaller)** with integer-friendly distance — a footprint and CPU-speed win for memory-constrained or SBC deployments. It's **recall-neutral**: −0.001 / +0.005 across both judges on the full 1540-QA LoCoMo set (see [docs/benchmarks.md](docs/benchmarks.md)). Off by default; standalone behaviour is unchanged unless you enable it.
+
+```python
+from taosmd import VectorMemory
+
+# Default is full-precision cosine; opt in per store.
+vmem = VectorMemory("data/vectors.db", binary_quant=True)
+await vmem.init()
+# vmem.binary_quant can also be toggled after construction.
+```
+
+Use it when the vector-store footprint or CPU distance cost is your binding constraint rather than recall — e.g. an Orange Pi / Rock 5 holding a large memory. Keep it off on a GPU box where full-precision cosine is effectively free.
+
 ## Key Features
 
 - **97.0% end-to-end Judge accuracy** on LongMemEval-S benchmark (SOTA)

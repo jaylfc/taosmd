@@ -103,6 +103,31 @@ Running these as cells against the same external `qwen3:4b` judge gives the leve
 
 Lesson: HyDE assumes the generator can imagine a good hypothetical answer; on memory-recall datasets a small generator hallucinates the answer's structure, the embedding lookup matches that hallucination, and recall collapses. Few-shot exemplars compete for context budget without adding retrieval signal — and the same effect persists when stacked: `few_shot_full_stack` (leader recipe + 5 exemplars) lands at 0.540, -0.017 vs the 0.557 leader. The same few-shot regression appears at the Pi NPU tier (-0.11 vs the Pi full-stack leader of 0.49) — direction-consistent across model sizes. Thinking-mode (qwen3 chain-of-thought ON, 200-QA subset) collapses to 0.20 — the model emits CoT that drifts off the retrieved context or fails to commit within the budget; **don't enable `--thinking-mode` on memory-recall benchmarks for this generator**. Generator-side bumps (35B-A3B via TurboQuant — `docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) are the next planned lever, since retrieval-side levers have plateaued.
 
+### Binary embedding quantization — recall-neutral, ships as an SBC footprint option
+
+Binary (sign-bit / Hamming) quantization replaces full-precision cosine with a 1-bit-per-dimension score: binarise the query and each stored vector to ±1 and rank by the fraction of matching bits. We A/B'd it against the leader vector-only recipe on the **full 1540-QA** LoCoMo set, dual-judge (`qwen3:4b` strict + `gemma4:e2b` lenient):
+
+| Scoring | qwen3:4b strict | gemma4:e2b lenient |
+|---|---|---|
+| full-precision cosine (baseline) | 0.520 | 0.694 |
+| **binary-quant** | 0.519 (**−0.001**) | 0.699 (**+0.005**) |
+
+Per-category deltas stay inside ±0.04 on both judges (Multi-hop / Temporal / Open / Single-hop) — within run-to-run noise. **Verdict: recall-neutral.** The value isn't quality — it's footprint and speed: **32× smaller vectors** (1 bit vs 32-bit float per dimension) and integer-friendly distance, which matters on memory- and CPU-constrained SBC deployments.
+
+Shipped as an **opt-in, default-off** option — `VectorMemory(binary_quant=True)` (benchmark flag: `--binary-quant`). Standalone behaviour is unchanged unless you turn it on; recommended for the SBC / low-memory tier where the vector-store footprint or CPU distance cost is the binding constraint, not recall.
+
+### CLAG cluster pre-filter — negative at our tier, not shipped
+
+CLAG (cluster-then-retrieve: cosine k-means over the candidate pool, keep only the query's nearest cluster(s) before ranking) is a frontier idea aimed at small-model latency. On the 200-QA subset, every variant regressed:
+
+| Variant | qwen3:4b Δ | gemma4:e2b Δ |
+|---|---|---|
+| keep nearest 1 cluster | −0.205 | −0.285 |
+| keep nearest 2 clusters | −0.085 | −0.090 |
+| 1-of-6 clusters | −0.150 | −0.245 |
+
+The keep-sweep is monotonic — relaxing the pruning moves *toward* baseline but never beats it, so cluster pruning only ever discards relevant evidence. Worst on Multi-hop + Temporal, where the evidence for one answer is spread across clusters. Same pattern as HyDE / Chain-of-Memory / thinking-mode: a lever tuned for frontier models that regresses at our compute tier. **Not shipped.** (Benchmark-only `--clag` flag retained for reproduction.)
+
 ### Architecture matters more at smaller compute tiers
 
 The same retrieval improvement, applied to two generators on identical hardware-class infrastructure, can lift the smaller-model tier by an order of magnitude more than the larger-model tier:
