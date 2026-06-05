@@ -312,11 +312,11 @@ Use it when the vector-store footprint or CPU distance cost is your binding cons
 
 - **97.0% end-to-end Judge accuracy** on LongMemEval-S benchmark (SOTA)
 - **Zero cloud dependencies** — runs entirely on local hardware
-- **Framework-agnostic** — HTTP API works with any agent framework
+- **Framework-agnostic** — Python API + CLI work with any agent framework (MCP and local HTTP API in progress)
 - **Hybrid search** — semantic similarity + keyword overlap boosting
 - **Temporal facts** — validity windows, point-in-time queries
-- **Contradiction detection** — auto-resolve conflicting facts
-- **Zero-loss archive** — append-only, never modified, gzip compressed
+- **Contradiction detection** — corrected facts supersede the old value; recall returns only the active fact, so corrections stop resurfacing
+- **Zero-loss archive** — append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
 - **Intent-aware retrieval** — routes queries to optimal memory layer
 - **0.3ms embeddings** — ONNX Runtime on CPU (ARM or x86)
 - **Opt-in user tracking** — browsing history, app usage, search queries
