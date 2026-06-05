@@ -1249,6 +1249,7 @@ async def run(args: argparse.Namespace) -> int:
                 qmd_url=args.qmd_url,
                 embed_mode=args.embed_mode,
                 onnx_path=args.onnx_path,
+                binary_quant=args.binary_quant,
             )
             await vmem.init(http_client=client)
             kg = None
@@ -1585,6 +1586,15 @@ def _parse_args() -> argparse.Namespace:
             "first N aren't a balanced sample of the whole set — wait "
             "until at least 40-50%% before reading SH trend with "
             "confidence."
+        ),
+    )
+    p.add_argument(
+        "--binary-quant", action="store_true",
+        help=(
+            "Score first-stage vector retrieval by sign-bit Hamming similarity "
+            "instead of full-precision cosine (VectorMemory.binary_quant). "
+            "Recall-neutral footprint/speed option; combine with a wide "
+            "--retrieval-top-k + --reranker for coarse-to-fine retrieval."
         ),
     )
     return p.parse_args()

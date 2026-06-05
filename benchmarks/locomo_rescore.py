@@ -228,6 +228,13 @@ async def _call_ollama_judge(
         reference=record.get("reference", ""),
         predicted=record.get("predicted", ""),
     )
+    # Disable thinking for the rejudge call — judge replies are a single
+    # GOOD/BAD verdict, so chain-of-thought only adds latency (~6x on qwen3:4b).
+    # NOTE: qwen3:4b/1.7b treat Ollama's think=false as INVERTED/unreliable
+    # (see locomo_runner._generate notes); the proven switch is Qwen3's
+    # "/no_think" soft prefix prepended to the prompt — exactly what the runner
+    # uses via --no-think-prefix. Harmless for non-thinking judges (gemma4:e2b).
+    prompt = "/no_think\n\n" + prompt
     payload = {"model": model, "prompt": prompt, "stream": False}
     try:
         resp = await client.post(f"{ollama_url}/api/generate", json=payload, timeout=timeout)
