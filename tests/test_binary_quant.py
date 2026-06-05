@@ -19,6 +19,7 @@ def _deterministic_embedder(vmem: VectorMemory) -> None:
     """Patch embed() with a deterministic 16-dim hash vector (no ONNX/QMD)."""
 
     async def _fake_embed(text: str, task: str = "search_document") -> list[float]:
+        """Deterministic 16-dim hash vector centred on 0 (so sign bits vary)."""
         h = hash(text) & 0xFFFFFFFFFFFFFFFF
         return [((h >> (i * 3)) & 0xFF) / 255.0 - 0.5 for i in range(16)]
 
@@ -26,6 +27,7 @@ def _deterministic_embedder(vmem: VectorMemory) -> None:
 
 
 def _make_store(tmp_path, *, binary_quant: bool) -> VectorMemory:
+    """Init a VectorMemory with a deterministic embedder and the given mode."""
     vmem = VectorMemory(
         db_path=str(tmp_path / "vec.db"),
         embed_mode="onnx",  # falls through; we patch embed() directly
@@ -37,11 +39,13 @@ def _make_store(tmp_path, *, binary_quant: bool) -> VectorMemory:
 
 
 def test_binary_quant_defaults_off(tmp_path):
+    """binary_quant is opt-in: default construction leaves it disabled."""
     vmem = VectorMemory(db_path=str(tmp_path / "vec.db"))
     assert vmem.binary_quant is False
 
 
 def test_binary_quant_is_constructor_settable(tmp_path):
+    """The constructor flag enables binary-quant mode."""
     vmem = VectorMemory(db_path=str(tmp_path / "vec.db"), binary_quant=True)
     assert vmem.binary_quant is True
 
@@ -61,6 +65,34 @@ def test_binary_quant_search_returns_bounded_scores(tmp_path):
         assert hits[0]["text"] == "the cat sat on the mat"
     finally:
         asyncio.run(vmem.close())
+
+
+def test_binary_quant_stores_packed_bits(tmp_path):
+    """The footprint claim must be real: a binq store persists ~1 bit/dim, not floats."""
+    import sqlite3
+
+    cos = _make_store(tmp_path / "cos", binary_quant=False)
+    binq = _make_store(tmp_path / "binq", binary_quant=True)
+    text = "the quick brown fox jumps over the lazy dog"
+    try:
+        asyncio.run(cos.add(text))
+        asyncio.run(binq.add(text))
+    finally:
+        asyncio.run(cos.close())
+        asyncio.run(binq.close())
+
+    def _stored_len(db):
+        con = sqlite3.connect(db)
+        try:
+            return len(con.execute("SELECT embedding FROM vector_memory LIMIT 1").fetchone()[0])
+        finally:
+            con.close()
+
+    cos_len = _stored_len(tmp_path / "cos" / "vec.db")
+    binq_len = _stored_len(tmp_path / "binq" / "vec.db")
+    # 16-dim embedder → 2 packed bytes, base64-encoded to 4 chars. The JSON float
+    # list is far larger. Assert a real, large reduction (not a no-op).
+    assert binq_len < cos_len / 4, f"binq stored {binq_len}B vs cosine {cos_len}B — not packed"
 
 
 def test_binary_quant_matches_cosine_top_rank(tmp_path):
