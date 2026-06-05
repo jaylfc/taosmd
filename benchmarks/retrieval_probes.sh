@@ -61,9 +61,14 @@ run () {  # name  extra-args...
 
 echo "RETRIEVAL PROBE CHAIN start ${TS}" | tee -a "$LOG"
 
+# baseline keeps 20 cosine hits (no reranker -> --top-k nominal). Rerank probes
+# fetch a wide 50-pool and NARROW to 20 (--top-k 20) so context size matches
+# baseline exactly and we isolate the cross-encoder's selection quality. Without
+# the narrowing the full 50-pool flowed into adjacency (~250 turns) and drowned
+# the generator (the v2 rerank_only=0.295 collapse was this bug, not a verdict).
 run baseline    --model qwen3.5:9b --retrieval-top-k 20
-run rerank_only --model qwen3.5:9b --retrieval-top-k 50 --reranker bge-v2-m3
-run binq_rerank --model qwen3.5:9b --retrieval-top-k 50 --reranker bge-v2-m3 --binary-quant
+run rerank_only --model qwen3.5:9b --retrieval-top-k 50 --top-k 20 --reranker bge-v2-m3
+run binq_rerank --model qwen3.5:9b --retrieval-top-k 50 --top-k 20 --reranker bge-v2-m3 --binary-quant
 run bm25_lemma  --model qwen3.5:9b --retrieval-top-k 20 --fusion bm25_lemma_rrf
 run gen_35b     --model qwen3.6:35b-a3b-q4_K_M --retrieval-top-k 20
 

@@ -790,16 +790,23 @@ async def _retrieve(
     top_k: int,
     reranker: object | None = None,
     fusion: str = "boost",
+    rerank_top_k: int | None = None,
 ) -> list[dict]:
     if strategy == "vector-only":
         # fusion: "boost" (default, legacy additive keyword boost) | "rrf"
         # (Reciprocal Rank Fusion across semantic + keyword) | "none" (pure
         # semantic cosine). The fusion logic lives in VectorMemory.search.
+        #
+        # Coarse-to-fine: ``top_k`` is the candidate POOL fetched from vector
+        # search; when a cross-encoder reranker is present it re-scores that
+        # pool and NARROWS to ``rerank_top_k`` (the final context size). Without
+        # this narrowing the full pool flows into adjacency injection, bloating
+        # the generator context — so rerank_top_k must be set when reranking.
         raw = await vmem.search(query, limit=top_k, fusion=fusion)
         hits = [{"text": r["text"], "metadata": r.get("metadata", {}),
                  "score": r.get("similarity", 0.0)} for r in raw]
         if reranker is not None and getattr(reranker, "available", False):
-            hits = reranker.rerank(query, hits, top_k)
+            hits = reranker.rerank(query, hits, rerank_top_k or top_k)
         return hits
     # TODO: wire cross-encoder reranker for strategy="full"; for now reuse retrieve() with vector source only.
     hits = await retrieve(query, strategy="thorough", sources={"vector": vmem},
@@ -930,7 +937,7 @@ async def _process_qa(
             seen_texts: set[str] = set()
             all_hits: list[dict] = []
             for sq in sub_queries:
-                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker, fusion=fusion)
+                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker, fusion=fusion, rerank_top_k=top_k)
                 for h in sq_hits:
                     t = h.get("text", "")
                     if t not in seen_texts:
@@ -939,7 +946,7 @@ async def _process_qa(
             # Cap at retrieval_top_k, preserving order
             hits = all_hits[:retrieval_top_k]
         else:
-            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion)
+            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion, rerank_top_k=top_k)
 
         # Optional LLM listwise rerank — runs AFTER the cross-encoder narrows.
         # Single LLM call per QA scores all candidates as a list, returns
