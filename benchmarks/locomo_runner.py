@@ -1265,6 +1265,7 @@ async def run(args: argparse.Namespace) -> int:
                 embed_mode=args.embed_mode,
                 onnx_path=args.onnx_path,
                 binary_quant=args.binary_quant,
+                late_interaction=args.late_interaction,
             )
             await vmem.init(http_client=client)
             kg = None
@@ -1619,6 +1620,13 @@ def _parse_args() -> argparse.Namespace:
             "instead of full-precision cosine (VectorMemory.binary_quant). "
             "Recall-neutral footprint/speed option; combine with a wide "
             "--retrieval-top-k + --reranker for coarse-to-fine retrieval."
+        ),
+    )
+    p.add_argument(
+        "--late-interaction", action="store_true",
+        help=(
+            "Score retrieval by MiniLM token-level MaxSim (ColBERT-style late "
+            "interaction) instead of pooled cosine. Experimental, opt-in."
         ),
     )
     return p.parse_args()
