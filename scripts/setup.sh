@@ -3,7 +3,7 @@ set -e
 
 echo "================================"
 echo "  taOSmd Setup"
-echo "  97.2% Recall@5 on LongMemEval"
+echo "  97.0% end-to-end Judge accuracy on LongMemEval-S"
 echo "================================"
 echo ""
 
@@ -15,6 +15,10 @@ case "$ARCH" in
     *)             PLATFORM="$ARCH" ;;
 esac
 echo "→ Platform: $PLATFORM ($(uname -s))"
+
+# Resolve a Python 3 interpreter (clean distros often ship only python3, no `python`)
+PY="$(command -v python3 || command -v python)"
+if [ -z "$PY" ]; then echo "✗ Python 3 not found on PATH"; exit 1; fi
 
 # Check for GPU
 HAS_NVIDIA=false
@@ -120,12 +124,12 @@ fi
 echo ""
 echo "→ Setting up data stores (KG, vectors, archive, history)..."
 cd "$INSTALL_DIR"
-python -m taosmd.auto_setup --yes 2>&1 | sed 's/^/  /'
+"$PY" -m taosmd.auto_setup --yes 2>&1 | sed 's/^/  /'
 
 # Run self-test
 echo ""
 echo "→ Running self-test..."
-python -c "
+"$PY" -c "
 import sys
 sys.path.insert(0, '$INSTALL_DIR')
 import asyncio
@@ -145,7 +149,7 @@ async def test():
     # Test Vector Memory
     vmem = VectorMemory('$INSTALL_DIR/data/test-vectors.db', embed_mode='onnx', onnx_path='$MODEL_DIR')
     await vmem.init()
-    await vmem.add('taOSmd achieves 97.2% on LongMemEval')
+    await vmem.add('taOSmd achieves 97.0% on LongMemEval-S')
     results = await vmem.search('memory benchmark', hybrid=True)
     assert len(results) > 0, 'Vector search failed'
     await vmem.close()
@@ -205,7 +209,7 @@ if [ $? -eq 0 ]; then
 
     echo ""
     echo "  Quick test:"
-    echo "    python -c \"from taosmd import VectorMemory; print('taOSmd loaded')\""
+    echo "    python3 -c \"from taosmd import VectorMemory; print('taOSmd loaded')\""
     echo ""
     echo "  Docs: https://github.com/jaylfc/taosmd"
     echo ""
