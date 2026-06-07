@@ -10,7 +10,10 @@ and common secret formats.
 
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 # Each pattern: (name, regex, replacement)
 SECRET_PATTERNS: list[tuple[str, re.Pattern, str]] = [
@@ -71,7 +74,9 @@ def filter_text(text: str, mode: str = "redact") -> str:
         return text
 
     if mode == "warn":
-        # Caller should check contains_secrets() separately for logging
+        # warn = don't redact, just log when secrets are present.
+        if contains_secrets(text):
+            logger.warning("Secrets detected in text (warn mode): stored unredacted")
         return text
 
     # Default: redact

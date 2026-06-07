@@ -121,7 +121,8 @@ class PendingDecisionsStore:
             raise ValueError(f"unknown kind {kind!r}; must be one of {VALID_KINDS}")
         if suggested_action not in VALID_ACTIONS:
             raise ValueError(f"unknown suggested_action {suggested_action!r}; must be one of {VALID_ACTIONS}")
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("PendingDecisionsStore not initialized; call init() first")
 
         now = time.time()
         pid = _pending_id(subject, predicate, new_object, now)
@@ -154,7 +155,8 @@ class PendingDecisionsStore:
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """Return unresolved decisions, newest first."""
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("PendingDecisionsStore not initialized; call init() first")
         if subject is not None:
             rows = self._conn.execute(
                 """SELECT * FROM kg_pending_decisions
@@ -172,7 +174,8 @@ class PendingDecisionsStore:
         return [self._row_to_dict(r) for r in rows]
 
     async def get(self, pending_id: str) -> dict[str, Any] | None:
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("PendingDecisionsStore not initialized; call init() first")
         row = self._conn.execute(
             "SELECT * FROM kg_pending_decisions WHERE id = ?",
             (pending_id,),
@@ -198,7 +201,8 @@ class PendingDecisionsStore:
             raise ValueError(
                 f"unknown resolution {resolution!r}; must be one of {VALID_RESOLUTIONS}"
             )
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("PendingDecisionsStore not initialized; call init() first")
         cur = self._conn.execute(
             """UPDATE kg_pending_decisions
                   SET resolved_at = ?, resolution = ?, resolution_note = ?
@@ -209,7 +213,8 @@ class PendingDecisionsStore:
         return cur.rowcount > 0
 
     async def stats(self) -> dict[str, int]:
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("PendingDecisionsStore not initialized; call init() first")
         total = self._conn.execute(
             "SELECT COUNT(*) AS n FROM kg_pending_decisions"
         ).fetchone()["n"]

@@ -91,6 +91,10 @@ class ArchiveStore:
         self._current_file: Any = None
         self._current_date: str = ""
         self._user_tracking_enabled: bool = False
+        # In-memory line counts per JSONL path, avoids re-reading the whole
+        # daily file on every write. Seeded from disk the first time a path
+        # is seen; reset naturally per path across daily rollover.
+        self._line_counts: dict[str, int] = {}
 
     async def init(self) -> None:
         self._archive_dir.mkdir(parents=True, exist_ok=True)
@@ -189,8 +193,18 @@ class ArchiveStore:
         f.write(line + "\n")
         f.flush()
 
-        # Count lines for line_number
-        line_count = sum(1 for _ in open(file_path, "r", encoding="utf-8"))
+        # Count lines for line_number. Track in memory rather than re-reading
+        # the whole daily JSONL on every write: seed from disk the first time
+        # we see a path (handles daily rollover -> fresh path), then increment.
+        if file_path not in self._line_counts:
+            try:
+                with open(file_path, "r", encoding="utf-8") as existing:
+                    self._line_counts[file_path] = sum(1 for _ in existing)
+            except FileNotFoundError:
+                self._line_counts[file_path] = 0
+        else:
+            self._line_counts[file_path] += 1
+        line_count = self._line_counts[file_path]
 
         # Index for fast lookup
         cursor = self._conn.execute(
