@@ -78,8 +78,19 @@ def agent_rules() -> str:
     return files("taosmd").joinpath("docs/agent-rules.md").read_text(encoding="utf-8")
 
 
+def a2a_setup_guide() -> str:
+    """Return the verbatim `docs/a2a-comms.md` setup guide.
+
+    The guide is addressed to an agent and covers installing taOSmd, starting
+    the A2A bus, joining a channel, and inviting other agents. Works from both
+    editable and wheel installs.
+    """
+    return files("taosmd").joinpath("docs/a2a-comms.md").read_text(encoding="utf-8")
+
+
 __all__ = [
     "agent_rules",
+    "a2a_setup_guide",
     # Core memory layers
     "KnowledgeGraph",
     "VectorMemory",

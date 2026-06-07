@@ -1,10 +1,10 @@
-"""MCP server for taOSmd memory over stdio (#84).
+"""MCP server for taOSmd memory and A2A bus over stdio (#84).
 
 An activation surface so any MCP-capable agent (Claude, Cursor, Codex,
-OpenWebUI, …) can read and write taOSmd memory directly, without a custom
-integration. It is a thin shell over :mod:`taosmd.service` — the same shared
-core the local HTTP/REST server (#85) sits on — so behaviour matches the
-Python API and CLI exactly.
+OpenWebUI, …) can read and write taOSmd memory and the agent-to-agent bus
+directly, without a custom integration. It is a thin shell over
+:mod:`taosmd.service` — the same shared core the local HTTP/REST server (#85)
+sits on — so behaviour matches the Python API and CLI exactly.
 
 Design choices (matching the project's local-first, offline, additive vision):
 
@@ -65,8 +65,9 @@ def _require_fastmcp():
 def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
     """Build (but do not run) a FastMCP server bound to ``data_dir``.
 
-    Registers the five memory tools, each routing to :mod:`taosmd.service` on
-    the shared service-loop thread. Returns the configured ``FastMCP`` instance
+    Registers the memory tools and A2A bus tools, each routing to
+    :mod:`taosmd.service` on the shared service-loop thread. Returns the
+    configured ``FastMCP`` instance
     (its ``_taosmd_service_loop`` attribute holds the :class:`_ServiceLoop` so
     callers/tests can close it on teardown). ``runner`` lets a caller supply an
     existing loop (e.g. tests); otherwise one is created here.
@@ -145,6 +146,48 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
         ``registered=False`` with zeroed counters rather than erroring.
         """
         return await _dispatch(service.stats(agent=agent, data_dir=data_dir))
+
+    # ---- A2A bus tools -------------------------------------------------------
+
+    @mcp.tool()
+    async def a2a_channels() -> list[dict]:
+        """List all channels (named threads) on the A2A bus."""
+        return await _dispatch(service.a2a_channels(data_dir=data_dir))
+
+    @mcp.tool()
+    async def a2a_members(channel: str) -> list[str]:
+        """List distinct sender names observed on ``channel``."""
+        return await _dispatch(service.a2a_members(channel=channel, data_dir=data_dir))
+
+    @mcp.tool()
+    async def a2a_send(
+        channel: str, sender: str, body: str, reply_to: str | None = None
+    ) -> dict:
+        """Post a message to ``channel`` from ``sender``."""
+        return await _dispatch(
+            service.a2a_send(sender, body, thread=channel, reply_to=reply_to, data_dir=data_dir)
+        )
+
+    @mcp.tool()
+    async def a2a_read(
+        channel: str, since: float | None = None, limit: int = 50
+    ) -> list[dict]:
+        """Read messages from ``channel``, oldest-first, optionally filtered by ``since``."""
+        return await _dispatch(
+            service.a2a_feed(thread=channel, since=since, limit=limit, data_dir=data_dir)
+        )
+
+    @mcp.tool()
+    async def a2a_join(channel: str, agent: str) -> dict:
+        """Announce ``agent``'s presence on ``channel`` with a join marker."""
+        return await _dispatch(
+            service.a2a_send(
+                agent,
+                f"[JOIN] {agent} joined the channel",
+                thread=channel,
+                data_dir=data_dir,
+            )
+        )
 
     return mcp
 

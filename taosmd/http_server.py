@@ -43,6 +43,8 @@ Endpoints
 ``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?}`` -> send receipt
 ``GET  /a2a/messages``     ``?thread=&since=&limit=``      -> ``{"messages": [...]}``
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
+``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
+``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
 
 Inspection UI
 -------------
@@ -478,6 +480,10 @@ def _make_handler(data_dir, runner: _ServiceLoop):
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
+                elif method == "GET" and path == "/a2a/channels":
+                    self._handle_a2a_channels()
+                elif method == "GET" and path == "/a2a/members":
+                    self._handle_a2a_members(query)
                 else:
                     self._send_json(404, {"error": f"unknown route: {method} {path}"})
             except _BadRequest as exc:
@@ -555,6 +561,17 @@ def _make_handler(data_dir, runner: _ServiceLoop):
                 )
             )
             self._send_json(200, result)
+
+        def _handle_a2a_channels(self) -> None:
+            channels = runner.run(service.a2a_channels(data_dir=data_dir))
+            self._send_json(200, {"channels": channels})
+
+        def _handle_a2a_members(self, qs: dict) -> None:
+            channel = (qs.get("channel") or [None])[0]
+            if not channel:
+                raise _BadRequest("'channel' query parameter is required")
+            members = runner.run(service.a2a_members(channel=channel, data_dir=data_dir))
+            self._send_json(200, {"members": members})
 
         def _handle_a2a_send(self) -> None:
             body = self._read_json_body()
@@ -673,7 +690,8 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     print(f"Inspection UI (read-only): http://{bound_host}:{bound_port}/")
     print("Endpoints: GET /health, POST /ingest, GET|POST /search, "
           "GET /pending, POST /pending/resolve, "
-          "POST /a2a/send, GET /a2a/messages, GET /a2a/stream")
+          "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "
+          "GET /a2a/channels, GET /a2a/members")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
