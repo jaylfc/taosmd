@@ -47,7 +47,9 @@ def _is_cjk(ch: str) -> bool:
     """True for CJK / Japanese / Korean glyphs (roughly one token each)."""
     cp = ord(ch)
     return (
-        0x3000 <= cp <= 0x303F        # CJK symbols and punctuation
+        0x2E80 <= cp <= 0x2EFF        # CJK Radicals Supplement
+        or 0x2F00 <= cp <= 0x2FDF     # Kangxi Radicals
+        or 0x3000 <= cp <= 0x303F     # CJK symbols and punctuation
         or 0x3040 <= cp <= 0x30FF     # Hiragana + Katakana
         or 0x3400 <= cp <= 0x4DBF     # CJK Ext A
         or 0x4E00 <= cp <= 0x9FFF     # CJK Unified Ideographs
@@ -97,6 +99,13 @@ def truncate_to_tokens(text: str, max_tokens: int) -> str:
     """
     if estimate_tokens(text) <= max_tokens:
         return text
+    # Reserve budget for the trailing ellipsis so the returned string —
+    # marker included — still lands within max_tokens.
+    ellipsis = "..."
+    budget = max_tokens - estimate_tokens(ellipsis)
+    if budget <= 0:
+        # No room for content alongside the marker; emit just the marker.
+        return ellipsis
     # Walk the string accumulating the estimated token cost char-by-char,
     # stopping just before the budget is exceeded. Single pass, O(n).
     chars_per_token = _chars_per_token("".join(ch for ch in text if not _is_cjk(ch)))
@@ -111,12 +120,12 @@ def truncate_to_tokens(text: str, max_tokens: int) -> str:
             if non_cjk_run == chars_per_token:
                 tokens += 1
                 non_cjk_run = 0
-        if tokens > max_tokens:
+        if tokens > budget:
             break
         cut = i + 1
     if cut <= 0:
         cut = 1
-    return text[:cut] + "..."
+    return text[:cut] + ellipsis
 
 
 class ContextAssembler:

@@ -102,6 +102,10 @@ INTENT_PRIORITY = (
     INTENT_EXPLORATORY,  # fallback when nothing else matches
 )
 
+# Precomputed rank lookup for tie-breaking (lower index = higher precedence).
+# Built once at import rather than rebuilt on every classify_intent call.
+_PRIORITY_RANK = {intent: i for i, intent in enumerate(INTENT_PRIORITY)}
+
 # Keyword patterns for intent classification
 INTENT_PATTERNS = {
     INTENT_FACTUAL: [
@@ -186,10 +190,9 @@ def classify_intent(query: str) -> str:
     # Find best match. On a score tie, break it by the explicit priority
     # order rather than relying on dict insertion order. A lower priority
     # index means more specific / higher precedence.
-    priority_rank = {intent: i for i, intent in enumerate(INTENT_PRIORITY)}
     best_intent = max(
         scores,
-        key=lambda intent: (scores[intent], -priority_rank.get(intent, len(INTENT_PRIORITY))),
+        key=lambda intent: (scores[intent], -_PRIORITY_RANK.get(intent, len(INTENT_PRIORITY))),
     )
     if scores[best_intent] > 0:
         return best_intent
