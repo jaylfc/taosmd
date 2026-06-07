@@ -90,6 +90,13 @@ class VectorMemory:
         self._local_model = None
         self._onnx_session = None
         self._onnx_tokenizer = None
+        # BM25 index cache: rebuilt lazily and invalidated whenever the active
+        # corpus changes (add / supersede).  Keyed by fusion mode because
+        # bm25_rrf and bm25_lemma_rrf index different text forms.
+        # ``_bm25_cache`` maps mode → (retriever, texts, ids) tuple.
+        # ``_bm25_dirty`` is set on every write so the next query rebuilds.
+        self._bm25_cache: dict[str, tuple] = {}
+        self._bm25_dirty: bool = True
 
     async def init(self, http_client=None) -> None:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -250,6 +257,7 @@ class VectorMemory:
             (text, embedding_text, json.dumps(metadata or {}), now),
         )
         self._conn.commit()
+        self._bm25_dirty = True  # corpus changed — invalidate BM25 cache
         return cursor.lastrowid
 
     async def search(
@@ -373,10 +381,22 @@ class VectorMemory:
                     else:
                         bm25_texts = texts
                         bm25_query = query
-                    corpus_tokens = bm25s.tokenize(bm25_texts, stopwords=None, stemmer=None)
+                    # Build / reuse cached BM25 index for this fusion mode.
+                    # The cache is keyed by fusion mode and valid while the
+                    # active corpus is unchanged (_bm25_dirty is False).
+                    # Each entry is (retriever, bm25_texts_used) so a
+                    # corpus change (add / supersede) forces a full rebuild.
+                    cache_key = fusion
+                    cached = self._bm25_cache.get(cache_key)
+                    if self._bm25_dirty or cached is None or cached[1] != bm25_texts:
+                        corpus_tokens = bm25s.tokenize(bm25_texts, stopwords=None, stemmer=None)
+                        retriever = bm25s.BM25(k1=1.5, b=0.75)
+                        retriever.index(corpus_tokens)
+                        self._bm25_cache[cache_key] = (retriever, bm25_texts)
+                        self._bm25_dirty = False
+                    else:
+                        retriever = cached[0]
                     query_tokens = bm25s.tokenize([bm25_query], stopwords=None, stemmer=None)
-                    retriever = bm25s.BM25(k1=1.5, b=0.75)
-                    retriever.index(corpus_tokens)
                     bm25_indices, bm25_raw = retriever.retrieve(query_tokens, k=n)
                     # ranks for RRF
                     keyword_ranks = np.empty(n, dtype=np.int64)
@@ -543,6 +563,8 @@ class VectorMemory:
             (end, row_id),
         )
         self._conn.commit()
+        if cursor.rowcount > 0:
+            self._bm25_dirty = True  # active corpus changed — invalidate BM25 cache
         return cursor.rowcount > 0
 
     async def supersede_matching(self, text_or_substring: str, ended_at: float | None = None) -> int:
@@ -568,6 +590,8 @@ class VectorMemory:
             (end, text_or_substring),
         )
         self._conn.commit()
+        if cursor.rowcount > 0:
+            self._bm25_dirty = True  # active corpus changed — invalidate BM25 cache
         return cursor.rowcount
 
     async def clear(self) -> int:

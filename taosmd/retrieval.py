@@ -61,20 +61,32 @@ def _adapt_kg(results: list[dict]) -> list[dict]:
     for rank, r in enumerate(results):
         direction = r.get("direction", "outgoing")
         if direction == "outgoing":
+            # Anchor is the subject; predicate points toward the object.
+            # query_entity() for outgoing joins on object_id → object_name.
             subject = r.get("subject_name", r.get("subject_id", ""))
             obj = r.get("object_name", r.get("object_id", ""))
         else:
+            # Anchor is the object side of the triple; the far node is the
+            # subject.  query_entity() for incoming joins on subject_id →
+            # subject_name, so object_name is absent — use object_id (the
+            # normalised anchor key) as a readable fallback.
             subject = r.get("subject_name", r.get("subject_id", ""))
-            obj = r.get("object_name", r.get("object_id", ""))
+            obj = r.get("object_name") or r.get("object_id", "")
 
         predicate = r.get("predicate", "")
         text = f"{subject} {predicate} {obj}"
+        # source_id tracks the anchor entity: the subject for outgoing edges,
+        # the object (anchor that was queried) for incoming edges.
+        if direction == "outgoing":
+            source_id = str(r.get("subject_id", ""))
+        else:
+            source_id = str(r.get("object_id", ""))
 
         adapted.append(
             {
                 "text": text,
                 "source": "kg",
-                "source_id": str(r.get("subject_id", "")),
+                "source_id": source_id,
                 "rank": rank,
                 "source_score": float(r.get("confidence", 1.0)),
                 "metadata": r,
@@ -441,6 +453,51 @@ def _user_metadata(hit: dict) -> dict:
     return inner if isinstance(inner, dict) else meta
 
 
+async def _apply_llm_rerank(
+    query: str,
+    results: list[dict],
+    llm_reranker: dict,
+    top_k: int,
+) -> list[dict]:
+    """Apply the LLM listwise reranker if configured.
+
+    ``llm_reranker`` must be a dict with at least ``client``,
+    ``ollama_url``, and ``model`` keys (see :func:`retrieve` docstring).
+    On any failure the input list is returned truncated to ``top_k``.
+    """
+    if not llm_reranker or not results:
+        return results
+    try:
+        from taosmd.llm_rerank import llm_listwise_rerank  # noqa: PLC0415
+    except ImportError:
+        return results
+
+    client = llm_reranker.get("client")
+    ollama_url = llm_reranker.get("ollama_url", "")
+    model = llm_reranker.get("model", "")
+    if not client or not ollama_url or not model:
+        logger.debug("_apply_llm_rerank: missing required keys, skipping")
+        return results
+
+    no_think = llm_reranker.get("no_think_prefix", False)
+    timeout = float(llm_reranker.get("timeout", 60.0))
+
+    try:
+        return await llm_listwise_rerank(
+            client=client,
+            ollama_url=ollama_url,
+            rerank_model=model,
+            query=query,
+            candidates=results,
+            top_k=top_k,
+            timeout=timeout,
+            no_think_prefix=no_think,
+        )
+    except Exception as exc:
+        logger.debug("_apply_llm_rerank: failed (%s); using upstream order", exc)
+        return results[:top_k]
+
+
 async def _attach_neighbors(
     hits: list[dict],
     sources: dict,
@@ -545,6 +602,7 @@ async def retrieve(
     sources: dict | None = None,
     limit: int = 5,
     reranker: object | None = None,
+    llm_reranker: object | None = None,
     agent: str | None = None,
     worker_capabilities: dict | None = None,
     agent_name: str = "",
@@ -567,6 +625,31 @@ async def retrieve(
             so the per-agent fan-out setting controls the per-layer K.
         reranker: Optional CrossEncoderReranker instance. When provided and
             ``reranker.available`` is True, used for thorough/custom reranking.
+        llm_reranker: Optional dict enabling the LLM listwise reranker as an
+            opt-in second-pass stage.  Default ``None`` (off).
+
+            When supplied it must be a dict with the following keys:
+
+            * ``client``  — an ``httpx.AsyncClient`` already open for the
+              session lifetime.
+            * ``ollama_url`` — base URL of the Ollama server.
+            * ``model``  — Ollama model tag to use for reranking (e.g.
+              ``"qwen3:4b"``).
+
+            Optional keys:
+
+            * ``no_think_prefix`` (bool, default False) — prepend ``/no_think``
+              to suppress chain-of-thought tokens on models that support it.
+            * ``timeout`` (float, default 60.0) — per-call timeout in seconds.
+
+            The reranker is applied after the cross-encoder stage (when
+            ``reranker`` is also set) in "thorough" and "custom" strategies.
+            On any network or parse failure the stage is skipped silently and
+            the upstream ordering is preserved.
+
+            **Default is off** — full-scale validation on LoCoMo-1540 is still
+            pending.  Enabling this without benchmarking on your data is
+            discouraged.
         agent: Registered agent name. When given, ``effective_fanout`` is
             called to resolve the per-layer K from the agent's librarian
             fanout config and the supplied worker capabilities.
@@ -623,6 +706,9 @@ async def retrieve(
 
         if reranker is not None and getattr(reranker, "available", False):
             results = reranker.rerank(query, results, limit)
+
+        if llm_reranker is not None:
+            results = await _apply_llm_rerank(query, results, llm_reranker, limit)
 
         if verify and is_task_enabled(agent_name, "verification"):
             results = await _apply_verification(query, results, agent_name)
@@ -704,6 +790,9 @@ async def retrieve(
 
         if reranker is not None and getattr(reranker, "available", False):
             results = reranker.rerank(query, results, limit)
+
+        if llm_reranker is not None:
+            results = await _apply_llm_rerank(query, results, llm_reranker, limit)
 
         results = results[:limit]
         if adjacent_neighbors > 0:

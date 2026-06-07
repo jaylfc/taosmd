@@ -273,9 +273,34 @@ def extract_with_vocab(text: str) -> list[dict]:
     return facts
 
 
+# ---------------------------------------------------------------------------
+# Singular predicates — for contradiction detection
+# ---------------------------------------------------------------------------
+
+# Predicates where only one active value per subject makes semantic sense.
+# Any (subject, predicate, new_object) triple where the same subject already
+# has a *different* active object for the same predicate is a contradiction.
+# Keep this set a subset of ALLOWED_PREDICATES and curate deliberately —
+# adding a predicate here means the detector will flag duplicates for it.
+SINGULAR_PREDICATES: frozenset[str] = frozenset({
+    "is_a",
+    "works_on",
+    "lives_in",
+    "prefers",
+    "uses_model",
+    "runs_on",
+    "managed_by",
+    "owned_by",
+    "located_in",
+    "works_at",
+    "moved_to",
+    "birth_place",
+})
+
 __all__ = [
     "ALLOWED_PREDICATES",
     "PREDICATE_CATEGORIES",
+    "SINGULAR_PREDICATES",
     "SYNONYMS",
     "INVERSE_DIRECTION",
     "RELATIONSHIP_PATTERNS",

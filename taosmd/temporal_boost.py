@@ -94,11 +94,24 @@ def temporal_rerank(results: list[dict], query: str, boost_factor: float = 0.2) 
             overlap = len(query_words & text_words) / max(len(query_words), 1)
             boost += overlap * boost_factor
 
-        # Apply boost
+        # Apply boost to whichever ranking field is present.
+        # Results from hybrid fusion (fusion="rrf", "bm25_rrf", …) carry an
+        # ``rrf_score`` that is the field actually used for final ordering; pure
+        # semantic results only carry ``similarity``.  Boosting the wrong field
+        # leaves the ranking unchanged — hence prefer rrf_score when it exists.
         if boost > 0:
-            r["similarity"] = min(1.0, r.get("similarity", 0) + boost)
+            if "rrf_score" in r:
+                r["rrf_score"] = r["rrf_score"] + boost
+            else:
+                r["similarity"] = min(1.0, r.get("similarity", 0) + boost)
             r["temporal_boost"] = round(boost, 4)
 
-    # Re-sort by boosted similarity
-    results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
+    # Re-sort by the same field used for initial ordering.
+    # Use rrf_score when present (hybrid results); fall back to similarity.
+    def _rank_key(x: dict) -> float:
+        if "rrf_score" in x:
+            return x["rrf_score"]
+        return x.get("similarity", 0)
+
+    results.sort(key=_rank_key, reverse=True)
     return results
