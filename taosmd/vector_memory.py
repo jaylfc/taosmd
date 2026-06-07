@@ -15,6 +15,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from . import _db
+
 logger = logging.getLogger(__name__)
 
 SCHEMA = """
@@ -90,7 +92,7 @@ class VectorMemory:
 
     async def init(self, http_client=None) -> None:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn = _db.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()

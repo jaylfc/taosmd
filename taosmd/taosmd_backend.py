@@ -12,7 +12,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, _db
 from .backend import MemoryBackend
 
 SETTINGS_SCHEMA = """
@@ -82,7 +82,7 @@ class TaOSmdBackend(MemoryBackend):
     async def init(self) -> None:
         """Initialise settings database."""
         Path(self._settings_db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._settings_db_path)
+        self._conn = _db.connect(self._settings_db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SETTINGS_SCHEMA + AGENT_CONFIG_SCHEMA)
         self._conn.commit()
@@ -260,7 +260,7 @@ class TaOSmdBackend(MemoryBackend):
         """Ensure the settings DB connection is open (auto-init if needed)."""
         if self._conn is None:
             Path(self._settings_db_path).parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(self._settings_db_path)
+            self._conn = _db.connect(self._settings_db_path)
             self._conn.row_factory = sqlite3.Row
             self._conn.executescript(SETTINGS_SCHEMA + AGENT_CONFIG_SCHEMA)
             self._conn.commit()

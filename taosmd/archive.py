@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import _db
+
 logger = logging.getLogger(__name__)
 
 # Event types
@@ -95,7 +97,7 @@ class ArchiveStore:
     async def init(self) -> None:
         self._archive_dir.mkdir(parents=True, exist_ok=True)
         Path(self._index_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._index_path)
+        self._conn = _db.connect(self._index_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(INDEX_SCHEMA)
         self._conn.commit()
