@@ -32,21 +32,100 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Rough token estimation: 1 token ≈ 4 chars
-CHARS_PER_TOKEN = 4
+# Rough token estimation. A flat 4 chars/token under-counts dense content
+# (code, JSON) and badly under-counts CJK, where each glyph is roughly its
+# own token. We keep a cheap, deterministic, dependency-free heuristic:
+#   - CJK glyphs count as ~1 token each
+#   - punctuation/symbol-heavy text uses fewer chars/token (denser)
+#   - plain prose uses the classic ~4 chars/token
+CHARS_PER_TOKEN = 4          # prose default (kept public/back-compatible)
+CHARS_PER_TOKEN_DENSE = 3    # code / JSON / symbol-heavy text
+_DENSE_PUNCT_RATIO = 0.18    # punctuation share above which text is "dense"
+
+
+def _is_cjk(ch: str) -> bool:
+    """True for CJK / Japanese / Korean glyphs (roughly one token each)."""
+    cp = ord(ch)
+    return (
+        0x2E80 <= cp <= 0x2EFF        # CJK Radicals Supplement
+        or 0x2F00 <= cp <= 0x2FDF     # Kangxi Radicals
+        or 0x3000 <= cp <= 0x303F     # CJK symbols and punctuation
+        or 0x3040 <= cp <= 0x30FF     # Hiragana + Katakana
+        or 0x3400 <= cp <= 0x4DBF     # CJK Ext A
+        or 0x4E00 <= cp <= 0x9FFF     # CJK Unified Ideographs
+        or 0xF900 <= cp <= 0xFAFF     # CJK Compatibility Ideographs
+        or 0xFF00 <= cp <= 0xFFEF     # Halfwidth/Fullwidth forms
+        or 0xAC00 <= cp <= 0xD7AF     # Hangul syllables
+        or 0x20000 <= cp <= 0x2FA1F   # CJK Ext B-F + supplement
+    )
+
+
+def _chars_per_token(non_cjk_text: str) -> int:
+    """Pick chars-per-token for the non-CJK part based on symbol density."""
+    if not non_cjk_text:
+        return CHARS_PER_TOKEN
+    punct = sum(1 for ch in non_cjk_text if not ch.isalnum() and not ch.isspace())
+    if punct / len(non_cjk_text) >= _DENSE_PUNCT_RATIO:
+        return CHARS_PER_TOKEN_DENSE
+    return CHARS_PER_TOKEN
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token count estimate."""
-    return len(text) // CHARS_PER_TOKEN
+    """Content-aware token count estimate (heuristic, no tokenizer).
+
+    CJK glyphs are counted as ~1 token each; the remaining text is divided
+    by a chars-per-token factor that shrinks for punctuation/symbol-heavy
+    content (code, JSON) and stays at ~4 for prose.
+    """
+    if not text:
+        return 0
+    cjk = 0
+    other_chars: list[str] = []
+    for ch in text:
+        if _is_cjk(ch):
+            cjk += 1
+        else:
+            other_chars.append(ch)
+    non_cjk = "".join(other_chars)
+    return cjk + len(non_cjk) // _chars_per_token(non_cjk)
 
 
 def truncate_to_tokens(text: str, max_tokens: int) -> str:
-    """Truncate text to approximately max_tokens."""
-    max_chars = max_tokens * CHARS_PER_TOKEN
-    if len(text) <= max_chars:
+    """Truncate text to approximately max_tokens.
+
+    Uses the same content-aware estimate as ``estimate_tokens`` so that a
+    truncated string lands near ``max_tokens`` for both prose and dense or
+    CJK content. Returns ``text`` unchanged when it already fits.
+    """
+    if estimate_tokens(text) <= max_tokens:
         return text
-    return text[:max_chars] + "..."
+    # Reserve budget for the trailing ellipsis so the returned string —
+    # marker included — still lands within max_tokens.
+    ellipsis = "..."
+    budget = max_tokens - estimate_tokens(ellipsis)
+    if budget <= 0:
+        # No room for content alongside the marker; emit just the marker.
+        return ellipsis
+    # Walk the string accumulating the estimated token cost char-by-char,
+    # stopping just before the budget is exceeded. Single pass, O(n).
+    chars_per_token = _chars_per_token("".join(ch for ch in text if not _is_cjk(ch)))
+    tokens = 0
+    non_cjk_run = 0
+    cut = 0
+    for i, ch in enumerate(text):
+        if _is_cjk(ch):
+            tokens += 1
+        else:
+            non_cjk_run += 1
+            if non_cjk_run == chars_per_token:
+                tokens += 1
+                non_cjk_run = 0
+        if tokens > budget:
+            break
+        cut = i + 1
+    if cut <= 0:
+        cut = 1
+    return text[:cut] + ellipsis
 
 
 class ContextAssembler:

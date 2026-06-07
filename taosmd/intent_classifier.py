@@ -87,6 +87,25 @@ SEARCH_STRATEGIES = {
     },
 }
 
+# Explicit tie-break priority, most-specific first. When two intents score
+# equally, the one earlier in this tuple wins. Previously the winner was just
+# whichever intent appeared first in INTENT_PATTERNS — deterministic, but an
+# implicit side effect of dict order. Codifying it here makes the intended
+# precedence explicit and decouples it from pattern declaration order.
+INTENT_PRIORITY = (
+    INTENT_TIMELINE,     # date/session phrasing is very specific
+    INTENT_RELATIONAL,   # explicit relationships ("depends on", "manages")
+    INTENT_PREFERENCE,   # preference phrasing ("usually", "favourite")
+    INTENT_RECENT,       # recency phrasing ("yesterday", "latest")
+    INTENT_TECHNICAL,    # "how does X work", "architecture"
+    INTENT_FACTUAL,      # generic "what is" — least specific signal
+    INTENT_EXPLORATORY,  # fallback when nothing else matches
+)
+
+# Precomputed rank lookup for tie-breaking (lower index = higher precedence).
+# Built once at import rather than rebuilt on every classify_intent call.
+_PRIORITY_RANK = {intent: i for i, intent in enumerate(INTENT_PRIORITY)}
+
 # Keyword patterns for intent classification
 INTENT_PATTERNS = {
     INTENT_FACTUAL: [
@@ -168,8 +187,13 @@ def classify_intent(query: str) -> str:
             if re.search(pattern, query_lower):
                 scores[intent] += boost.get(intent, 1)
 
-    # Find best match
-    best_intent = max(scores, key=scores.get)
+    # Find best match. On a score tie, break it by the explicit priority
+    # order rather than relying on dict insertion order. A lower priority
+    # index means more specific / higher precedence.
+    best_intent = max(
+        scores,
+        key=lambda intent: (scores[intent], -_PRIORITY_RANK.get(intent, len(INTENT_PRIORITY))),
+    )
     if scores[best_intent] > 0:
         return best_intent
 
