@@ -468,6 +468,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Data dir for served memory (default: $TAOSMD_DATA_DIR or ~/.taosmd)",
     )
 
+    # ----- mcp subcommand (MCP server over stdio) -----------------------
+    mcp_p = sub.add_parser(
+        "mcp",
+        help="Run the MCP memory server over stdio (requires taosmd[mcp])",
+    )
+    mcp_p.add_argument(
+        "--mcp-data-dir", dest="mcp_data_dir", default=None,
+        help="Data dir for served memory (default: $TAOSMD_DATA_DIR or ~/.taosmd)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.cmd == "serve":
@@ -475,6 +485,14 @@ def main(argv: list[str] | None = None) -> int:
         return http_server.serve(
             host=args.host, port=args.port, data_dir=args.serve_data_dir,
         )
+
+    if args.cmd == "mcp":
+        from . import mcp_server  # noqa: PLC0415
+        try:
+            return mcp_server.serve_stdio(data_dir=args.mcp_data_dir)
+        except mcp_server.MissingMCPDependencyError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
     registry = AgentRegistry(args.data_dir)
 
