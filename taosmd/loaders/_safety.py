@@ -49,6 +49,10 @@ def check_size(path: str | Path, max_bytes: int | None = DEFAULT_MAX_BYTES) -> N
 def resolve_within(path: str | Path, base_dir: str | Path | None = None) -> Path:
     """Resolve ``path`` and, when ``base_dir`` is set, confine it there.
 
+    ``base_dir`` is expected to be a directory that contains (directly or
+    transitively) the file at ``path``; passing a file as ``base_dir``
+    only ever matches that exact file.
+
     With ``base_dir=None`` (the default) this is just ``Path(path)``
     resolved — no restriction, so direct standalone use of any path is
     unaffected.
@@ -57,6 +61,12 @@ def resolve_within(path: str | Path, base_dir: str | Path | None = None) -> Path
     resolved ``base_dir`` or a ``ValueError`` is raised. Resolving first
     means traversal (``../``), absolute escapes, and symlinks that point
     out of the tree are all caught.
+
+    This is a containment check, not an atomic open: there is an inherent
+    TOCTOU window between resolving the path here and the caller opening
+    it, so a symlink swapped in after this returns is not caught. For the
+    local-first, single-user ingest path this guards against accidental
+    escapes, not a concurrent adversary on the same machine.
     """
     resolved = Path(path).resolve()
     if base_dir is None:
@@ -66,6 +76,6 @@ def resolve_within(path: str | Path, base_dir: str | Path | None = None) -> Path
     if resolved != base and base not in resolved.parents:
         raise ValueError(
             f"{path} resolves to {resolved}, which is outside the "
-            f"allowed base directory {base}."
+            f"allowed base path {base}."
         )
     return resolved
