@@ -87,6 +87,15 @@ def _send(req) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read().decode())
 
 
+def _get_raw(url: str) -> tuple[int, str, str]:
+    """GET returning (status, content_type, body_text) — for the HTML UI."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=10) as resp:
+            return resp.status, resp.headers.get("Content-Type", ""), resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get("Content-Type", ""), exc.read().decode()
+
+
 def test_health(live_server):
     status, body = _get(f"{live_server}/health")
     assert status == 200
@@ -156,3 +165,57 @@ def test_pending_resolve_bad_decision_returns_400(live_server):
     )
     assert status == 400
     assert "decision" in body["error"]
+
+
+# ----- inspection UI ------------------------------------------------------
+
+
+def test_root_serves_inspection_ui_html(live_server):
+    status, ctype, html = _get_raw(f"{live_server}/")
+    assert status == 200
+    assert "text/html" in ctype
+    # App title + the markers the UI is built from (search box, query field).
+    assert "taOSmd inspector" in html
+    assert 'id="query"' in html
+    assert 'id="searchResults"' in html
+    assert 'id="pendingResults"' in html
+
+
+def test_ui_alias_serves_same_page(live_server):
+    status, ctype, html = _get_raw(f"{live_server}/ui")
+    assert status == 200
+    assert "text/html" in ctype
+    assert "taOSmd inspector" in html
+
+
+def test_inspection_ui_is_fully_offline(live_server):
+    """No external requests: no <script src>, no CDN/http(s) links, no @import."""
+    _, _, html = _get_raw(f"{live_server}/")
+    assert "src=" not in html
+    assert "http://" not in html
+    assert "https://" not in html
+    assert "@import" not in html
+    # Everything is inline.
+    assert "<style>" in html
+    assert "<script>" in html
+
+
+def test_ui_backing_endpoints_still_work(live_server):
+    """The JSON endpoints the UI consumes (search + pending) still respond."""
+    status, body = _post(
+        f"{live_server}/ingest",
+        {"text": "The inspection UI consumes the search endpoint.", "agent": "ui-test"},
+    )
+    assert status == 200, body
+
+    status, body = _post(
+        f"{live_server}/search",
+        {"query": "The inspection UI consumes the search endpoint.", "agent": "ui-test"},
+    )
+    assert status == 200, body
+    assert body["hits"]
+    assert "inspection UI" in body["hits"][0]["text"]
+
+    status, body = _get(f"{live_server}/pending?agent=ui-test")
+    assert status == 200
+    assert body["pending"] == []
