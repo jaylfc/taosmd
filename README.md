@@ -354,7 +354,7 @@ It reuses the same shared service layer as the [local HTTP/REST server](#api), s
 
 ## Key Features
 
-- **97.0% end-to-end Judge accuracy** on LongMemEval-S benchmark (SOTA)
+- **97.0% end-to-end Judge accuracy** on LongMemEval-S — measured on our low-end reference stack under a strict local judge ([methodology](docs/benchmarks.md))
 - **Zero cloud dependencies** — runs entirely on local hardware
 - **Framework-agnostic** — Python API, CLI, [MCP server](#mcp-server), and local HTTP/REST API work with any agent framework
 - **Hybrid search** — semantic similarity + keyword overlap boosting
