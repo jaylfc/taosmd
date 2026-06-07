@@ -28,6 +28,10 @@ _DEFAULT_DATA_DIR = os.path.expanduser("~/.taosmd")
 
 # Key under which the global memory/Librarian model is stored.
 _MEMORY_MODEL_KEY = "memory_model"
+# Key under which the optional remote server URL is stored.
+_SERVER_URL_KEY = "server_url"
+# Key under which the optional remote server bearer token is stored.
+_SERVER_TOKEN_KEY = "server_token"
 
 
 def _resolve_data_dir(data_dir=None) -> str:
@@ -109,8 +113,103 @@ def resolve_memory_model(fallback: str | None = None, data_dir=None) -> str | No
     return model if model is not None else fallback
 
 
+# ---------------------------------------------------------------------------
+# Remote server URL
+# ---------------------------------------------------------------------------
+
+def get_server_url(data_dir=None) -> str | None:
+    """Return the configured remote server URL, or ``None`` if unset.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_SERVER_URL`` environment variable
+    2. ``server_url`` key in ``~/.taosmd/config.json``
+
+    A remote URL tells the service layer to delegate every data call to
+    that server instead of running a local store.  Example value:
+    ``"http://pi.local:7900"`` or a Tailscale MagicDNS URL.
+    """
+    env = os.environ.get("TAOSMD_SERVER_URL")
+    if env and env.strip():
+        return env.strip()
+    url = _read(data_dir).get(_SERVER_URL_KEY)
+    if isinstance(url, str) and url.strip():
+        return url.strip()
+    return None
+
+
+def set_server_url(url: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the remote server URL.
+
+    Args:
+        url: Base URL of the remote taOSmd server, e.g. ``"http://pi:7900"``.
+            Ignored when ``clear`` is True.
+        clear: when True, remove the setting.
+
+    Raises:
+        ValueError: when ``clear`` is False and ``url`` is not a non-empty string.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_SERVER_URL_KEY, None)
+    else:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string (or pass clear=True)")
+        data[_SERVER_URL_KEY] = url.strip()
+    _write(data, data_dir)
+
+
+# ---------------------------------------------------------------------------
+# Remote server bearer token
+# ---------------------------------------------------------------------------
+
+def get_server_token(data_dir=None) -> str | None:
+    """Return the configured remote server bearer token, or ``None`` if unset.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_TOKEN`` environment variable
+    2. ``server_token`` key in ``~/.taosmd/config.json``
+
+    When set, the token is sent as ``Authorization: Bearer <token>`` on every
+    request to the remote server.  The token is never logged or printed.
+    """
+    env = os.environ.get("TAOSMD_TOKEN")
+    if env and env.strip():
+        return env.strip()
+    token = _read(data_dir).get(_SERVER_TOKEN_KEY)
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def set_server_token(token: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the remote server bearer token.
+
+    Args:
+        token: Bearer token string.  Ignored when ``clear`` is True.
+        clear: when True, remove the setting.
+
+    Raises:
+        ValueError: when ``clear`` is False and ``token`` is not a
+            non-empty string.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_SERVER_TOKEN_KEY, None)
+    else:
+        if not isinstance(token, str) or not token.strip():
+            raise ValueError("token must be a non-empty string (or pass clear=True)")
+        data[_SERVER_TOKEN_KEY] = token.strip()
+    _write(data, data_dir)
+
+
 __all__ = [
     "get_memory_model",
     "set_memory_model",
     "resolve_memory_model",
+    "get_server_url",
+    "set_server_url",
+    "get_server_token",
+    "set_server_token",
 ]
