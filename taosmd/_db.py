@@ -17,6 +17,7 @@ apart from the journal mode.
 from __future__ import annotations
 
 import sqlite3
+import warnings
 from pathlib import Path
 from typing import Union
 
@@ -33,7 +34,26 @@ def connect(db_path: Union[str, Path]) -> sqlite3.Connection:
     returned connection as before.
     """
     conn = sqlite3.connect(db_path)
-    # WAL is harmless (silently stays "memory") on ``:memory:`` databases.
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    # ``PRAGMA journal_mode`` echoes the journal mode actually in effect. WAL
+    # can silently refuse to engage on filesystems without shared-memory/mmap
+    # support (notably some network mounts), where it falls back to the prior
+    # rollback journal. ``:memory:`` databases report "memory". We read the
+    # result so the fallback is observable rather than silent; the connection
+    # stays fully usable either way, so we deliberately do not raise.
+    row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+    mode = (row[0] if row else "") or ""
+    # The connection is fully usable whichever journal mode took effect, so we
+    # do not raise on a fallback. We surface it as a warning instead of letting
+    # it pass silently; ``:memory:`` legitimately reports "memory".
+    if mode.lower() not in ("wal", "memory"):
+        warnings.warn(
+            f"SQLite WAL mode not enabled for {db_path!r} "
+            f"(journal_mode={mode!r}); concurrent access may hit "
+            "'database is locked'.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    # busy_timeout takes an integer literal; SQLite does not allow bound
+    # parameters in PRAGMA statements, and the value is an internal constant.
+    conn.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_MS)}")
     return conn

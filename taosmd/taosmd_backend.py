@@ -81,6 +81,9 @@ class TaOSmdBackend(MemoryBackend):
 
     async def init(self) -> None:
         """Initialise settings database."""
+        # Guard against re-init leaking an already-open connection.
+        if self._conn is not None:
+            return
         Path(self._settings_db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = _db.connect(self._settings_db_path)
         self._conn.row_factory = sqlite3.Row
