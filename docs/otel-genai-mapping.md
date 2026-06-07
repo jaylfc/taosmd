@@ -52,12 +52,12 @@ GenAI-standard attributes (tokens, model, provider) always use `gen_ai.*`.
 
 | Metric | Type | Unit | Attributes |
 |---|---|---|---|
-| `taosmd.memory.recall` | histogram | ratio | `probe.class` (stable/update/dedup/decay), `probe.delta_s` |
-| `taosmd.memory.update_correctness` | histogram | ratio | — |
-| `taosmd.memory.dedup_ratio` | gauge | ratio | — |
+| `taosmd.memory.recall` | histogram | 1 | `probe.class` (stable/update/dedup/decay), `probe.delta_s` |
+| `taosmd.memory.update_correctness` | histogram | 1 | — |
+| `taosmd.memory.dedup_ratio` | gauge | 1 | — |
 | `taosmd.memory.store_growth` | gauge | By | `store` |
 | `taosmd.memory.op_latency` | histogram | ms | `memory.op` (search/ingest/extract/judge) |
-| `taosmd.bench.suite_score` | gauge | ratio | `bench.suite` (locomo/longmemeval), `bench.category`, `dataset`, `commit`, `judge` |
+| `taosmd.bench.suite_score` | gauge | 1 | `bench.suite` (locomo/longmemeval), `bench.category`, `dataset`, `commit`, `judge` |
 
 ## Part D — Benchmark run-trigger control API (taOSmd-hosted; playground = thin client)
 
@@ -68,9 +68,33 @@ GenAI-standard attributes (tokens, model, provider) always use `gen_ai.*`.
 - taOSmd owns suite execution (runners, memory pipeline, configs); the playground triggers
   and consumes. Works without taOS (control API is client-agnostic).
 
-## Open questions for taOS (amend here)
+## Trace context propagation (cross-boundary contract)
 
-1. `gen_ai.conversation.id` semantics: per agent-run, per session, or per A2A channel? (Drives correlation.)
-2. `reasoning` as a child event vs its own span (timeline noise vs visibility).
-3. Final metric names/units (Part C) once the playground UI shape is fixed.
-4. Whether `message_in`/`message_out` become span events on a turn span or standalone spans.
+taOS passes **W3C trace context (`traceparent`)** + **`gen_ai.conversation.id`** on every
+memory API call into taOSmd; taOSmd **accepts and propagates** them so its memory spans nest
+under the agent's `chat` span:
+
+- **HTTP path (`taosmd serve`)**: taOS sends the `traceparent` request header (and
+  `gen_ai.conversation.id` as a header / query param). taOSmd extracts the incoming context,
+  creates its `retrieve_memory` / `ingest_memory` / extract / judge spans as **children** of
+  it, and sets `gen_ai.conversation.id` on them. Any onward LLM call from taOSmd carries the
+  `traceparent` forward.
+- **In-process Python API path**: taOS sets the active OTel context (or passes
+  `traceparent` + `conversation_id` kwargs) before calling; taOSmd parents its spans under it.
+- **Standalone**: when no incoming context is present (taOSmd used without taOS), it starts a
+  fresh root span — unaffected.
+
+This is the one cross-boundary item; with it confirmed, the agent `chat` span and the
+`retrieve_memory` span share one trace.
+
+## Resolved decisions (v0.1 — taOS + taOSmd agreed on the bus)
+
+1. **`gen_ai.conversation.id` = per session / conversation thread** (stable across turns; nested
+   turn span trees under it). Falls back to the agent-run id when an agent has no persistent
+   session concept. NOT per-run, NOT per-A2A-channel.
+2. **`reasoning` = child event** (`gen_ai.reasoning`) on the active turn span, not its own span.
+3. **`message_in` / `message_out` = span events** on the turn span (role-tagged input/output),
+   folded into the `llm_call` input/output events where they coincide; if no turn span is active,
+   attach to the conversation root span. No standalone `chat.message` spans.
+4. **Metric units (Part C)**: dimensionless ratios use UCUM **`1`** (not "ratio"); `By` and `ms`
+   as shown. Names are taOSmd-owned and final for v0.
