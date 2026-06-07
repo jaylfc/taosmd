@@ -470,6 +470,17 @@ All components expose HTTP endpoints when used with the taOS server:
 
 `taosmd serve` also exposes a minimal, read-only local inspection UI at the root URL (e.g. `http://127.0.0.1:7833/`) — a single self-contained, stdlib-only page (no JS frameworks, no CDNs, works offline) for searching memory and viewing the pending-review queue for an agent.
 
+To run the server persistently as a background service (systemd on Linux, launchd on macOS, or a Scheduled Task on Windows), use `--install-service`:
+
+```bash
+taosmd serve --install-service            # install with defaults
+taosmd serve --port 8080 --install-service  # custom port
+taosmd serve --service-status            # check running state
+taosmd serve --uninstall-service         # stop and remove
+```
+
+See [docs/serve-service.md](docs/serve-service.md) for platform-specific details, log locations, and how to change host/port/data-dir after installation.
+
 ## Running Benchmarks
 
 ```bash
