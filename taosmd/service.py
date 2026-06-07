@@ -17,7 +17,10 @@ the only thing they add is a uniform, transport-friendly signature:
 
 from __future__ import annotations
 
+import json
+
 from . import api as _api
+from .archive import EVENT_A2A
 
 
 async def ingest(text, *, agent: str, data_dir=None, **opts) -> dict:
@@ -120,4 +123,84 @@ async def stats(*, agent: str, data_dir=None) -> dict:
     return out
 
 
-__all__ = ["ingest", "search", "pending_list", "pending_resolve", "stats", "supersede"]
+async def a2a_send(
+    sender: str,
+    body: str,
+    *,
+    thread: str = "general",
+    reply_to: str | None = None,
+    data_dir=None,
+) -> dict:
+    """Post a message onto the agent-to-agent bus.
+
+    Stores the message as an append-only archive event of type
+    :data:`~taosmd.archive.EVENT_A2A` and returns a receipt with the
+    assigned row ID. ``sender`` and ``body`` must be non-empty strings;
+    ``thread`` defaults to ``"general"``; ``reply_to`` is optional and
+    should be the string ID of the message being replied to.
+
+    Returns ``{"id", "from", "thread", "reply_to"}``.
+    """
+    if not isinstance(sender, str) or not sender:
+        raise ValueError("sender must be a non-empty string")
+    if not isinstance(body, str) or not body:
+        raise ValueError("body must be a non-empty string")
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    row_id = await archive.record(
+        event_type=EVENT_A2A,
+        data={"from": sender, "body": body, "thread": thread, "reply_to": reply_to},
+        agent_name=sender,
+        app_id=thread,
+        summary=body[:200],
+    )
+    return {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to}
+
+
+async def a2a_feed(
+    *,
+    thread: str | None = None,
+    since: float | None = None,
+    limit: int = 50,
+    data_dir=None,
+) -> list[dict]:
+    """Return messages from the agent-to-agent bus, oldest-first.
+
+    Filters by ``thread`` (when given) and by ``since`` (Unix timestamp,
+    exclusive lower bound). ``limit`` caps the number of rows fetched from
+    the archive (applied before reversing, so it limits the most-recent N
+    messages when ``since`` is None). Returns chronological order (oldest
+    first) suitable for chat-style display.
+
+    Each item has shape ``{"id", "ts", "from", "body", "thread",
+    "reply_to"}``.
+    """
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    rows = await archive.query(
+        event_type=EVENT_A2A,
+        app_id=thread,
+        since=since,
+        limit=limit,
+    )
+    # archive.query returns newest-first; A2A feed is displayed oldest-first.
+    rows = list(reversed(rows))
+    result = []
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        result.append({
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": data.get("from"),
+            "body": data.get("body"),
+            "thread": data.get("thread"),
+            "reply_to": data.get("reply_to"),
+        })
+    return result
+
+
+__all__ = ["ingest", "search", "pending_list", "pending_resolve", "stats", "supersede",
+           "a2a_send", "a2a_feed"]

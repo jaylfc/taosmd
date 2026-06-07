@@ -40,6 +40,9 @@ Endpoints
 ``GET  /search?q=&agent=&limit=``                          -> ``{"hits": [...]}``
 ``GET  /pending?agent=``                                   -> ``{"pending": [...]}``
 ``POST /pending/resolve``  ``{"id", "decision", "note"?}`` -> resolve result
+``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?}`` -> send receipt
+``GET  /a2a/messages``     ``?thread=&since=&limit=``      -> ``{"messages": [...]}``
+``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
 
 Inspection UI
 -------------
@@ -58,6 +61,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -132,6 +136,22 @@ _INSPECTION_UI_HTML = """<!doctype html>
   .empty, .err { color: var(--muted); font-size: 14px; padding: 6px 0; }
   .err { color: #ff8c8c; }
   .note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  /* A2A bus */
+  .a2a-list {
+    margin-top: 14px; max-height: 340px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .a2a-msg {
+    border-radius: 8px; padding: 8px 12px; max-width: 85%;
+    background: var(--chip); word-break: break-word;
+  }
+  .a2a-msg.left  { align-self: flex-start; border-left: 3px solid var(--accent); }
+  .a2a-msg.right { align-self: flex-end;   border-right: 3px solid #a78bfa; }
+  .a2a-msg .sender { font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 2px; }
+  .a2a-msg.right .sender { color: #a78bfa; }
+  .a2a-msg .body { white-space: pre-wrap; }
+  .a2a-msg .ts { font-size: 11px; color: var(--muted); margin-top: 4px; text-align: right; }
+  .a2a-status { color: var(--muted); font-size: 13px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -164,6 +184,20 @@ _INSPECTION_UI_HTML = """<!doctype html>
     </div>
     <p class="note">Read-only. Resolve decisions from the CLI (<code>taosmd review</code>).</p>
     <div class="results" id="pendingResults"></div>
+  </section>
+
+  <section class="card" aria-labelledby="a2a-h">
+    <h2 id="a2a-h">A2A bus</h2>
+    <div class="row">
+      <div class="field">
+        <label for="a2aThread">Thread</label>
+        <input id="a2aThread" value="general" autocomplete="off">
+      </div>
+      <button id="a2aConnectBtn" type="button">Connect</button>
+    </div>
+    <p class="note">Read-only live view. Agents write via <code>POST /a2a/send</code>.</p>
+    <div class="a2a-list" id="a2aList" aria-live="polite" aria-label="A2A messages"></div>
+    <div class="a2a-status" id="a2aStatus"></div>
   </section>
 </main>
 <script>
@@ -249,6 +283,78 @@ _INSPECTION_UI_HTML = """<!doctype html>
       out.innerHTML = '<div class="err">' + esc(e.message || e) + "</div>";
     });
   }
+
+  // ----- A2A bus -----------------------------------------------------------
+  var _a2aEs = null;
+
+  function _a2aSenders() {
+    // Collect unique senders from existing messages to decide left/right alignment.
+    var items = $("a2aList").querySelectorAll(".a2a-msg");
+    var seen = [];
+    items.forEach(function (el) { var s = el.dataset.sender; if (s && seen.indexOf(s) === -1) seen.push(s); });
+    return seen;
+  }
+
+  function _renderMsg(msg, senderIndex) {
+    var side = (senderIndex % 2 === 0) ? "left" : "right";
+    var ts = msg.ts ? new Date(msg.ts * 1000).toLocaleTimeString() : "";
+    return '<div class="a2a-msg ' + side + '" data-sender="' + esc(msg.from || "") + '">' +
+      '<div class="sender">@' + esc(msg.from || "?") + '</div>' +
+      '<div class="body">' + esc(msg.body || "") + '</div>' +
+      '<div class="ts">' + esc(ts) + (msg.reply_to ? " · ↩ " + esc(String(msg.reply_to)) : "") + '</div>' +
+      '</div>';
+  }
+
+  function _appendMsg(msg) {
+    var list = $("a2aList");
+    var senders = _a2aSenders();
+    var idx = senders.indexOf(msg.from || "");
+    if (idx === -1) { idx = senders.length; }
+    list.insertAdjacentHTML("beforeend", _renderMsg(msg, idx));
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function a2aConnect() {
+    var thread = $("a2aThread").value.trim() || "general";
+    var list = $("a2aList");
+    var status = $("a2aStatus");
+
+    if (_a2aEs) { _a2aEs.close(); _a2aEs = null; }
+    list.innerHTML = "";
+    status.textContent = "Loading history…";
+
+    fetch("/a2a/messages?thread=" + encodeURIComponent(thread) + "&limit=200")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var msgs = d.messages || [];
+        var senderMap = {};
+        var senderCount = 0;
+        msgs.forEach(function (msg) {
+          var s = msg.from || "";
+          if (!(s in senderMap)) { senderMap[s] = senderCount++; }
+          list.insertAdjacentHTML("beforeend", _renderMsg(msg, senderMap[s]));
+        });
+        list.scrollTop = list.scrollHeight;
+        status.textContent = "Connected · thread: " + thread;
+        var es = new EventSource("/a2a/stream?thread=" + encodeURIComponent(thread));
+        _a2aEs = es;
+        es.onmessage = function (e) {
+          try {
+            var msg = JSON.parse(e.data);
+            _appendMsg(msg);
+          } catch (_) {}
+        };
+        es.onerror = function () {
+          status.textContent = "Disconnected from stream. Reload to reconnect.";
+        };
+      })
+      .catch(function (e) {
+        status.textContent = "Failed to load history: " + esc(e.message || e);
+      });
+  }
+
+  $("a2aConnectBtn").addEventListener("click", a2aConnect);
+  $("a2aThread").addEventListener("keydown", function (e) { if (e.key === "Enter") a2aConnect(); });
 
   $("searchBtn").addEventListener("click", search);
   $("query").addEventListener("keydown", function (e) { if (e.key === "Enter") search(); });
@@ -365,6 +471,13 @@ def _make_handler(data_dir, runner: _ServiceLoop):
                     self._handle_pending(query)
                 elif method == "POST" and path == "/pending/resolve":
                     self._handle_pending_resolve()
+                elif method == "POST" and path == "/a2a/send":
+                    self._handle_a2a_send()
+                elif method == "GET" and path == "/a2a/messages":
+                    self._handle_a2a_messages(query)
+                elif method == "GET" and path == "/a2a/stream":
+                    self._handle_a2a_stream(query)
+                    return  # SSE response already sent; skip _send_json error path
                 else:
                     self._send_json(404, {"error": f"unknown route: {method} {path}"})
             except _BadRequest as exc:
@@ -443,6 +556,90 @@ def _make_handler(data_dir, runner: _ServiceLoop):
             )
             self._send_json(200, result)
 
+        def _handle_a2a_send(self) -> None:
+            body = self._read_json_body()
+            from_ = body.get("from")
+            body_text = body.get("body")
+            thread = body.get("thread", "general") or "general"
+            reply_to = body.get("reply_to")
+            if not isinstance(from_, str) or not from_:
+                raise _BadRequest("'from' (non-empty string) is required")
+            if not isinstance(body_text, str) or not body_text:
+                raise _BadRequest("'body' (non-empty string) is required")
+            result = runner.run(
+                service.a2a_send(
+                    sender=from_, body=body_text,
+                    thread=thread, reply_to=reply_to,
+                    data_dir=data_dir,
+                )
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_messages(self, qs: dict) -> None:
+            thread = (qs.get("thread") or [None])[0]
+            since_raw = (qs.get("since") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            try:
+                since = float(since_raw) if since_raw is not None else None
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'since' must be a float timestamp") from exc
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            messages = runner.run(
+                service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
+            )
+            self._send_json(200, {"messages": messages})
+
+        def _handle_a2a_stream(self, qs: dict) -> None:
+            """Server-Sent Events stream for the A2A bus.
+
+            Runs in its own request thread (ThreadingHTTPServer); polls the
+            archive once per second via the service loop and pushes new
+            messages as ``data:`` SSE frames. Each ``runner.run(...)`` call
+            is a quick, bounded archive query — the sleep happens here in
+            the request thread, never inside the service loop. Disconnects
+            are detected via write errors and exit the loop cleanly.
+            """
+            thread = (qs.get("thread") or [None])[0]
+            since_raw = (qs.get("since") or [None])[0]
+            try:
+                last_ts = float(since_raw) if since_raw is not None else time.time()
+            except (TypeError, ValueError):
+                last_ts = time.time()
+
+            # Send SSE response headers before entering the poll loop.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+
+            try:
+                while True:
+                    msgs = runner.run(
+                        service.a2a_feed(
+                            thread=thread, since=last_ts, limit=200, data_dir=data_dir,
+                        )
+                    )
+                    # Keep only messages strictly newer than last_ts to avoid
+                    # re-sending the boundary row on subsequent polls.
+                    new_msgs = [m for m in msgs if m["ts"] > last_ts]
+                    if new_msgs:
+                        for msg in new_msgs:
+                            frame = f"data: {json.dumps(msg)}\n\n"
+                            self.wfile.write(frame.encode("utf-8"))
+                            last_ts = msg["ts"]
+                        self.wfile.flush()
+                    else:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                    time.sleep(1.0)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                # Client disconnected; exit the thread cleanly.
+                return
+
     return TaosmdHandler
 
 
@@ -475,7 +672,8 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     print(f"taosmd HTTP API listening on http://{bound_host}:{bound_port} ({where})")
     print(f"Inspection UI (read-only): http://{bound_host}:{bound_port}/")
     print("Endpoints: GET /health, POST /ingest, GET|POST /search, "
-          "GET /pending, POST /pending/resolve")
+          "GET /pending, POST /pending/resolve, "
+          "POST /a2a/send, GET /a2a/messages, GET /a2a/stream")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -37,11 +37,12 @@ EVENT_CONTENT_VIEW = "content_view"       # User viewed a post, page, thread, vi
 EVENT_SEARCH = "search"                   # User searched for something
 EVENT_INGEST = "ingest"                   # Content ingested into knowledge base
 EVENT_MONITOR = "monitor"                 # Monitoring event (poll, change detected)
+EVENT_A2A = "a2a"                         # Agent-to-agent message bus message
 
 ALL_EVENT_TYPES = [
     EVENT_CONVERSATION, EVENT_TOOL_CALL, EVENT_API_CALL, EVENT_DECISION,
     EVENT_ERROR, EVENT_SYSTEM, EVENT_APP_USAGE, EVENT_CONTENT_VIEW,
-    EVENT_SEARCH, EVENT_INGEST, EVENT_MONITOR,
+    EVENT_SEARCH, EVENT_INGEST, EVENT_MONITOR, EVENT_A2A,
 ]
 
 # User activity events are opt-in
@@ -175,7 +176,7 @@ class ArchiveStore:
         # Redact secrets before storage
         from .secret_filter import redact_secrets
         summary, _ = redact_secrets(summary)
-        for key in ("content", "text", "msg", "query"):
+        for key in ("content", "text", "msg", "query", "body"):
             if key in data and isinstance(data[key], str):
                 data[key], _ = redact_secrets(data[key])
 
