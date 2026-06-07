@@ -51,10 +51,12 @@ pip install -e . --quiet 2>/dev/null || pip3 install -e . --quiet
 # Install ONNX Runtime (for fast embeddings)
 pip install onnxruntime numpy --quiet 2>/dev/null || pip3 install onnxruntime numpy --quiet
 
-# Ensure huggingface-cli is available
-if ! command -v huggingface-cli &>/dev/null; then
-    pip install huggingface-hub --quiet 2>/dev/null || pip3 install huggingface-hub --quiet
+# Ensure the Hugging Face CLI is available. `huggingface-cli` is deprecated and
+# no longer downloads; the current entrypoint is `hf` (huggingface-hub >= 0.34).
+if ! command -v hf &>/dev/null; then
+    pip install -U huggingface-hub --quiet 2>/dev/null || pip3 install -U huggingface-hub --quiet
 fi
+HF_DL="hf"; command -v hf &>/dev/null || HF_DL="huggingface-cli"
 
 # ================================================
 # 1. Embedding model (required — all platforms)
@@ -64,7 +66,7 @@ if [ -f "$MODEL_DIR/model.onnx" ]; then
     echo "✓ Embedding model already downloaded"
 else
     echo "→ Downloading all-MiniLM-L6-v2 ONNX (90MB)..."
-    huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir "$MODEL_DIR" --quiet
+    "$HF_DL" download onnx-models/all-MiniLM-L6-v2-onnx --local-dir "$MODEL_DIR"
 fi
 
 # ================================================
@@ -85,9 +87,9 @@ if [ "$PLATFORM" = "arm64" ] && [ -e "/sys/class/misc/mali0" ]; then
         else
             echo "  → Downloading Qwen3-4B for NPU (4.6GB)..."
             mkdir -p "$RKLLM_DIR"
-            huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
+            "$HF_DL" download dulimov/Qwen3-4B-rk3588-1.2.1-base \
                 Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
-                --local-dir "$RKLLM_DIR" --quiet 2>/dev/null || echo "  ⚠ Download failed — install manually"
+                --local-dir "$RKLLM_DIR" 2>/dev/null || echo "  ⚠ Download failed — install manually"
         fi
     else
         echo "  ⚠ rkllama not found. Install from: https://github.com/NotPunchnox/rkllama"
@@ -188,16 +190,12 @@ if [ $? -eq 0 ]; then
     echo "  Location: $INSTALL_DIR"
     echo "  Model:    $MODEL_DIR/model.onnx"
 
-    # GPU-specific suggestions
-    if [ "$HAS_NVIDIA" = true ]; then
+    # LLM extraction status (x86 path set this up above via Ollama + qwen3:4b)
+    if command -v ollama &>/dev/null && ollama list 2>/dev/null | grep -q "qwen3:4b"; then
         echo ""
-        echo "  GPU detected! For LLM-powered fact extraction:"
-        echo "    1. Install Ollama: curl -fsSL https://ollama.com/install.sh | sh"
-        echo "    2. Pull a model: ollama pull qwen2.5:3b"
-        echo "    3. Set: export TAOSMD_LLM_URL=http://localhost:11434"
-        echo ""
-        echo "  This enables 72% recall background extraction"
-        echo "  (vs 39% regex-only without a GPU/LLM)"
+        echo "  LLM extraction ready: Ollama + qwen3:4b are installed."
+        if [ "$HAS_NVIDIA" = true ]; then echo "  (Running on your detected GPU.)"; else echo "  (CPU-only — same quality, slower than a GPU/NPU.)"; fi
+        echo "  Enables higher-recall background fact extraction than regex-only."
     fi
 
     # RK3588-specific suggestions
