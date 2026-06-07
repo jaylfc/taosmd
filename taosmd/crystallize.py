@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import _db
+
 if TYPE_CHECKING:
     from .knowledge_graph import TemporalKnowledgeGraph
 
@@ -67,7 +69,7 @@ class CrystalStore:
 
     async def init(self) -> None:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn = _db.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()

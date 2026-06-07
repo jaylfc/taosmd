@@ -28,7 +28,7 @@ from pathlib import Path
 
 import httpx
 
-from taosmd import prompts
+from taosmd import _db, prompts
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ class SessionCatalog:
 
     async def init(self) -> None:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn = _db.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()
