@@ -32,6 +32,39 @@ CREATE TABLE IF NOT EXISTS vector_memory (
 CREATE INDEX IF NOT EXISTS idx_vm_created ON vector_memory(created_at DESC);
 """
 
+# External-content FTS5 virtual table backing the opt-in "fts5_rrf" fusion mode.
+# It indexes the `text` column keyed to vector_memory.id (content=vector_memory,
+# content_rowid=id), so it stores only the inverted index, not a copy of the
+# text. Created separately from SCHEMA because FTS5 may be unavailable in a given
+# sqlite3 build — we probe for it (see _fts5_available) and skip the table if so.
+# The index is populated lazily on the first fts5_rrf search rather than on every
+# add(), so non-FTS stores (and the hot add() path) are untouched and existing
+# DBs work without a rebuild.
+FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS vector_memory_fts USING fts5(
+    text,
+    content='vector_memory',
+    content_rowid='id'
+);
+"""
+
+
+def fts5_query_string(query: str) -> str:
+    """Turn arbitrary user text into a safe FTS5 MATCH query.
+
+    FTS5 MATCH has its own query grammar (quotes, parens, OR/AND/NOT, NEAR, *,
+    etc.), so raw user text like `say "hi" (really?)` would raise a syntax
+    error. We extract bareword tokens, wrap each as a double-quoted FTS5 string
+    (doubling embedded quotes per the FTS5 escaping rule), and OR-join them so
+    any token may match. Returns "" when no usable token survives.
+    """
+    import re
+
+    tokens = re.findall(r"\w+", query.lower())
+    if not tokens:
+        return ""
+    return " OR ".join('"' + t.replace('"', '""') + '"' for t in tokens)
+
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
@@ -101,6 +134,17 @@ class VectorMemory:
                 "binary_quant and late_interaction are mutually exclusive"
             )
         self._conn: sqlite3.Connection | None = None
+        # Whether the open sqlite3 build supports FTS5 and the FTS table exists.
+        # Set in init(); gates the opt-in "fts5_rrf" fusion mode (graceful
+        # fallback to "rrf" when False). The FTS index itself is populated
+        # lazily on first fts5_rrf search.
+        self._fts5_ready = False
+        # Watermark of the highest vector_memory.id that has been reflected into
+        # the FTS index. -1 means "never built". External-content FTS5 reports
+        # COUNT(*) from the content table even when its index is empty, so we
+        # can't detect staleness by row count — we track the max id we last
+        # rebuilt at and re-rebuild when the table has grown past it.
+        self._fts5_synced_max_id = -1
         self._http = None
         self._local_model = None
         self._onnx_session = None
@@ -112,6 +156,18 @@ class VectorMemory:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()
+
+        # Probe for FTS5 and create the external-content index table if present.
+        # Compiled into CPython's bundled sqlite3, but a custom/system build may
+        # omit it — fall back gracefully (fts5_rrf degrades to rrf at search).
+        try:
+            self._conn.executescript(FTS_SCHEMA)
+            self._conn.commit()
+            self._fts5_ready = True
+        except sqlite3.OperationalError as e:
+            logger.warning("FTS5 unavailable (%s); fts5_rrf will fall back to rrf", e)
+            self._fts5_ready = False
+
         self._http = http_client
 
         # Load local embedding model if requested
@@ -300,6 +356,28 @@ class VectorMemory:
         self._conn.commit()
         return cursor.lastrowid
 
+    def _sync_fts_index(self) -> bool:
+        """Populate the FTS5 index from vector_memory if it's out of sync.
+
+        Lazy and idempotent: rebuilds the external-content index from the main
+        table on the first fts5_rrf search (or after rows are added between
+        searches), so add() stays untouched and existing DBs need no migration.
+        Uses FTS5's 'rebuild' command, which reindexes from the content table.
+        Staleness is tracked by the main table's MAX(id) watermark (COUNT(*) is
+        unreliable for external-content FTS5). Returns True when the index is
+        ready to query, False if FTS5 is unavailable.
+        """
+        if not self._fts5_ready or self._conn is None:
+            return False
+        row = self._conn.execute("SELECT MAX(id) FROM vector_memory").fetchone()
+        max_id = row[0] if row and row[0] is not None else 0
+        if self._fts5_synced_max_id >= max_id:
+            return True
+        self._conn.execute("INSERT INTO vector_memory_fts(vector_memory_fts) VALUES('rebuild')")
+        self._conn.commit()
+        self._fts5_synced_max_id = max_id
+        return True
+
     async def search(
         self,
         query: str,
@@ -315,6 +393,13 @@ class VectorMemory:
           "bm25_rrf"       — RRF over (semantic ranks, proper BM25 ranks).
                               Industrial BM25 (IDF + TF saturation + length
                               norm via bm25s) on raw text.
+          "fts5_rrf"       — RRF over (semantic ranks, SQLite FTS5 BM25 ranks).
+                              Same recipe as bm25_rrf but the keyword ranks come
+                              from a built-in FTS5 index (zero new deps, no
+                              per-query bm25s+spaCy rebuild). The index is built
+                              lazily on the first fts5_rrf search. Falls back to
+                              the "rrf" presence heuristic if the sqlite3 build
+                              lacks FTS5.
           "bm25_lemma_rrf" — Same as bm25_rrf but BM25 indexes and queries
                               run on spaCy-lemmatised text (handles
                               meetings/meeting, attending/attend etc.).
@@ -418,12 +503,38 @@ class VectorMemory:
                 # Dot product = cosine similarity (both normalised)
                 similarities = emb_norms @ query_norm
 
-            if hybrid and keywords and fusion in ("rrf", "bm25_rrf", "bm25_lemma_rrf", "mem0_additive"):
+            # fts5_rrf needs a live FTS5 index; if this build lacks FTS5, drop
+            # to the "rrf" presence heuristic so the run still completes.
+            effective_fusion = fusion
+            if fusion == "fts5_rrf" and not self._sync_fts_index():
+                effective_fusion = "rrf"
+
+            if hybrid and keywords and effective_fusion in ("rrf", "bm25_rrf", "bm25_lemma_rrf", "mem0_additive", "fts5_rrf"):
                 rrf_k = 60
                 n = len(ids)
                 semantic_ranks = np.argsort(np.argsort(-similarities))  # rank 0 = best
 
-                if fusion in ("bm25_rrf", "bm25_lemma_rrf", "mem0_additive"):
+                if effective_fusion == "fts5_rrf":
+                    # Lexical ranks from the built-in FTS5 BM25 index. Map each
+                    # matched rowid (== vector_memory.id) to its rank; ids/texts
+                    # are aligned 1:1 with similarities, so build an id->index
+                    # lookup. Unmatched rows get the worst rank (n-1) so RRF
+                    # still contributes a (small) reciprocal term for them.
+                    id_to_idx = {rid: i for i, rid in enumerate(ids)}
+                    keyword_ranks = np.full(n, n - 1, dtype=np.int64)
+                    match_str = fts5_query_string(query)
+                    if match_str:
+                        fts_rows = self._conn.execute(
+                            "SELECT rowid FROM vector_memory_fts "
+                            "WHERE vector_memory_fts MATCH ? ORDER BY rank",
+                            (match_str,),
+                        ).fetchall()
+                        for rank, frow in enumerate(fts_rows):
+                            idx = id_to_idx.get(frow[0])
+                            if idx is not None:
+                                keyword_ranks[idx] = rank
+                    bm25_raw_per_idx = None
+                elif effective_fusion in ("bm25_rrf", "bm25_lemma_rrf", "mem0_additive"):
                     # Proper BM25. bm25s tokenises by lowercasing + splitting
                     # on non-word characters; we skip stemming because spaCy
                     # lemmatisation (when fusion in {bm25_lemma_rrf,
@@ -450,7 +561,7 @@ class VectorMemory:
                     for rank, idx in enumerate(bm25_indices[0]):
                         bm25_raw_per_idx[idx] = float(bm25_raw[0, rank])
                 else:
-                    # Legacy substring-presence heuristic (fusion == "rrf").
+                    # Legacy substring-presence heuristic (effective_fusion == "rrf").
                     keyword_scores = np.zeros(n, dtype=np.float32)
                     for i, text in enumerate(texts):
                         text_lower = text.lower()
@@ -458,7 +569,7 @@ class VectorMemory:
                     keyword_ranks = np.argsort(np.argsort(-keyword_scores))
                     bm25_raw_per_idx = None
 
-                if fusion == "mem0_additive":
+                if effective_fusion == "mem0_additive":
                     # Mem0-style additive scoring: sigmoid-normalise BM25 to
                     # [0, 1], add to semantic similarity, divide by 2 for
                     # max_possible=2 (no entity boost in this base impl).

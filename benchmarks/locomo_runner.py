@@ -1471,13 +1471,16 @@ def _parse_args() -> argparse.Namespace:
                         "decay rate per turn-index age (0.0 disables, 0.02 "
                         "down-weights the oldest turn in a 600-turn convo by "
                         "~6e-6, 0.005 by ~0.05). Default 0.0.")
-    p.add_argument("--fusion", choices=["boost", "rrf", "bm25_rrf", "bm25_lemma_rrf", "mem0_additive", "none"], default="boost",
+    p.add_argument("--fusion", choices=["boost", "rrf", "bm25_rrf", "bm25_lemma_rrf", "mem0_additive", "fts5_rrf", "none"], default="boost",
                    help="Vector + keyword fusion mode (vector-only strategy):\n"
                         "  boost: legacy additive keyword boost (0.3 * overlap, our "
                         "current default in the matrix runs).\n"
                         "  rrf: Reciprocal Rank Fusion across semantic + keyword "
                         "ranked lists (the 2026 LoCoMo recipe — already implemented "
                         "in VectorMemory.search but never invoked from the bench).\n"
+                        "  fts5_rrf: RRF with keyword ranks from SQLite's built-in "
+                        "FTS5 BM25 index — zero new deps, no per-query bm25s+spaCy "
+                        "rebuild. Falls back to rrf if the sqlite3 build lacks FTS5.\n"
                         "  none: pure semantic cosine (MemPalace-equivalent).")
     p.add_argument("--multi-level-retrieval", action="store_true",
                    help="Ingest three levels into vmem instead of one: raw turns "
