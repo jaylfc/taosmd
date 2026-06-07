@@ -50,7 +50,7 @@ The agent will pull the repo, run the install, register itself, append the per-t
 
 ### One-Line Setup (manual)
 
-> **Note:** Install scripts are new and awaiting full testing on clean environments. Please report issues.
+> **Note:** The Python package install (`pip install taosmd`) and the CLI (`taosmd`, `taosmd serve`, `taosmd mcp`) are verified on a clean environment. The one-line bootstrap below (which additionally installs Ollama and downloads the embedding + LLM models) is newer and still being validated across clean machines — please report issues.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash
