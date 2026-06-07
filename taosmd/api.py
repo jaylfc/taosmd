@@ -344,8 +344,29 @@ async def resolve_pending_decision(
             kg = TemporalKnowledgeGraph(db_path=kg_path)
             await kg.init()
             try:
+                # Resolve the old object names before invalidating so we can
+                # mirror the correction into the vector layer (soft-supersede
+                # the chunk(s) carrying the stale value). Best-effort and
+                # zero-loss: raw rows are retained, only hidden from recall.
+                stores = await _ensure_stores(data_dir)
+                vmem = stores.get("vector")
+                old_objects = [
+                    row["object_name"]
+                    for old_id in decision["old_triple_ids"]
+                    if (row := kg._conn.execute(
+                        "SELECT o.name AS object_name FROM kg_triples t "
+                        "JOIN kg_entities o ON o.id = t.object_id WHERE t.id = ?",
+                        (old_id,),
+                    ).fetchone()) is not None
+                ]
                 for old_id in decision["old_triple_ids"]:
                     await kg.invalidate(old_id)
+                if vmem is not None:
+                    for obj_name in old_objects:
+                        try:
+                            await vmem.supersede_matching(obj_name)
+                        except Exception as e:  # pragma: no cover - defensive
+                            logger.debug("vector supersede skipped: %s", e)
                 await kg.add_triple(
                     subject=decision["subject"],
                     predicate=decision["predicate"],
@@ -363,4 +384,23 @@ async def resolve_pending_decision(
         await store.close()
 
 
-__all__ = ["ingest", "search", "list_pending_decisions", "resolve_pending_decision"]
+async def supersede_vectors(match: str, *, data_dir=None) -> int:
+    """Soft-supersede vector chunk(s) whose stored text contains ``match``.
+
+    The manual counterpart to the automatic KG->vector link: lets a caller
+    retire a stale fact from vector recall directly (e.g. when a correction
+    arrives outside the KG contradiction path). Zero-loss — the matched rows
+    are retained, only stamped ``valid_to`` so ``search()`` skips them.
+    Returns the number of rows superseded.
+    """
+    stores = await _ensure_stores(data_dir)
+    return await stores["vector"].supersede_matching(match)
+
+
+__all__ = [
+    "ingest",
+    "search",
+    "list_pending_decisions",
+    "resolve_pending_decision",
+    "supersede_vectors",
+]

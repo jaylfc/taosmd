@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS vector_memory (
     text TEXT NOT NULL,
     embedding TEXT NOT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    valid_to REAL
 );
 CREATE INDEX IF NOT EXISTS idx_vm_created ON vector_memory(created_at DESC);
 """
@@ -95,6 +96,7 @@ class VectorMemory:
         self._conn = _db.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
         self._http = http_client
 
@@ -121,6 +123,23 @@ class VectorMemory:
             except Exception as e:
                 logger.warning("ONNX model failed to load: %s, falling back to QMD", e)
                 self._embed_mode = "qmd"
+
+    def _migrate(self) -> None:
+        """Bring an existing DB up to the current schema without data loss.
+
+        Adds the nullable ``valid_to`` column to stores created before the
+        correction-supersede feature. ``ALTER TABLE ... ADD COLUMN`` only
+        appends a NULL-defaulted column — no rows are rewritten or dropped, so
+        every existing vector survives and stays active (valid_to IS NULL).
+        """
+        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(vector_memory)")}
+        if "valid_to" not in cols:
+            self._conn.execute("ALTER TABLE vector_memory ADD COLUMN valid_to REAL")
+        # Index creation is deferred to here (not in SCHEMA) so it runs *after*
+        # the column is guaranteed to exist — a legacy table only gains the
+        # column via the ALTER above, and CREATE INDEX in SCHEMA would fire
+        # before that on the no-op CREATE TABLE IF NOT EXISTS path.
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_vm_valid ON vector_memory(valid_to)")
 
     async def close(self) -> None:
         if self._conn:
@@ -274,8 +293,17 @@ class VectorMemory:
                 "when", "where", "which", "who", "whom", "many", "much", "long"}
         keywords = [w.lower().strip("?.,!") for w in query.split() if len(w) > 2 and w.lower() not in stop]
 
-        # Load all embeddings and compute similarity using numpy batch operations
-        rows = self._conn.execute("SELECT id, text, embedding, metadata_json, created_at FROM vector_memory").fetchall()
+        # Load all *active* embeddings and compute similarity. Superseded rows
+        # (valid_to IS NOT NULL) are soft-hidden from recall — mirroring the
+        # KG's active-triple filter — but the raw row is never deleted, so
+        # zero-loss is preserved. This active filter covers every scoring path
+        # below (cosine, binary-quant, and the pure-Python fallback) because
+        # they all consume this single row set. No behaviour change when
+        # nothing has been superseded.
+        rows = self._conn.execute(
+            "SELECT id, text, embedding, metadata_json, created_at FROM vector_memory "
+            "WHERE valid_to IS NULL"
+        ).fetchall()
         if not rows:
             return []
 
@@ -471,7 +499,7 @@ class VectorMemory:
         """
         sql = (
             "SELECT id, text, metadata_json, created_at FROM vector_memory "
-            "WHERE json_extract(metadata_json, ?) = ?"
+            "WHERE valid_to IS NULL AND json_extract(metadata_json, ?) = ?"
         )
         params: list = [f"$.{position_key}", position_value]
         if group_key is not None and group_value is not None:
@@ -495,6 +523,52 @@ class VectorMemory:
     async def stats(self) -> dict:
         """Overall vector-memory statistics."""
         return {"count": await self.count()}
+
+    async def supersede(self, row_id: int, ended_at: float | None = None) -> bool:
+        """Soft-hide a single vector row from active recall.
+
+        Sets ``valid_to`` on the row so ``search()`` (and the adjacent-neighbour
+        lookup) no longer return it, mirroring the KG's
+        :meth:`TemporalKnowledgeGraph.invalidate`. The raw row — text, embedding,
+        and metadata — is *retained*; it is only excluded from recall, never
+        deleted. The append-only archive entry is likewise untouched, so
+        zero-loss is preserved.
+
+        Already-superseded rows are left as-is (the guard mirrors the KG's
+        ``valid_to IS NULL`` condition). Returns True if a row was affected.
+        """
+        end = ended_at if ended_at is not None else time.time()
+        cursor = self._conn.execute(
+            "UPDATE vector_memory SET valid_to = ? WHERE id = ? AND valid_to IS NULL",
+            (end, row_id),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    async def supersede_matching(self, text_or_substring: str, ended_at: float | None = None) -> int:
+        """Soft-hide every active row whose stored text contains the substring.
+
+        Used to wire corrections by content: when a fact is corrected, the
+        chunk(s) still carrying the *old* value are excluded from active recall
+        so the stale fact stops resurfacing in vector search too. As with
+        :meth:`supersede`, the raw rows are retained (zero-loss) — only their
+        ``valid_to`` is stamped. Matching is a plain case-sensitive substring
+        test on the stored (already secret-redacted) text. An empty/blank
+        ``text_or_substring`` is a no-op (returns 0) so a missing correction
+        value can never sweep the whole store. Returns the number of rows
+        superseded.
+        """
+        needle = (text_or_substring or "").strip()
+        if not needle:
+            return 0
+        end = ended_at if ended_at is not None else time.time()
+        cursor = self._conn.execute(
+            "UPDATE vector_memory SET valid_to = ? "
+            "WHERE valid_to IS NULL AND instr(text, ?) > 0",
+            (end, text_or_substring),
+        )
+        self._conn.commit()
+        return cursor.rowcount
 
     async def clear(self) -> int:
         cursor = self._conn.execute("DELETE FROM vector_memory")

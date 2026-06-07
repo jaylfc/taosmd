@@ -208,6 +208,7 @@ async def process_conversation_turn(
     pending_store=None,
     defer_below_confidence: float = 0.0,
     default_fact_confidence: float = 1.0,
+    vmem=None,
 ) -> dict:
     """Extract facts from a conversation turn and store in the KG.
 
@@ -229,6 +230,11 @@ async def process_conversation_turn(
         catalog pass, a summary of a summary) should pass a lower
         value -- e.g. 0.6 for regex on a session summary -- so the
         deferral threshold can actually fire.
+      - ``vmem``: an optional :class:`~taosmd.vector_memory.VectorMemory`.
+        When provided, an auto-resolved contradiction also soft-supersedes
+        the raw vector chunk(s) carrying the old object value, so a corrected
+        fact stops resurfacing in vector recall as well as in the KG. When
+        None (default), the vector store is left completely untouched.
 
     Returns ``{facts_extracted, triples_created, contradictions_resolved,
     deferred, deferred_ids, triple_ids, method}``.
@@ -289,6 +295,7 @@ async def process_conversation_turn(
                 pending_store=pending_store,
                 defer_below_confidence=defer_below_confidence,
                 evidence=text[:500],
+                vmem=vmem,
             )
             if result.get("status") == "deferred":
                 deferred_ids.append(result["pending_id"])

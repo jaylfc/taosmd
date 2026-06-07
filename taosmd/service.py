@@ -69,6 +69,20 @@ async def pending_resolve(
     )
 
 
+async def supersede(match: str, *, agent: str | None = None, data_dir=None) -> dict:
+    """Soft-supersede vector chunk(s) whose stored text contains ``match``.
+
+    Thin wrapper over :func:`taosmd.api.supersede_vectors`. Used to wire a
+    correction into the vector layer by content: matching chunks leave active
+    recall while the raw rows + archive entries are retained (zero-loss),
+    mirroring how the typed KG invalidates a corrected triple. ``agent`` is
+    accepted for adapter symmetry; the vector store is keyed per data dir.
+    Returns ``{"superseded": int, "match": str}``.
+    """
+    count = await _api.supersede_vectors(match, data_dir=data_dir)
+    return {"superseded": count, "match": match}
+
+
 async def stats(*, agent: str, data_dir=None) -> dict:
     """Return lightweight stats for an agent.
 
@@ -106,4 +120,4 @@ async def stats(*, agent: str, data_dir=None) -> dict:
     return out
 
 
-__all__ = ["ingest", "search", "pending_list", "pending_resolve", "stats"]
+__all__ = ["ingest", "search", "pending_list", "pending_resolve", "stats", "supersede"]
