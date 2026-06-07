@@ -25,6 +25,7 @@ Usage::
 See ``reference_memory_systems_survey.md`` for the design rationale.
 """
 
+from ._safety import DEFAULT_MAX_BYTES, check_size, resolve_within
 from .blob import (
     Blob,
     BlobType,
@@ -59,4 +60,7 @@ __all__ = [
     "REGISTRY",
     "pick_loader",
     "register_loader",
+    "DEFAULT_MAX_BYTES",
+    "check_size",
+    "resolve_within",
 ]

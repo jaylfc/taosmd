@@ -13,14 +13,17 @@ from taosmd.loaders import (
     BlobType,
     ChatBlob,
     ChatLoader,
+    DEFAULT_MAX_BYTES,
     DocBlob,
     DocLoader,
     EmailBlob,
     EmailLoader,
     TranscriptBlob,
     TranscriptLoader,
+    check_size,
     pick_loader,
     register_loader,
+    resolve_within,
     REGISTRY,
 )
 from taosmd.loaders.interface import LoaderInterface
@@ -300,4 +303,137 @@ def test_pick_and_load_e2e(tmp_path):
     blob = _run(loader.load(src))
 
     assert isinstance(blob, ChatBlob)
+    assert blob.messages[0].content == "Hi."
+
+
+# ---------------------------------------------------------------------------
+# Opt-in safety guards (#112 size limit, #113 path containment)
+# ---------------------------------------------------------------------------
+
+
+def test_default_max_bytes_is_generous():
+    # 100 MB — large enough that no normal loaded file trips it.
+    assert DEFAULT_MAX_BYTES == 100 * 1024 * 1024
+
+
+# --- check_size ------------------------------------------------------------
+
+
+def test_check_size_allows_small_file(tmp_path):
+    p = tmp_path / "small.txt"
+    p.write_text("tiny")
+    # Default generous cap and an explicit cap both pass silently.
+    check_size(p)
+    check_size(p, max_bytes=1024)
+
+
+def test_check_size_rejects_oversized_file(tmp_path):
+    p = tmp_path / "big.txt"
+    p.write_bytes(b"x" * 2048)
+    with pytest.raises(ValueError, match="exceeds the loader size"):
+        check_size(p, max_bytes=1024)
+
+
+def test_check_size_none_disables_check(tmp_path):
+    p = tmp_path / "big.txt"
+    p.write_bytes(b"x" * 2048)
+    # max_bytes=None is an explicit opt-out — no error even when large.
+    check_size(p, max_bytes=None)
+
+
+# --- resolve_within --------------------------------------------------------
+
+
+def test_resolve_within_no_base_dir_allows_any_path(tmp_path):
+    # With base_dir=None (default) nothing is restricted — standalone
+    # use of any absolute path keeps working.
+    p = tmp_path / "anywhere.txt"
+    p.write_text("ok")
+    assert resolve_within(p) == p.resolve()
+    # A path well outside the tree resolves fine too.
+    assert resolve_within("/etc/hosts") == Path("/etc/hosts").resolve()
+
+
+def test_resolve_within_allows_path_inside_base(tmp_path):
+    sub = tmp_path / "data"
+    sub.mkdir()
+    p = sub / "ok.txt"
+    p.write_text("ok")
+    assert resolve_within(p, base_dir=sub) == p.resolve()
+    # Nested deeper is fine too.
+    nested = sub / "a" / "b"
+    nested.mkdir(parents=True)
+    deep = nested / "deep.txt"
+    deep.write_text("ok")
+    assert resolve_within(deep, base_dir=sub) == deep.resolve()
+
+
+def test_resolve_within_blocks_traversal_escape(tmp_path):
+    sub = tmp_path / "data"
+    sub.mkdir()
+    escape = sub / ".." / ".." / "etc" / "passwd"
+    with pytest.raises(ValueError, match="outside the allowed base"):
+        resolve_within(escape, base_dir=sub)
+
+
+def test_resolve_within_blocks_absolute_escape(tmp_path):
+    sub = tmp_path / "data"
+    sub.mkdir()
+    with pytest.raises(ValueError, match="outside the allowed base"):
+        resolve_within("/etc/passwd", base_dir=sub)
+
+
+def test_resolve_within_blocks_symlink_escape(tmp_path):
+    sub = tmp_path / "data"
+    sub.mkdir()
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret")
+    link = sub / "link.txt"
+    link.symlink_to(outside)
+    with pytest.raises(ValueError, match="outside the allowed base"):
+        resolve_within(link, base_dir=sub)
+
+
+# --- wired into loader.load() ---------------------------------------------
+
+
+def test_loader_rejects_oversized_file(tmp_path):
+    src = tmp_path / "huge.txt"
+    src.write_bytes(b"x" * 4096)
+    with pytest.raises(ValueError, match="exceeds the loader size"):
+        _run(DocLoader().load(src, max_bytes=1024))
+
+
+def test_loader_base_dir_blocks_traversal(tmp_path):
+    base = tmp_path / "allowed"
+    base.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("nope")
+    escape = base / ".." / "outside.txt"
+    with pytest.raises(ValueError, match="outside the allowed base"):
+        _run(DocLoader().load(escape, base_dir=base))
+
+
+def test_loader_base_dir_allows_normal_path(tmp_path):
+    base = tmp_path / "allowed"
+    base.mkdir()
+    src = base / "notes.txt"
+    src.write_text("# Hello\n\nbody")
+    blob = _run(DocLoader().load(src, base_dir=base))
+    assert blob.title == "Hello"
+
+
+def test_loader_no_base_dir_allows_any_path(tmp_path):
+    # Default call (no base_dir) loads a file regardless of location.
+    src = tmp_path / "notes.txt"
+    src.write_text("plain content")
+    blob = _run(DocLoader().load(src))
+    assert blob.content == "plain content"
+
+
+def test_loader_default_call_unchanged(tmp_path):
+    # A normal small file loads fine with no safety args at all.
+    src = tmp_path / "session.chat.json"
+    src.write_text(json.dumps([{"role": "user", "content": "Hi."}]))
+    blob = _run(ChatLoader().load(src))
     assert blob.messages[0].content == "Hi."

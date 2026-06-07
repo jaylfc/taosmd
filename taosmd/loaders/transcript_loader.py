@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, ClassVar
 
+from ._safety import DEFAULT_MAX_BYTES, check_size, resolve_within
 from .blob import TranscriptBlob, TranscriptStamp
 from .interface import LoaderInterface
 
@@ -55,9 +56,18 @@ class TranscriptLoader(LoaderInterface):
         ext = extension.lower().lstrip(".") if extension else ""
         return ext.endswith("transcript.json") or ext.endswith("whisper.json")
 
-    async def load(self, file_path: str | Path, **kwargs) -> TranscriptBlob:
+    async def load(
+        self,
+        file_path: str | Path,
+        *,
+        max_bytes: int | None = DEFAULT_MAX_BYTES,
+        base_dir: str | Path | None = None,
+        **kwargs,
+    ) -> TranscriptBlob:
         path = Path(file_path)
-        with open(path) as f:
+        safe_path = resolve_within(file_path, base_dir)
+        check_size(safe_path, max_bytes)
+        with open(safe_path) as f:
             data = json.load(f)
 
         rows: list[dict] = []

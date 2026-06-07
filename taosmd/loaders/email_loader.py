@@ -18,6 +18,7 @@ from email.utils import getaddresses, parsedate_to_datetime
 from pathlib import Path
 from typing import ClassVar
 
+from ._safety import DEFAULT_MAX_BYTES, check_size, resolve_within
 from .blob import EmailBlob
 from .interface import LoaderInterface
 
@@ -29,9 +30,18 @@ class EmailLoader(LoaderInterface):
         "message/rfc822", "application/mbox",
     )
 
-    async def load(self, file_path: str | Path, **kwargs) -> EmailBlob:
+    async def load(
+        self,
+        file_path: str | Path,
+        *,
+        max_bytes: int | None = DEFAULT_MAX_BYTES,
+        base_dir: str | Path | None = None,
+        **kwargs,
+    ) -> EmailBlob:
         path = Path(file_path)
-        with open(path, "rb") as f:
+        safe_path = resolve_within(file_path, base_dir)
+        check_size(safe_path, max_bytes)
+        with open(safe_path, "rb") as f:
             msg = email.message_from_binary_file(f, policy=policy.default)
 
         # body — prefer text/plain part, fall back to flat string.

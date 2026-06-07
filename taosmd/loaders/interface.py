@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar
 
+from ._safety import DEFAULT_MAX_BYTES
 from .blob import Blob
 
 
@@ -47,7 +48,14 @@ class LoaderInterface(ABC):
         return False
 
     @abstractmethod
-    async def load(self, file_path: str | Path, **kwargs) -> Blob:
+    async def load(
+        self,
+        file_path: str | Path,
+        *,
+        max_bytes: int | None = DEFAULT_MAX_BYTES,
+        base_dir: str | Path | None = None,
+        **kwargs,
+    ) -> Blob:
         """Read the file at ``file_path`` and return a typed ``Blob``.
 
         Implementations should set ``Blob.source_path`` to a string of
@@ -55,5 +63,19 @@ class LoaderInterface(ABC):
         a string view is cheap to derive, it lets legacy ingest paths
         keep working. When it isn't cheap, leave it empty and rely on
         the typed fields.
+
+        Two opt-in safety guards, both with standalone-safe defaults:
+
+          ``max_bytes`` — the file is rejected (``ValueError``) if it is
+          larger than this. Defaults to a generous 100 MB; pass ``None``
+          to disable the check.
+
+          ``base_dir`` — when given, the resolved ``file_path`` must sit
+          inside it or a ``ValueError`` is raised (path-traversal /
+          symlink containment). Defaults to ``None`` (no restriction),
+          so direct use against any path keeps working.
+
+        Implementations enforce both via ``taosmd.loaders._safety``
+        before reading the file.
         """
         raise NotImplementedError
