@@ -482,6 +482,21 @@ def main(argv: list[str] | None = None) -> int:
         "--serve-data-dir", dest="serve_data_dir", default=None,
         help="Data dir for served memory (default: $TAOSMD_DATA_DIR or ~/.taosmd)",
     )
+    _svc = serve_p.add_mutually_exclusive_group()
+    _svc.add_argument(
+        "--install-service", action="store_true",
+        help="Install taosmd serve as a persistent background service "
+             "(systemd user unit on Linux, LaunchAgent on macOS, "
+             "PowerShell instructions on Windows) and exit.",
+    )
+    _svc.add_argument(
+        "--uninstall-service", action="store_true",
+        help="Stop and remove the background service installed by --install-service.",
+    )
+    _svc.add_argument(
+        "--service-status", action="store_true",
+        help="Print the running status of the background service.",
+    )
 
     # ----- mcp subcommand (MCP server over stdio) -----------------------
     mcp_p = sub.add_parser(
@@ -496,6 +511,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "serve":
+        from . import service_install  # noqa: PLC0415
+        if args.install_service:
+            return service_install.install_service(
+                host=args.host, port=args.port, data_dir=args.serve_data_dir,
+            )
+        if args.uninstall_service:
+            return service_install.uninstall_service()
+        if args.service_status:
+            return service_install.service_status()
         from . import http_server  # noqa: PLC0415
         return http_server.serve(
             host=args.host, port=args.port, data_dir=args.serve_data_dir,
