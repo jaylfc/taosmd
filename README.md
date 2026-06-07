@@ -468,6 +468,8 @@ All components expose HTTP endpoints when used with the taOS server:
 | `GET /api/archive/events` | Search archived events |
 | `POST /api/kg/classify` | Classify memory type |
 
+`taosmd serve` also exposes a minimal, read-only local inspection UI at the root URL (e.g. `http://127.0.0.1:7833/`) — a single self-contained, stdlib-only page (no JS frameworks, no CDNs, works offline) for searching memory and viewing the pending-review queue for an agent.
+
 ## Running Benchmarks
 
 ```bash
