@@ -1,9 +1,13 @@
 """Tests for the timeline intent type in the intent classifier."""
 
+import re
+
 import pytest
 from taosmd.intent_classifier import (
     classify_intent,
     get_search_strategy,
+    INTENT_PATTERNS,
+    INTENT_PRIORITY,
     INTENT_TIMELINE,
     INTENT_FACTUAL,
     INTENT_TECHNICAL,
@@ -40,3 +44,45 @@ def test_non_timeline_queries_unchanged():
     assert classify_intent("What is taOS?") == INTENT_FACTUAL
     assert classify_intent("How does embedding work?") == INTENT_TECHNICAL
     assert classify_intent("What does Jay prefer?") == INTENT_PREFERENCE
+
+
+def _scores(query: str) -> dict:
+    """Replicate the classifier's scoring for tie inspection in tests."""
+    ql = query.lower().strip()
+    boost = {"recent": 2, "preference": 2, "timeline": 2}
+    out = {}
+    for intent, patterns in INTENT_PATTERNS.items():
+        s = sum(boost.get(intent, 1) for p in patterns if re.search(p, ql))
+        if s:
+            out[intent] = s
+    return out
+
+
+def test_tie_resolves_by_explicit_priority():
+    """A genuine score tie must resolve to the higher-priority intent.
+
+    "What is the architecture" matches one factual pattern ("what is") and
+    one technical pattern ("architecture") — a 1-1 tie. Technical outranks
+    factual in INTENT_PRIORITY, so technical must win.
+    """
+    query = "What is the architecture"
+    scores = _scores(query)
+    assert scores.get(INTENT_FACTUAL) == scores.get(INTENT_TECHNICAL) == 1
+    assert INTENT_PRIORITY.index(INTENT_TECHNICAL) < INTENT_PRIORITY.index(
+        INTENT_FACTUAL
+    )
+    assert classify_intent(query) == INTENT_TECHNICAL
+
+
+def test_priority_independent_of_pattern_decl_order():
+    """Tie-break must follow INTENT_PRIORITY, not dict declaration order."""
+    # Every pattern-bearing intent appears in the explicit priority list.
+    for intent in INTENT_PATTERNS:
+        assert intent in INTENT_PRIORITY
+    # Priority is intentionally different from declaration order (factual is
+    # declared first but is near-last in priority).
+    decl_order = list(INTENT_PATTERNS.keys())
+    assert decl_order[0] == INTENT_FACTUAL
+    assert INTENT_PRIORITY.index(INTENT_FACTUAL) > INTENT_PRIORITY.index(
+        INTENT_TECHNICAL
+    )
