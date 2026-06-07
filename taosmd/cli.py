@@ -449,6 +449,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Free-form note attached to the resolution",
     )
 
+    # ----- supersede subcommand (retire stale chunks from vector recall) -
+    supersede_p = sub.add_parser(
+        "supersede",
+        help="Soft-hide vector chunk(s) whose text contains --match from active "
+             "recall (zero-loss: raw rows are retained, only excluded from search)",
+    )
+    supersede_p.add_argument(
+        "--agent", default=None,
+        help="Agent name (accepted for symmetry; the vector store is per data dir)",
+    )
+    supersede_p.add_argument(
+        "--match", required=True,
+        help="Substring; every active chunk whose stored text contains it is superseded",
+    )
+
     # ----- serve subcommand (local HTTP/REST API) -----------------------
     serve_p = sub.add_parser(
         "serve",
@@ -493,6 +508,15 @@ def main(argv: list[str] | None = None) -> int:
         except mcp_server.MissingMCPDependencyError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
+
+    if args.cmd == "supersede":
+        import asyncio  # noqa: PLC0415
+        from . import service  # noqa: PLC0415
+        result = asyncio.run(
+            service.supersede(args.match, agent=args.agent, data_dir=args.data_dir)
+        )
+        print(f"superseded {result['superseded']} chunk(s) matching {result['match']!r}")
+        return 0
 
     registry = AgentRegistry(args.data_dir)
 
