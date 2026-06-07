@@ -71,7 +71,7 @@ cd taosmd
 pip install -e .
 
 # 1. Embedding model (required)
-huggingface-cli download onnx-models/all-MiniLM-L6-v2-onnx --local-dir models/minilm-onnx
+hf download onnx-models/all-MiniLM-L6-v2-onnx --local-dir models/minilm-onnx
 
 # 2. LLM for fact extraction + answering (required)
 # Option A (default): any Linux/macOS box with or without a GPU — use Ollama
@@ -80,7 +80,7 @@ ollama pull qwen3:4b
 
 # Option B (NPU acceleration): Orange Pi / Rock 5 / Radxa with RK3588 — use rkllama
 # Install rkllama: https://github.com/NotPunchnox/rkllama
-huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
+hf download dulimov/Qwen3-4B-rk3588-1.2.1-base \
   Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
   --local-dir ~/.rkllama/models/qwen3-4b-chat
 ```
@@ -439,7 +439,7 @@ The default Manual Install path. Ollama serves the LLM, ONNX Runtime serves embe
 # See: https://github.com/NotPunchnox/rkllama
 
 # The setup script handles this automatically, or manually:
-huggingface-cli download dulimov/Qwen3-4B-rk3588-1.2.1-base \
+hf download dulimov/Qwen3-4B-rk3588-1.2.1-base \
   Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
   --local-dir ~/.rkllama/models/qwen3-4b-chat
 ```
