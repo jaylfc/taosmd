@@ -359,7 +359,7 @@ It reuses the same shared service layer as the [local HTTP/REST server](#api), s
 - **Framework-agnostic** — Python API, CLI, [MCP server](#mcp-server), and local HTTP/REST API work with any agent framework
 - **Hybrid search** — semantic similarity + keyword overlap boosting
 - **Temporal facts** — validity windows, point-in-time queries
-- **Contradiction detection** — corrected facts supersede the old value; recall returns only the active fact, so corrections stop resurfacing
+- **Contradiction detection** — corrected facts supersede across both the typed knowledge graph (via `valid_to` invalidation) and the vector recall layer (matching chunks soft-hidden, not deleted); recall returns only the active fact
 - **Zero-loss archive** — append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
 - **Intent-aware retrieval** — routes queries to optimal memory layer
 - **0.3ms embeddings** — ONNX Runtime on CPU (ARM or x86)
@@ -458,19 +458,42 @@ export TAOSMD_LLM_URL=http://<gpu-machine>:11434
 
 ## API
 
-All components expose HTTP endpoints when used with the taOS server:
+`taosmd serve` starts a local HTTP/REST server (default `127.0.0.1:7833`, stdlib only, no new dependencies). It is a thin JSON shell over the same service layer as the Python API and CLI, so behaviour is identical across surfaces. Every endpoint that takes an `agent` parameter forwards it to the service layer, honouring the same per-agent isolation as the Python API.
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /api/kg/triples` | Add a fact |
-| `GET /api/kg/query/{entity}` | Query facts about an entity |
-| `POST /api/archive/record` | Archive an event |
-| `GET /api/archive/events` | Search archived events |
-| `POST /api/kg/classify` | Classify memory type |
+**Security note:** the server binds `127.0.0.1` by default — no auth is needed because only local processes can reach it. If you pass `--host 0.0.0.0` to expose it on a LAN, there is no authentication; put it behind your own network controls.
 
-`taosmd serve` also exposes a minimal, read-only local inspection UI at the root URL (e.g. `http://127.0.0.1:7833/`) — a single self-contained, stdlib-only page (no JS frameworks, no CDNs, works offline) for searching memory and viewing the pending-review queue for an agent.
+### Endpoints
 
-To run the server persistently as a background service (systemd on Linux, launchd on macOS, or a Scheduled Task on Windows), use `--install-service`:
+| Method | Path | Request | Response |
+|--------|------|---------|----------|
+| `GET` | `/health` | — | `{"status": "ok", "version": <str>}` |
+| `POST` | `/ingest` | `{"text": str, "agent": str}` | `{"archived": int, "agent": str, "data_dir": str}` |
+| `POST` | `/search` | `{"query": str, "agent": str, "limit"?: int}` | `{"hits": [...]}` |
+| `GET` | `/search` | `?q=<query>&agent=<agent>&limit=<int>` | `{"hits": [...]}` |
+| `GET` | `/pending` | `?agent=<agent>&limit=<int>` | `{"pending": [...]}` |
+| `POST` | `/pending/resolve` | `{"id": str, "decision": "accept"\|"reject"\|"modify", "note"?: str}` | `{"ok": bool, "applied_kg": bool, "resolution": str}` |
+
+Each hit in `/search` results has the agent-rules contract shape: `{text, source, timestamp, confidence, metadata}`.
+
+### Agent-to-agent (A2A) bus
+
+`taosmd serve` also exposes a lightweight message bus for agent-to-agent communication on the same port:
+
+| Method | Path | Request | Response |
+|--------|------|---------|----------|
+| `POST` | `/a2a/send` | `{"from": str, "body": str, "thread"?: str, "reply_to"?: str}` | `{"id": str, "from": str, "thread": str, "reply_to": str\|null}` |
+| `GET` | `/a2a/messages` | `?thread=<str>&since=<unix-ts>&limit=<int>` | `{"messages": [...]}` (oldest-first) |
+| `GET` | `/a2a/stream` | `?thread=<str>&since=<unix-ts>` | SSE stream (`text/event-stream`), one JSON message per `data:` frame |
+
+Messages are stored as append-only archive events, so they inherit the archive's durability and automatic secret redaction. `thread` defaults to `"general"` when omitted from `/a2a/send`. Each message object has shape `{id, ts, from, body, thread, reply_to}`.
+
+### Inspection UI
+
+`GET /` and `GET /ui` serve a read-only local inspector — a single self-contained HTML page (inline `<style>` and `<script>`, no external requests, works fully offline). It lets you search memory, view the pending-review queue, and monitor the A2A bus (backfills history then live-updates via the SSE stream). It exposes no write or destructive actions; the JSON endpoints above are the integration surface.
+
+### Persistent service
+
+To run the server as a background service (systemd on Linux, launchd on macOS, or a Scheduled Task on Windows), use `--install-service`:
 
 ```bash
 taosmd serve --install-service            # install with defaults
