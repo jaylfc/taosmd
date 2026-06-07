@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "taosmd"
 version = "0.2.0"
-description = "Framework-agnostic AI memory system. 97.0% Recall@5 on LongMemEval-S."
+description = "Framework-agnostic, local-first AI memory system. 97.0% end-to-end Judge accuracy on LongMemEval-S, measured on a low-end reference stack."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
