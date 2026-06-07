@@ -183,14 +183,15 @@ def _install_cron(data_dir: str):
     q_dir = shlex.quote(data_dir)
     py_snippet = (
         "import asyncio, os; "
+        "from os.path import join as j; "
         "from taosmd.archive import ArchiveStore; "
         "from taosmd.catalog_pipeline import CatalogPipeline; "
         "d = os.environ['TAOSMD_DATA_DIR']; "
-        "a = ArchiveStore(archive_dir=d + '/archive', index_path=d + '/archive-index.db'); "
+        "a = ArchiveStore(archive_dir=j(d, 'archive'), index_path=j(d, 'archive-index.db')); "
         "asyncio.run(a.init()); asyncio.run(a.compress_old_files()); asyncio.run(a.close()); "
-        "p = CatalogPipeline(archive_dir=d + '/archive', sessions_dir=d + '/sessions', "
-        "catalog_db=d + '/session-catalog.db', crystals_db=d + '/crystals.db', "
-        "kg_db=d + '/knowledge-graph.db'); "
+        "p = CatalogPipeline(archive_dir=j(d, 'archive'), sessions_dir=j(d, 'sessions'), "
+        "catalog_db=j(d, 'session-catalog.db'), crystals_db=j(d, 'crystals.db'), "
+        "kg_db=j(d, 'knowledge-graph.db')); "
         "asyncio.run(p.init()); asyncio.run(p.index_yesterday()); asyncio.run(p.close())"
     )
     cron_cmd = (
