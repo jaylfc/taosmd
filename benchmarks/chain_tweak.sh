@@ -40,5 +40,7 @@ run x_adj3         --model qwen3.5:9b --adjacent-turns 3                # more n
 run x_temp00       --model qwen3.5:9b --gen-temp 0.0                    # clean temperature sweep (no /no_think confound)
 run x_temp07       --model qwen3.5:9b --gen-temp 0.7
 run x_fullstack    --model qwen3.5:9b --multi-level-retrieval --llm-query-expansion --fusion rrf  # rerank ON TOP of the full-stack leader recipe
+run x_fts5_rerank  --model qwen3.5:9b --fusion fts5_rrf                  # FTS5 lexical arm (zero-dep, no per-query rebuild) + rerank
+run x_fts5_norrk   --model qwen3.5:9b --fusion fts5_rrf --reranker off --retrieval-top-k 20  # FTS5 fusion alone vs baseline (isolate the lexical swap)
 echo "CHAIN TWEAK DONE ${TS}  (escalate winners to q34b + full-1540)" >> "$LOG"
 echo "CHAIN_TWEAK_DONE" >> "$OUT/chain_tweak_done.marker"
