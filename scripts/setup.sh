@@ -190,16 +190,12 @@ if [ $? -eq 0 ]; then
     echo "  Location: $INSTALL_DIR"
     echo "  Model:    $MODEL_DIR/model.onnx"
 
-    # GPU-specific suggestions
-    if [ "$HAS_NVIDIA" = true ]; then
+    # LLM extraction status (x86 path set this up above via Ollama + qwen3:4b)
+    if command -v ollama &>/dev/null && ollama list 2>/dev/null | grep -q "qwen3:4b"; then
         echo ""
-        echo "  GPU detected! For LLM-powered fact extraction:"
-        echo "    1. Install Ollama: curl -fsSL https://ollama.com/install.sh | sh"
-        echo "    2. Pull a model: ollama pull qwen2.5:3b"
-        echo "    3. Set: export TAOSMD_LLM_URL=http://localhost:11434"
-        echo ""
-        echo "  This enables 72% recall background extraction"
-        echo "  (vs 39% regex-only without a GPU/LLM)"
+        echo "  LLM extraction ready: Ollama + qwen3:4b are installed."
+        if [ "$HAS_NVIDIA" = true ]; then echo "  (Running on your detected GPU.)"; else echo "  (CPU-only — same quality, slower than a GPU/NPU.)"; fi
+        echo "  Enables higher-recall background fact extraction than regex-only."
     fi
 
     # RK3588-specific suggestions
