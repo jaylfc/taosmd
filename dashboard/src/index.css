@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Design-system tokens for taOSmd dashboard.
+  Dark theme, restrained: evolved from bg #0f1115 / accent #6ea8fe baseline.
+  All semantic tokens live here; components reference these, never raw Tailwind palette.
+*/
+:root {
+  /* Surfaces */
+  --bg: #0d1017;          /* deepest background — content canvas */
+  --surface: #131720;     /* sidebar / toolbar / panel — cooler than bg */
+  --surface-2: #1a1f2e;   /* cards, hit rows, raised elements */
+  --border: #222738;      /* structural dividers */
+  --border-subtle: #1b2030; /* very faint separators inside panels */
+
+  /* Text — minimum 4.5:1 contrast ratio on their respective backgrounds */
+  --ink: #dde1ea;         /* body text — #dde1ea on #0d1017 = ~11:1 */
+  --muted: #8d97aa;       /* secondary info — on #0d1017 = ~4.6:1 */
+  --muted-bright: #a8b2c4; /* muted-but-prominent labels */
+
+  /* ONE accent — used ONLY for primary actions, current selection, live indicator */
+  --accent: #5b9cf6;      /* blue-ish; #5b9cf6 on #131720 = ~5.2:1 */
+  --accent-dim: #2a3f6a;  /* accent background wash for selection highlight */
+  --accent-hover: #7ab3ff;
+
+  /* State colors */
+  --error: #f87171;       /* #f87171 on #0d1017 = ~5.8:1 */
+  --warning: #f59e0b;
+  --success: #34d399;
+  --info: #60a5fa;
+
+  /* Sender tint palette — subtle, NOT colored side-stripes, just bg tints */
+  --sender-0-bg: #131c2a;   /* blueish night */
+  --sender-1-bg: #1c1326;   /* plum */
+  --sender-2-bg: #111e1a;   /* forest */
+  --sender-3-bg: #1e1712;   /* amber dark */
+  --sender-4-bg: #1a1220;   /* violet */
+  --sender-5-bg: #0f1a1e;   /* teal */
+
+  /* Typography — system-only, NO web fonts */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Fira Code", Consolas, monospace;
+
+  /* Interaction */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+
+  /* Transitions */
+  --t-fast: 150ms ease-out;
+  --t-base: 200ms ease-out;
+  --t-slow: 250ms ease-out;
+
+  /* Sidebar width */
+  --sidebar-w: 220px;
+}
+
+/* Reduced motion — honour user preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Reset */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Focus ring — visible, a11y-first */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Scrollbars — subtle, native style */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Skeleton animation */
+@keyframes skeleton-pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 0.35; }
+  100% { opacity: 0.6; }
+}
+
+.skeleton {
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+/* New-message fade-in */
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.msg-new {
+  animation: msg-in 200ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-new { animation: none; }
+}

@@ -62,12 +62,59 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files as _pkg_files
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__, service
+
+# ---------------------------------------------------------------------------
+# Static webui helpers
+# ---------------------------------------------------------------------------
+
+def _webui_dir() -> Path | None:
+    """Return the path to the built webui, or None if absent.
+
+    Tries importlib.resources first (works in wheel installs); falls back to
+    a path relative to this file (works in editable / source installs).
+    """
+    try:
+        ref = _pkg_files("taosmd").joinpath("webui")
+        # In Python 3.9+ files() returns a Traversable; we need a real Path.
+        import importlib.resources as _ir  # noqa: PLC0415
+        # For wheels, traverse to a concrete path via as_file context is
+        # awkward to keep open; instead resolve via __file__ which always works.
+        _ = ref  # suppress unused-variable on the import above
+    except Exception:
+        pass
+    # Use __file__-relative path — reliable in both source and wheel.
+    candidate = Path(__file__).parent / "webui"
+    if (candidate / "index.html").exists():
+        return candidate
+    return None
+
+
+_WEBUI_DIR: Path | None = _webui_dir()
+
+# Extend mimetypes with types the stdlib may be missing.
+_EXTRA_MIME = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+    ".ttf": "font/ttf",
+    ".ico": "image/x-icon",
+    ".png": "image/png",
+    ".json": "application/json",
+    ".map": "application/json",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -431,6 +478,43 @@ def _make_handler(data_dir, runner: _ServiceLoop):
             if self.command != "HEAD":
                 self.wfile.write(body)
 
+        def _send_file(self, path: Path, content_type: str) -> None:
+            body = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _serve_spa(self) -> None:
+            """Serve the built React SPA index.html, or fall back to the inline UI."""
+            if _WEBUI_DIR is not None:
+                self._send_file(_WEBUI_DIR / "index.html", "text/html; charset=utf-8")
+            else:
+                self._send_html(200, _INSPECTION_UI_HTML)
+
+        def _try_serve_static(self, path: str) -> bool:
+            """Try to serve a static asset from webui/.
+
+            Returns True if the asset was served, False if not found.
+            """
+            if _WEBUI_DIR is None:
+                return False
+            # Strip leading slash and prevent path traversal
+            rel = path.lstrip("/")
+            target = (_WEBUI_DIR / rel).resolve()
+            try:
+                target.relative_to(_WEBUI_DIR.resolve())
+            except ValueError:
+                return False
+            if not target.is_file():
+                return False
+            suffix = target.suffix.lower()
+            ctype = _EXTRA_MIME.get(suffix) or mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+            self._send_file(target, ctype)
+            return True
+
         def _read_json_body(self) -> dict:
             length = int(self.headers.get("Content-Length") or 0)
             if length <= 0:
@@ -460,7 +544,7 @@ def _make_handler(data_dir, runner: _ServiceLoop):
             query = parse_qs(parts.query)
             try:
                 if method == "GET" and path in ("/", "/ui"):
-                    self._send_html(200, _INSPECTION_UI_HTML)
+                    self._serve_spa()
                 elif method == "GET" and path == "/health":
                     self._send_json(200, {"status": "ok", "version": __version__})
                 elif method == "GET" and path == "/search":
@@ -475,15 +559,20 @@ def _make_handler(data_dir, runner: _ServiceLoop):
                     self._handle_pending_resolve()
                 elif method == "POST" and path == "/a2a/send":
                     self._handle_a2a_send()
+                elif method == "GET" and path == "/a2a/channels":
+                    self._handle_a2a_channels()
+                elif method == "GET" and path == "/a2a/members":
+                    self._handle_a2a_members(query)
                 elif method == "GET" and path == "/a2a/messages":
                     self._handle_a2a_messages(query)
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
-                elif method == "GET" and path == "/a2a/channels":
-                    self._handle_a2a_channels()
-                elif method == "GET" and path == "/a2a/members":
-                    self._handle_a2a_members(query)
+                elif method == "GET" and self._try_serve_static(parts.path):
+                    return  # static asset served
+                elif method == "GET":
+                    # SPA routing: unknown non-API paths return index.html
+                    self._serve_spa()
                 else:
                     self._send_json(404, {"error": f"unknown route: {method} {path}"})
             except _BadRequest as exc:
