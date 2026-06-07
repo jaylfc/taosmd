@@ -308,11 +308,53 @@ await vmem.init()
 
 Use it when the vector-store footprint or CPU distance cost is your binding constraint rather than recall — e.g. an Orange Pi / Rock 5 holding a large memory. Keep it off on a GPU box where full-precision cosine is effectively free.
 
+## MCP server
+
+taOSmd can expose its memory over the [Model Context Protocol](https://modelcontextprotocol.io) so any MCP-capable agent (Claude Desktop, Cursor, Codex, OpenWebUI, …) can read and write memory directly — no custom integration. The server is local-first and offline: it speaks the **stdio** transport (the standard for desktop MCP clients), with no network listener and no cloud dependency.
+
+The MCP SDK is an **optional dependency**, so the core install stays lean:
+
+```bash
+pip install taosmd[mcp]
+```
+
+Run the server over stdio:
+
+```bash
+taosmd mcp                       # serves $TAOSMD_DATA_DIR (or ~/.taosmd)
+taosmd mcp --mcp-data-dir ./mem  # or point it at a specific data dir
+```
+
+Point an MCP client at it by spawning that command. For example, in a Claude Desktop / Cursor MCP config:
+
+```json
+{
+  "mcpServers": {
+    "taosmd": {
+      "command": "taosmd",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Tools exposed (each takes an `agent` argument, honouring the same per-agent isolation as the Python API):
+
+| Tool | Purpose |
+| --- | --- |
+| `memory_ingest(text, agent)` | Store a transcript/note in an agent's memory |
+| `memory_search(query, agent, limit=5)` | Retrieve passages relevant to a query |
+| `memory_pending_list(agent)` | List KG-update decisions awaiting review |
+| `memory_pending_resolve(decision_id, decision, note="")` | Resolve a pending decision (`accept`/`reject`/`modify`) |
+| `memory_stats(agent)` | Lightweight per-agent stats |
+
+It reuses the same shared service layer as the [local HTTP/REST server](#api), so behaviour matches the Python API and CLI exactly. The MCP server is additive and opt-in — it only runs when you start it; standalone use is untouched, and `import taosmd` works whether or not the `mcp` SDK is installed.
+
 ## Key Features
 
 - **97.0% end-to-end Judge accuracy** on LongMemEval-S benchmark (SOTA)
 - **Zero cloud dependencies** — runs entirely on local hardware
-- **Framework-agnostic** — Python API + CLI work with any agent framework (MCP and local HTTP API in progress)
+- **Framework-agnostic** — Python API, CLI, [MCP server](#mcp-server), and local HTTP/REST API work with any agent framework
 - **Hybrid search** — semantic similarity + keyword overlap boosting
 - **Temporal facts** — validity windows, point-in-time queries
 - **Contradiction detection** — corrected facts supersede the old value; recall returns only the active fact, so corrections stop resurfacing

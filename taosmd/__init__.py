@@ -28,6 +28,11 @@ from .api import ingest, search, list_pending_decisions, resolve_pending_decisio
 # The MCP server (#84) reuses the same `service` core.
 from . import service
 from .http_server import serve
+
+# MCP server (#84). The module imports the `mcp` SDK lazily, so this import
+# never fails when the optional dependency is absent; only building/running a
+# server raises MissingMCPDependencyError. Importing `taosmd` stays lean.
+from . import mcp_server
 from .cross_encoder import CrossEncoderReranker
 from .access_tracker import AccessTracker
 from .preference_extractor import extract_preferences
@@ -94,6 +99,7 @@ __all__ = [
     # Activation surfaces
     "service",
     "serve",
+    "mcp_server",
     "CrossEncoderReranker",
     "classify_intent",
     "get_search_strategy",

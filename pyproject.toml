@@ -19,6 +19,9 @@ dependencies = [
 dev = ["pytest", "pytest-asyncio"]
 local = ["sentence-transformers"]
 benchmarks = ["mem0ai>=0.1.0", "mempalace"]
+# MCP server surface (#84) — optional so the core install stays lean.
+# Install with: pip install taosmd[mcp]
+mcp = ["mcp"]
 
 [tool.setuptools.packages.find]
 include = ["taosmd*"]
