@@ -487,9 +487,9 @@ Each hit in `/search` results has the agent-rules contract shape: `{text, source
 
 Messages are stored as append-only archive events, so they inherit the archive's durability and automatic secret redaction. `thread` defaults to `"general"` when omitted from `/a2a/send`. Each message object has shape `{id, ts, from, body, thread, reply_to}`.
 
-### Inspection UI
+### Web dashboard
 
-`GET /` and `GET /ui` serve a read-only local inspector — a single self-contained HTML page (inline `<style>` and `<script>`, no external requests, works fully offline). It lets you search memory, view the pending-review queue, and monitor the A2A bus (backfills history then live-updates via the SSE stream). It exposes no write or destructive actions; the JSON endpoints above are the integration surface.
+`GET /` and `GET /ui` serve a read-only local web dashboard — a bundled React single-page app with three views: memory search, the pending-review queue, and a live A2A channel monitor (it lists channels, then backfills a channel's history and live-updates over the SSE stream). It is served entirely from local bundled assets (no CDN, works fully offline); if the dashboard assets haven't been built, the server falls back to a minimal self-contained stdlib inspector page. Read-only — it exposes no write or destructive actions; the JSON endpoints above are the integration surface.
 
 ### Persistent service
 
