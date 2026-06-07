@@ -144,6 +144,8 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 **97.0% end-to-end Judge accuracy on LongMemEval-S** (500 questions, standard test set). Harness: `benchmarks/longmemeval_runner.py`.
 
+> These are our own reproducible measurements, not a third-party-audited landscape ranking. Every number pins its generator, judge, dataset, and commit so you can re-run it on your own hardware — and we deliberately report under a strict local judge (`qwen3:4b`) alongside the lenient frontier-judge number that other systems publish, so the comparison is honest about what's being measured. See the [judge-sensitivity analysis](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring).
+
 See [docs/benchmarks.md](docs/benchmarks.md) for the full LongMemEval-S breakdown, the LoCoMo (1540-QA multi-session) measurements with retrieval-architecture ablations, methodology, and per-hardware-tier configuration recommendations (12 / 8 / 4 GB GPU, Orange Pi NPU, RPi 4).
 
 ### Per-Category Breakdown
