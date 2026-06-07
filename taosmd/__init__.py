@@ -23,6 +23,11 @@ from .session_catalog import SessionCatalog
 from .catalog_pipeline import CatalogPipeline
 from .retrieval import retrieve
 from .api import ingest, search, list_pending_decisions, resolve_pending_decision
+
+# Activation surfaces — shared service layer + local HTTP/REST API (#85).
+# The MCP server (#84) reuses the same `service` core.
+from . import service
+from .http_server import serve
 from .cross_encoder import CrossEncoderReranker
 from .access_tracker import AccessTracker
 from .preference_extractor import extract_preferences
@@ -86,6 +91,9 @@ __all__ = [
     "retrieve",
     "ingest",
     "search",
+    # Activation surfaces
+    "service",
+    "serve",
     "CrossEncoderReranker",
     "classify_intent",
     "get_search_strategy",
