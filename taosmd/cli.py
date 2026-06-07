@@ -141,6 +141,167 @@ def _memory_model_set(model: str | None, clear: bool) -> int:
     return 0
 
 
+def _config_set_server(url: str | None, clear: bool) -> int:
+    from . import config  # noqa: PLC0415
+
+    if not clear and not url:
+        print("error: provide <url> or --clear", file=sys.stderr)
+        return 2
+    try:
+        config.set_server_url(url or "", clear=clear)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if clear:
+        print("Server URL cleared (local mode).")
+    else:
+        print(f"Remote server URL set: {url}")
+    return 0
+
+
+def _config_set_token(token: str | None, clear: bool) -> int:
+    from . import config  # noqa: PLC0415
+
+    if not clear and not token:
+        print("error: provide <token> or --clear", file=sys.stderr)
+        return 2
+    try:
+        config.set_server_token(token or "", clear=clear)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if clear:
+        print("Server token cleared.")
+    else:
+        print("Server token stored.")
+    return 0
+
+
+def _config_show() -> int:
+    from . import config  # noqa: PLC0415
+
+    url = config.get_server_url()
+    token = config.get_server_token()
+    model = config.get_memory_model()
+    print(f"server_url   : {url or '(unset — local mode)'}")
+    print(f"server_token : {'(set)' if token else '(unset)'}")
+    print(f"memory_model : {model or '(default)'}")
+    return 0
+
+
+def _a2a_poll_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd a2a-poll`` — fetch new messages and update state file."""
+    import asyncio  # noqa: PLC0415
+    import json  # noqa: PLC0415 (already imported at module level but guard for type-checker)
+    from pathlib import Path  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    state_file = Path(args.state_file).expanduser()
+    channel = args.channel
+
+    # --- resolve messages from remote or local service -------------------
+    server_url = getattr(args, "server", None)
+    if server_url:
+        # One-shot override: create a temporary RemoteClient.
+        from .remote import RemoteClient  # noqa: PLC0415
+        client = RemoteClient(server_url)
+
+        async def _fetch(since):
+            return await client.a2a_feed(thread=channel, since=since, limit=500)
+
+        messages = asyncio.run(_fetch(None))
+    else:
+        from . import service  # noqa: PLC0415
+
+        async def _fetch_local(since):
+            return await service.a2a_feed(thread=channel, since=since, limit=500)
+
+        messages = asyncio.run(_fetch_local(None))
+
+    # --- load / initialise state ----------------------------------------
+    state: dict = {}
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            state = {}
+    last_id: int = state.get(channel, -1)
+
+    # --- filter to only new messages ------------------------------------
+    exclude = getattr(args, "exclude", None)
+    new_messages = []
+    for msg in messages:
+        msg_id = msg.get("id")
+        # IDs from the archive are integers; coerce defensively.
+        try:
+            msg_id_int = int(msg_id)
+        except (TypeError, ValueError):
+            continue
+        if msg_id_int <= last_id:
+            continue
+        if exclude and msg.get("from") == exclude:
+            # Skip messages from the excluded sender (usually "ourselves"),
+            # but still advance last_id so we don't re-see them next poll.
+            last_id = max(last_id, msg_id_int)
+            continue
+        new_messages.append((msg_id_int, msg))
+
+    # --- print new messages and update state ----------------------------
+    for msg_id_int, msg in sorted(new_messages, key=lambda t: t[0]):
+        ts = msg.get("ts", 0)
+        try:
+            ts_str = datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        except Exception:
+            ts_str = str(ts)
+        from_ = msg.get("from", "?")
+        body = msg.get("body", "")
+        reply = f" (reply_to={msg.get('reply_to')})" if msg.get("reply_to") else ""
+        print(f"[{ts_str}] <{from_}>{reply} {body}")
+        last_id = max(last_id, msg_id_int)
+
+    # --- persist state --------------------------------------------------
+    state[channel] = last_id
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps(state, indent=2))
+    return 0
+
+
+def _install_skill_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd install-skill`` — copy the packaged skill into ~/.claude/skills/."""
+    import shutil  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+    from importlib.resources import files as _pkg_files  # noqa: PLC0415
+
+    dest_dir = Path("~/.claude/skills/taosmd-a2a").expanduser()
+    skill_src_dir = Path(__file__).parent / "skills" / "taosmd-a2a"
+
+    if not skill_src_dir.is_dir():
+        # Fallback: try importlib.resources (wheel installs)
+        try:
+            ref = _pkg_files("taosmd").joinpath("skills/taosmd-a2a")
+            # Convert Traversable to a concrete path via __file__ approach.
+            skill_src_dir = Path(__file__).parent / "skills" / "taosmd-a2a"
+        except Exception:
+            pass
+
+    if not skill_src_dir.is_dir():
+        print("error: packaged skill not found in taosmd/skills/taosmd-a2a/", file=sys.stderr)
+        print("  Re-install the package to include skill assets.", file=sys.stderr)
+        return 2
+
+    force = getattr(args, "force", False)
+    skill_md = dest_dir / "SKILL.md"
+    if skill_md.exists() and not force:
+        print(f"Skill already installed at {dest_dir}")
+        print("  Re-run with --force to overwrite.")
+        return 0
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(str(skill_src_dir), str(dest_dir), dirs_exist_ok=True)
+    print(f"taosmd-a2a skill installed at {dest_dir}")
+    return 0
+
+
 def _agent_rm(registry: AgentRegistry, name: str, drop_data: bool) -> int:
     try:
         registry.delete_agent(name, drop_data=drop_data)
@@ -331,6 +492,12 @@ def main(argv: list[str] | None = None) -> int:
         default="data",
         help="Path to the taosmd data directory (default: ./data)",
     )
+    parser.add_argument(
+        "--server",
+        default=None,
+        metavar="URL",
+        help="Remote taOSmd server URL (overrides TAOSMD_SERVER_URL and config.json for this invocation)",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     agent = sub.add_parser("agent", help="Manage registered agents")
@@ -464,6 +631,69 @@ def main(argv: list[str] | None = None) -> int:
         help="Substring; every active chunk whose stored text contains it is superseded",
     )
 
+    # ----- config subcommand (server URL + token + show) ----------------
+    cfg_p = sub.add_parser(
+        "config",
+        help="Get/set connection config (remote server URL, bearer token, memory model)",
+    )
+    cfg_sub = cfg_p.add_subparsers(dest="config_cmd", required=True)
+
+    # config set-server
+    ss_p = cfg_sub.add_parser("set-server", help="Set or clear the remote server URL")
+    ss_p.add_argument(
+        "url", nargs="?", default=None,
+        help="Base URL of the remote taOSmd server, e.g. http://pi.local:7900",
+    )
+    ss_p.add_argument("--clear", action="store_true", help="Unset the server URL (revert to local mode)")
+
+    # config set-token
+    st_p = cfg_sub.add_parser("set-token", help="Set or clear the remote server bearer token")
+    st_p.add_argument(
+        "token", nargs="?", default=None,
+        help="Bearer token for the remote server. Stored in config.json; "
+             "use TAOSMD_TOKEN env var to avoid on-disk storage.",
+    )
+    st_p.add_argument("--clear", action="store_true", help="Unset the token")
+
+    # config show
+    cfg_sub.add_parser("show", help="Print the resolved server_url and whether a token is set")
+
+    # ----- install-skill subcommand ------------------------------------
+    install_skill_p = sub.add_parser(
+        "install-skill",
+        help="Copy the taosmd-a2a Claude skill into ~/.claude/skills/taosmd-a2a/",
+    )
+    install_skill_p.add_argument(
+        "--force", action="store_true",
+        help="Overwrite an existing installation",
+    )
+
+    # ----- a2a-poll subcommand ----------------------------------------
+    a2a_poll_p = sub.add_parser(
+        "a2a-poll",
+        help="Fetch new A2A messages since the last poll (cron-friendly, updates state file)",
+    )
+    a2a_poll_p.add_argument(
+        "--channel", required=True,
+        help="Channel name to poll (e.g. the project channel name)",
+    )
+    a2a_poll_p.add_argument(
+        "--server", default=None,
+        help="Override the remote server URL for this poll (e.g. http://pi.local:7900). "
+             "Defaults to TAOSMD_SERVER_URL or the configured server_url.",
+    )
+    a2a_poll_p.add_argument(
+        "--state-file",
+        dest="state_file",
+        default="~/.taosmd/a2a-poll-state.json",
+        help="JSON file that stores the last-seen message ID per channel "
+             "(default: ~/.taosmd/a2a-poll-state.json)",
+    )
+    a2a_poll_p.add_argument(
+        "--exclude", default=None,
+        help="Skip messages from this sender (e.g. your own agent name)",
+    )
+
     # ----- serve subcommand (local HTTP/REST API) -----------------------
     serve_p = sub.add_parser(
         "serve",
@@ -509,6 +739,20 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+
+    if args.cmd == "config":
+        if args.config_cmd == "set-server":
+            return _config_set_server(args.url, args.clear)
+        if args.config_cmd == "set-token":
+            return _config_set_token(args.token, args.clear)
+        if args.config_cmd == "show":
+            return _config_show()
+
+    if args.cmd == "install-skill":
+        return _install_skill_cmd(args)
+
+    if args.cmd == "a2a-poll":
+        return _a2a_poll_cmd(args)
 
     if args.cmd == "serve":
         from . import service_install  # noqa: PLC0415

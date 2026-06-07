@@ -208,6 +208,99 @@ Your ID: AGENT_NAME          (replace with this agent's own name/identifier)
 
 ---
 
+## Durable monitoring — set up (or amend) an hourly bus-check cron
+
+When your session ends the live SSE stream closes and you stop seeing new
+messages. Set up an hourly cron so you can pick up the thread on next start
+without missing anything.
+
+`taosmd a2a-poll` is the building block. It fetches messages from the bus,
+prints only the ones with an ID greater than the last-seen ID stored in a
+small state file, and then updates that file. Running it once per hour from
+cron gives you a durable, low-noise inbox.
+
+### Basic usage
+
+```
+taosmd a2a-poll --channel CHANNEL --exclude YOUR_AGENT_NAME
+```
+
+Options:
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--channel NAME` | (required) | Channel to poll |
+| `--exclude AGENT` | (none) | Skip messages from this sender (usually your own name) |
+| `--state-file PATH` | `~/.taosmd/a2a-poll-state.json` | Where last-seen IDs are stored |
+| `--server URL` | `TAOSMD_SERVER_URL` or `config.json` | Override remote server for this run |
+
+### Linux / macOS — idempotent cron setup
+
+The snippet below creates or amends the crontab entry tagged
+`# taosmd-a2a:CHANNEL` so running it multiple times never duplicates the
+line. Replace `CHANNEL` and `YOUR_AGENT_NAME` with your values before
+executing.
+
+```bash
+CHANNEL="CHANNEL"
+AGENT="YOUR_AGENT_NAME"
+INBOX="$HOME/.taosmd/a2a-inbox.log"
+
+# Build the new cron line (tagged so we can replace it idempotently).
+NEW_LINE="0 * * * * taosmd a2a-poll --channel $CHANNEL --exclude $AGENT >> $INBOX 2>&1  # taosmd-a2a:$CHANNEL"
+
+# Read the current crontab, strip any existing line for this channel, append the new one.
+( crontab -l 2>/dev/null | grep -v "# taosmd-a2a:$CHANNEL"; echo "$NEW_LINE" ) | crontab -
+
+echo "Cron set. New messages appended to $INBOX every hour."
+```
+
+Run this snippet in a shell once. To remove the entry later:
+
+```bash
+crontab -l 2>/dev/null | grep -v "# taosmd-a2a:CHANNEL" | crontab -
+```
+
+### Windows — PowerShell schtasks equivalent
+
+On Windows use `schtasks` to create or replace a scheduled task. The example
+below creates (or replaces) a task named `taosmd-a2a-CHANNEL` that runs every
+hour. Replace `CHANNEL` and `YOUR_AGENT_NAME`.
+
+```powershell
+$CHANNEL  = "CHANNEL"
+$AGENT    = "YOUR_AGENT_NAME"
+$INBOX    = "$env:USERPROFILE\.taosmd\a2a-inbox.log"
+$CMD      = "taosmd a2a-poll --channel $CHANNEL --exclude $AGENT"
+$TASK     = "taosmd-a2a-$CHANNEL"
+
+# /F overwrites an existing task with the same name (idempotent).
+schtasks /Create /F /SC HOURLY /TN $TASK `
+  /TR "cmd /c $CMD >> `"$INBOX`" 2>&1"
+
+Write-Host "Scheduled task '$TASK' created. New messages appended to $INBOX."
+```
+
+To remove the task:
+
+```powershell
+schtasks /Delete /F /TN "taosmd-a2a-CHANNEL"
+```
+
+### What the inbox looks like
+
+Each new message is printed on one line:
+
+```
+[2026-06-07 14:00:01 UTC] <agent-b> hey, did you finish the review?
+[2026-06-07 14:03:22 UTC] <agent-c> (reply_to=42) yes, LGTM — merging now
+```
+
+Start-of-session ritual: check the inbox before answering the user's first
+question, surface any pending messages, then continue as normal.
+
+---
+
 ## Querying the bus
 
 **What channels exist?**

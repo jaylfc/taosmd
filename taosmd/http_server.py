@@ -70,7 +70,7 @@ from importlib.resources import files as _pkg_files
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, service
+from . import __version__, config as _config, service
 
 # ---------------------------------------------------------------------------
 # Static webui helpers
@@ -451,7 +451,19 @@ def _make_handler(data_dir, runner: _ServiceLoop):
 
     ThreadingHTTPServer instantiates the handler per request, so the data dir
     is closed over here rather than threaded through every call site.
+
+    If the server has ``server_token`` set in its own config (or the
+    ``TAOSMD_TOKEN`` env var), every data/A2A JSON endpoint requires a
+    matching ``Authorization: Bearer <token>`` header and returns ``401``
+    otherwise. ``GET /health``, ``GET /``, ``GET /ui``, and static assets
+    are always open so monitoring probes and the inspection UI keep working.
     """
+    # Read the server-side expected token once at handler-class creation time.
+    # This is the token the *server* checks (not the client's outbound token).
+    _server_token: str | None = _config.get_server_token(data_dir)
+
+    # Paths that are always public regardless of the token setting.
+    _PUBLIC_PATHS = frozenset({"/", "/ui", "/health"})
 
     class TaosmdHandler(BaseHTTPRequestHandler):
         server_version = f"taosmd/{__version__}"
@@ -528,6 +540,23 @@ def _make_handler(data_dir, runner: _ServiceLoop):
                 raise _BadRequest("JSON body must be an object")
             return parsed
 
+        # ----- auth helper -------------------------------------------------
+        def _check_token(self, path: str) -> bool:
+            """Return True when the request is authorised to proceed.
+
+            If ``_server_token`` is not set, every request is authorised.
+            Public paths (health, UI) are always authorised.
+            Otherwise the ``Authorization: Bearer <token>`` header must match.
+            """
+            if not _server_token:
+                return True
+            if path.rstrip("/") in _PUBLIC_PATHS or not path.rstrip("/"):
+                return True
+            auth = self.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                return auth[len("Bearer "):].strip() == _server_token
+            return False
+
         # ----- routing -----------------------------------------------------
         def do_GET(self) -> None:  # noqa: N802 - stdlib signature
             self._dispatch("GET")
@@ -542,6 +571,11 @@ def _make_handler(data_dir, runner: _ServiceLoop):
             parts = urlsplit(self.path)
             path = parts.path.rstrip("/") or "/"
             query = parse_qs(parts.query)
+            # Token gate: check before routing so even unknown paths are
+            # protected (prevents enumeration without a token).
+            if not self._check_token(path):
+                self._send_json(401, {"error": "Unauthorized"})
+                return
             try:
                 if method == "GET" and path in ("/", "/ui"):
                     self._serve_spa()
