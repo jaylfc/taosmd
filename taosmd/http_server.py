@@ -145,8 +145,8 @@ _INSPECTION_UI_HTML = """<!doctype html>
     border-radius: 8px; padding: 8px 12px; max-width: 85%;
     background: var(--chip); word-break: break-word;
   }
-  .a2a-msg.left  { align-self: flex-start; border-left: 3px solid var(--accent); }
-  .a2a-msg.right { align-self: flex-end;   border-right: 3px solid #a78bfa; }
+  .a2a-msg.left  { align-self: flex-start; background: #1b2330; }
+  .a2a-msg.right { align-self: flex-end;   background: #251c33; }
   .a2a-msg .sender { font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 2px; }
   .a2a-msg.right .sender { color: #a78bfa; }
   .a2a-msg .body { white-space: pre-wrap; }
@@ -299,7 +299,7 @@ _INSPECTION_UI_HTML = """<!doctype html>
     var side = (senderIndex % 2 === 0) ? "left" : "right";
     var ts = msg.ts ? new Date(msg.ts * 1000).toLocaleTimeString() : "";
     return '<div class="a2a-msg ' + side + '" data-sender="' + esc(msg.from || "") + '">' +
-      '<div class="sender">@' + esc(msg.from || "?") + '</div>' +
+      '<div class="sender">' + esc(msg.from || "?") + '</div>' +
       '<div class="body">' + esc(msg.body || "") + '</div>' +
       '<div class="ts">' + esc(ts) + (msg.reply_to ? " · ↩ " + esc(String(msg.reply_to)) : "") + '</div>' +
       '</div>';
