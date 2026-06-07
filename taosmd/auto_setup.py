@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -173,7 +174,29 @@ def _install_cron(data_dir: str):
     lessons, writes new KG triples, defers low-confidence contradictions
     to the pending-decisions queue).
     """
-    cron_cmd = f'0 3 * * * cd {data_dir} && python3 -c "import asyncio; from taosmd.archive import ArchiveStore; from taosmd.catalog_pipeline import CatalogPipeline; a = ArchiveStore(archive_dir=\\"{data_dir}/archive\\", index_path=\\"{data_dir}/archive-index.db\\"); asyncio.run(a.init()); asyncio.run(a.compress_old_files()); asyncio.run(a.close()); p = CatalogPipeline(archive_dir=\\"{data_dir}/archive\\", sessions_dir=\\"{data_dir}/sessions\\", catalog_db=\\"{data_dir}/session-catalog.db\\", crystals_db=\\"{data_dir}/crystals.db\\", kg_db=\\"{data_dir}/knowledge-graph.db\\"); asyncio.run(p.init()); asyncio.run(p.index_yesterday()); asyncio.run(p.close())" 2>/dev/null'
+    # All path/user values are passed through shlex.quote so a data_dir
+    # containing shell metacharacters (spaces, $, ;, &&, backticks, etc.)
+    # cannot break out of the command line that /bin/sh runs for cron. The
+    # quoted dir is assigned to a shell variable once and the Python snippet
+    # reads it from the TAOSMD_DATA_DIR environment variable, so the path is
+    # never re-interpolated inside the Python string literals.
+    q_dir = shlex.quote(data_dir)
+    py_snippet = (
+        "import asyncio, os; "
+        "from taosmd.archive import ArchiveStore; "
+        "from taosmd.catalog_pipeline import CatalogPipeline; "
+        "d = os.environ['TAOSMD_DATA_DIR']; "
+        "a = ArchiveStore(archive_dir=d + '/archive', index_path=d + '/archive-index.db'); "
+        "asyncio.run(a.init()); asyncio.run(a.compress_old_files()); asyncio.run(a.close()); "
+        "p = CatalogPipeline(archive_dir=d + '/archive', sessions_dir=d + '/sessions', "
+        "catalog_db=d + '/session-catalog.db', crystals_db=d + '/crystals.db', "
+        "kg_db=d + '/knowledge-graph.db'); "
+        "asyncio.run(p.init()); asyncio.run(p.index_yesterday()); asyncio.run(p.close())"
+    )
+    cron_cmd = (
+        f"0 3 * * * cd {q_dir} && TAOSMD_DATA_DIR={q_dir} "
+        f"python3 -c {shlex.quote(py_snippet)} 2>/dev/null"
+    )
 
     try:
         existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True)

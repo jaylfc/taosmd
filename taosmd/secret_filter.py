@@ -4,8 +4,8 @@ Detects and redacts sensitive tokens (API keys, passwords, JWTs, etc.)
 before text is stored in any memory layer. Runs on every ingest path:
 vector memory, knowledge graph, and archive.
 
-14 pattern categories covering all major cloud providers, CI/CD tokens,
-and common secret formats.
+Covers all major cloud providers (AWS, GCP, Azure), payment and email
+providers (Stripe, SendGrid), CI/CD tokens, and common secret formats.
 """
 
 from __future__ import annotations
@@ -16,6 +16,11 @@ import re
 SECRET_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     ("openai_key", re.compile(r"sk-[A-Za-z0-9]{20,}"), "[REDACTED:openai_key]"),
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9\-]{20,}"), "[REDACTED:anthropic_key]"),
+    ("stripe_key", re.compile(r"sk_(?:live|test)_[0-9a-zA-Z]{24,}"), "[REDACTED:stripe_key]"),
+    ("sendgrid_key", re.compile(r"SG\.[\w-]{22}\.[\w-]{43}"), "[REDACTED:sendgrid_key]"),
+    ("gcp_service_account", re.compile(r'"type"\s*:\s*"service_account"'), "[REDACTED:gcp_service_account]"),
+    ("gcp_private_key", re.compile(r'"private_key"\s*:\s*"-----BEGIN PRIVATE KEY-----'), "[REDACTED:gcp_private_key]"),
+    ("azure_storage_key", re.compile(r"AccountKey=[A-Za-z0-9+/=]{40,}"), "[REDACTED:azure_storage_key]"),
     ("github_pat", re.compile(r"ghp_[A-Za-z0-9]{36,}"), "[REDACTED:github_pat]"),
     ("github_oauth", re.compile(r"gho_[A-Za-z0-9]{36,}"), "[REDACTED:github_oauth]"),
     ("github_app", re.compile(r"(?:ghu|ghs|ghr)_[A-Za-z0-9]{36,}"), "[REDACTED:github_token]"),
