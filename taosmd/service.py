@@ -202,5 +202,83 @@ async def a2a_feed(
     return result
 
 
+async def a2a_channels(*, data_dir=None) -> list[dict]:
+    """Return a summary of every channel (named thread) on the A2A bus.
+
+    Derived entirely from existing :data:`~taosmd.archive.EVENT_A2A` archive
+    events — no additional schema. Groups by ``app_id`` (which equals the
+    thread name) and aggregates membership, message count, and timestamps.
+
+    Each item has shape ``{"channel", "members", "message_count",
+    "created_ts", "last_ts"}``, sorted by ``last_ts`` descending (most
+    recently active channel first). ``members`` is a sorted list of unique
+    sender names observed on that channel.
+    """
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+
+    channels: dict[str, dict] = {}
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        thread = data.get("thread") or row.get("app_id") or "general"
+        sender = data.get("from") or ""
+        ts = row.get("timestamp", 0.0)
+
+        if thread not in channels:
+            channels[thread] = {
+                "channel": thread,
+                "_members": set(),
+                "message_count": 0,
+                "created_ts": ts,
+                "last_ts": ts,
+            }
+        ch = channels[thread]
+        if sender:
+            ch["_members"].add(sender)
+        ch["message_count"] += 1
+        if ts < ch["created_ts"]:
+            ch["created_ts"] = ts
+        if ts > ch["last_ts"]:
+            ch["last_ts"] = ts
+
+    result = []
+    for ch in channels.values():
+        result.append({
+            "channel": ch["channel"],
+            "members": sorted(ch["_members"]),
+            "message_count": ch["message_count"],
+            "created_ts": ch["created_ts"],
+            "last_ts": ch["last_ts"],
+        })
+    result.sort(key=lambda c: c["last_ts"], reverse=True)
+    return result
+
+
+async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
+    """Return distinct sender names observed on ``channel``, sorted.
+
+    Derived from :data:`~taosmd.archive.EVENT_A2A` events whose ``app_id``
+    matches ``channel``. Returns an empty list (not an error) when the
+    channel has never received a message.
+    """
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    rows = await archive.query(event_type=EVENT_A2A, app_id=channel, limit=100_000)
+    members: set[str] = set()
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        sender = data.get("from") or ""
+        if sender:
+            members.add(sender)
+    return sorted(members)
+
+
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "stats", "supersede",
-           "a2a_send", "a2a_feed"]
+           "a2a_send", "a2a_feed", "a2a_channels", "a2a_members"]

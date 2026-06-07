@@ -30,7 +30,7 @@ include = ["taosmd*"]
 # importlib.resources.files("taosmd")). Without this they are omitted from the
 # wheel and agent_rules() raises FileNotFoundError on a pip install (#66).
 [tool.setuptools.package-data]
-taosmd = ["docs/**/*.md"]
+taosmd = ["docs/**/*.md", "webui/**/*"]
 
 [project.scripts]
 taosmd = "taosmd.cli:main"
