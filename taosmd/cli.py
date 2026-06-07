@@ -449,7 +449,33 @@ def main(argv: list[str] | None = None) -> int:
         help="Free-form note attached to the resolution",
     )
 
+    # ----- serve subcommand (local HTTP/REST API) -----------------------
+    serve_p = sub.add_parser(
+        "serve",
+        help="Run the local HTTP/REST memory API (stdlib server, zero deps)",
+    )
+    serve_p.add_argument(
+        "--host", default="127.0.0.1",
+        help="Bind address (default 127.0.0.1, localhost-only). "
+             "Use 0.0.0.0 to expose on the LAN — no auth, so gate it yourself.",
+    )
+    serve_p.add_argument(
+        "--port", type=int, default=7833,
+        help="Bind port (default 7833)",
+    )
+    serve_p.add_argument(
+        "--serve-data-dir", dest="serve_data_dir", default=None,
+        help="Data dir for served memory (default: $TAOSMD_DATA_DIR or ~/.taosmd)",
+    )
+
     args = parser.parse_args(argv)
+
+    if args.cmd == "serve":
+        from . import http_server  # noqa: PLC0415
+        return http_server.serve(
+            host=args.host, port=args.port, data_dir=args.serve_data_dir,
+        )
+
     registry = AgentRegistry(args.data_dir)
 
     if args.cmd == "review":
