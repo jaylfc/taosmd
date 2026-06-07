@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "taosmd"
 version = "0.2.0"
@@ -18,6 +22,12 @@ benchmarks = ["mem0ai>=0.1.0", "mempalace"]
 
 [tool.setuptools.packages.find]
 include = ["taosmd*"]
+
+# Ship runtime data files (e.g. docs/agent-rules.md, read at runtime via
+# importlib.resources.files("taosmd")). Without this they are omitted from the
+# wheel and agent_rules() raises FileNotFoundError on a pip install (#66).
+[tool.setuptools.package-data]
+taosmd = ["docs/*.md"]
 
 [project.scripts]
 taosmd = "taosmd.cli:main"
