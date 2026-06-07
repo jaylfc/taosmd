@@ -12,6 +12,7 @@ Storage: data/archive/YYYY/MM/DD.jsonl (one JSON line per event, gzipped after d
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import logging
 import os
@@ -193,6 +194,13 @@ class ArchiveStore:
         # Write to JSONL
         f, file_path = self._ensure_file(ts)
         line = json.dumps(event, default=str)
+        # Append a per-entry SHA-256 content hash so bit-rot and truncated
+        # writes are detectable later with verify_entry() / verify_day().
+        # The checksum covers the serialised event line (excluding the
+        # newline), stored as a separate ``sha256`` key so readers that
+        # don't know about checksums can ignore it transparently.
+        event["sha256"] = hashlib.sha256(line.encode()).hexdigest()
+        line = json.dumps(event, default=str)
         f.write(line + "\n")
         f.flush()
 
@@ -364,6 +372,80 @@ class ArchiveStore:
             "events": {r["event_type"]: r["n"] for r in rows},
             "total": sum(r["n"] for r in rows),
         }
+
+    # ------------------------------------------------------------------
+    # Integrity verification
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def verify_entry(line: str) -> bool:
+        """Return True if the JSONL line passes its embedded SHA-256 check.
+
+        Lines without a ``sha256`` key (written before checksums were added)
+        are treated as valid — the check is additive and backwards-compatible.
+        A missing or blank line is considered invalid.
+        """
+        line = line.strip()
+        if not line:
+            return False
+        try:
+            record = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        stored = record.get("sha256")
+        if stored is None:
+            # Legacy entry — no checksum, pass through.
+            return True
+        # Recompute over the line as it was written, i.e. without the sha256
+        # key.  Strip sha256 before reserialising to reconstruct the original
+        # line that was hashed.
+        original = dict(record)
+        del original["sha256"]
+        original_line = json.dumps(original, default=str)
+        expected = hashlib.sha256(original_line.encode()).hexdigest()
+        return stored == expected
+
+    async def verify_day(self, date: str) -> dict:
+        """Verify checksums for every entry in a day's JSONL file.
+
+        Returns ``{"date": date, "total": N, "ok": M, "bad": K, "legacy": L}``
+        where ``legacy`` counts entries without a checksum (pre-checksum rows).
+        Does not raise on individual failures — the caller decides how to
+        handle them.
+        """
+        parts = date.split("-")
+        path = self._archive_dir / parts[0] / parts[1] / f"{parts[2]}.jsonl"
+        gz_path = path.with_suffix(".jsonl.gz")
+
+        lines: list[str] = []
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        elif gz_path.exists():
+            with gzip.open(gz_path, "rt", encoding="utf-8") as fh:
+                lines = fh.readlines()
+
+        total = ok = bad = legacy = 0
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            total += 1
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                bad += 1
+                continue
+            if record.get("sha256") is None:
+                legacy += 1
+                ok += 1
+                continue
+            if self.verify_entry(line):
+                ok += 1
+            else:
+                bad += 1
+
+        return {"date": date, "total": total, "ok": ok, "bad": bad, "legacy": legacy}
 
     # ------------------------------------------------------------------
     # Stats

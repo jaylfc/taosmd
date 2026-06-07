@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from . import _db
+from .predicate_vocab import SINGULAR_PREDICATES
 
 logger = logging.getLogger(__name__)
 
@@ -364,11 +365,10 @@ class TemporalKnowledgeGraph:
     # Contradiction detection
     # ------------------------------------------------------------------
 
-    # Predicates where only one active value should exist per subject
-    SINGULAR_PREDICATES = {
-        "is_a", "works_on", "lives_in", "prefers", "uses_model",
-        "runs_on", "managed_by", "owned_by", "located_in",
-    }
+    # Predicates where only one active value should exist per subject.
+    # Sourced from the closed vocab in predicate_vocab.SINGULAR_PREDICATES
+    # so that the contradiction-detection set and the vocab stay in sync.
+    SINGULAR_PREDICATES = SINGULAR_PREDICATES
 
     async def detect_contradictions(
         self,
