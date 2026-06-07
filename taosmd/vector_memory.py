@@ -490,6 +490,10 @@ class VectorMemory:
         row = self._conn.execute("SELECT COUNT(*) as n FROM vector_memory").fetchone()
         return row["n"]
 
+    async def stats(self) -> dict:
+        """Overall vector-memory statistics."""
+        return {"count": await self.count()}
+
     async def clear(self) -> int:
         cursor = self._conn.execute("DELETE FROM vector_memory")
         self._conn.commit()

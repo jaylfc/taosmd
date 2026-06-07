@@ -290,3 +290,27 @@ def test_kg_auto_resolves_high_confidence_even_with_pending_store(tmp_path):
     assert result["pending_id"] == ""
     assert result["contradictions_resolved"] == 1
     assert queue == []
+
+
+def test_raises_when_used_before_init(tmp_path):
+    """Calling store methods before init() raises RuntimeError, not AssertionError."""
+    store = PendingDecisionsStore(db_path=tmp_path / "kg.db")
+
+    async def go():
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await store.list_pending()
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await store.get("deadbeef")
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await store.stats()
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await store.defer(
+                kind="contradiction",
+                subject="user",
+                predicate="lives_in",
+                new_object="paris",
+                old_triple_ids=[],
+                suggested_action="invalidate_old_add_new",
+            )
+
+    _run(go())
