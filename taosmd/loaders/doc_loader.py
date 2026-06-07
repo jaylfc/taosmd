@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import ClassVar
 
+from ._safety import DEFAULT_MAX_BYTES, check_size, resolve_within
 from .blob import DocBlob
 from .interface import LoaderInterface
 
@@ -23,9 +24,18 @@ class DocLoader(LoaderInterface):
         "text/plain", "text/markdown",
     )
 
-    async def load(self, file_path: str | Path, **kwargs) -> DocBlob:
+    async def load(
+        self,
+        file_path: str | Path,
+        *,
+        max_bytes: int | None = DEFAULT_MAX_BYTES,
+        base_dir: str | Path | None = None,
+        **kwargs,
+    ) -> DocBlob:
         path = Path(file_path)
-        with open(path, encoding="utf-8", errors="replace") as f:
+        safe_path = resolve_within(file_path, base_dir)
+        check_size(safe_path, max_bytes)
+        with open(safe_path, encoding="utf-8", errors="replace") as f:
             content = f.read()
 
         title = ""
