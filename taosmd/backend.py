@@ -48,3 +48,48 @@ class MemoryBackend:
     async def update_agent_config(self, agent_name: str, config: dict) -> dict:
         """Update an agent's memory config. Returns the new config."""
         raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Recipes (config profiles) - the SP4 contract seam
+    # ------------------------------------------------------------------
+    # A recipe is a declared config bundle (retrieval + ingest + generator +
+    # librarian) carrying benchmark scores, tier, and pros/cons. The Memory app
+    # renders recipes generically from get_recipe_schema() and drives selection
+    # via list/get/apply/recommend. Defaults below are graceful no-ops so a
+    # backend without recipe support degrades cleanly; taOSmd overrides them.
+
+    async def get_recipe_schema(self) -> dict:
+        """Return the JSON Schema for a recipe config bundle.
+
+        Lets a host UI render any recipe generically. Default: empty (this
+        backend exposes no recipes).
+        """
+        return {}
+
+    async def list_recipes(self) -> list[dict]:
+        """Return the available recipes, each as a config bundle + metadata."""
+        return []
+
+    async def get_recipe(self, recipe_id: str) -> dict | None:
+        """Return one recipe by id, or None if unknown."""
+        return None
+
+    async def apply_recipe(self, recipe_id: str, *, agent: str | None = None) -> dict:
+        """Apply a recipe to ``agent`` (or as the global default when None).
+
+        Returns ``{"applied_recipe_id": str, "recipe": dict}``.
+        """
+        raise NotImplementedError
+
+    async def recommend(self, device_info: dict | None = None) -> list[dict]:
+        """Rank recipes best-first for the given (or locally probed) device.
+
+        ``device_info`` is the ``{host, cluster, aggregate}`` shape; when None,
+        the backend falls back to a local hardware probe. Each item is a recipe
+        dict with an added ``rationale``.
+        """
+        return []
+
+    async def create_recipe(self, spec: dict) -> dict:
+        """Create a custom recipe from a spec (validated against the schema)."""
+        raise NotImplementedError

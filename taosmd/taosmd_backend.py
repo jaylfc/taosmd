@@ -77,6 +77,9 @@ class TaOSmdBackend(MemoryBackend):
         self._crystals = crystals
         self._insights = insights
         self._settings_db_path = str(settings_db_path)
+        # Recipe stores (config.json / agents.json) live alongside the settings
+        # db, so recipe read/write co-locates with the rest of the backend data.
+        self._data_dir = str(Path(settings_db_path).parent)
         self._conn: sqlite3.Connection | None = None
 
     async def init(self) -> None:
@@ -254,6 +257,73 @@ class TaOSmdBackend(MemoryBackend):
         )
         self._conn.commit()
         return await self.get_agent_config(agent_name)
+
+    # ------------------------------------------------------------------
+    # Recipes (config profiles) - SP4 ABC impl, delegating to recipes.py
+    # ------------------------------------------------------------------
+
+    async def get_recipe_schema(self) -> dict:
+        """Return the recipe config-bundle JSON Schema for generic rendering."""
+        from . import recipes  # noqa: PLC0415
+        return recipes.recipe_schema()
+
+    async def list_recipes(self) -> list[dict]:
+        """Return all built-in recipes (config bundle + benchmark metadata)."""
+        from . import recipes  # noqa: PLC0415
+        return [r.to_dict() for r in recipes.list_recipes()]
+
+    async def get_recipe(self, recipe_id: str) -> dict | None:
+        """Return one recipe by id, or None if unknown."""
+        from . import recipes  # noqa: PLC0415
+        r = recipes.get_recipe(recipe_id)
+        return r.to_dict() if r is not None else None
+
+    async def apply_recipe(self, recipe_id: str, *, agent: str | None = None) -> dict:
+        """Apply a recipe to ``agent``, or set it as the global default.
+
+        ``agent=None`` sets the global default recipe (config.json); a named
+        agent gets the recipe written through to its per-agent config. Raises
+        ValueError on an unknown recipe id.
+        """
+        from . import recipes, config as _config  # noqa: PLC0415
+        recipe = recipes.get_recipe(recipe_id)
+        if recipe is None:
+            raise ValueError(f"unknown recipe id: {recipe_id!r}")
+        if agent is None:
+            _config.set_default_recipe(recipe_id, data_dir=self._data_dir)
+            return {"applied_recipe_id": recipe_id, "recipe": recipe.to_dict()}
+        applied = recipes.apply_recipe(agent, recipe_id, data_dir=self._data_dir)
+        return {"applied_recipe_id": recipe_id, "recipe": applied.to_dict()}
+
+    async def recommend(self, device_info: dict | None = None) -> list[dict]:
+        """Rank recipes best-first for the given (or locally probed) device.
+
+        Each item is a recipe dict with an added ``rationale`` summarising the
+        tier fit and benchmarked lenient score.
+        """
+        from . import recipes  # noqa: PLC0415
+        info = device_info if device_info is not None else recipes.local_probe()
+        device_tier = recipes.tier_of(info)
+        out: list[dict] = []
+        for r in recipes.recommend(info):
+            d = r.to_dict()
+            tier = r.metadata.get("tier", "?")
+            lenient = r.metadata.get("scores", {}).get("gemma4:e2b")
+            fits = recipes._fits(tier, device_tier)
+            d["rationale"] = (
+                f"{'fits' if fits else 'exceeds'} the detected {device_tier} tier "
+                f"(recipe tier {tier})"
+                + (f"; lenient score {lenient}" if lenient is not None else "")
+            )
+            out.append(d)
+        return out
+
+    async def create_recipe(self, spec: dict) -> dict:
+        """Create a custom recipe (SP3). Not yet supported."""
+        raise NotImplementedError(
+            "custom recipes are SP3 (create/persist in the config DB); "
+            "not yet implemented"
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
