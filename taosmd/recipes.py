@@ -116,3 +116,92 @@ def recipe_schema() -> dict:
             },
         },
     }
+
+
+# Built-in recipes. Scores are copied verbatim from docs/benchmarks.md
+# "Full-1540 leader (tri-judge, Jun 2026)". Do not invent numbers.
+_REGISTRY: dict[str, Recipe] = {}
+
+
+def _register(r: Recipe) -> None:
+    _REGISTRY[r.id] = r
+
+
+_register(Recipe(
+    id="maxsim-rerank-9b",
+    name="MaxSim + rerank (12 GB GPU)",
+    retrieval={"strategy": "thorough", "limit": 5, "candidate_top_k": 50,
+               "fusion": "mem0_additive", "reranker": "bge-v2-m3",
+               "adjacent_neighbors": 2, "llm_reranker": False},
+    ingest={"extraction": True, "extraction_model": "", "embed_verbatim": True},
+    generator={"model": "ollama:qwen3.5:9b"},
+    librarian={"fanout": "med", "worker_aware": True},
+    metadata={"tier": "gpu-12gb",
+              "scores": {"gemma4:e2b": 0.748, "llama3.1:8b": 0.394,
+                         "qwen3:4b-instruct-2507": 0.659},
+              "pros": ["Highest recall on every judge",
+                       "Best on a 12 GB GPU where the reranker fits"],
+              "cons": ["Needs the bge-v2-m3 cross-encoder (a model download)",
+                       "Higher per-query latency than RRF"],
+              "est_latency": "high", "est_footprint": "high",
+              "source": "docs/benchmarks.md full-1540 tri-judge"}))
+
+_register(Recipe(
+    id="rrf-9b",
+    name="RRF (12 GB GPU, no reranker)",
+    retrieval={"strategy": "thorough", "limit": 5, "candidate_top_k": 20,
+               "fusion": "rrf", "reranker": "none",
+               "adjacent_neighbors": 2, "llm_reranker": True},
+    ingest={"extraction": True, "extraction_model": "", "embed_verbatim": True},
+    generator={"model": "ollama:qwen3.5:9b"},
+    librarian={"fanout": "med", "worker_aware": True},
+    metadata={"tier": "gpu-12gb",
+              "scores": {"gemma4:e2b": 0.723, "llama3.1:8b": 0.390,
+                         "qwen3:4b-instruct-2507": 0.634},
+              "pros": ["Leader-class recall with no reranker download",
+                       "Lower latency than MaxSim+rerank"],
+              "cons": ["About 0.025 below the leader on lenient + qwen judges"],
+              "est_latency": "medium", "est_footprint": "medium",
+              "source": "docs/benchmarks.md full-1540 tri-judge"}))
+
+_register(Recipe(
+    id="fast-8b",
+    name="Fast (4 GB GPU / realtime)",
+    retrieval={"strategy": "thorough", "limit": 5, "candidate_top_k": 20,
+               "fusion": "rrf", "reranker": "none",
+               "adjacent_neighbors": 2, "llm_reranker": False},
+    ingest={"extraction": True, "extraction_model": "", "embed_verbatim": True},
+    generator={"model": "ollama:llama3.1:8b"},
+    librarian={"fanout": "low", "worker_aware": True},
+    metadata={"tier": "gpu-4gb",
+              "scores": {},
+              "pros": ["About 2.4x faster than the 9B leader, only ~0.02 lower",
+                       "Fits a 4 GB GPU; good for multiple agents on one card"],
+              "cons": ["Not full-1540 tri-judged; subset/cross-tier figure only"],
+              "est_latency": "low", "est_footprint": "low",
+              "source": "docs/benchmarks.md generator candidates (subset)"}))
+
+_register(Recipe(
+    id="lite-pi",
+    name="Lite (no-LLM ingest, Pi / CPU)",
+    retrieval={"strategy": "fast", "limit": 5, "candidate_top_k": 20,
+               "fusion": "boost", "reranker": "none",
+               "adjacent_neighbors": 2, "llm_reranker": False},
+    ingest={"extraction": False, "extraction_model": "", "embed_verbatim": True},
+    generator={"model": ""},
+    librarian={"fanout": "low", "worker_aware": False},
+    metadata={"tier": "pi-npu",
+              "scores": {},
+              "pros": ["No LLM extraction cost per turn; safe on Pi 4B CPU",
+                       "Archive + embed + retrieve unchanged, so recall holds"],
+              "cons": ["No enriched facts/events; relies on raw embedding recall"],
+              "est_latency": "low", "est_footprint": "low",
+              "source": "Midas-class no-LLM-ingest, low tier"}))
+
+
+def get_recipe(recipe_id: str) -> Recipe | None:
+    return _REGISTRY.get(recipe_id)
+
+
+def list_recipes() -> list[Recipe]:
+    return list(_REGISTRY.values())
