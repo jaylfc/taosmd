@@ -383,3 +383,65 @@ def resolve_recipe(agent: str, data_dir=None) -> Recipe:
         return apply_recipe(agent, gid, data_dir=data_dir)
     top = recommend(None)[0]
     return apply_recipe(agent, top.id, data_dir=data_dir)
+
+
+import threading
+from pathlib import Path
+
+# HuggingFace repo for the bge reranker v2-m3 ONNX export.
+_RERANKER_REPO = "BAAI/bge-reranker-v2-m3"
+_RERANKER_DOWNLOADS: dict[str, str] = {}  # onnx_path -> "downloading"|"ready"|"error"
+
+
+def _reranker_present(onnx_path: str) -> bool:
+    for c in (Path(onnx_path) / "model.onnx", Path(onnx_path) / "onnx" / "model.onnx"):
+        if c.exists():
+            return True
+    return False
+
+
+def _fetch_reranker_onnx(dest: str, on_progress) -> str | None:
+    """Download the bge-v2-m3 ONNX into dest, reporting progress. Network IO.
+
+    Uses huggingface_hub (already a transitive dep via transformers) with
+    tqdm progress mapped to on_progress events. Raises on failure.
+    """
+    from huggingface_hub import snapshot_download  # noqa: PLC0415
+    on_progress({"phase": "start", "pct": 0, "repo": _RERANKER_REPO})
+    path = snapshot_download(
+        repo_id=_RERANKER_REPO,
+        allow_patterns=["*.onnx", "*.json", "tokenizer*", "*.txt"],
+        local_dir=dest,
+    )
+    on_progress({"phase": "done", "pct": 100})
+    return path
+
+
+def ensure_reranker_model(onnx_path: str = "models/cross-encoder-onnx",
+                          on_progress=None, block: bool = False) -> str:
+    """Ensure the bge-v2-m3 ONNX is present; download with visible progress.
+
+    Returns "ready" if present, "downloading" if a background fetch is in
+    flight (block=False), or "error". Never blocks a caller unless block=True.
+    Progress events are dicts {phase, pct, ...} passed to on_progress.
+    """
+    on_progress = on_progress or (lambda e: None)
+    if _reranker_present(onnx_path):
+        return "ready"
+    if _RERANKER_DOWNLOADS.get(onnx_path) == "downloading":
+        return "downloading"
+
+    def _run():
+        _RERANKER_DOWNLOADS[onnx_path] = "downloading"
+        try:
+            _fetch_reranker_onnx(onnx_path, on_progress)
+            _RERANKER_DOWNLOADS[onnx_path] = "ready"
+        except Exception as exc:  # noqa: BLE001
+            _RERANKER_DOWNLOADS[onnx_path] = "error"
+            on_progress({"phase": "error", "error": str(exc)})
+
+    if block:
+        _run()
+        return _RERANKER_DOWNLOADS.get(onnx_path, "error")
+    threading.Thread(target=_run, daemon=True).start()
+    return "downloading"

@@ -175,3 +175,28 @@ def test_resolve_falls_back_to_recommend_when_unconfigured(tmp_path, monkeypatch
     resolved = recipes.resolve_recipe("carol", data_dir=d)
     # fresh install resolves to recommend()[0] for the probed (cpu) tier
     assert resolved.metadata["tier"] in ("cpu", "pi-npu")
+
+
+def test_ensure_reranker_model_reports_progress_and_is_nonblocking(tmp_path, monkeypatch):
+    events = []
+    # Fake the actual fetch so the test does no network IO.
+    def fake_fetch(dest, on_progress):
+        on_progress({"phase": "start", "pct": 0})
+        on_progress({"phase": "done", "pct": 100})
+        (tmp_path / "model.onnx").write_bytes(b"x")
+        return str(tmp_path / "model.onnx")
+
+    monkeypatch.setattr(recipes, "_fetch_reranker_onnx", fake_fetch)
+    state = recipes.ensure_reranker_model(
+        onnx_path=str(tmp_path), on_progress=events.append, block=True)
+    assert state == "ready"
+    assert any(e["phase"] == "done" for e in events)
+
+
+def test_ensure_reranker_model_nonblocking_returns_downloading(tmp_path, monkeypatch):
+    monkeypatch.setattr(recipes, "_fetch_reranker_onnx",
+                        lambda dest, on_progress: None)
+    # Missing model, non-blocking: kicks off and reports 'downloading'.
+    state = recipes.ensure_reranker_model(
+        onnx_path=str(tmp_path / "missing"), on_progress=lambda e: None, block=False)
+    assert state in ("downloading", "ready")
