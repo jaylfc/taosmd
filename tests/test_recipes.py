@@ -200,3 +200,10 @@ def test_ensure_reranker_model_nonblocking_returns_downloading(tmp_path, monkeyp
     state = recipes.ensure_reranker_model(
         onnx_path=str(tmp_path / "missing"), on_progress=lambda e: None, block=False)
     assert state in ("downloading", "ready")
+
+
+def test_public_surface_exported():
+    import taosmd
+    for name in ("recipe_schema", "list_recipes", "get_recipe",
+                 "recommend", "resolve_recipe", "apply_recipe"):
+        assert hasattr(taosmd, name), name
