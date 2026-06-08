@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS archive_index (
     event_type TEXT NOT NULL,
     agent_name TEXT,
     app_id TEXT,
+    project TEXT,
     summary TEXT NOT NULL DEFAULT '',
     file_path TEXT NOT NULL,
     line_number INTEGER NOT NULL,
@@ -106,6 +107,11 @@ class ArchiveStore:
         self._conn = _db.connect(self._index_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(INDEX_SCHEMA)
+        # Back-fill: add project column to existing installs
+        try:
+            self._conn.execute("SELECT project FROM archive_index LIMIT 1")
+        except Exception:
+            self._conn.execute("ALTER TABLE archive_index ADD COLUMN project TEXT")
         self._conn.commit()
         # Load user tracking preference
         row = self._conn.execute(
@@ -168,6 +174,7 @@ class ArchiveStore:
         agent_name: str | None = None,
         app_id: str | None = None,
         summary: str = "",
+        project: str | None = None,
     ) -> int:
         """Record an event to the archive. Returns the index row ID."""
         # Skip user activity events if tracking is disabled
@@ -187,6 +194,7 @@ class ArchiveStore:
             "event_type": event_type,
             "agent_name": agent_name,
             "app_id": app_id,
+            "project": project,
             "summary": summary,
             "data": data,
         }
@@ -220,9 +228,9 @@ class ArchiveStore:
         # Index for fast lookup
         cursor = self._conn.execute(
             """INSERT INTO archive_index
-               (timestamp, event_type, agent_name, app_id, summary, file_path, line_number, data_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ts, event_type, agent_name, app_id, summary, file_path, line_count, json.dumps(data, default=str)),
+               (timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ts, event_type, agent_name, app_id, project, summary, file_path, line_count, json.dumps(data, default=str)),
         )
 
         # Index in FTS for full-text search

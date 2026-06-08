@@ -280,14 +280,27 @@ def _deduplicate(results: list[dict], threshold: float = 0.8) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-async def _query_source(name: str, source: object, query: str, limit: int) -> list[dict]:
+async def _query_source(
+    name: str,
+    source: object,
+    query: str,
+    limit: int,
+    project: str | None = None,
+    search_agents: list[str] | None = None,
+) -> list[dict]:
     """Query a single source and return adapted results.
 
     Returns an empty list if the query raises an exception.
     """
     try:
         if name == "vector":
-            raw = await source.search(query, limit=limit, hybrid=True)
+            raw = await source.search(
+                query,
+                limit=limit,
+                hybrid=True,
+                project=project,
+                search_agents=search_agents,
+            )
             return _adapt_vector(raw)
         elif name == "kg":
             words = [w for w in query.split() if len(w) > 2]
@@ -595,6 +608,53 @@ async def _attach_neighbors(
     return hits
 
 
+
+def _filter_project_scope(
+    results: list[dict],
+    project: str | None = None,
+    search_agents: list[str] | None = None,
+) -> list[dict]:
+    """Post-filter results by project and agent scope.
+
+    Applied after all sources return results. Handles the different metadata
+    shapes from each source (archive uses ``agent_name`` and stores project
+    inside ``data_json``, vector uses ``agent``/``project`` in metadata,
+    KG has no agent field).
+    """
+    if project is None and search_agents is None:
+        return results
+
+    agent_set = set(search_agents) if search_agents else None
+    filtered = []
+    for hit in results:
+        md = hit.get("metadata", {}) or {}
+        # Unwrap nested metadata (archive wraps in inner dict)
+        inner = md.get("metadata") if isinstance(md, dict) else None
+        user_md = inner if isinstance(inner, dict) else md
+
+        # Project filter: check all metadata layers
+        if project is not None:
+            hit_project = (
+                (user_md.get("project") if isinstance(user_md, dict) else None)
+                or (md.get("project") if isinstance(md, dict) else None)
+            )
+            if hit_project is not None and hit_project != project:
+                continue
+
+        # Agent filter: check top-level, then archive agent_name
+        if agent_set is not None:
+            hit_agent = (
+                (user_md.get("agent") if isinstance(user_md, dict) else None)
+                or (md.get("agent") if isinstance(md, dict) else None)
+                or (md.get("agent_name") if isinstance(md, dict) else None)
+            )
+            if hit_agent is not None and hit_agent not in agent_set:
+                continue
+
+        filtered.append(hit)
+    return filtered
+
+
 async def retrieve(
     query: str,
     strategy: str = "thorough",
@@ -610,6 +670,8 @@ async def retrieve(
     adjacent_neighbors: int = 0,
     position_key: str = "position",
     group_key: str | None = None,
+    project: str | None = None,
+    search_agents: list[str] | None = None,
 ) -> list[dict]:
     """Retrieve relevant results from available memory sources.
 
@@ -689,7 +751,11 @@ async def retrieve(
         available = {k: v for k, v in sources.items()}
 
         tasks = [
-            asyncio.create_task(_query_source(name, src, query, fetch_limit))
+            asyncio.create_task(_query_source(
+                name, src, query, fetch_limit,
+                project=project if name == "vector" else None,
+                search_agents=search_agents if name == "vector" else None,
+            ))
             for name, src in available.items()
         ]
         results_per_source = await asyncio.gather(*tasks, return_exceptions=True)
@@ -718,7 +784,7 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
-        return results
+        return _filter_project_scope(results, project, search_agents)
 
     elif strategy == "fast":
         strategy_info = get_search_strategy(query)
@@ -744,7 +810,7 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
-        return results
+        return _filter_project_scope(results, project, search_agents)
 
     elif strategy == "minimal":
         strategy_info = get_search_strategy(query)
@@ -763,7 +829,7 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
-        return results
+        return _filter_project_scope(results, project, search_agents)
 
     elif strategy == "custom":
         if memory_layers is None:
@@ -799,7 +865,7 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
-        return results
+        return _filter_project_scope(results, project, search_agents)
 
     else:
         raise ValueError(f"Unknown strategy {strategy!r}. Must be one of: thorough, fast, minimal, custom.")
