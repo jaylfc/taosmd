@@ -1,4 +1,4 @@
-"""Tests for librarian discovery — list_projects and list_shelves."""
+"""Tests for librarian discovery: list_projects and list_shelves."""
 from __future__ import annotations
 
 import pytest
