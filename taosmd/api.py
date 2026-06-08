@@ -316,6 +316,68 @@ async def search(
     return [_format_hit(hit) for hit in raw]
 
 
+async def list_projects(*, data_dir=None) -> list[dict]:
+    """List all projects that have stored memories.
+
+    Returns a list of dicts with project_id, agent count, and last activity.
+    Useful for discovery when an agent doesn't know which project it's in.
+
+    Returns:
+        ``[{"project_id": str, "agents": [str], "last_ingest": float}]``
+    """
+    stores = await _ensure_stores(data_dir)
+
+    rows = stores["archive"]._conn.execute(
+        "SELECT project, agent_name, MAX(timestamp) as last_ts "
+        "FROM archive_index WHERE project IS NOT NULL "
+        "GROUP BY project, agent_name ORDER BY last_ts DESC"
+    ).fetchall()
+
+    projects: dict[str, dict] = {}
+    for row in rows:
+        pid = row["project"]
+        if pid not in projects:
+            projects[pid] = {"project_id": pid, "agents": [], "last_ingest": 0}
+        if row["agent_name"] and row["agent_name"] not in projects[pid]["agents"]:
+            projects[pid]["agents"].append(row["agent_name"])
+        if row["last_ts"] and row["last_ts"] > projects[pid]["last_ingest"]:
+            projects[pid]["last_ingest"] = row["last_ts"]
+
+    return list(projects.values())
+
+
+async def list_shelves(*, project: str, data_dir=None) -> list[dict]:
+    """List all agent shelves within a specific project.
+
+    Returns agent names, fact counts, and last activity for the given project.
+    Use this to discover what other agents have memories for a project before
+    using ``also_include`` in ``search()``.
+
+    Args:
+        project: The project fingerprint to query.
+
+    Returns:
+        ``[{"agent": str, "facts": int, "last_ingest": float}]``
+    """
+    stores = await _ensure_stores(data_dir)
+
+    rows = stores["archive"]._conn.execute(
+        "SELECT agent_name, COUNT(*) as cnt, MAX(timestamp) as last_ts "
+        "FROM archive_index WHERE project = ? "
+        "GROUP BY agent_name ORDER BY last_ts DESC",
+        (project,),
+    ).fetchall()
+
+    return [
+        {
+            "agent": row["agent_name"] or "unknown",
+            "facts": row["cnt"],
+            "last_ingest": row["last_ts"],
+        }
+        for row in rows
+    ]
+
+
 async def list_pending_decisions(
     *, limit: int = 20, subject: str | None = None, data_dir=None,
 ) -> list[dict]:
