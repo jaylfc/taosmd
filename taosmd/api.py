@@ -289,7 +289,33 @@ async def search(
 
     from taosmd.agents import ensure_agent
     from taosmd.retrieval import retrieve as _retrieve
-    ensure_agent(agent)
+    from taosmd import recipes as _recipes  # noqa: PLC0415
+    # Register against the same data_dir the recipe layer resolves against, so
+    # resolve_recipe() can read/write this agent's record.
+    ensure_agent(agent, data_dir=data_dir)
+
+    # Resolve the active recipe (per-agent -> global default -> recommend()[0])
+    # and map its retrieval knobs onto the retrieve() call below.
+    recipe = _recipes.resolve_recipe(agent, data_dir=data_dir)
+    rc = recipe.retrieval
+
+    # Build the reranker the recipe asks for; degrade (not block) when absent.
+    reranker = None
+    degraded = None
+    if rc.get("reranker") == "bge-v2-m3":
+        from taosmd.cross_encoder import CrossEncoderReranker  # noqa: PLC0415
+        ce = CrossEncoderReranker()
+        if ce.available:
+            reranker = ce
+        else:
+            # Kick off a progress-reporting download in the background; this
+            # one search runs without the reranker rather than blocking.
+            _recipes.ensure_reranker_model(block=False)
+            degraded = "reranker-downloading"
+
+    # Caller override: prefer an explicitly-passed limit (differing from the
+    # signature default of 5) over the recipe's configured limit.
+    effective_limit = limit if limit != 5 else rc.get("limit", limit)
 
     # Build the list of agent names to search across.
     # When project + also_include are set, we search the calling agent
@@ -307,13 +333,21 @@ async def search(
             "kg": stores["kg"],
             "archive": stores["archive"],
         },
+        strategy=rc.get("strategy", "thorough"),
         agent=agent,
         agent_name=agent,
-        limit=limit,
+        limit=effective_limit,
+        reranker=reranker,
+        adjacent_neighbors=rc.get("adjacent_neighbors", 0),
+        fusion=rc.get("fusion", "boost"),
+        candidate_top_k=rc.get("candidate_top_k"),
         project=project,
         search_agents=search_agents,
     )
-    return [_format_hit(hit) for hit in raw]
+    hits = [_format_hit(hit) for hit in raw]
+    if degraded and hits:
+        hits[0].setdefault("metadata", {})["recipe_degraded"] = degraded
+    return hits
 
 
 async def list_projects(*, data_dir=None) -> list[dict]:
