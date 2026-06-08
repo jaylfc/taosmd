@@ -159,7 +159,7 @@ def _normalize_transcript(transcript) -> list[dict]:
     )
 
 
-async def ingest(transcript, *, agent: str, data_dir=None) -> dict:
+async def ingest(transcript, *, agent: str, project: str | None = None, data_dir=None) -> dict:
     """Shelve a transcript into the zero-loss archive and embed it for search.
 
     Per the agent-rules contract: call after every meaningful exchange.
@@ -171,11 +171,16 @@ async def ingest(transcript, *, agent: str, data_dir=None) -> dict:
             (``{"role", "content", optional "timestamp"}``), or an iterable
             of either.
         agent: Registered agent name. Auto-registered if absent.
+        project: Optional project fingerprint for cross-agent memory sharing.
+            When set, memories are tagged with this project ID so that
+            different agents working on the same project can find each
+            other's memories via ``search(..., also_include=[...])``.
+            Use ``taosmd.project.get_project_id()`` for automatic detection.
         data_dir: Optional taosmd data dir. Defaults to ``$TAOSMD_DATA_DIR``
             or ``~/.taosmd``.
 
     Returns:
-        ``{"archived": int, "agent": str, "data_dir": str}`` — ``archived``
+        ``{"archived": int, "agent": str, "project": str|None, "data_dir": str}`` — ``archived``
         is the count of non-empty turns that were shelved.
     """
     if not agent:
@@ -196,8 +201,11 @@ async def ingest(transcript, *, agent: str, data_dir=None) -> dict:
             item,
             agent_name=agent,
             summary=text[:80],
+            project=project,
         )
         meta: dict = {"agent": agent}
+        if project:
+            meta["project"] = project
         if "role" in item:
             meta["role"] = item["role"]
         if "timestamp" in item:
@@ -206,7 +214,7 @@ async def ingest(transcript, *, agent: str, data_dir=None) -> dict:
         archived += 1
 
     update_stats(agent, last_ingest_at=int(time.time()))
-    return {"archived": archived, "agent": agent, "data_dir": stores["data_dir"]}
+    return {"archived": archived, "agent": agent, "project": project, "data_dir": stores["data_dir"]}
 
 
 def _format_hit(hit: dict) -> dict:
@@ -244,7 +252,15 @@ def _format_hit(hit: dict) -> dict:
     }
 
 
-async def search(query: str, *, agent: str, limit: int = 5, data_dir=None) -> list[dict]:
+async def search(
+    query: str,
+    *,
+    agent: str,
+    project: str | None = None,
+    also_include: list[str] | None = None,
+    limit: int = 5,
+    data_dir=None,
+) -> list[dict]:
     """Search the librarian's shelves for passages relevant to ``query``.
 
     Returns ranked hits in the agent-rules contract shape with explicit
@@ -255,6 +271,12 @@ async def search(query: str, *, agent: str, limit: int = 5, data_dir=None) -> li
     Args:
         query: The search query.
         agent: Registered agent name. Auto-registered if absent.
+        project: Optional project fingerprint. When set, only memories
+            tagged with this project are returned (scoped search).
+            Use ``taosmd.project.get_project_id()`` for automatic detection.
+        also_include: Optional list of additional agent names whose
+            memories should be included in the search results (cross-agent
+            reads). Only effective when ``project`` is also set.
         limit: Maximum number of hits to return.
         data_dir: Optional taosmd data dir (see :func:`ingest`).
     """
@@ -269,6 +291,15 @@ async def search(query: str, *, agent: str, limit: int = 5, data_dir=None) -> li
     from taosmd.retrieval import retrieve as _retrieve
     ensure_agent(agent)
 
+    # Build the list of agent names to search across.
+    # When project + also_include are set, we search the calling agent
+    # plus any explicitly included agents within the same project.
+    search_agents = [agent]
+    if project and also_include:
+        for name in also_include:
+            if name != agent:
+                search_agents.append(name)
+
     raw = await _retrieve(
         query,
         sources={
@@ -279,6 +310,8 @@ async def search(query: str, *, agent: str, limit: int = 5, data_dir=None) -> li
         agent=agent,
         agent_name=agent,
         limit=limit,
+        project=project,
+        search_agents=search_agents,
     )
     return [_format_hit(hit) for hit in raw]
 

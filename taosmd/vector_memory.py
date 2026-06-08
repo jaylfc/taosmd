@@ -266,6 +266,8 @@ class VectorMemory:
         limit: int = 5,
         hybrid: bool = True,
         fusion: str = "boost",
+        project: str | None = None,
+        search_agents: list[str] | None = None,
     ) -> list[dict]:
         """Semantic search with optional hybrid fusion.
 
@@ -289,6 +291,11 @@ class VectorMemory:
           "none"           — Pure semantic cosine similarity.
 
         When hybrid=False, fusion mode is ignored and pure semantic is used.
+
+        Args:
+            project: When set, only return memories tagged with this project.
+            search_agents: When set (with project), only return memories from
+                these agent names within the project. Enables cross-agent reads.
         """
         query_emb = await self.embed(query, task="search_query")
         if not query_emb:
@@ -312,6 +319,25 @@ class VectorMemory:
             "SELECT id, text, embedding, metadata_json, created_at FROM vector_memory "
             "WHERE valid_to IS NULL"
         ).fetchall()
+
+        # Filter by project and/or agent scope when specified.
+        if project is not None or search_agents is not None:
+            filtered = []
+            agent_set = set(search_agents) if search_agents else None
+            for row in rows:
+                try:
+                    meta = json.loads(row["metadata_json"])
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                # Project filter: skip rows that don't match the project.
+                if project is not None and meta.get("project") != project:
+                    continue
+                # Agent filter: skip rows whose agent isn't in the allowed set.
+                if agent_set is not None and meta.get("agent") not in agent_set:
+                    continue
+                filtered.append(row)
+            rows = filtered
+
         if not rows:
             return []
 
