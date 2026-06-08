@@ -189,13 +189,230 @@ def _config_show() -> int:
     return 0
 
 
+def _format_a2a_line(msg: dict) -> str:
+    """Render one A2A message as a single human-readable line.
+
+    Shared by ``a2a-poll`` and ``a2a-watch`` so both surfaces print an
+    identical format: ``[<ts UTC>] <sender>[ (reply_to=N)] <body>``.
+    """
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    ts = msg.get("ts", 0)
+    try:
+        ts_str = datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+    except Exception:  # noqa: BLE001 - never let a bad ts crash the line
+        ts_str = str(ts)
+    from_ = msg.get("from", "?")
+    body = msg.get("body", "")
+    reply = f" (reply_to={msg.get('reply_to')})" if msg.get("reply_to") else ""
+    return f"[{ts_str}] <{from_}>{reply} {body}"
+
+
+def _a2a_stream(server_url: str, channel: str, exclude: str | None, since: float | None):
+    """Yield new A2A messages from the bus SSE endpoint, one at a time.
+
+    Holds a long-lived connection to ``GET {server}/a2a/stream?thread=&since=``
+    and yields each parsed message dict as it arrives. Robustness mirrors
+    ``a2a-poll``:
+
+    * **id-dedup** - the server stream filters by timestamp (``ts > since``),
+      which can miss or repeat same-second siblings across a reconnect. We
+      track the max message id seen and drop anything ``<= last_id``, so the
+      stream is exactly-once regardless of timestamp granularity.
+    * **client-side exclude** - messages from ``exclude`` (usually our own
+      agent) are skipped but still advance the cursor.
+    * **auto-reconnect** - on any read/connection error the connection is
+      retried with a short backoff, resuming from ``last_ts`` rewound by one
+      second (id-dedup absorbs the overlap). The bus emits ``: keepalive``
+      frames every second, so a dropped peer is detected promptly.
+
+    This is a generator: callers (``a2a-watch``, ``a2a-bridge``) decide what to
+    do with each message. It runs until the caller stops consuming or the
+    process is interrupted.
+    """
+    import json  # noqa: PLC0415
+    import time  # noqa: PLC0415
+    import urllib.parse  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    last_id = -1
+    last_ts = since if since is not None else time.time()
+    backoff = 1.0
+
+    while True:
+        # Rewind a second so a same-timestamp sibling is not skipped; id-dedup
+        # below drops anything we have already emitted.
+        q = urllib.parse.urlencode({"thread": channel, "since": max(0.0, last_ts - 1.0)})
+        url = f"{server_url.rstrip('/')}/a2a/stream?{q}"
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                backoff = 1.0  # connected: reset backoff
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").rstrip("\n")
+                    if not line.startswith("data:"):
+                        continue  # keepalive (": ...") or blank frame separator
+                    payload = line[len("data:"):].strip()
+                    if not payload:
+                        continue
+                    try:
+                        msg = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    try:
+                        msg_id = int(msg.get("id"))
+                    except (TypeError, ValueError):
+                        continue
+                    ts = msg.get("ts")
+                    if isinstance(ts, (int, float)):
+                        last_ts = max(last_ts, float(ts))
+                    if msg_id <= last_id:
+                        continue
+                    last_id = msg_id
+                    if exclude and msg.get("from") == exclude:
+                        continue  # advance cursor (done above) but do not emit
+                    yield msg
+        except KeyboardInterrupt:
+            return
+        except Exception:  # noqa: BLE001 - any transport error: reconnect with backoff
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+
+
+def _resolve_a2a_server(args: argparse.Namespace) -> str:
+    """Resolve the bus base URL for streaming commands.
+
+    Streaming requires the HTTP server (``taosmd serve``); unlike ``a2a-poll``
+    there is no in-process fallback. Order: explicit ``--server`` flag,
+    then ``$TAOSMD_SERVER_URL``, then the configured server_url, then the
+    local default ``http://127.0.0.1:7900``.
+    """
+    import os  # noqa: PLC0415
+
+    explicit = getattr(args, "server", None)
+    if explicit:
+        return explicit
+    env = os.environ.get("TAOSMD_SERVER_URL")
+    if env:
+        return env
+    try:
+        from . import config as _config  # noqa: PLC0415
+
+        configured = _config.get_server_url()
+        if configured:
+            return configured
+    except Exception:  # noqa: BLE001 - config is optional
+        pass
+    return "http://127.0.0.1:7900"
+
+
+def _a2a_watch_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd a2a-watch``: stream new messages, one line each.
+
+    Holds the bus SSE and prints one line per new message in the same format
+    as ``a2a-poll``, flushing immediately so a consumer (or a harness Monitor)
+    gets instant pickup. ``--count N`` exits after N messages (0 = forever).
+    """
+    server_url = _resolve_a2a_server(args)
+    exclude = getattr(args, "exclude", None)
+    count = getattr(args, "count", 0) or 0
+
+    emitted = 0
+    try:
+        for msg in _a2a_stream(server_url, args.channel, exclude, since=None):
+            print(_format_a2a_line(msg), flush=True)
+            emitted += 1
+            if count and emitted >= count:
+                break
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def _a2a_bridge_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd a2a-bridge``: run a trigger command on each new message.
+
+    On every new message, spawn ``--trigger`` (a shell command) with the
+    message JSON on stdin. This is the only way to wake a dormant local
+    session: a headless agent can be spawned on message arrival.
+
+    * ``--debounce S`` coalesces a burst: messages arriving within S seconds of
+      the last spawn are batched and passed together (as a JSON array) to the
+      next spawn.
+    * ``--max-concurrency N`` caps simultaneous trigger processes; while N are
+      running, new messages are batched for the next free slot rather than
+      piling up overlapping spawns.
+    """
+    import json  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    server_url = _resolve_a2a_server(args)
+    exclude = getattr(args, "exclude", None)
+    trigger = args.trigger
+    debounce = max(0.0, getattr(args, "debounce", 0.0) or 0.0)
+    max_conc = max(1, getattr(args, "max_concurrency", 1) or 1)
+    count = getattr(args, "count", 0) or 0
+
+    running: list[subprocess.Popen] = []
+    last_spawn = 0.0
+    fired = 0
+
+    def _reap() -> None:
+        running[:] = [p for p in running if p.poll() is None]
+
+    def _spawn(batch: list[dict]) -> None:
+        nonlocal last_spawn, fired
+        payload = json.dumps(batch[0] if len(batch) == 1 else batch)
+        try:
+            proc = subprocess.Popen(
+                trigger, shell=True, stdin=subprocess.PIPE, text=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - bad trigger command
+            print(
+                f"taosmd a2a-bridge: failed to spawn trigger ({type(exc).__name__}: {exc})",
+                file=sys.stderr,
+            )
+            return
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(payload)
+            proc.stdin.close()
+        except Exception:  # noqa: BLE001 - process may have exited already
+            pass
+        running.append(proc)
+        last_spawn = time.time()
+        fired += 1
+
+    try:
+        for msg in _a2a_stream(server_url, args.channel, exclude, since=None):
+            _reap()
+            now = time.time()
+            within_debounce = debounce and (now - last_spawn) < debounce
+            if len(running) >= max_conc or within_debounce:
+                # Wait for a slot / for the debounce window to pass, batching
+                # any further messages that the generator would yield next.
+                while len(running) >= max_conc or (
+                    debounce and (time.time() - last_spawn) < debounce
+                ):
+                    time.sleep(0.1)
+                    _reap()
+            _spawn([msg])
+            if count and fired >= count:
+                break
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
 def _a2a_poll_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd a2a-poll``: fetch new messages and update state file."""
     import asyncio  # noqa: PLC0415
     import json  # noqa: PLC0415 (already imported at module level but guard for type-checker)
     import os  # noqa: PLC0415
     from pathlib import Path  # noqa: PLC0415
-    from datetime import datetime, timezone  # noqa: PLC0415
 
     state_file = Path(args.state_file).expanduser()
     channel = args.channel
@@ -260,15 +477,7 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
 
     # --- print new messages and update state ----------------------------
     for msg_id_int, msg in sorted(new_messages, key=lambda t: t[0]):
-        ts = msg.get("ts", 0)
-        try:
-            ts_str = datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        except Exception:
-            ts_str = str(ts)
-        from_ = msg.get("from", "?")
-        body = msg.get("body", "")
-        reply = f" (reply_to={msg.get('reply_to')})" if msg.get("reply_to") else ""
-        print(f"[{ts_str}] <{from_}>{reply} {body}")
+        print(_format_a2a_line(msg))
         last_id = max(last_id, msg_id_int)
 
     # --- persist state (atomic: tmp write + os.replace) -----------------
@@ -790,6 +999,68 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip messages from this sender (e.g. your own agent name)",
     )
 
+    # ----- a2a-watch subcommand (realtime SSE stream) -------------------
+    a2a_watch_p = sub.add_parser(
+        "a2a-watch",
+        help="Stream new A2A messages in realtime over SSE (one line each); "
+             "wrap in a Monitor for instant in-session pickup",
+    )
+    a2a_watch_p.add_argument(
+        "--channel", required=True,
+        help="Channel name to watch",
+    )
+    a2a_watch_p.add_argument(
+        "--server", default=None,
+        help="Bus server URL (default: TAOSMD_SERVER_URL, configured server_url, "
+             "else http://127.0.0.1:7900). Requires a running `taosmd serve`.",
+    )
+    a2a_watch_p.add_argument(
+        "--exclude", default=None,
+        help="Skip messages from this sender (e.g. your own agent name)",
+    )
+    a2a_watch_p.add_argument(
+        "--count", type=int, default=0,
+        help="Exit after printing N new messages (default 0 = run forever)",
+    )
+
+    # ----- a2a-bridge subcommand (exec-on-message dormant wake) ---------
+    a2a_bridge_p = sub.add_parser(
+        "a2a-bridge",
+        help="Run a trigger command on each new A2A message (the message JSON "
+             "is piped to the command's stdin); wakes a dormant local session",
+    )
+    a2a_bridge_p.add_argument(
+        "--channel", required=True,
+        help="Channel name to bridge",
+    )
+    a2a_bridge_p.add_argument(
+        "--trigger", required=True,
+        help="Shell command to run per new message; the message JSON is written "
+             "to its stdin (a coalesced batch is a JSON array)",
+    )
+    a2a_bridge_p.add_argument(
+        "--server", default=None,
+        help="Bus server URL (default: TAOSMD_SERVER_URL, configured server_url, "
+             "else http://127.0.0.1:7900). Requires a running `taosmd serve`.",
+    )
+    a2a_bridge_p.add_argument(
+        "--exclude", default=None,
+        help="Skip messages from this sender (e.g. your own agent name)",
+    )
+    a2a_bridge_p.add_argument(
+        "--debounce", type=float, default=0.0,
+        help="Coalesce a burst: messages within S seconds of the last spawn are "
+             "batched into the next trigger run (default 0 = no debounce)",
+    )
+    a2a_bridge_p.add_argument(
+        "--max-concurrency", dest="max_concurrency", type=int, default=1,
+        help="Max simultaneous trigger processes (default 1)",
+    )
+    a2a_bridge_p.add_argument(
+        "--count", type=int, default=0,
+        help="Exit after firing the trigger N times (default 0 = run forever)",
+    )
+
     # ----- serve subcommand (local HTTP/REST API) -----------------------
     serve_p = sub.add_parser(
         "serve",
@@ -880,6 +1151,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "a2a-poll":
         return _a2a_poll_cmd(args)
+
+    if args.cmd == "a2a-watch":
+        return _a2a_watch_cmd(args)
+
+    if args.cmd == "a2a-bridge":
+        return _a2a_bridge_cmd(args)
 
     if args.cmd == "serve":
         from . import service_install  # noqa: PLC0415
