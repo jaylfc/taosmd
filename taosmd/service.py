@@ -154,6 +154,22 @@ async def pending_resolve(
     )
 
 
+async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
+    """Detect and (when ``repair=True``) fix archive turns missing from the vector store.
+
+    Thin wrapper over :func:`taosmd.api.reconcile`. The archive is the source of
+    truth; the vector store is a derived index. A crash between the two sequential
+    writes in :func:`ingest` leaves a turn in the archive but absent from vector
+    recall. Reconcile re-adds those missing entries without touching anything that
+    was deliberately superseded (superseded rows count as present).
+
+    Returns ``{"agent", "archive_turns", "vector_entries", "missing", "readded",
+    "checked_ok"}``. When ``repair=False`` this is a dry-run: ``readded`` is
+    always 0.
+    """
+    return await _api.reconcile(agent=agent, data_dir=data_dir, repair=repair)
+
+
 async def supersede(match: str, *, agent: str | None = None, data_dir=None) -> dict:
     """Soft-supersede vector chunk(s) whose stored text contains ``match``.
 
@@ -392,5 +408,5 @@ async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
     return sorted(members)
 
 
-__all__ = ["ingest", "search", "pending_list", "pending_resolve", "stats", "supersede",
-           "a2a_send", "a2a_feed", "a2a_channels", "a2a_members"]
+__all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
+           "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members"]

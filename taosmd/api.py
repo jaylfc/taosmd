@@ -384,6 +384,134 @@ async def resolve_pending_decision(
         await store.close()
 
 
+async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
+    """Detect archive turns missing from the vector store and optionally re-add them.
+
+    The append-only archive is the source of truth (Option A). The vector store
+    is a derived index. A crash between the archive write and the vector write in
+    :func:`ingest` leaves a turn present in the archive but absent from vector
+    recall. This function detects and, when ``repair=True``, corrects that gap.
+
+    **How missing is computed**
+
+    Build a ``Counter`` (multiset) of texts from both stores, then subtract the
+    vector multiset from the archive multiset. A text that appears twice in the
+    archive but only once in the vector store counts as 1 missing copy; a text
+    present in the archive but entirely absent from the vector store counts as N
+    missing copies where N is its archive count.
+
+    **Supersede guard**
+
+    ``iter_entries(include_superseded=True)`` includes intentionally superseded
+    rows in the vector multiset, so a turn whose vector copy was soft-hidden by a
+    correction is counted as *present* and is not re-added. Corrected/stale
+    content is therefore never resurrected by reconcile.
+
+    **Chunking**
+
+    ``add()`` stores each turn as one row (no splitting). The comparison is done
+    at the full-turn level: the archive's ``data.content`` field is compared
+    directly against the stored ``text`` column values. Archive rows whose content
+    field is empty or whitespace-only are skipped (they were skipped at ingest
+    time too, so they can never be in the vector store).
+
+    Args:
+        agent: Agent name whose archive + vector entries are reconciled.
+        data_dir: Optional taosmd data dir. Defaults to ``$TAOSMD_DATA_DIR`` or
+            ``~/.taosmd``.
+        repair: When True (default), re-add missing entries to the vector store.
+            When False, only report without modifying (dry-run / ``--check``).
+
+    Returns:
+        ``{
+            "agent": str,
+            "archive_turns": int,   # non-empty conversation turns in the archive
+            "vector_entries": int,  # entries in the vector store (incl. superseded)
+            "missing": int,         # archive turns absent from the vector store
+            "readded": int,         # entries re-added (0 when repair=False)
+            "checked_ok": bool,     # True when missing == 0
+        }``
+    """
+    import json as _json
+    from collections import Counter
+
+    if not agent:
+        raise ValueError("agent name is required")
+
+    stores = await _ensure_stores(data_dir)
+    archive = stores["archive"]
+    vmem = stores["vector"]
+
+    from taosmd.archive import EVENT_CONVERSATION
+
+    # --- Build archive multiset -----------------------------------------
+    # Use a large limit; the archive index is an SQLite table so this is fast.
+    rows = await archive.query(
+        event_type=EVENT_CONVERSATION,
+        agent_name=agent,
+        limit=1_000_000,
+    )
+    archive_texts: list[tuple[str, dict]] = []  # (text, row) for re-add
+    archive_counter: Counter[str] = Counter()
+    for row in rows:
+        try:
+            data = _json.loads(row.get("data_json", "{}"))
+        except (_json.JSONDecodeError, TypeError):
+            data = {}
+        text = str(data.get("content", "")).strip()
+        if not text:
+            continue
+        archive_counter[text] += 1
+        # Keep the first-seen archive row per text value for metadata
+        # reconstruction; duplicates will use the same metadata shape.
+        archive_texts.append((text, data))
+
+    # --- Build vector multiset (including superseded) -------------------
+    vector_counter: Counter[str] = Counter()
+    async for text, _meta in vmem.iter_entries(agent=agent, include_superseded=True):
+        vector_counter[text] += 1
+
+    # --- Compute missing (count-aware subtraction) ----------------------
+    missing_counter: Counter[str] = archive_counter.copy()
+    missing_counter.subtract(vector_counter)
+    # Discard zero or negative counts (present or over-represented in vector)
+    missing: dict[str, int] = {t: c for t, c in missing_counter.items() if c > 0}
+
+    total_missing = sum(missing.values())
+    readded = 0
+
+    if repair and missing:
+        # Build a lookup of text → archive data for timestamp reconstruction.
+        # Only need one representative row per distinct text.
+        text_to_data: dict[str, dict] = {}
+        for text, data in archive_texts:
+            if text not in text_to_data:
+                text_to_data[text] = data
+
+        for text, count in missing.items():
+            data = text_to_data.get(text, {})
+            meta: dict = {"agent": agent}
+            # Propagate role and timestamp from the archive entry where available.
+            if "role" in data:
+                meta["role"] = data["role"]
+            if "timestamp" in data:
+                meta["timestamp"] = data["timestamp"]
+            for _ in range(count):
+                added_id = await vmem.add(text, metadata=meta)
+                if added_id != -1:
+                    readded += 1
+
+    vector_total = sum(vector_counter.values())
+    return {
+        "agent": agent,
+        "archive_turns": sum(archive_counter.values()),
+        "vector_entries": vector_total,
+        "missing": total_missing,
+        "readded": readded,
+        "checked_ok": total_missing == 0,
+    }
+
+
 async def supersede_vectors(match: str, *, data_dir=None) -> int:
     """Soft-supersede vector chunk(s) whose stored text contains ``match``.
 
@@ -403,4 +531,5 @@ __all__ = [
     "list_pending_decisions",
     "resolve_pending_decision",
     "supersede_vectors",
+    "reconcile",
 ]

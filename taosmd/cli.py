@@ -485,6 +485,52 @@ def _review_help() -> str:
     )
 
 
+def _reconcile_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd reconcile`` — compare archive to vector store and repair gaps."""
+    import asyncio  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+    from .agents import AgentRegistry  # noqa: PLC0415
+
+    repair = not args.check
+    data_dir = args.data_dir
+
+    agent_names: list[str]
+    if args.agent:
+        agent_names = [args.agent]
+    else:
+        # Reconcile all registered agents.
+        registry = AgentRegistry(data_dir)
+        agent_names = [a["name"] for a in registry.list_agents()]
+        if not agent_names:
+            print("No registered agents found.")
+            return 0
+
+    any_missing = False
+    for agent in agent_names:
+        result = asyncio.run(service.reconcile(agent=agent, data_dir=data_dir, repair=repair))
+        mode = "check" if not repair else "repair"
+        status = "ok" if result["checked_ok"] else "MISSING"
+        readded_col = f"  re-added={result['readded']}" if repair else ""
+        print(
+            f"[{mode}] {result['agent']:<24} "
+            f"archive={result['archive_turns']}  "
+            f"vector={result['vector_entries']}  "
+            f"missing={result['missing']}  "
+            f"{status}"
+            f"{readded_col}"
+        )
+        if not result["checked_ok"]:
+            any_missing = True
+
+    if any_missing and not repair:
+        print(
+            "\nhint: run without --check to repair, "
+            "or `taosmd reconcile` to re-add missing entries."
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="taosmd")
     parser.add_argument(
@@ -728,6 +774,23 @@ def main(argv: list[str] | None = None) -> int:
         help="Print the running status of the background service.",
     )
 
+    # ----- reconcile subcommand ----------------------------------------
+    reconcile_p = sub.add_parser(
+        "reconcile",
+        help="Detect (and repair) archive turns missing from the vector store "
+             "due to a crash between the two sequential writes in ingest(). "
+             "The archive is the source of truth; this re-adds any absent entries "
+             "without resurrecting superseded/corrected content.",
+    )
+    reconcile_p.add_argument(
+        "--agent", default=None,
+        help="Agent name to reconcile. When omitted, all registered agents are reconciled.",
+    )
+    reconcile_p.add_argument(
+        "--check", action="store_true",
+        help="Dry-run: report missing counts without modifying the vector store.",
+    )
+
     # ----- mcp subcommand (MCP server over stdio) -----------------------
     mcp_p = sub.add_parser(
         "mcp",
@@ -785,6 +848,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"superseded {result['superseded']} chunk(s) matching {result['match']!r}")
         return 0
+
+    if args.cmd == "reconcile":
+        return _reconcile_cmd(args)
 
     registry = AgentRegistry(args.data_dir)
 
