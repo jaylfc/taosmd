@@ -594,6 +594,41 @@ class VectorMemory:
             self._bm25_dirty = True  # active corpus changed — invalidate BM25 cache
         return cursor.rowcount
 
+    async def iter_entries(
+        self,
+        agent: str | None = None,
+        include_superseded: bool = True,
+    ):
+        """Yield (text, metadata_dict) tuples for stored entries.
+
+        Used by :func:`taosmd.api.reconcile` to enumerate the current vector
+        corpus — including superseded rows when ``include_superseded=True`` — so
+        the reconcile logic can distinguish "truly absent" from "intentionally
+        superseded". Superseded rows count as *present* in the multiset; their
+        content is not re-added, so corrected/stale entries are never resurrected.
+
+        When ``agent`` is given, only rows whose stored metadata ``agent`` field
+        matches are returned. This mirrors the per-agent scope used by
+        :meth:`add` when metadata ``{"agent": ...}`` is attached at ingest time.
+        Rows with no ``agent`` field in their metadata are included only when
+        ``agent`` is ``None``.
+
+        Yields ``(text: str, metadata: dict)`` in insertion order (ascending id).
+        """
+        sql = "SELECT text, metadata_json FROM vector_memory"
+        if not include_superseded:
+            sql += " WHERE valid_to IS NULL"
+        sql += " ORDER BY id ASC"
+
+        for row in self._conn.execute(sql).fetchall():
+            try:
+                meta = json.loads(row["metadata_json"])
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            if agent is not None and meta.get("agent") != agent:
+                continue
+            yield row["text"], meta
+
     async def clear(self) -> int:
         cursor = self._conn.execute("DELETE FROM vector_memory")
         self._conn.commit()
