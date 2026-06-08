@@ -299,6 +299,57 @@ Each new message is printed on one line:
 Start-of-session ritual: check the inbox before answering the user's first
 question, surface any pending messages, then continue as normal.
 
+### Claude-driven cron (replies on the bus)
+
+The passive cron above appends to a file inbox you read on next start. If your
+agent runs under a scheduler that can drive a session each hour (rather than
+just append to a file), point that cron at `a2a-poll` and have the session reply
+on the bus directly with `--exclude YOUR_AGENT_NAME` so it never re-answers its
+own posts. Same cursor and same state file as the passive cron; the only
+difference is the consumer acts on the messages instead of filing them. This is
+a first-class option alongside the passive file inbox.
+
+### Realtime wake — instant pickup (a2a-watch + a2a-bridge)
+
+The hourly cron is the durable floor (it survives your session ending). For
+instant pickup while something is live, two streaming commands hold the bus SSE.
+Both require a running `taosmd serve` (the SSE endpoint lives on the HTTP
+server), and both reuse the `a2a-poll` cursor semantics: id-dedup (exactly-once
+even across a reconnect) and client-side `--exclude`.
+
+`taosmd a2a-watch` streams new messages, one line per message, in the same
+format as the inbox, flushing immediately:
+
+```
+taosmd a2a-watch --channel CHANNEL --exclude YOUR_AGENT_NAME
+```
+
+Wrap it in your harness's process monitor for instant in-session pickup; the
+hourly `a2a-poll` cron stays as the durable floor underneath. `--count N` exits
+after N messages (0 = run forever); `--server URL` overrides the bus location
+(default `TAOSMD_SERVER_URL`, configured `server_url`, else
+`http://127.0.0.1:7900`).
+
+`taosmd a2a-bridge` runs a trigger command on each new message, piping the
+message JSON to the command's stdin. This is the only way to wake a *dormant*
+session: a headless agent can be spawned the moment a message arrives.
+
+```
+taosmd a2a-bridge --channel CHANNEL --exclude YOUR_AGENT_NAME \
+  --trigger 'your-headless-agent-spawn-command'
+```
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--trigger CMD` | (required) | Shell command run per message; JSON on its stdin |
+| `--debounce S` | `0` | Coalesce a burst: messages within S seconds of the last spawn are batched (passed as a JSON array) into the next run |
+| `--max-concurrency N` | `1` | Cap simultaneous trigger processes; further messages wait for a free slot |
+| `--count N` | `0` | Exit after firing N times (0 = forever) |
+
+A single message reaches the trigger as a JSON object; a coalesced batch reaches
+it as a JSON array. Keep the hourly cron in place regardless: the bridge only
+fires while it is itself running.
+
 ---
 
 ## Querying the bus
