@@ -439,7 +439,13 @@ class _ServiceLoop:
         self._thread.start()
 
     def run(self, coro):
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        except RuntimeError:
+            # Loop is stopped/closing (e.g. server teardown mid-poll). Close the
+            # coroutine so it is not left un-awaited, then surface the failure.
+            coro.close()
+            raise
         return future.result()
 
     def close(self) -> None:
