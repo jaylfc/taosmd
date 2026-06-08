@@ -45,14 +45,20 @@ fresh install runs a real recipe (tier-gated to the leader where affordable).
 - A declared JSON-Schema export of the bundle shape, so any consumer (the taOS
   Memory-framework manager, the dashboard) can render a recipe generically with
   no taosmd-specific UI code. This is the contract seam @taOS asked for.
+- `recommend(device_info) -> ranked[recipe]` auto-pick, INCLUDING a minimal
+  local hardware probe so a fresh standalone install auto-detects its tier and
+  picks the best affordable recipe with no taOS involved (decided: auto-detect
+  in SP1, not deferred). When taOS supplies a richer `device_info` (host +
+  cluster + aggregate), recommend uses it; when nothing is supplied, recommend
+  falls back to the local probe. This preserves the standalone guarantee: the
+  device vocabulary is shared with taOS but never depended on.
 
 ## Non-goals (SP1)
 
-- `recommend(device_info) -> ranked[recipe]` auto-pick. The schema carries the
-  `tier` and footprint metadata that makes ranking possible, and the registry is
-  tier-tagged, but the ranking call itself is SP2.
 - The full taOS-facing API surface (list/get/set/create over HTTP/MCP/remote)
-  is SP4. SP1 ships the Python API and the schema export it builds on.
+  is SP4. SP1 ships the Python API, the schema export, and `recommend()`; the
+  cross-surface wiring (and taOS building the cluster-aware `device_info`
+  producer) is SP4.
 - The dashboard recipe-selector page is SP5.
 - New retrieval science. SP1 only wires recipes to levers that already exist and
   are already benchmarked. No new lever is introduced.
@@ -60,8 +66,10 @@ fresh install runs a real recipe (tier-gated to the leader where affordable).
 ## Sub-project map (context only)
 
 - **SP1 (this spec):** recipe core: object, registry, resolution+application,
-  lite path, schema export.
-- **SP2:** `recommend(device_info) -> ranked[recipe]` and tier inference.
+  lite path, schema export, `recommend()` + local hardware probe (fresh install
+  auto-detects and picks).
+- **SP2:** cluster-aware ranking refinements (multi-worker `device_info`,
+  TurboQuant-aware tiers) once taOS ships the cluster `aggregate` producer.
 - **SP3:** custom recipes (create/edit/delete) persisted in the config DB.
 - **SP4:** taOS contract API across HTTP / MCP / CLI / remote (the framework
   manager calls these).
@@ -190,12 +198,24 @@ A new `taosmd/recipes.py` exposes:
 - `get_recipe(recipe_id) -> Recipe | None`
 - `list_recipes() -> list[Recipe]`
 - `resolve_recipe(agent, data_dir) -> Recipe` resolution order:
-  1. the agent's per-agent recipe override (agent config), if set;
+  1. the agent's per-agent recipe override (`applied_recipe_id` on the agent),
+     if set;
   2. the global default recipe (config.json, new key alongside memory_model);
-  3. a tier-safe fallback built-in (`rrf-9b` when a GPU is present and the
-     reranker is not known-available, else `lite-pi`). The fallback is
-     conservative on purpose: it never assumes a reranker that may not be
-     installed.
+  3. `recommend(local_probe())[0]`, the top-ranked recipe for the locally
+     detected tier. On a fresh install with nothing configured this is what
+     runs, so the install auto-picks the best affordable recipe rather than a
+     static guess. The result is cached so the probe runs once, not per search.
+- `recommend(device_info=None) -> list[Recipe]` ranks the built-in registry
+  against the tier. `device_info` is the taOS-supplied
+  `{host, cluster, aggregate}` when present; when `None`, recommend calls
+  `local_probe()`. Ranking is honest about footprint: it never returns a recipe
+  whose generator or reranker cannot fit the detected tier above a recipe that
+  can. Returns best-first with a per-recipe rationale.
+- `local_probe() -> device_info` is a minimal, dependency-free hardware sniff
+  (GPU/VRAM if a CUDA or Metal device is visible, NPU presence, CPU core count,
+  RAM). It produces the SAME `device_info` shape taOS produces (host section
+  only, no cluster), so recommend has one input vocabulary. Standalone never
+  needs taOS to run.
 - `recipe_schema() -> dict` (the export above).
 
 Application happens at the existing call sites, not by rewriting them:
@@ -203,9 +223,14 @@ Application happens at the existing call sites, not by rewriting them:
 - `api.search()` calls `resolve_recipe(...)` and maps the recipe's `retrieval`
   section onto its `retrieve(...)` call (limit, candidate pool, fusion,
   reranker, adjacent_neighbors, llm_reranker). The reranker field maps to
-  constructing the CrossEncoderReranker only when the recipe asks for it and the
-  model is available; if asked-for but unavailable, it degrades to no reranker
-  and records that in the result so the gap is visible rather than silent.
+  constructing the CrossEncoderReranker when the recipe asks for it. If the
+  bge-v2-m3 model is not present yet, it is downloaded WITH VISIBLE PROGRESS,
+  never silently and never blocking on a silent stall (decided): the download
+  emits progress events that taOS / the dashboard render in their notification
+  area, and the CLI prints a progress line. The first search that needs the
+  reranker triggers the fetch; while it is downloading, that search degrades to
+  no-reranker and records `recipe_degraded` so results are never blocked waiting
+  on a model, and subsequent searches use the reranker once it has landed.
 - `api.ingest()` (and the enrichment stage it feeds) consults
   `ingest.extraction`; when false, the LLM enrichment is skipped and only
   archive+embed runs.
@@ -256,9 +281,11 @@ the flat settings store.
 
 - Unknown recipe id: `get_recipe` returns None; `resolve_recipe` falls through to
   the next resolution step and logs which recipe id was requested and missing.
-- Reranker requested but model not present: degrade to no reranker, attach a
-  `recipe_degraded` note to the search result. Never silently pretend the
-  reranker ran (silent-failure rule).
+- Reranker requested but model not present: kick off a progress-reporting
+  download, degrade THIS search to no reranker, and attach a `recipe_degraded`
+  note. Never silently pretend the reranker ran, and never block a search
+  waiting on a download (silent-failure rule). If the download itself fails,
+  surface the error through the progress channel and stay degraded.
 - Malformed custom recipe (SP3 territory, but the loader is built in SP1):
   validate against `recipe_schema()` on load; reject with a clear error naming
   the offending field rather than partially applying it.
@@ -280,14 +307,23 @@ the flat settings store.
   thread through; an explicit call-site argument overrides the recipe.
 - Lite path: `lite-pi` makes ingest skip LLM enrichment (enrichment stage is not
   called) while archive+embed still runs, and search still returns hits.
-- Degradation: reranker requested but unavailable degrades to no reranker and
-  sets `recipe_degraded`; nothing raises.
+- Degradation: reranker requested but not yet downloaded degrades THIS search to
+  no reranker, sets `recipe_degraded`, and emits download-progress events;
+  nothing raises and the search is not blocked.
+- recommend(): ranks the registry best-first; never ranks a recipe whose
+  generator/reranker cannot fit the tier above one that can; uses an injected
+  `device_info` when given and `local_probe()` when not.
+- local_probe(): returns the host `device_info` shape; on a no-GPU host the top
+  recommendation is a non-reranker recipe; on a GPU+reranker host it is the
+  leader. Fresh install (no global default, no per-agent override) resolves to
+  `recommend()[0]`.
 - No regression: existing search/ingest tests pass unchanged when no recipe is
   configured (fallback behaves at least as well as today's defaults).
 
 ## Out of scope / future
 
-- recommend(device_info) ranking (SP2).
+- Cluster-aware ranking over a multi-worker `device_info` aggregate (SP2, once
+  taOS ships the producer). SP1's `recommend()` reasons over a single host.
 - Custom recipe CRUD + DB persistence (SP3).
 - taOS contract API across surfaces (SP4).
 - Dashboard recipe-selector page (SP5).
