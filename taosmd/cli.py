@@ -193,6 +193,7 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd a2a-poll``: fetch new messages and update state file."""
     import asyncio  # noqa: PLC0415
     import json  # noqa: PLC0415 (already imported at module level but guard for type-checker)
+    import os  # noqa: PLC0415
     from pathlib import Path  # noqa: PLC0415
     from datetime import datetime, timezone  # noqa: PLC0415
 
@@ -200,23 +201,34 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
     channel = args.channel
 
     # --- resolve messages from remote or local service -------------------
+    # A fetch failure (bus unreachable, server down) must not dump a traceback
+    # into a cron inbox, and must not touch the state file (so the cursor is
+    # preserved and we do not re-emit the whole channel on the next run).
     server_url = getattr(args, "server", None)
-    if server_url:
-        # One-shot override: create a temporary RemoteClient.
-        from .remote import RemoteClient  # noqa: PLC0415
-        client = RemoteClient(server_url)
+    try:
+        if server_url:
+            # One-shot override: create a temporary RemoteClient.
+            from .remote import RemoteClient  # noqa: PLC0415
+            client = RemoteClient(server_url)
 
-        async def _fetch(since):
-            return await client.a2a_feed(thread=channel, since=since, limit=500)
+            async def _fetch(since):
+                return await client.a2a_feed(thread=channel, since=since, limit=500)
 
-        messages = asyncio.run(_fetch(None))
-    else:
-        from . import service  # noqa: PLC0415
+            messages = asyncio.run(_fetch(None))
+        else:
+            from . import service  # noqa: PLC0415
 
-        async def _fetch_local(since):
-            return await service.a2a_feed(thread=channel, since=since, limit=500)
+            async def _fetch_local(since):
+                return await service.a2a_feed(thread=channel, since=since, limit=500)
 
-        messages = asyncio.run(_fetch_local(None))
+            messages = asyncio.run(_fetch_local(None))
+    except Exception as exc:  # noqa: BLE001 - any fetch error: one line, no traceback
+        print(
+            f"taosmd a2a-poll: could not reach the bus "
+            f"({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
+        return 2
 
     # --- load / initialise state ----------------------------------------
     state: dict = {}
@@ -259,10 +271,15 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
         print(f"[{ts_str}] <{from_}>{reply} {body}")
         last_id = max(last_id, msg_id_int)
 
-    # --- persist state --------------------------------------------------
+    # --- persist state (atomic: tmp write + os.replace) -----------------
+    # An in-place write that crashes mid-flush leaves corrupt JSON, which the
+    # next run treats as a reset (cursor -1) and re-emits the whole channel.
+    # Write to a temp file in the same dir, then atomically rename over it.
     state[channel] = last_id
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps(state, indent=2))
+    tmp = state_file.with_name(state_file.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    os.replace(tmp, state_file)
     return 0
 
 
