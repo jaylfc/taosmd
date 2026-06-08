@@ -342,6 +342,28 @@ await vmem.init()
 
 Use it when the vector-store footprint or CPU distance cost is your binding constraint rather than recall, e.g. an Orange Pi / Rock 5 holding a large memory. Keep it off on a GPU box where full-precision cosine is effectively free.
 
+## Recipes (tier-aware config profiles)
+
+A **recipe** is a named, declared config bundle (retrieval + ingest + generator + librarian settings) that carries its own benchmark scores, target hardware tier, and pros/cons. Instead of leaving the retrieval levers at their defaults, taOSmd ships a small registry of recipes we have actually measured (for example the `maxsim-rerank-9b` leader for a 12 GB GPU and a `lite-pi` no-LLM-ingest profile for an Orange Pi / CPU), and a **fresh install auto-detects your hardware and applies the best affordable recipe on first use**, so you run a benchmarked configuration rather than unconfigured defaults. No taOS or network is required: the hardware probe is local, and the reranker model (when a recipe asks for one) downloads on first use with progress and degrades gracefully if it is not yet present.
+
+```python
+import taosmd
+
+# Inspect the built-in recipes (each carries scores, tier, pros/cons)
+for r in taosmd.list_recipes():
+    print(r.id, r.metadata["tier"], r.metadata["scores"])
+
+# What does this machine's hardware suggest? (ranked best-first)
+best = taosmd.recommend()[0]
+print("recommended:", best.id)
+
+# Apply a recipe to an agent (or pass it as the global default); search() then uses it.
+# A fresh agent auto-resolves to recommend()[0], so this is only for an explicit override.
+taosmd.apply_recipe("my-agent", best.id)
+```
+
+`taosmd.recipe_schema()` returns the recipe bundle as a JSON Schema, so a host UI can render any recipe generically. The default is tier-gated: the reranking leader where the cross-encoder is affordable, a lighter recipe (RRF, or the lite profile) on constrained tiers. See [docs/benchmarks.md](docs/benchmarks.md) for the per-recipe scores.
+
 ## MCP server
 
 taOSmd can expose its memory over the [Model Context Protocol](https://modelcontextprotocol.io) so any MCP-capable agent (Claude Desktop, Cursor, Codex, OpenWebUI, …) can read and write memory directly, no custom integration. The server is local-first and offline: it speaks the **stdio** transport (the standard for desktop MCP clients), with no network listener and no cloud dependency.
@@ -604,6 +626,8 @@ Each hit in `/search` results has the agent-rules contract shape: `{text, source
 | `GET` | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` (distinct sender names on the channel) |
 
 Messages are stored as append-only archive events, so they inherit the archive's durability and automatic secret redaction. `thread` defaults to `"general"` when omitted from `/a2a/send`. Each message object has shape `{id, ts, from, body, thread, reply_to}`.
+
+Three CLI commands consume the bus for monitoring (all share an id-based, exactly-once cursor and a `--exclude <sender>` filter): `taosmd a2a-poll` fetches only-new messages and updates a small state file (cron-friendly, durable across sessions); `taosmd a2a-watch` holds the SSE stream and prints one line per new message for instant in-session pickup; and `taosmd a2a-bridge --trigger <cmd>` runs a command per new message with the message JSON on stdin, which can wake a dormant agent on arrival. The bundled `taosmd-a2a` skill (`taosmd install-skill`) walks through joining a channel and setting up durable or realtime monitoring.
 
 ### Web dashboard
 
