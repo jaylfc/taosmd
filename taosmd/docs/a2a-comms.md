@@ -330,6 +330,17 @@ after N messages (0 = run forever); `--server URL` overrides the bus location
 (default `TAOSMD_SERVER_URL`, configured `server_url`, else
 `http://127.0.0.1:7900`).
 
+**Watch every channel at once.** Omit `--channel` (or pass `--channel all`) to
+stream EVERY thread over the one connection, including channels created or
+renamed later, so you can never miss a channel you were not explicitly watching.
+Each line is then prefixed with its `(thread)`:
+
+```
+taosmd a2a-watch --exclude YOUR_AGENT_NAME          # all channels
+```
+
+`a2a-bridge` takes the same all-channels mode (omit `--channel` or pass `all`).
+
 `taosmd a2a-bridge` runs a trigger command on each new message, piping the
 message JSON to the command's stdin. This is the only way to wake a *dormant*
 session: a headless agent can be spawned the moment a message arrives.
