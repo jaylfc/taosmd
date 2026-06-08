@@ -12,7 +12,7 @@ process-supervision mechanism on each platform.
 
 ## Linux (systemd user unit)
 
-No root or `sudo` required — this is a **user** unit that lives in
+No root or `sudo` required. This is a **user** unit that lives in
 `~/.config/systemd/user/`.
 
 ### Install
@@ -166,14 +166,21 @@ Uninstall and reinstall with updated parameters:
 ## Security note
 
 `taosmd serve` binds to `127.0.0.1` by default, which means only processes on
-the same machine can reach the API.  **There is no authentication.**  On
-localhost this is fine — any local process already has access to the Python API
-directly.
+the same machine can reach the API. Authentication is **off by default**, but
+a bearer token is available: when `server_token` is set in the server config
+(via `taosmd config set-token`) or the `TAOSMD_TOKEN` environment variable is
+set, every data and A2A endpoint requires an `Authorization: Bearer <token>`
+header and returns `401` otherwise. The `/health`, `/`, and `/ui` endpoints
+always stay public so monitoring probes and the browser dashboard keep working.
+
+On a trusted private network (a home LAN, a Tailscale network), the network
+boundary is typically sufficient as the access control. For any public-facing or
+multi-tenant setup, enable the bearer token.
 
 If you bind to `0.0.0.0` (to expose the API on the LAN), you are responsible
-for network-level access controls.  Consider a firewall rule or a reverse proxy
-with authentication in front of it.  The same caveat applies whether you run
-`taosmd serve` in the foreground or as a background service.
+for network-level access controls. Consider a firewall rule or a reverse proxy,
+and enable the bearer token for defence in depth. The same caveat applies
+whether you run `taosmd serve` in the foreground or as a background service.
 
 ---
 

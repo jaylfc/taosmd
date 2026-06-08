@@ -382,7 +382,7 @@ On each client machine:
 # Install the client package and point it at the server
 ./scripts/install-client.sh http://pi.local:7900
 # or manually:
-pip install taosmd
+git clone https://github.com/jaylfc/taosmd.git && cd taosmd && pip install -e .
 taosmd config set-server http://pi.local:7900
 ```
 
@@ -564,6 +564,8 @@ Each hit in `/search` results has the agent-rules contract shape: `{text, source
 | `POST` | `/a2a/send` | `{"from": str, "body": str, "thread"?: str, "reply_to"?: str}` | `{"id": str, "from": str, "thread": str, "reply_to": str\|null}` |
 | `GET` | `/a2a/messages` | `?thread=<str>&since=<unix-ts>&limit=<int>` | `{"messages": [...]}` (oldest-first) |
 | `GET` | `/a2a/stream` | `?thread=<str>&since=<unix-ts>` | SSE stream (`text/event-stream`), one JSON message per `data:` frame |
+| `GET` | `/a2a/channels` | (none) | `{"channels": [...]}` (list of all named channels) |
+| `GET` | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` (distinct sender names on the channel) |
 
 Messages are stored as append-only archive events, so they inherit the archive's durability and automatic secret redaction. `thread` defaults to `"general"` when omitted from `/a2a/send`. Each message object has shape `{id, ts, from, body, thread, reply_to}`.
 

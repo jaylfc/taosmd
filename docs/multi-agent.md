@@ -1,6 +1,6 @@
 # Running multiple agents on one taosmd install
 
-The taosmd service is one process. Per-agent indexes are separate. Two agents share embedding compute, the LLM, the cross-encoder, and the catalog runtime — but each one has its own shelf, its own knowledge graph, its own archive. Reading another agent's memory is opt-in and explicit.
+The taosmd service is one process. Agents share embedding compute, the LLM, the cross-encoder, and the catalog runtime, but each one has its own shelf, its own knowledge graph scope, and its own archive rows. Reading another agent's memory is opt-in and explicit.
 
 If you've got one OpenClaw process running five agents, or one LangChain harness running a researcher and a support bot, this is the doc for you.
 
@@ -8,21 +8,22 @@ If you've got one OpenClaw process running five agents, or one LangChain harness
 
 ```
 data/
-├── agents.json                              ← registry: who's who
-└── agent-memory/
-    ├── alice/
-    │   └── index.sqlite                     ← alice's shelf
-    ├── bob/
-    │   └── index.sqlite                     ← bob's shelf
-    └── support/
-        └── index.sqlite                     ← support's shelf
+├── agents.json          ← registry: who's who (bookkeeping only)
+├── agent-memory/
+│   ├── alice/           ← registry dir for alice (bookkeeping + delete support)
+│   └── bob/             ← registry dir for bob
+├── vector-memory.db     ← shared vector store (all agents)
+├── knowledge-graph.db   ← shared knowledge graph (all agents)
+└── archive-index.db     ← shared archive index (all agents)
 ```
 
-One taosmd process holds the embedding model, the LLM client, and the catalog pipeline in memory. When `alice.search()` runs, it routes to `agent-memory/alice/index.sqlite`. When `bob.search()` runs, it routes to `agent-memory/bob/index.sqlite`. The compute is shared; the data isn't.
+One taosmd process holds the embedding model, the LLM client, and the catalog pipeline in memory. There is **one shared set of stores** for the whole data directory: `vector-memory.db`, `knowledge-graph.db`, and `archive-index.db` are used by every agent. Per-agent isolation is enforced by an `agent` field stored in each row's metadata and filtered at query time, not by separate files.
+
+The `data/agents.json` registry and `agent-memory/{name}/` directories exist for bookkeeping (agent list, display names, stats) and to support `delete_agent --drop-data`. They do not route reads or writes. Every search and ingest call goes to the same shared stores and is scoped by the `agent` parameter.
 
 ## Naming convention
 
-Agent names must match `^[a-z][a-z0-9_-]{0,62}$` — lowercase, start with a letter, dashes and underscores allowed, max 63 chars. Pick stable names. They become directory names on disk and they're cited in every search/ingest call.
+Agent names must match `^[a-z][a-z0-9_-]{0,62}$`: lowercase, start with a letter, dashes and underscores allowed, max 63 chars. Pick stable names. They become directory names on disk and they're cited in every search/ingest call.
 
 The convention I'd recommend: `{framework}-{role}` or `{tenant}-{role}`.
 
@@ -34,7 +35,7 @@ The convention I'd recommend: `{framework}-{role}` or `{tenant}-{role}`.
 | Multi-tenant SaaS, customer ACME | `acme-assistant` |
 | Personal Claude Code project | your handle, e.g. `jay` |
 
-Avoid names that clash with reserved-feeling defaults (`default`, `agent`, `user`) — those are easy to type by accident in another script and end up sharing.
+Avoid names that clash with reserved-feeling defaults (`default`, `agent`, `user`). Those are easy to type by accident in another script and end up sharing.
 
 ## Registering an agent
 
@@ -65,60 +66,106 @@ A second `register_agent("openclaw-research", ...)` raises `AgentExistsError` un
 
 ## Cross-agent reads (opt-in)
 
-By default agents only see their own shelf. If you need one agent to read another's memory — typically a supervisor reading what its workers logged — call search with an explicit `also_include` list:
+By default agents only see their own rows. If you need one agent to read another's memory, typically a supervisor reading what its workers logged, use `also_include`. Cross-agent reads require a shared `project` id: memories tagged with a different project (or tagged with no project at all, from a different agent) are excluded unless they match the calling agent's own rows.
 
 ```python
-# Supervisor reads its own memory PLUS the worker shelves it owns.
-results = taosmd.search(
+import taosmd
+
+# Get the shared project fingerprint (auto-detected from git remote or cwd).
+pid = taosmd.get_project_id()
+
+# Supervisor reads its own memory PLUS the worker shelves, all within the same project.
+results = await taosmd.search(
     query,
     agent="supervisor",
+    project=pid,
     also_include=["worker-1", "worker-2"],  # explicit names, no wildcards
 )
 ```
 
 Rules:
 
-- The `also_include` list is **explicit names only**. No wildcards, no globs, no "all". You name every shelf you want to read.
-- The supervisor's own writes still go only to its own shelf. `ingest()` ignores `also_include`.
-- Cross-agent reads work for `search()`, `vsearch()`, `hybrid_search()`, and `ContextAssembler.assemble()`. They don't apply to `KnowledgeGraph.add_triple()` or any other write path.
+- `also_include` is only honoured when `project` is also set. Without a `project`, the list is ignored and the search returns only the calling agent's own rows.
+- The `also_include` list takes explicit names only. No wildcards, no globs, no "all". Name every shelf you want to read.
+- The supervisor's own writes still go only to its own rows. `ingest()` ignores `also_include`.
+- Cross-agent reads work for `search()`. They don't apply to `KnowledgeGraph.add_triple()` or any other write path.
 - The `source` field on returned passages always names the shelf it came from, so you can attribute "I learned this from worker-1" in your output.
 
-If you want bidirectional sharing (worker-1 also reads supervisor's memory), each agent declares the other in its own `also_include`. There's no group concept — pairwise opt-in keeps the model simple and the access surface narrow.
+If you want bidirectional sharing (worker-1 also reads supervisor's memory), each agent declares the other in its own `also_include`. There is no group concept; pairwise opt-in keeps the model simple and the access surface narrow.
+
+## Project-scoped memory
+
+Projects let multiple agents working on the same codebase or task share memory without leaking it to unrelated agents.
+
+```python
+import taosmd
+
+# Auto-detect a 12-character project fingerprint from the git remote origin.
+# Falls back to .taosmd/project.toml, then a hash of the cwd.
+pid = taosmd.get_project_id()
+
+# Tag memories with a project when ingesting.
+await taosmd.ingest(transcript, agent="supervisor", project=pid)
+
+# Scope a search to that project.
+hits = await taosmd.search(query, agent="supervisor", project=pid)
+
+# Cross-agent reads within the project (see Cross-agent reads above).
+hits = await taosmd.search(query, agent="supervisor", project=pid, also_include=["worker-1"])
+
+# Discover which projects have stored memories.
+projects = await taosmd.list_projects()
+
+# List the agent shelves that have memories in a specific project.
+shelves = await taosmd.list_shelves(project=pid)
+```
+
+These are available on the Python API today. The HTTP, MCP, and CLI surfaces do not yet accept a `project` argument.
 
 ## Migration scenarios
 
 ### Renaming an agent
 
+Because per-agent data lives in shared stores (keyed by the `agent` field, not by directory), renaming is a two-step operation: update the registry, then update the agent name in the instruction file.
+
 ```bash
-# 1. Rename the registry record + the directory.
-mv data/agent-memory/old-name data/agent-memory/new-name
-taosmd agent rm old-name           # removes the registry entry, preserves data
-taosmd agent add new-name          # registers the new name against the moved dir
+# 1. Update the registry.
+taosmd agent rm old-name           # removes the registry entry (does not delete data)
+taosmd agent add new-name          # registers the new name
 
 # 2. Update the agent's instruction file: replace the agent name in
 # the per-turn rules block. Without this the agent will keep calling
 # search(agent="old-name"), which auto-registers a fresh empty shelf.
 ```
 
+Note: existing rows in the shared stores still carry `agent="old-name"` in their metadata. A future `taosmd agent rename` command will handle the in-place metadata migration. For now, you can re-ingest the old agent's archive under the new name using the same split-style script above, or simply accept that old memories will only be found when searching with the old agent name.
+
 ### Splitting one agent into two
 
-You've been running everything as `jay` and want to split personal life out into `jay-personal`. There's no built-in mover — write a one-off script:
+You've been running everything as `jay` and want to split personal life out into `jay-personal`. Because all agents share the same stores (isolation is by `agent` field, not by file), splitting is done by re-ingesting the relevant rows under the new agent name. There's no built-in mover; write a one-off script:
 
 ```python
+import asyncio
 import taosmd
 from taosmd.archive import ArchiveStore
 
-src = ArchiveStore("data/agent-memory/jay/index.sqlite")
-dst = ArchiveStore("data/agent-memory/jay-personal/index.sqlite")
-taosmd.register_agent("jay-personal")
+async def split():
+    taosmd.register_agent("jay-personal")
+    # Open the shared archive store.
+    store = ArchiveStore(
+        archive_dir="data/archive",
+        index_path="data/archive-index.db",
+    )
+    await store.init()
+    for record in store.iter_archive(agent="jay"):
+        if record.metadata.get("topic") == "personal":   # your filter
+            # Re-ingest under the new agent name to create tagged copies.
+            await taosmd.ingest(record.text, agent="jay-personal")
 
-for record in src.iter_archive():
-    if record.metadata.get("topic") == "personal":   # your filter
-        dst.append(record.text, metadata=record.metadata)
-        src.delete(record.id)
+asyncio.run(split())
 
-# Re-index the new agent so vector + KG stay in sync with the moved archive.
-# (Run your normal ingest flow against jay-personal.)
+# Re-index so vector + KG stay in sync with the new agent.
+# (Run your normal ingest flow against jay-personal for any turns missed above.)
 ```
 
 ### Merging two agents
@@ -127,13 +174,13 @@ Reverse of the split. Append the source's archive into the destination, then re-
 
 ## Resource isolation
 
-The job queue is single-process. All agents queue against the same embedding service. There are no per-agent rate limits today — a chatty agent can saturate the queue and slow down its peers. If that becomes a problem, the right fix is a per-agent token budget at the queue layer, tracked under #2-style follow-ups.
+The job queue is single-process. All agents queue against the same embedding service. There are no per-agent rate limits today; a chatty agent can saturate the queue and slow down its peers. If that becomes a problem, the right fix is a per-agent token budget at the queue layer, tracked under #2-style follow-ups.
 
 Disk: per-agent dirs grow independently. Run `taosmd agent list` to see chunk counts and spot the agents that are running away.
 
-Backups: back up the entire `data/` tree as one unit. Per-agent dirs reference each other through the catalog and crystals stores; partial backups risk dangling references.
+Backups: back up the entire `data/` tree as one unit. The shared stores (`vector-memory.db`, `knowledge-graph.db`, `archive-index.db`) and the archive directory must stay consistent with each other; partial backups risk dangling references.
 
-## Worked example — single OpenClaw, five agents
+## Worked example: single OpenClaw, five agents
 
 You're running one OpenClaw process. You want a research agent, a writing agent, a code-review agent, a customer-support agent, and a personal assistant. All five share the same Pi.
 
@@ -150,12 +197,12 @@ taosmd agent add openclaw-personal --display-name "Personal Assistant"
 
 taosmd agent list
 # NAME                  DISPLAY              CREATED            LAST INGEST  CHUNKS
-# openclaw-research     Research             2026-04-14 15:00   —                 0
-# openclaw-writer       Writer               2026-04-14 15:00   —                 0
+# openclaw-research     Research             2026-04-14 15:00   (none)            0
+# openclaw-writer       Writer               2026-04-14 15:00   (none)            0
 # ...
 ```
 
-In each agent's instruction file (OpenClaw's per-agent system prompt), append the rules block from [`docs/agent-rules.md`](agent-rules.md), with `<your-agent-name>` replaced by that agent's name. The writer's prompt cites `openclaw-writer`, the support bot's prompt cites `openclaw-support`, etc.
+In each agent's instruction file (OpenClaw's per-agent system prompt), append the rules block from [`taosmd/docs/agent-rules.md`](../taosmd/docs/agent-rules.md), with `<your-agent-name>` replaced by that agent's name. The writer's prompt cites `openclaw-writer`, the support bot's prompt cites `openclaw-support`, etc.
 
 Optional cross-reads: if the writer should be able to see what the researcher logged, add `also_include=["openclaw-research"]` to the writer's search calls (or wrap the search call in OpenClaw's tool layer so the agent doesn't have to remember).
 
