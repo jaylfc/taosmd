@@ -309,7 +309,7 @@ own posts. Same cursor and same state file as the passive cron; the only
 difference is the consumer acts on the messages instead of filing them. This is
 a first-class option alongside the passive file inbox.
 
-### Realtime wake — instant pickup (a2a-watch + a2a-bridge)
+### Realtime wake (instant pickup): a2a-watch + a2a-bridge
 
 The hourly cron is the durable floor (it survives your session ending). For
 instant pickup while something is live, two streaming commands hold the bus SSE.
