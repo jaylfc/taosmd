@@ -116,7 +116,7 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 > from taosmd import VectorMemory
 > vmem = VectorMemory("~/.taosmd/vector-memory.db", embed_mode="onnx", onnx_path="<taosmd-dir>/models/minilm-onnx")
 > await vmem.init()
-> # fusion="mem0_additive" is the production leader on LoCoMo (0.68/0.55 SH).
+> # fusion="mem0_additive" is a strong CPU-friendly fusion; MaxSim+rerank (bge-v2-m3) leads on a GPU box. See docs/benchmarks.md.
 > # Falls back to hybrid keyword+vector if `hybrid=False`.
 > results = await vmem.search("What did I say about Docker?", hybrid=True, fusion="mem0_additive")
 > ```
@@ -187,12 +187,19 @@ The Librarian adds LLM-assisted query expansion on top of the vector + cross-enc
 
 LoCoMo-10 is a harder dataset than LongMemEval-S: 1540 QAs across multi-session conversations (50+ sessions, 400 to 700 turns), four categories, more pressure on the retrieval architecture. We run it on the smaller generators we actually target so the numbers reflect the hardware tier our users run on, not gpt-4o-mini.
 
-Two full-1540 numbers, because the strict and lenient judges reward different fusion choices:
+**MaxSim + reranking is the current leader on the full 1540-QA test set, first across all three of our judges.** It runs a `bge-v2-m3` cross-encoder doing late-interaction (MaxSim) scoring over a wider k=50 candidate pool:
 
-- **0.557** under our strict default judge (`qwen3:4b`), from the RRF leader recipe (qwen3.5:9b + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`).
-- **0.68 overall / 0.55 Single-hop** under the lenient matched-with-paper-SOTA judge (`gemma4:e2b`), from the `mem0_additive` recipe (qwen3.5:9b + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion mem0_additive --gen-temp 0.2`), which is the current default.
+| Recipe (qwen3.5:9b, full 1540) | Lenient `gemma4:e2b` | Strict `llama3.1:8b` | Strict `qwen3:4b-instruct` |
+|---|---|---|---|
+| **MaxSim + rerank** (`--retrieval-top-k 50 --adjacent-turns 2 --reranker bge-v2-m3 --fusion mem0_additive`) | **0.748** | **0.394** | **0.659** |
+| RRF (`--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`) | 0.723 | 0.390 | 0.634 |
+| mem0_additive (`--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion mem0_additive`) | 0.684 | 0.387 | 0.624 |
 
-These are two recipes, not one scored twice: under a single judge the gap is small (the `mem0_additive` recipe scores 0.54 under the strict judge; the RRF recipe scores 0.557), but `mem0_additive` wins decisively under the lenient judge, which is why it is the default. Published numbers from Mem0/EMem/Zep use a lenient frontier judge (gpt-4o-mini), so the `gemma4:e2b` 0.68 is the more apples-to-apples comparison with their headlines. See [docs/benchmarks.md](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring) for the full multi-judge analysis.
+MaxSim+rerank wins clearly under the lenient and qwen3-instruct judges (about +0.025 each) and is first, by a near-tie margin, under the strict llama judge. The ordering MaxSim > RRF > mem0_additive is identical across all three judges. Published numbers from Mem0/EMem/Zep use a lenient frontier judge (gpt-4o-mini), so the `gemma4:e2b` 0.748 is the more apples-to-apples comparison with their headlines.
+
+**Judge note.** Our earlier strict judge (`qwen3:4b`) is a thinking model whose current build no longer emits clean YES/NO verdicts, so the strict column now uses two non-thinking judges: `llama3.1:8b` and `qwen3:4b-instruct-2507`. Legacy strict figures from earlier tables (RRF 0.557, mem0 0.540) came from an older `qwen3:4b` build and are not directly comparable to the new judges. See [docs/benchmarks.md](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring) for the full multi-judge analysis.
+
+**Default recipe (tier-gated).** Where the cross-encoder reranker is affordable (a GPU box, or any tier with headroom), MaxSim+rerank is the recommended default. On constrained tiers such as a Pi 4B on CPU, drop the reranker and use a lighter recipe (RRF or mem0_additive), trading roughly 0.02 to 0.06 for much lower latency. Both RRF and mem0_additive beat the older mem0-only guidance on every judge at full 1540, so any earlier "mem0_additive is the default" wording is superseded by this.
 
 > **Subset 200 ≠ full 1540 for every recipe.** Earlier versions of this table reported subset-200 numbers for some rows. Validating those at full 1540 found the leader recipe (qwen+mem0+temp 0.2) generalises within −0.01 SH, but the previously-listed "Best Single-hop" pick (llama3.1:8b + RRF + temp 0.2) regressed by −0.16 SH at full scale and has been removed below. All ranks shown here are now validated at full 1540 before promotion; the asterisked rows are explicit about which scale they were measured at.
 
@@ -200,7 +207,7 @@ These are two recipes, not one scored twice: under a single judge the gap is sma
 
 | Workload | Generator | Fusion + ingest | Temp | Overall (q3:4b / g4:e2b) | Single-hop (g4:e2b) | Notes |
 |---|---|---|---|---|---|---|
-| **Best overall** (default) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` | **0.2** | 0.54 / **0.68** | **0.55** | **Validated at full 1540.** Wins Overall on full scale. Production default. |
+| **Best generator** | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` | **0.2** | 0.54 / **0.68** | **0.55** | **Validated at full 1540.** Best generator at this tier; pair with the MaxSim+rerank recipe above where the reranker is affordable. |
 | **Best Single-hop** (SH-heavy workloads) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` + `--emem-edu --emem-edu-no-filter` (extractor: `llama3.1:8b`) | **0.2** | 0.52 / 0.67 | **0.60** | **Validated at full 1540.** EMem-EDU ingest (one extra LLM call per session) trades −0.02 Overall for +0.07 SH vs the default. q3:4b SH lifts +0.10 (0.25 → 0.35). |
 | Best mem0_additive Single-hop† | `llama3.1:8b` (4.9 GB) | `mem0_additive` | **0.0** | 0.51 / 0.65 | 0.60 | Subset 200. Greedy decoding lifted llama Single-hop +0.13 vs temp 0.2 in the temp sweep. Full-1540 validation pending. |
 | **Best temporal reasoning**† | `mistral-small3.2` (~5 GB) | `rrf` | 0.2 | 0.56 / 0.70 | 0.53 | Subset 200. Wins Temporal (0.71). 2.8× slower than qwen, specialty pick only. Full-1540 validation pending. |

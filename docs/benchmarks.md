@@ -51,7 +51,21 @@ End-to-end Judge here is graded by an **external** LLM (`qwen3:4b`) — distinct
 
 Harness: [`benchmarks/locomo_runner.py`](../benchmarks/locomo_runner.py). Rescore tool: [`benchmarks/locomo_rescore_streaming.py`](../benchmarks/locomo_rescore_streaming.py).
 
-### Leaderboard (external `qwen3:4b` judge, same dataset + same prompt)
+### Full-1540 leader (tri-judge, Jun 2026)
+
+The current leader is **MaxSim + reranking**: `qwen3.5:9b --retrieval-top-k 50 --adjacent-turns 2 --reranker bge-v2-m3 --fusion mem0_additive`, a bge-v2-m3 cross-encoder doing late-interaction (MaxSim) scoring over a wider k=50 candidate pool. Scored on the full 1540 under three judges:
+
+| Recipe (qwen3.5:9b) | Lenient `gemma4:e2b` | Strict `llama3.1:8b` | Strict `qwen3:4b-instruct-2507` |
+|---|---|---|---|
+| **MaxSim + rerank** | **0.748** | **0.394** | **0.659** |
+| RRF (k=20 + llm-exp) | 0.723 | 0.390 | 0.634 |
+| mem0_additive (k=20 + llm-exp) | 0.684 | 0.387 | 0.624 |
+
+MaxSim+rerank is first on every judge (clearly under gemma and qwen3-instruct at about +0.025, by a near-tie margin under llama). The MaxSim > RRF > mem0_additive ordering is identical across all three judges. Both RRF and mem0_additive beat the older mem0-only default on every judge, so mem0_additive is no longer the recommended default (the default is tier-gated: MaxSim+rerank where the reranker is affordable, a lighter recipe on constrained tiers).
+
+**Judge methodology change (Jun 2026).** The original external strict judge `qwen3:4b` is a thinking model whose current ollama build no longer emits clean YES/NO verdicts (it preambles, or does not commit within a reasonable token budget), so it is retired as a judge. The strict column now uses two non-thinking judges: `llama3.1:8b` and the non-thinking `qwen3:4b-instruct-2507` (HF GGUF). The lenient judge is unchanged (`gemma4:e2b`). The legacy `qwen3:4b` figures in the leaderboard below (for example RRF 0.557, mem0 0.540) came from an older `qwen3:4b` build and are not directly comparable to the new strict judges; they are kept for history.
+
+### Leaderboard (legacy external `qwen3:4b` judge, same dataset + same prompt)
 
 | System | Generator | Retrieval config | Ext Judge | Notes |
 |---|---|---|---|---|
