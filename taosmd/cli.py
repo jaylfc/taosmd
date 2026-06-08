@@ -189,11 +189,13 @@ def _config_show() -> int:
     return 0
 
 
-def _format_a2a_line(msg: dict) -> str:
+def _format_a2a_line(msg: dict, show_thread: bool = False) -> str:
     """Render one A2A message as a single human-readable line.
 
-    Shared by ``a2a-poll`` and ``a2a-watch`` so both surfaces print an
-    identical format: ``[<ts UTC>] <sender>[ (reply_to=N)] <body>``.
+    Shared by ``a2a-poll`` and ``a2a-watch``. Default format:
+    ``[<ts UTC>] <sender>[ (reply_to=N)] <body>``. When ``show_thread`` is
+    True (all-channels mode) the channel is included:
+    ``[<ts UTC>] (<thread>) <sender>[ (reply_to=N)] <body>``.
     """
     from datetime import datetime, timezone  # noqa: PLC0415
 
@@ -207,15 +209,18 @@ def _format_a2a_line(msg: dict) -> str:
     from_ = msg.get("from", "?")
     body = msg.get("body", "")
     reply = f" (reply_to={msg.get('reply_to')})" if msg.get("reply_to") else ""
-    return f"[{ts_str}] <{from_}>{reply} {body}"
+    thread = f" ({msg.get('thread')})" if show_thread else ""
+    return f"[{ts_str}]{thread} <{from_}>{reply} {body}"
 
 
-def _a2a_stream(server_url: str, channel: str, exclude: str | None, since: float | None):
+def _a2a_stream(server_url: str, channel: str | None, exclude: str | None, since: float | None):
     """Yield new A2A messages from the bus SSE endpoint, one at a time.
 
     Holds a long-lived connection to ``GET {server}/a2a/stream?thread=&since=``
-    and yields each parsed message dict as it arrives. Robustness mirrors
-    ``a2a-poll``:
+    and yields each parsed message dict as it arrives. When ``channel`` is
+    ``None``, ``""`` or ``"all"``, the ``thread`` filter is omitted so the
+    server streams EVERY channel over the one connection (and newly created or
+    renamed channels appear automatically). Robustness mirrors ``a2a-poll``:
 
     * **id-dedup** - the server stream filters by timestamp (``ts > since``),
       which can miss or repeat same-second siblings across a reconnect. We
@@ -237,6 +242,7 @@ def _a2a_stream(server_url: str, channel: str, exclude: str | None, since: float
     import urllib.parse  # noqa: PLC0415
     import urllib.request  # noqa: PLC0415
 
+    all_mode = channel in (None, "", "all")
     last_id = -1
     last_ts = since if since is not None else time.time()
     backoff = 1.0
@@ -244,7 +250,10 @@ def _a2a_stream(server_url: str, channel: str, exclude: str | None, since: float
     while True:
         # Rewind a second so a same-timestamp sibling is not skipped; id-dedup
         # below drops anything we have already emitted.
-        q = urllib.parse.urlencode({"thread": channel, "since": max(0.0, last_ts - 1.0)})
+        params = {"since": max(0.0, last_ts - 1.0)}
+        if not all_mode:
+            params["thread"] = channel  # omit -> server streams every thread
+        q = urllib.parse.urlencode(params)
         url = f"{server_url.rstrip('/')}/a2a/stream?{q}"
         try:
             req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
@@ -314,15 +323,19 @@ def _a2a_watch_cmd(args: argparse.Namespace) -> int:
     Holds the bus SSE and prints one line per new message in the same format
     as ``a2a-poll``, flushing immediately so a consumer (or a harness Monitor)
     gets instant pickup. ``--count N`` exits after N messages (0 = forever).
+    When ``--channel`` is omitted (or ``all``), every channel is streamed over
+    one connection and each line is prefixed with its ``(thread)``.
     """
     server_url = _resolve_a2a_server(args)
+    channel = getattr(args, "channel", None)
     exclude = getattr(args, "exclude", None)
     count = getattr(args, "count", 0) or 0
+    all_mode = channel in (None, "", "all")
 
     emitted = 0
     try:
-        for msg in _a2a_stream(server_url, args.channel, exclude, since=None):
-            print(_format_a2a_line(msg), flush=True)
+        for msg in _a2a_stream(server_url, channel, exclude, since=None):
+            print(_format_a2a_line(msg, show_thread=all_mode), flush=True)
             emitted += 1
             if count and emitted >= count:
                 break
@@ -1006,8 +1019,10 @@ def main(argv: list[str] | None = None) -> int:
              "wrap in a Monitor for instant in-session pickup",
     )
     a2a_watch_p.add_argument(
-        "--channel", required=True,
-        help="Channel name to watch",
+        "--channel", default=None,
+        help="Channel name to watch. Omit (or pass 'all') to stream EVERY "
+             "channel over one connection, auto-including new/renamed ones; "
+             "each line is then prefixed with its (thread).",
     )
     a2a_watch_p.add_argument(
         "--server", default=None,
@@ -1030,8 +1045,9 @@ def main(argv: list[str] | None = None) -> int:
              "is piped to the command's stdin); wakes a dormant local session",
     )
     a2a_bridge_p.add_argument(
-        "--channel", required=True,
-        help="Channel name to bridge",
+        "--channel", default=None,
+        help="Channel name to bridge. Omit (or pass 'all') to fire on messages "
+             "from EVERY channel over one connection, auto-including new ones.",
     )
     a2a_bridge_p.add_argument(
         "--trigger", required=True,

@@ -143,3 +143,42 @@ def test_bridge_execs_trigger_with_json_stdin(watch_server, tmp_path):
     assert payload["from"] == "@taOS"
     assert payload["body"] == "wake-payload"
     assert "id" in payload
+
+
+def test_watch_all_channels(watch_server, capsys):
+    """--channel omitted (all) streams every channel; lines show the thread."""
+    base_url, rc = watch_server
+    _seed(rc, "alpha", [("@taOS", "from alpha chan")])
+    _seed(rc, "beta", [("@taOS", "from beta chan")])
+
+    # channel=None => all-channels mode
+    rc_code = _a2a_watch_cmd(_watch_args(None, base_url, count=2))
+
+    assert rc_code == 0
+    out = capsys.readouterr().out
+    assert "from alpha chan" in out
+    assert "from beta chan" in out
+    # all-mode prefixes each line with its (thread)
+    assert "(alpha)" in out
+    assert "(beta)" in out
+
+
+def test_bridge_all_channels(watch_server, tmp_path):
+    """a2a-bridge with channel omitted fires on messages from any channel."""
+    base_url, rc = watch_server
+    sink = tmp_path / "bridge_all.txt"
+    trigger = f'{sys.executable} -c "import sys,pathlib; ' \
+              f"pathlib.Path(r'{sink}').write_text(sys.stdin.read())\""
+    _seed(rc, "gamma", [("@taOS", "wake-from-gamma")])
+
+    rc_code = _a2a_bridge_cmd(_bridge_args(None, base_url, trigger, count=1))
+
+    assert rc_code == 0
+    import time
+    for _ in range(50):
+        if sink.exists() and sink.read_text():
+            break
+        time.sleep(0.1)
+    payload = json.loads(sink.read_text())
+    assert payload["thread"] == "gamma"
+    assert payload["body"] == "wake-from-gamma"
