@@ -6,20 +6,20 @@
 
 **Framework-agnostic AI memory system. 97.0% end-to-end Judge accuracy on LongMemEval-S.**
 
-End-to-end Judge accuracy means retrieve → generate → LLM-grade against the reference answer. Runs offline on anything with 8 GB+ RAM and Python 3.10+ — a Pi 4B, an old laptop, an Intel mini PC, a Mac mini, or a 16 GB Orange Pi 5 Plus (our reference low-end). Zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
+End-to-end Judge accuracy means retrieve → generate → LLM-grade against the reference answer. Runs offline on anything with 8 GB+ RAM and Python 3.10+: a Pi 4B, an old laptop, an Intel mini PC, a Mac mini, or a 16 GB Orange Pi 5 Plus (our reference low-end). Zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
 
 ---
 
 ## Why this exists
 
-Most memory benchmarks run on hosted models (GPT-4o-mini, Claude, Gemini) behind an API key — fine for prototypes, not fine if you're:
+Most memory benchmarks run on hosted models (GPT-4o-mini, Claude, Gemini) behind an API key, fine for prototypes, not fine if you're:
 
-- **On modest hardware.** Running an agent on a Pi 4B, a £170 Orange Pi 5 Plus, an Intel mini PC, an old laptop, or a Mac mini. No 24 GB 4090 — 8 GB RAM minimum, 16 GB comfortable, NPU or GPU optional. The memory system has to fit *around* that, not on top of it.
+- **On modest hardware.** Running an agent on a Pi 4B, a £170 Orange Pi 5 Plus, an Intel mini PC, an old laptop, or a Mac mini. No 24 GB 4090. 8 GB RAM minimum, 16 GB comfortable, NPU or GPU optional. The memory system has to fit *around* that, not on top of it.
 - **Distributed across a few small machines.** Pi + desktop + laptop, pooled by the taOS stack. The memory layer lives across those nodes without assuming any single "real" machine.
 - **Offline or air-gapped.** Forwarding a conversation turn to a third-party API is a compliance violation or a signal flare. Memory here can't mean "we shipped it to a hosted API".
 - **Zero-loss by default.** The verbatim transcript goes into an append-only archive first; summaries and structure are layered on top, never *over*. The source is still on the shelf byte-for-byte. Disagree with a summary? Read what was actually said.
 
-The 97.0% on LongMemEval-S was measured on our reference low-end stack (Orange Pi 5 Plus, 16 GB RAM). The same code runs on a Pi 4B, an Intel mini PC, a Mac mini, an old laptop, or a workstation with a GPU — see [Hardware Tested](#hardware-tested). No hidden hosted model doing the heavy lifting off-camera.
+The 97.0% on LongMemEval-S was measured on our reference low-end stack (Orange Pi 5 Plus, 16 GB RAM). The same code runs on a Pi 4B, an Intel mini PC, a Mac mini, an old laptop, or a workstation with a GPU, see [Hardware Tested](#hardware-tested). No hidden hosted model doing the heavy lifting off-camera.
 
 Zero cloud dependencies. Zero API keys. NPU if you have one, CPU if you don't, cluster if you want the throughput.
 
@@ -35,18 +35,18 @@ The cleanest way to install taosmd is to ask your agent to do it. Paste this mes
 >
 > 1. Read the README so you understand what you're installing.
 > 2. Run the install script: `curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash`. Report any errors and stop if it fails.
-> 3. Register yourself as an agent so you have your own isolated index. Pick a stable agent name (lowercase, no spaces) — the same name you'll use every time you call the librarian. If I have multiple agents in this framework, ask me what to name this one before registering.
-> 4. Verify the install: call `taosmd.search("hello", agent="<your-name>")` — it should return an empty result, not an error.
-> 5. Append the "Memory — taosmd" rules block to my agent file (CLAUDE.md / system prompt / AGENTS.md — whatever your framework reads every turn). Pull the block via `python -c "import taosmd; print(taosmd.agent_rules())"` — the file is shipped as package data at `taosmd/docs/agent-rules.md` so this works from both editable and wheel installs. Replace `<your-agent-name>` with the name you registered as.
+> 3. Register yourself as an agent so you have your own isolated index. Pick a stable agent name (lowercase, no spaces), the same name you'll use every time you call the librarian. If I have multiple agents in this framework, ask me what to name this one before registering.
+> 4. Verify the install: call `taosmd.search("hello", agent="<your-name>")`, it should return an empty result, not an error.
+> 5. Append the "Memory, taosmd" rules block to my agent file (CLAUDE.md / system prompt / AGENTS.md, whatever your framework reads every turn). Pull the block via `python -c "import taosmd; print(taosmd.agent_rules())"`, the file is shipped as package data at `taosmd/docs/agent-rules.md` so this works from both editable and wheel installs. Replace `<your-agent-name>` with the name you registered as.
 > 6. Confirm it's installed and tell me your agent name so I know how to refer to your memory.
 >
-> Don't summarise the repo or paraphrase the rules. Copy them verbatim — the wording is the contract.
+> Don't summarise the repo or paraphrase the rules. Copy them verbatim, the wording is the contract.
 
-The agent will pull the repo, run the install, register itself, append the per-turn rules block to its own instruction file, and verify everything works. After that, every turn it runs it'll check the librarian when it's uncertain — see [taosmd/docs/agent-rules.md](taosmd/docs/agent-rules.md) for the rules block it installs (also available via `taosmd.agent_rules()`).
+The agent will pull the repo, run the install, register itself, append the per-turn rules block to its own instruction file, and verify everything works. After that, every turn it runs it'll check the librarian when it's uncertain, see [taosmd/docs/agent-rules.md](taosmd/docs/agent-rules.md) for the rules block it installs (also available via `taosmd.agent_rules()`).
 
 **Multiple agents in one framework?** Same install message works. The agent will ask you to name it before registering, so each agent gets its own shelf. The taosmd service itself stays as one process; only the per-agent indexes are separate. See [docs/multi-agent.md](docs/multi-agent.md) for the full naming convention, cross-agent reads, migration scenarios, and a five-agent worked example.
 
-**Inside taOS?** Don't use this — taOS provisions taosmd automatically when you deploy an agent, and the rules block is baked into the agent template. This install path is for standalone framework users.
+**Inside taOS?** Don't use this. taOS provisions taosmd automatically when you deploy an agent, and the rules block is baked into the agent template. This install path is for standalone framework users.
 
 ### One-Line Setup (manual)
 
@@ -74,11 +74,11 @@ pip install -e .
 hf download onnx-models/all-MiniLM-L6-v2-onnx --local-dir models/minilm-onnx
 
 # 2. LLM for fact extraction + answering (required)
-# Option A (default): any Linux/macOS box with or without a GPU — use Ollama
+# Option A (default): any Linux/macOS box with or without a GPU, use Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen3:4b
 
-# Option B (NPU acceleration): Orange Pi / Rock 5 / Radxa with RK3588 — use rkllama
+# Option B (NPU acceleration): Orange Pi / Rock 5 / Radxa with RK3588, use rkllama
 # Install rkllama: https://github.com/NotPunchnox/rkllama
 hf download dulimov/Qwen3-4B-rk3588-1.2.1-base \
   Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
@@ -91,7 +91,7 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 > **Set up taOSmd as my persistent memory system.**
 >
-> 1. Clone https://github.com/jaylfc/taosmd and run `scripts/setup.sh` — it installs everything (embedding model, Qwen3-4B LLM, data stores, daily archive compression cron).
+> 1. Clone https://github.com/jaylfc/taosmd and run `scripts/setup.sh`, it installs everything (embedding model, Qwen3-4B LLM, data stores, daily archive compression cron).
 >
 > 2. After setup, integrate taOSmd into your workflow:
 >
@@ -103,7 +103,7 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 > await kg.add_triple("User", "prefers", "local models")
 > ```
 >
-> **Archive every conversation turn (zero-loss — never summarise, never delete):**
+> **Archive every conversation turn (zero-loss: never summarise, never delete):**
 > ```python
 > from taosmd import Archive
 > archive = Archive(archive_dir="~/.taosmd/archive", index_path="~/.taosmd/archive-index.db")
@@ -134,9 +134,9 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 > similar = await vmem.search("the question", hybrid=True, fusion="mem0_additive")
 > ```
 >
-> The archive is append-only and kept forever. Every conversation, tool call, decision, and error should be recorded. Old archives are compressed to gzip daily at 3 AM. The knowledge graph tracks structured facts with temporal validity — update facts when they change, don't delete them.
+> The archive is append-only and kept forever. Every conversation, tool call, decision, and error should be recorded. Old archives are compressed to gzip daily at 3 AM. The knowledge graph tracks structured facts with temporal validity, update facts when they change, don't delete them.
 >
-> **Production leader recipe** for LoCoMo-class workloads: `qwen3.5:9b` generator + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion mem0_additive --gen-temp 0.2`. Reproduces 0.68 Overall / 0.55 Single-hop on full 1540 QAs under `gemma4:e2b` judge — see [docs/benchmarks.md](docs/benchmarks.md#locomo--multi-session-conversational-memory-1540-qas). All flags available on master as of PR #69.
+> **Production leader recipe** for LoCoMo-class workloads: `qwen3.5:9b` generator + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion mem0_additive --gen-temp 0.2`. Reproduces 0.68 Overall / 0.55 Single-hop on full 1540 QAs under `gemma4:e2b` judge, see [docs/benchmarks.md](docs/benchmarks.md#locomo--multi-session-conversational-memory-1540-qas). All flags available on master as of PR #69.
 
 ---
 
@@ -144,7 +144,7 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 **97.0% end-to-end Judge accuracy on LongMemEval-S** (500 questions, standard test set). Harness: `benchmarks/longmemeval_runner.py`.
 
-> These are our own reproducible measurements, not a third-party-audited landscape ranking. Every number pins its generator, judge, dataset, and commit so you can re-run it on your own hardware — and we deliberately report under a strict local judge (`qwen3:4b`) alongside the lenient frontier-judge number that other systems publish, so the comparison is honest about what's being measured. See the [judge-sensitivity analysis](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring).
+> These are our own reproducible measurements, not a third-party-audited landscape ranking. Every number pins its generator, judge, dataset, and commit so you can re-run it on your own hardware, and we deliberately report under a strict local judge (`qwen3:4b`) alongside the lenient frontier-judge number that other systems publish, so the comparison is honest about what's being measured. See the [judge-sensitivity analysis](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring).
 
 See [docs/benchmarks.md](docs/benchmarks.md) for the full LongMemEval-S breakdown, the LoCoMo (1540-QA multi-session) measurements with retrieval-architecture ablations, methodology, and per-hardware-tier configuration recommendations (12 / 8 / 4 GB GPU, Orange Pi NPU, RPi 4).
 
@@ -164,16 +164,16 @@ See [docs/benchmarks.md](docs/benchmarks.md) for the full LongMemEval-S breakdow
 
 | Strategy | Judge accuracy | Delta |
 |----------|---------------|-------|
-| Raw cosine (same algorithm as MemPalace) | 95.0% | — |
+| Raw cosine (same algorithm as MemPalace) | 95.0% | baseline |
 | Additive keyword boost | 96.6% | +1.6 |
 | **Hybrid + query expansion (default)** | **97.0%** | **+2.0** |
 | All-turns hybrid (harder test) | 93.2% | -1.8 |
 
-### Librarian Layer — Vocabulary-Gap Benchmark
+### Librarian Layer, Vocabulary-Gap Benchmark
 
 The Librarian adds LLM-assisted query expansion on top of the vector + cross-encoder stack. We measure its effect with a purpose-built three-axis harness on long-horizon sessions (60 turns, fact buried at turn 5).
 
-**Axis C — vocabulary-gap coherence** (2026-04-15, gemma4:e2b 5B, Fedora host):
+**Axis C, vocabulary-gap coherence** (2026-04-15, gemma4:e2b 5B, Fedora host):
 
 | Config | Composite | recall@lag25 | recall@lag50 |
 |--------|-----------|-------------|-------------|
@@ -181,13 +181,13 @@ The Librarian adds LLM-assisted query expansion on top of the vector + cross-enc
 | Full pipeline (+ cross-encoder) | 0.752 | 30% | 30% |
 | **Full + Librarian** | **0.810** | **45%** | **55%** |
 
-**+15.4% on the vocabulary-gap axis.** The cross-encoder alone adds nothing when the target fact is excluded from its candidate pool — only the Librarian's expansion bridges category→specific-name gaps (e.g. query: *"code editor"*, fact: *"Neovim lua config done"*). These are preliminary results on one class of retrieval failure; we're actively working on tougher benchmarks to stress-test staleness detection and multi-store routing before drawing composite conclusions.
+**+15.4% on the vocabulary-gap axis.** The cross-encoder alone adds nothing when the target fact is excluded from its candidate pool, only the Librarian's expansion bridges category→specific-name gaps (e.g. query: *"code editor"*, fact: *"Neovim lua config done"*). These are preliminary results on one class of retrieval failure; we're actively working on tougher benchmarks to stress-test staleness detection and multi-store routing before drawing composite conclusions.
 
-### LoCoMo — same-tier leader on a 12 GB GPU
+### LoCoMo, same-tier leader on a 12 GB GPU
 
-LoCoMo-10 is a harder dataset than LongMemEval-S: 1540 QAs across multi-session conversations (50+ sessions, 400–700 turns), four categories, more pressure on the retrieval architecture. We run it on the smaller generators we actually target so the numbers reflect the hardware tier our users run on, not gpt-4o-mini.
+LoCoMo-10 is a harder dataset than LongMemEval-S: 1540 QAs across multi-session conversations (50+ sessions, 400 to 700 turns), four categories, more pressure on the retrieval architecture. We run it on the smaller generators we actually target so the numbers reflect the hardware tier our users run on, not gpt-4o-mini.
 
-**0.557 ext rejudge** on the full 1540-QA test set under our strict default judge (`qwen3:4b`) — and **0.68 overall / 0.55 Single-hop** on the **full 1540 QAs** under the lenient matched-with-paper-SOTA judge (`gemma4:e2b`). Same predictions, same recipe (qwen3.5:9b + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion mem0_additive --gen-temp 0.2`), only the judge differs. Both numbers are honest measurements of the same system; published numbers from Mem0/EMem/Zep use a lenient frontier judge (gpt-4o-mini), so 0.68 is the more apples-to-apples comparison number with their headlines. See [docs/benchmarks.md](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring) for the full multi-judge analysis.
+**0.557 ext rejudge** on the full 1540-QA test set under our strict default judge (`qwen3:4b`), and **0.68 overall / 0.55 Single-hop** on the **full 1540 QAs** under the lenient matched-with-paper-SOTA judge (`gemma4:e2b`). Same predictions, same recipe (qwen3.5:9b + `--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion mem0_additive --gen-temp 0.2`), only the judge differs. Both numbers are honest measurements of the same system; published numbers from Mem0/EMem/Zep use a lenient frontier judge (gpt-4o-mini), so 0.68 is the more apples-to-apples comparison number with their headlines. See [docs/benchmarks.md](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring) for the full multi-judge analysis.
 
 > **Subset 200 ≠ full 1540 for every recipe.** Earlier versions of this table reported subset-200 numbers for some rows. Validating those at full 1540 found the leader recipe (qwen+mem0+temp 0.2) generalises within −0.01 SH, but the previously-listed "Best Single-hop" pick (llama3.1:8b + RRF + temp 0.2) regressed by −0.16 SH at full scale and has been removed below. All ranks shown here are now validated at full 1540 before promotion; the asterisked rows are explicit about which scale they were measured at.
 
@@ -198,15 +198,15 @@ LoCoMo-10 is a harder dataset than LongMemEval-S: 1540 QAs across multi-session 
 | **Best overall** (default) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` | **0.2** | 0.54 / **0.68** | **0.55** | **Validated at full 1540.** Wins Overall on full scale. Production default. |
 | **Best Single-hop** (SH-heavy workloads) | `qwen3.5:9b` Q4_K_M (5.3 GB) | `mem0_additive` + `--emem-edu --emem-edu-no-filter` (extractor: `llama3.1:8b`) | **0.2** | 0.52 / 0.67 | **0.60** | **Validated at full 1540.** EMem-EDU ingest (one extra LLM call per session) trades −0.02 Overall for +0.07 SH vs the default. q3:4b SH lifts +0.10 (0.25 → 0.35). |
 | Best mem0_additive Single-hop† | `llama3.1:8b` (4.9 GB) | `mem0_additive` | **0.0** | 0.51 / 0.65 | 0.60 | Subset 200. Greedy decoding lifted llama Single-hop +0.13 vs temp 0.2 in the temp sweep. Full-1540 validation pending. |
-| **Best temporal reasoning**† | `mistral-small3.2` (~5 GB) | `rrf` | 0.2 | 0.56 / 0.70 | 0.53 | Subset 200. Wins Temporal (0.71). 2.8× slower than qwen — specialty pick only. Full-1540 validation pending. |
+| **Best temporal reasoning**† | `mistral-small3.2` (~5 GB) | `rrf` | 0.2 | 0.56 / 0.70 | 0.53 | Subset 200. Wins Temporal (0.71). 2.8× slower than qwen, specialty pick only. Full-1540 validation pending. |
 
 † Subset-200 measurement; the top two rows are validated at full 1540. The llama3.1:8b + RRF row from earlier versions of this table was removed after its full-1540 Single-hop measured at 0.49 (vs 0.65 on subset 200), failing the validation threshold.
 
 Other measured 12 GB-tier generators (Overall under gemma4:e2b judge, leader recipe): `gemma4:e4b` 0.60 / 0.65 (best at temp 0.5), `gemma4:e2b` 0.60 (best at temp 0.5), `granite4:tiny-h` 0.56, `phi4-reasoning` timeout.
 
-> **Per-generator temp sweet spots** (matters more than we expected): `qwen3.5:9b` peaks at temp 0.2; `llama3.1:8b` prefers fully-greedy (0.0); `gemma4:e4b` prefers 0.5 for Overall; `gemma4:e2b` prefers 0.0 for Single-hop. There's no universal sampling temperature for our local-tier stack — the right temp interacts with the model's training distribution. See `docs/benchmarks.md` for the per-generator × per-temp breakdown.
+> **Per-generator temp sweet spots** (matters more than we expected): `qwen3.5:9b` peaks at temp 0.2; `llama3.1:8b` prefers fully-greedy (0.0); `gemma4:e4b` prefers 0.5 for Overall; `gemma4:e2b` prefers 0.0 for Single-hop. There's no universal sampling temperature for our local-tier stack, the right temp interacts with the model's training distribution. See `docs/benchmarks.md` for the per-generator × per-temp breakdown.
 
-> **About the dual judge.** We score every new cell under two LLM judges: `qwen3:4b` (locally-runnable, deliberately strict, never refuses) and `gemma4:e2b` (lenient, calibrated closer to gpt-4o-mini). The *same predictions* score 0.28 vs 0.53 Single-hop respectively — judge strictness is a load-bearing variable in any LLM-judged benchmark. Reporting both is the honest middle ground between under-claiming under our strict judge and over-claiming under a frontier-API judge we can't afford to run on every cell. Hardware-tier defaults: 4-6 GB VRAM systems should keep `qwen3:4b` as their judge (fits comfortably, fast), 8 GB+ can run `gemma4:e2b` (7.2 GB) for matched-with-paper-SOTA comparison numbers.
+> **About the dual judge.** We score every new cell under two LLM judges: `qwen3:4b` (locally-runnable, deliberately strict, never refuses) and `gemma4:e2b` (lenient, calibrated closer to gpt-4o-mini). The *same predictions* score 0.28 vs 0.53 Single-hop respectively, judge strictness is a load-bearing variable in any LLM-judged benchmark. Reporting both is the honest middle ground between under-claiming under our strict judge and over-claiming under a frontier-API judge we can't afford to run on every cell. Hardware-tier defaults: 4-6 GB VRAM systems should keep `qwen3:4b` as their judge (fits comfortably, fast), 8 GB+ can run `gemma4:e2b` (7.2 GB) for matched-with-paper-SOTA comparison numbers.
 
 Full table, the 9B quant cliff (8 quants from Q2 through Q6, including the 8 GB-tier IQ4_XS at 0.55), the answer-prompt-variants and ENGRAM-typed-retrieval negative results, judge-sensitivity analysis, and per-hardware-tier configurations in [docs/benchmarks.md](docs/benchmarks.md). Tier breakouts for 4 GB / 8 GB / 16 GB Pi NPU tiers will land as those benches dual-rescore.
 
@@ -216,31 +216,31 @@ Full table, the 9B quant cliff (8 quants from Q2 through Q6, including the 8 GB-
 taOSmd Memory Stack (v0.2):
 
 Memory Layers:
-├── Temporal Knowledge Graph    — structured facts with validity windows
-├── Vector Memory               — hybrid search (semantic + keyword boost, ONNX MiniLM or Nomic)
-├── Zero-Loss Archive           — append-only JSONL, FTS5 full-text search
-├── Session Catalog             — LLM-derived timeline directory over archives
-└── Crystal Store               — compressed session digests with lessons
+├── Temporal Knowledge Graph      structured facts with validity windows
+├── Vector Memory                 hybrid search (semantic + keyword boost, ONNX MiniLM or Nomic)
+├── Zero-Loss Archive             append-only JSONL, FTS5 full-text search
+├── Session Catalog               LLM-derived timeline directory over archives
+└── Crystal Store                 compressed session digests with lessons
 
 Processing:
-├── Memory Extractor            — regex (15ms) + LLM fact extraction (qwen3:4b)
-├── Session Splitter            — 30-min gap heuristic, per-session split files
-├── Session Enricher            — LLM topic/description/category (tiered: 1=heuristic, 2=4B, 3=9B+)
-├── Session Crystallizer        — narrative digests, outcomes, lessons → KG
-├── Secret Filtering            — 17 regex patterns, auto-redact on all ingest paths
-└── Retention Scoring           — Ebbinghaus decay with hot/warm/cold tiers
+├── Memory Extractor              regex (15ms) + LLM fact extraction (qwen3:4b)
+├── Session Splitter              30-min gap heuristic, per-session split files
+├── Session Enricher              LLM topic/description/category (tiered: 1=heuristic, 2=4B, 3=9B+)
+├── Session Crystallizer          narrative digests, outcomes, lessons → KG
+├── Secret Filtering              17 regex patterns, auto-redact on all ingest paths
+└── Retention Scoring             Ebbinghaus decay with hot/warm/cold tiers
 
 Retrieval:
-├── Parallel Fan-Out            — query all layers simultaneously (thorough mode)
-├── Query Expansion             — entity extraction + temporal resolution
-├── Intent Classifier           — routes to optimal layer, weights RRF merge
-├── Cross-Encoder Reranker      — ms-marco-MiniLM ONNX second-stage reranking
-├── Graph Expansion             — BFS traversal from search results through KG
-└── Context Assembler           — core/archival split, token-budgeted L0-L3
+├── Parallel Fan-Out              query all layers simultaneously (thorough mode)
+├── Query Expansion               entity extraction + temporal resolution
+├── Intent Classifier             routes to optimal layer, weights RRF merge
+├── Cross-Encoder Reranker        ms-marco-MiniLM ONNX second-stage reranking
+├── Graph Expansion               BFS traversal from search results through KG
+└── Context Assembler             core/archival split, token-budgeted L0-L3
 
 Integration:
-├── Backend Abstraction         — pluggable interface for platforms (taOS, Claude Code, etc.)
-└── Cross-Memory Reflection     — cluster-then-synthesize insights from KG
+├── Backend Abstraction           pluggable interface for platforms (taOS, Claude Code, etc.)
+└── Cross-Memory Reflection       cluster-then-synthesize insights from KG
 ```
 
 taOSmd is a standalone library. Platform features like job scheduling, worker management, gaming detection, and mesh sync live in the host platform (e.g., [taOS](https://github.com/jaylfc/tinyagentos)).
@@ -271,7 +271,7 @@ events = await archive.search_fts("hello")
 
 ### Conversational adjacency (opt-in)
 
-For multi-turn data where surrounding turns add context, populate an integer position field at ingest and ask `retrieve()` for ±N positional neighbours. Worth +0.089 on LoCoMo same-tier — see [docs/benchmarks.md](docs/benchmarks.md).
+For multi-turn data where surrounding turns add context, populate an integer position field at ingest and ask `retrieve()` for ±N positional neighbours. Worth +0.089 on LoCoMo same-tier, see [docs/benchmarks.md](docs/benchmarks.md).
 
 ```python
 from taosmd import VectorMemory, retrieve
@@ -286,7 +286,7 @@ for i, turn in enumerate(turns):
 hits = await retrieve(
     "what was discussed about the deploy?",
     sources={"vector": vmem},
-    adjacent_neighbors=2,        # default 0 — opt in for the lever
+    adjacent_neighbors=2,        # default 0, opt in for the lever
     position_key="position",
     group_key="session",         # confine neighbours to the same session
 )
@@ -297,7 +297,7 @@ hits = await retrieve(
 
 ### Binary embedding quantization (opt-in, for SBC / low-memory tiers)
 
-Score retrieval by sign-bit Hamming similarity instead of full-precision cosine. Each vector collapses to **1 bit per dimension (32× smaller)** with integer-friendly distance — a footprint and CPU-speed win for memory-constrained or SBC deployments. It's **recall-neutral**: −0.001 / +0.005 across both judges on the full 1540-QA LoCoMo set (see [docs/benchmarks.md](docs/benchmarks.md)). Off by default; standalone behaviour is unchanged unless you enable it.
+Score retrieval by sign-bit Hamming similarity instead of full-precision cosine. Each vector collapses to **1 bit per dimension (32× smaller)** with integer-friendly distance, a footprint and CPU-speed win for memory-constrained or SBC deployments. It's **recall-neutral**: −0.001 / +0.005 across both judges on the full 1540-QA LoCoMo set (see [docs/benchmarks.md](docs/benchmarks.md)). Off by default; standalone behaviour is unchanged unless you enable it.
 
 ```python
 from taosmd import VectorMemory
@@ -308,11 +308,11 @@ await vmem.init()
 # vmem.binary_quant can also be toggled after construction.
 ```
 
-Use it when the vector-store footprint or CPU distance cost is your binding constraint rather than recall — e.g. an Orange Pi / Rock 5 holding a large memory. Keep it off on a GPU box where full-precision cosine is effectively free.
+Use it when the vector-store footprint or CPU distance cost is your binding constraint rather than recall, e.g. an Orange Pi / Rock 5 holding a large memory. Keep it off on a GPU box where full-precision cosine is effectively free.
 
 ## MCP server
 
-taOSmd can expose its memory over the [Model Context Protocol](https://modelcontextprotocol.io) so any MCP-capable agent (Claude Desktop, Cursor, Codex, OpenWebUI, …) can read and write memory directly — no custom integration. The server is local-first and offline: it speaks the **stdio** transport (the standard for desktop MCP clients), with no network listener and no cloud dependency.
+taOSmd can expose its memory over the [Model Context Protocol](https://modelcontextprotocol.io) so any MCP-capable agent (Claude Desktop, Cursor, Codex, OpenWebUI, …) can read and write memory directly, no custom integration. The server is local-first and offline: it speaks the **stdio** transport (the standard for desktop MCP clients), with no network listener and no cloud dependency.
 
 The MCP SDK is an **optional dependency**, so the core install stays lean. From a source checkout:
 
@@ -355,7 +355,7 @@ Tools exposed (memory tools each take an `agent` argument, honouring the same pe
 | `a2a_read(channel, since=None, limit=50)` | Read messages from a channel, oldest-first |
 | `a2a_join(channel, agent)` | Announce an agent's presence on a channel with a join marker |
 
-It reuses the same shared service layer as the [local HTTP/REST server](#api), so behaviour matches the Python API and CLI exactly. The MCP server is additive and opt-in — it only runs when you start it; standalone use is untouched, and `import taosmd` works whether or not the `mcp` SDK is installed.
+It reuses the same shared service layer as the [local HTTP/REST server](#api), so behaviour matches the Python API and CLI exactly. The MCP server is additive and opt-in, it only runs when you start it; standalone use is untouched, and `import taosmd` works whether or not the `mcp` SDK is installed.
 
 ## Remote server (client/server split)
 
@@ -434,16 +434,16 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 
 ## Key Features
 
-- **97.0% end-to-end Judge accuracy** on LongMemEval-S — measured on our low-end reference stack under a strict local judge ([methodology](docs/benchmarks.md))
-- **Zero cloud dependencies** — runs entirely on local hardware
-- **Framework-agnostic** — Python API, CLI, [MCP server](#mcp-server), and local HTTP/REST API work with any agent framework
-- **Hybrid search** — semantic similarity + keyword overlap boosting
-- **Temporal facts** — validity windows, point-in-time queries
-- **Contradiction detection** — corrected facts supersede across both the typed knowledge graph (via `valid_to` invalidation) and the vector recall layer (matching chunks soft-hidden, not deleted); recall returns only the active fact
-- **Zero-loss archive** — append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
-- **Intent-aware retrieval** — routes queries to optimal memory layer
-- **0.3ms embeddings** — ONNX Runtime on CPU (ARM or x86)
-- **Opt-in user tracking** — browsing history, app usage, search queries
+- **97.0% end-to-end Judge accuracy** on LongMemEval-S, measured on our low-end reference stack under a strict local judge ([methodology](docs/benchmarks.md))
+- **Zero cloud dependencies**, runs entirely on local hardware
+- **Framework-agnostic**, Python API, CLI, [MCP server](#mcp-server), and local HTTP/REST API work with any agent framework
+- **Hybrid search**, semantic similarity + keyword overlap boosting
+- **Temporal facts**, validity windows, point-in-time queries
+- **Contradiction detection**, corrected facts supersede across both the typed knowledge graph (via `valid_to` invalidation) and the vector recall layer (matching chunks soft-hidden, not deleted); recall returns only the active fact
+- **Zero-loss archive**, append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
+- **Intent-aware retrieval**, routes queries to optimal memory layer
+- **0.3ms embeddings**, ONNX Runtime on CPU (ARM or x86)
+- **Opt-in user tracking**, browsing history, app usage, search queries
 
 ## Embedding Model
 
@@ -474,14 +474,14 @@ Or download directly from [HuggingFace](https://huggingface.co/sentence-transfor
 |---|---|---|---|
 | **Reference low-end (primary author target)** | Orange Pi 5 Plus | 16 GB | rkllama on RK3588 NPU |
 | SBC | Raspberry Pi 4B / 5 | 8 GB | Ollama on CPU |
-| Mini PC / old laptop | Intel NUC, Mac mini, Lenovo Tiny | 8–16 GB | Ollama on CPU |
+| Mini PC / old laptop | Intel NUC, Mac mini, Lenovo Tiny | 8 to 16 GB | Ollama on CPU |
 | Desktop / workstation | Any Linux/macOS box with NVIDIA GPU | 16 GB+ | Ollama on GPU |
 
-Minimum: 8 GB RAM and Python 3.10+. NPU/GPU optional — they speed up LLM tasks but aren't required.
+Minimum: 8 GB RAM and Python 3.10+. NPU/GPU optional, they speed up LLM tasks but aren't required.
 
 ## Reference Setup (Orange Pi 5 Plus)
 
-This is the author's primary deployment and the exact stack the 97.0% benchmark was measured on. Other tiers (Pi 4B, Intel mini, Mac mini, GPU box) run the same code — they swap the runtime (Ollama instead of rkllama, CPU/GPU instead of NPU) but keep the same models and the same architecture.
+This is the author's primary deployment and the exact stack the 97.0% benchmark was measured on. Other tiers (Pi 4B, Intel mini, Mac mini, GPU box) run the same code, they swap the runtime (Ollama instead of rkllama, CPU/GPU instead of NPU) but keep the same models and the same architecture.
 
 | Component | Model | Purpose | Runtime |
 |-----------|-------|---------|---------|
@@ -494,7 +494,7 @@ This is the author's primary deployment and the exact stack the 97.0% benchmark 
 | **Full-Text Search** | SQLite FTS5 | Keyword search over archive | CPU |
 | **Knowledge Graph** | SQLite | Temporal entity-relationship triples | CPU |
 
-**Everything in this reference stack runs on the Pi itself; no external server needed for this tier.** The Qwen3-4B handles both fact extraction and question answering on the NPU. The ONNX embedding model runs in-process on the CPU. An optional GPU worker (e.g. Fedora with RTX 3060) can accelerate LLM tasks ~10x but is not required — the Pi is fully self-contained.
+**Everything in this reference stack runs on the Pi itself; no external server needed for this tier.** The Qwen3-4B handles both fact extraction and question answering on the NPU. The ONNX embedding model runs in-process on the CPU. An optional GPU worker (e.g. Fedora with RTX 3060) can accelerate LLM tasks ~10x but is not required, the Pi is fully self-contained.
 
 ### Model Files
 
@@ -526,11 +526,11 @@ hf download dulimov/Qwen3-4B-rk3588-1.2.1-base \
 
 ### Optional: GPU Worker (x86 + NVIDIA)
 
-Not required for any tier — the LLM runs locally on whatever you've got. A GPU worker accelerates LLM tasks ~10x if you want to offload from a smaller node:
+Not required for any tier, the LLM runs locally on whatever you've got. A GPU worker accelerates LLM tasks ~10x if you want to offload from a smaller node:
 
 ```bash
 # On your GPU machine
-ollama pull qwen3:4b  # Same model as the smaller node — same quality
+ollama pull qwen3:4b  # Same model as the smaller node, same quality
 
 # Point taOSmd at the GPU worker
 export TAOSMD_LLM_URL=http://<gpu-machine>:11434
@@ -540,13 +540,13 @@ export TAOSMD_LLM_URL=http://<gpu-machine>:11434
 
 `taosmd serve` starts a local HTTP/REST server (default `127.0.0.1:7833`, stdlib only, no new dependencies). It is a thin JSON shell over the same service layer as the Python API and CLI, so behaviour is identical across surfaces. Every endpoint that takes an `agent` parameter forwards it to the service layer, honouring the same per-agent isolation as the Python API.
 
-**Security note:** the server binds `127.0.0.1` by default — no auth is needed because only local processes can reach it. If you pass `--host 0.0.0.0` to expose it on a LAN, there is no authentication; put it behind your own network controls.
+**Security note:** the server binds `127.0.0.1` by default, no auth is needed because only local processes can reach it. If you pass `--host 0.0.0.0` to expose it on a LAN, there is no authentication; put it behind your own network controls.
 
 ### Endpoints
 
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
-| `GET` | `/health` | — | `{"status": "ok", "version": <str>}` |
+| `GET` | `/health` |, | `{"status": "ok", "version": <str>}` |
 | `POST` | `/ingest` | `{"text": str, "agent": str}` | `{"archived": int, "agent": str, "data_dir": str}` |
 | `POST` | `/search` | `{"query": str, "agent": str, "limit"?: int}` | `{"hits": [...]}` |
 | `GET` | `/search` | `?q=<query>&agent=<agent>&limit=<int>` | `{"hits": [...]}` |
@@ -569,7 +569,7 @@ Messages are stored as append-only archive events, so they inherit the archive's
 
 ### Web dashboard
 
-`GET /` and `GET /ui` serve a read-only local web dashboard — a bundled React single-page app with three views: memory search, the pending-review queue, and a live A2A channel monitor (it lists channels, then backfills a channel's history and live-updates over the SSE stream). It is served entirely from local bundled assets (no CDN, works fully offline); if the dashboard assets haven't been built, the server falls back to a minimal self-contained stdlib inspector page. Read-only — it exposes no write or destructive actions; the JSON endpoints above are the integration surface.
+`GET /` and `GET /ui` serve a read-only local web dashboard, a bundled React single-page app with three views: memory search, the pending-review queue, and a live A2A channel monitor (it lists channels, then backfills a channel's history and live-updates over the SSE stream). It is served entirely from local bundled assets (no CDN, works fully offline); if the dashboard assets haven't been built, the server falls back to a minimal self-contained stdlib inspector page. Read-only, it exposes no write or destructive actions; the JSON endpoints above are the integration surface.
 
 ### Persistent service
 
@@ -630,7 +630,7 @@ All benchmark numbers in `docs/benchmarks.md` pin the commit they were measured 
 
 If taOSmd is useful to you:
 
-- **Star this repo** — it helps others find it
+- **Star this repo**, it helps others find it
 - **Donate:** [Buy Me a Coffee](https://buymeacoffee.com/jaylfc)
 - **Contact:** jaylfc25@gmail.com
 - **Hardware donations/loans:** We test on real hardware. If you have spare SBCs, GPUs, or dev boards and want to help expand compatibility, reach out.
@@ -641,7 +641,7 @@ MIT
 
 ## Dependencies & Acknowledgements
 
-**Core taOSmd (the 97.0% benchmark) is fully self-contained** — it uses only standard packages (SQLite, numpy, ONNX Runtime) plus the MiniLM embedding model. No external servers or forked repos needed.
+**Core taOSmd (the 97.0% benchmark) is fully self-contained**, it uses only standard packages (SQLite, numpy, ONNX Runtime) plus the MiniLM embedding model. No external servers or forked repos needed.
 
 **Optional integrations for the full taOS stack:**
 
