@@ -205,3 +205,77 @@ def get_recipe(recipe_id: str) -> Recipe | None:
 
 def list_recipes() -> list[Recipe]:
     return list(_REGISTRY.values())
+
+
+import os
+import shutil
+import subprocess
+
+
+def _detect_gpu() -> dict:
+    """Best-effort, dependency-free GPU sniff."""
+    # NVIDIA via nvidia-smi
+    if shutil.which("nvidia-smi"):
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                vram = int(out.stdout.strip().splitlines()[0].strip())
+                return {"type": "nvidia", "vram_mb": vram}
+        except Exception:
+            pass
+    # Apple Metal (unified memory): present on darwin with arm64
+    import platform
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        return {"type": "metal", "vram_mb": _total_ram_mb()}
+    return {"type": "none", "vram_mb": 0}
+
+
+def _detect_npu() -> dict:
+    # Rockchip RKNPU exposes /sys/kernel/debug/rknpu or a devfreq node.
+    for p in ("/sys/kernel/debug/rknpu", "/sys/class/devfreq/fdab0000.npu"):
+        if os.path.exists(p):
+            return {"type": "rknpu"}
+    return {"type": "none"}
+
+
+def _total_ram_mb() -> int:
+    try:
+        return int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 * 1024))
+    except (ValueError, OSError, AttributeError):
+        return 0
+
+
+def local_probe() -> dict:
+    """Minimal, dependency-free hardware sniff.
+
+    Returns the same ``device_info`` shape taOS produces (host section only,
+    no cluster), so ``recommend()`` has one input vocabulary. Standalone never
+    needs taOS to run.
+    """
+    import platform
+    return {"host": {
+        "cpu": {"arch": platform.machine(), "cores": os.cpu_count() or 1},
+        "ram_mb": _total_ram_mb(),
+        "npu": _detect_npu(),
+        "gpu": _detect_gpu(),
+    }}
+
+
+def tier_of(device_info: dict) -> str:
+    """Classify a device_info dict into a coarse tier string."""
+    host = device_info.get("host", {})
+    gpu = host.get("gpu", {})
+    npu = host.get("npu", {})
+    vram = gpu.get("vram_mb", 0) or 0
+    if gpu.get("type") not in (None, "none") and vram >= 11000:
+        return "gpu-12gb"
+    if gpu.get("type") not in (None, "none") and vram >= 7000:
+        return "gpu-8gb"
+    if gpu.get("type") not in (None, "none") and vram >= 3500:
+        return "gpu-4gb"
+    if npu.get("type") not in (None, "none"):
+        return "pi-npu"
+    return "cpu"

@@ -62,3 +62,26 @@ def test_lite_recipe_disables_extraction_and_reranker():
     lite = recipes.get_recipe("lite-pi")
     assert lite.ingest["extraction"] is False
     assert lite.retrieval["reranker"] == "none"
+
+
+def test_local_probe_shape():
+    info = recipes.local_probe()
+    assert "host" in info
+    host = info["host"]
+    for k in ("cpu", "ram_mb", "npu", "gpu"):
+        assert k in host, k
+    assert "cores" in host["cpu"]
+    assert host["gpu"]["type"] in ("nvidia", "amd", "mali", "intel", "metal", "none")
+
+
+def test_local_probe_tier_classifier():
+    # tier_of() maps a probe dict to a coarse tier string.
+    assert recipes.tier_of({"host": {"gpu": {"type": "nvidia", "vram_mb": 12000},
+                                     "npu": {"type": "none"}, "cpu": {"cores": 8},
+                                     "ram_mb": 32000}}) == "gpu-12gb"
+    assert recipes.tier_of({"host": {"gpu": {"type": "none"},
+                                     "npu": {"type": "rknpu"}, "cpu": {"cores": 8},
+                                     "ram_mb": 16000}}) == "pi-npu"
+    assert recipes.tier_of({"host": {"gpu": {"type": "none"},
+                                     "npu": {"type": "none"}, "cpu": {"cores": 4},
+                                     "ram_mb": 8000}}) == "cpu"
