@@ -313,9 +313,8 @@ async def search(
             _recipes.ensure_reranker_model(block=False)
             degraded = "reranker-downloading"
 
-    # Caller override: prefer an explicitly-passed limit (differing from the
-    # signature default of 5) over the recipe's configured limit.
-    effective_limit = limit if limit != 5 else rc.get("limit", limit)
+    # per-agent fanout (recipe-derived via librarian.fanout) governs retrieval breadth; recipe.retrieval.candidate_top_k sets the pre-rerank pool. retrieval.limit is advisory in SP1.
+    effective_limit = limit
 
     # Build the list of agent names to search across.
     # When project + also_include are set, we search the calling agent

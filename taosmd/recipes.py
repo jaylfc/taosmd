@@ -357,7 +357,10 @@ def apply_recipe(agent: str, recipe_id: str, data_dir=None) -> Recipe:
         retrieval_config=dict(recipe.retrieval),
         librarian=_librarian_for(recipe), data_dir=data_dir)
     gen = recipe.generator.get("model", "")
-    if gen:
+    # Only seed the global memory model from the recipe when the user has not
+    # already chosen one. The fresh-install path (resolve_recipe -> apply_recipe
+    # for recommend()[0]) must not clobber a model the user configured.
+    if gen and _config.get_memory_model(data_dir=data_dir) is None:
         _config.set_memory_model(gen, data_dir=data_dir)
     return recipe
 
@@ -431,8 +434,12 @@ def ensure_reranker_model(onnx_path: str = "models/cross-encoder-onnx",
     if _RERANKER_DOWNLOADS.get(onnx_path) == "downloading":
         return "downloading"
 
+    # Mark "downloading" on the main thread BEFORE starting the worker, so a
+    # concurrent caller observes the in-flight status and does not spawn a
+    # duplicate download (closes the TOCTOU window between start() and _run()).
+    _RERANKER_DOWNLOADS[onnx_path] = "downloading"
+
     def _run():
-        _RERANKER_DOWNLOADS[onnx_path] = "downloading"
         try:
             _fetch_reranker_onnx(onnx_path, on_progress)
             _RERANKER_DOWNLOADS[onnx_path] = "ready"

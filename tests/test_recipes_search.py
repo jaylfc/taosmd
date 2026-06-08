@@ -13,18 +13,24 @@ class _FakeVector:
     async def search(self, query, *, limit=5, hybrid=True, fusion="boost",
                      project=None, search_agents=None):
         self.calls.append({"limit": limit, "fusion": fusion})
-        return [{"text": "hit", "score": 1.0, "metadata": {}}]
+        # _adapt_vector reads r["id"] and r["similarity"]; without them the
+        # adapter raises KeyError which _query_source swallows to [], so the
+        # call-kwargs asserts would pass while no results flowed through.
+        return [{"id": "v1", "text": "hit", "similarity": 1.0, "metadata": {}}]
 
 
 def test_retrieve_threads_fusion_and_candidate_top_k():
     vec = _FakeVector()
-    asyncio.run(retrieval.retrieve(
+    results = asyncio.run(retrieval.retrieve(
         "q", sources={"vector": vec}, strategy="custom",
         memory_layers=["vector"], limit=5, fusion="mem0_additive",
         candidate_top_k=50))
     assert vec.calls, "vector source was not queried"
     assert vec.calls[0]["fusion"] == "mem0_additive"
     assert vec.calls[0]["limit"] == 50  # candidate pool, not the final limit
+    # Verify the hit actually flowed through the adapter (not swallowed to []).
+    assert results, "the fake vector hit did not flow through retrieve()"
+    assert results[0]["text"] == "hit"
 
 
 from pathlib import Path
@@ -69,3 +75,21 @@ def test_search_applies_resolved_recipe_reranker_degrades(tmp_path, monkeypatch)
     assert hits, "degraded search should still return the embedded turn"
     # The wiring must mark the degraded reranker on the top hit.
     assert hits[0]["metadata"].get("recipe_degraded") == "reranker-downloading"
+
+
+def test_recipe_controls_retrieval_breadth_via_fanout(tmp_path):
+    # Recipe-differentiated breadth, end to end: applying a recipe writes its
+    # librarian.fanout through to the agent, and effective_fanout reflects it.
+    # maxsim-rerank-9b uses fanout "med" (K=10); lite-pi uses "low" (K=3).
+    d = str(tmp_path)
+    taosmd_agents.ensure_agent("gina", data_dir=d)
+
+    recipes.apply_recipe("gina", "maxsim-rerank-9b", data_dir=d)
+    assert (taosmd_agents._registry(d)
+            .effective_fanout("gina", worker_capabilities=None)
+            == taosmd_agents.FANOUT_LEVELS["med"])
+
+    recipes.apply_recipe("gina", "lite-pi", data_dir=d)
+    assert (taosmd_agents._registry(d)
+            .effective_fanout("gina", worker_capabilities=None)
+            == taosmd_agents.FANOUT_LEVELS["low"])

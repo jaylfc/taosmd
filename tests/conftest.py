@@ -27,4 +27,8 @@ def _no_reranker_network(monkeypatch):
         recipes, "_fetch_reranker_onnx",
         lambda *a, **k: None, raising=False,
     )
+    # Reset the module-level download-status dict so a "downloading" entry from
+    # one test cannot leak into the next (it would short-circuit
+    # ensure_reranker_model into returning "downloading" without doing work).
+    monkeypatch.setattr(recipes, "_RERANKER_DOWNLOADS", {})
     yield

@@ -166,6 +166,27 @@ def test_apply_recipe_writes_through_and_resolves(tmp_path):
     assert rec["librarian"]["enabled"] is False
 
 
+def test_apply_recipe_does_not_clobber_existing_memory_model(tmp_path):
+    # When the user has already chosen a memory model, applying a recipe that
+    # names a generator must NOT overwrite it (fresh-install resolve path would
+    # otherwise silently replace the user's choice).
+    d = str(tmp_path)
+    taosmd_agents.ensure_agent("erin", data_dir=d)
+    taosmd_config.set_memory_model("ollama:user-pick", data_dir=d)
+    # maxsim-rerank-9b names ollama:qwen3.5:9b as its generator.
+    recipes.apply_recipe("erin", "maxsim-rerank-9b", data_dir=d)
+    assert taosmd_config.get_memory_model(data_dir=d) == "ollama:user-pick"
+
+
+def test_apply_recipe_sets_memory_model_when_unset(tmp_path):
+    # With no memory model configured, the recipe's generator seeds the global.
+    d = str(tmp_path)
+    taosmd_agents.ensure_agent("frank", data_dir=d)
+    assert taosmd_config.get_memory_model(data_dir=d) is None
+    recipes.apply_recipe("frank", "maxsim-rerank-9b", data_dir=d)
+    assert taosmd_config.get_memory_model(data_dir=d) == "ollama:qwen3.5:9b"
+
+
 def test_resolve_falls_back_to_recommend_when_unconfigured(tmp_path, monkeypatch):
     d = str(tmp_path)
     monkeypatch.setattr(recipes, "local_probe", lambda: {
