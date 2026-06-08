@@ -50,7 +50,7 @@ The agent will pull the repo, run the install, register itself, append the per-t
 
 ### One-Line Setup (manual)
 
-> **Note:** Installing from source (`git clone` then `pip install -e .`) and the CLI (`taosmd`, `taosmd serve`, `taosmd mcp`) are verified on a clean environment. A PyPI release is planned but not published yet, so `pip install taosmd` does not work today; use the source install below. The one-line bootstrap (which additionally installs Ollama and downloads the embedding and LLM models) is newer and still being validated across clean machines, so please report issues.
+> **Note:** From v0.3.0, taOSmd is on PyPI: `pip install taosmd` (add the MCP server with `pip install "taosmd[mcp]"`). The source install (`git clone` then `pip install -e .`) is also verified on a clean environment and is what you want for development. The one-line bootstrap (which additionally installs Ollama and downloads the embedding and LLM models) is newer and still being validated across clean machines, so please report issues.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash
@@ -84,6 +84,26 @@ hf download dulimov/Qwen3-4B-rk3588-1.2.1-base \
   Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
   --local-dir ~/.rkllama/models/qwen3-4b-chat
 ```
+
+### Install hygiene (avoid a shadowed install)
+
+Always install taOSmd into a virtual environment, and never with `sudo` into the
+system Python. A system-wide copy under `/usr/lib/python3/dist-packages/taosmd`
+(left by an earlier `sudo pip install`) will shadow a venv editable install, so
+`import taosmd` resolves to the stale system copy instead of your checkout. To
+check what is actually being imported and remove a stale system copy:
+
+```bash
+# Which taosmd is active, and its version?
+python -c "import taosmd, pathlib; print(pathlib.Path(taosmd.__file__).resolve()); print(taosmd.__version__)"
+
+# If it points at /usr/lib/... or /usr/local/... instead of your venv, remove it:
+sudo python3 -m pip uninstall -y taosmd     # the SYSTEM python, outside any venv
+```
+
+Running `taosmd serve` as a systemd unit? Point the unit at your venv's
+interpreter (`ExecStart=/path/to/.venv/bin/python -m taosmd serve ...`); a PyPI
+or venv install needs no `WorkingDirectory` and no repo checkout to start.
 
 ### Tell Your Agent
 
