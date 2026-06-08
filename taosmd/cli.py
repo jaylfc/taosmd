@@ -751,8 +751,8 @@ def main(argv: list[str] | None = None) -> int:
              "Use 0.0.0.0 to expose on the LAN — no auth, so gate it yourself.",
     )
     serve_p.add_argument(
-        "--port", type=int, default=7833,
-        help="Bind port (default 7833)",
+        "--port", type=int, default=7900,
+        help="Bind port (default 7900)",
     )
     serve_p.add_argument(
         "--serve-data-dir", dest="serve_data_dir", default=None,

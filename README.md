@@ -538,7 +538,7 @@ export TAOSMD_LLM_URL=http://<gpu-machine>:11434
 
 ## API
 
-`taosmd serve` starts a local HTTP/REST server (default `127.0.0.1:7833`, stdlib only, no new dependencies). It is a thin JSON shell over the same service layer as the Python API and CLI, so behaviour is identical across surfaces. Every endpoint that takes an `agent` parameter forwards it to the service layer, honouring the same per-agent isolation as the Python API.
+`taosmd serve` starts a local HTTP/REST server (default `127.0.0.1:7900`, stdlib only, no new dependencies). It is a thin JSON shell over the same service layer as the Python API and CLI, so behaviour is identical across surfaces. Every endpoint that takes an `agent` parameter forwards it to the service layer, honouring the same per-agent isolation as the Python API.
 
 **Security note:** the server binds `127.0.0.1` by default, no auth is needed because only local processes can reach it. If you pass `--host 0.0.0.0` to expose it on a LAN, there is no authentication; put it behind your own network controls.
 

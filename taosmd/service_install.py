@@ -75,7 +75,7 @@ def render_systemd_unit(
     host:
         Bind address (e.g. ``127.0.0.1``).
     port:
-        Bind port (e.g. ``7833``).
+        Bind port (e.g. ``7900``).
     data_dir:
         Optional data directory.  When ``None`` the service inherits
         ``$TAOSMD_DATA_DIR`` or the default ``~/.taosmd`` — the same

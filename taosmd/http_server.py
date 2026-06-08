@@ -119,7 +119,7 @@ _EXTRA_MIME = {
 logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 7833
+DEFAULT_PORT = 7900
 
 
 # A single self-contained page: one inline <style> and one inline vanilla
@@ -803,7 +803,7 @@ def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=Non
 def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> int:
     """Run the local HTTP memory server until interrupted.
 
-    Binds ``host:port`` (default ``127.0.0.1:7833``) and blocks serving
+    Binds ``host:port`` (default ``127.0.0.1:7900``) and blocks serving
     requests. Returns 0 on a clean Ctrl-C shutdown.
     """
     httpd = make_server(host, port, data_dir)

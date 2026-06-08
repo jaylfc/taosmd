@@ -12,7 +12,7 @@
     Bind address passed to "taosmd serve" (default: 127.0.0.1).
 
 .PARAMETER Port
-    Bind port passed to "taosmd serve" (default: 7833).
+    Bind port passed to "taosmd serve" (default: 7900).
 
 .PARAMETER DataDir
     Data directory passed to "taosmd serve --serve-data-dir".
@@ -35,7 +35,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$BindHost = "127.0.0.1",
-    [int]$Port = 7833,
+    [int]$Port = 7900,
     [string]$DataDir = "",
     [switch]$Uninstall
 )

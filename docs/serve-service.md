@@ -1,7 +1,7 @@
 # Running taosmd serve as a persistent background service
 
 `taosmd serve` starts the local HTTP/REST memory API and inspection UI on
-`http://127.0.0.1:7833` by default.  Running it in the foreground works fine
+`http://127.0.0.1:7900` by default.  Running it in the foreground works fine
 for development, but for a live-always dashboard you want the process to
 survive logouts, restart after a crash, and start automatically at login.
 
@@ -20,7 +20,7 @@ No root or `sudo` required. This is a **user** unit that lives in
 ```bash
 taosmd serve --install-service
 # With a custom port or data directory:
-taosmd serve --host 127.0.0.1 --port 7833 --install-service
+taosmd serve --host 127.0.0.1 --port 7900 --install-service
 taosmd serve --serve-data-dir /mnt/data/taosmd --install-service
 ```
 
@@ -70,7 +70,7 @@ starts at login and restarts if it exits.
 ```bash
 taosmd serve --install-service
 # With a custom port or data directory:
-taosmd serve --port 7833 --install-service
+taosmd serve --port 7900 --install-service
 taosmd serve --serve-data-dir ~/.taosmd --install-service
 ```
 
@@ -187,8 +187,8 @@ whether you run `taosmd serve` in the foreground or as a background service.
 ## Checking the port is live
 
 ```bash
-curl http://127.0.0.1:7833/health
+curl http://127.0.0.1:7900/health
 # Expected: {"status": "ok", "version": "..."}
 ```
 
-The read-only inspection UI is at `http://127.0.0.1:7833/` in your browser.
+The read-only inspection UI is at `http://127.0.0.1:7900/` in your browser.
