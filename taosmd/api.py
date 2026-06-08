@@ -180,7 +180,7 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
             or ``~/.taosmd``.
 
     Returns:
-        ``{"archived": int, "agent": str, "project": str|None, "data_dir": str}`` — ``archived``
+        ``{"archived": int, "agent": str, "project": str|None, "data_dir": str}``, where ``archived``
         is the count of non-empty turns that were shelved.
     """
     if not agent:
