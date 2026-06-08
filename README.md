@@ -50,7 +50,7 @@ The agent will pull the repo, run the install, register itself, append the per-t
 
 ### One-Line Setup (manual)
 
-> **Note:** The Python package install (`pip install taosmd`) and the CLI (`taosmd`, `taosmd serve`, `taosmd mcp`) are verified on a clean environment. The one-line bootstrap below (which additionally installs Ollama and downloads the embedding + LLM models) is newer and still being validated across clean machines — please report issues.
+> **Note:** Installing from source (`git clone` then `pip install -e .`) and the CLI (`taosmd`, `taosmd serve`, `taosmd mcp`) are verified on a clean environment. A PyPI release is planned but not published yet, so `pip install taosmd` does not work today; use the source install below. The one-line bootstrap (which additionally installs Ollama and downloads the embedding and LLM models) is newer and still being validated across clean machines, so please report issues.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash
@@ -314,10 +314,10 @@ Use it when the vector-store footprint or CPU distance cost is your binding cons
 
 taOSmd can expose its memory over the [Model Context Protocol](https://modelcontextprotocol.io) so any MCP-capable agent (Claude Desktop, Cursor, Codex, OpenWebUI, …) can read and write memory directly — no custom integration. The server is local-first and offline: it speaks the **stdio** transport (the standard for desktop MCP clients), with no network listener and no cloud dependency.
 
-The MCP SDK is an **optional dependency**, so the core install stays lean:
+The MCP SDK is an **optional dependency**, so the core install stays lean. From a source checkout:
 
 ```bash
-pip install taosmd[mcp]
+pip install -e ".[mcp]"
 ```
 
 Run the server over stdio:
