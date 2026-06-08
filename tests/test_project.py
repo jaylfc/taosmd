@@ -162,7 +162,9 @@ class TestGetProjectId:
         assert isinstance(pid, str)
 
     def test_length(self, tmp_path):
-        pid = get_project_id(cwd=str(tmp_path), explicit_id="test")
+        # No explicit_id: a detected/derived fingerprint is always 12 hex chars.
+        # (explicit_id is returned verbatim, covered by test_explicit.)
+        pid = get_project_id(cwd=str(tmp_path))
         assert len(pid) == 12
 
     def test_explicit(self, tmp_path):

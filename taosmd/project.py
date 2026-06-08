@@ -1,4 +1,4 @@
-"""Project identity — deterministic, environment-derived project fingerprints.
+"""Project identity: deterministic, environment-derived project fingerprints.
 
 The project fingerprint solves a real multi-agent problem: when Claude Code,
 Kilo Code, Hermes, or any other agent framework works on the same codebase,
@@ -6,13 +6,14 @@ they need to share memory without relying on agent instructions being
 identical. Instructions drift; git remotes don't.
 
 The fingerprint is a short hash of the git remote origin URL (normalized).
-It's stable across clones, machines, and agent sessions — as long as the
+It's stable across clones, machines, and agent sessions, as long as the
 repo has a remote, the fingerprint is deterministic.
 
-Fallback chain:
-  1. ``git config --get remote.origin.url`` → sha256, 12 hex chars
-  2. Explicit project ID from ``<project>/.taosmd/project.toml``
-  3. Hash of ``os.getcwd()`` (unstable if moved — last resort)
+Resolution order (first match wins):
+  1. ``explicit_id`` argument, if provided (manual override)
+  2. ``git config --get remote.origin.url`` hashed to sha256, 12 hex chars
+  3. Explicit project ID from ``<project>/.taosmd/project.toml``
+  4. Hash of ``os.getcwd()`` (unstable if moved, last resort)
 
 Usage::
 
@@ -41,7 +42,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_FINGERPRINT_LEN = 12  # 48 bits — enough for billions of projects, short enough to read
+_FINGERPRINT_LEN = 12  # 48 bits, enough for billions of projects, short enough to read
 
 
 class ProjectFingerprintError(RuntimeError):
@@ -99,7 +100,7 @@ def _read_project_toml(cwd: str | None = None) -> str | None:
         return None
     try:
         text = toml_path.read_text()
-        # Simple parse — look for ``project_id = "..."`` without toml dep
+        # Simple parse: look for ``project_id = "..."`` without toml dep
         match = re.search(r'project_id\s*=\s*["\']([^"\']+)["\']', text)
         if match:
             return match.group(1).strip()
@@ -158,7 +159,7 @@ class ProjectResolver:
         toml_id = _read_project_toml(self.cwd)
         if toml_id:
             warnings.append(
-                "No git remote detected — using .taosmd/project.toml. "
+                "No git remote detected, using .taosmd/project.toml. "
                 "Consider adding a git remote for stable project identity."
             )
             return ProjectInfo(
@@ -170,7 +171,7 @@ class ProjectResolver:
         # 4. Fallback: hash of cwd
         cwd = self.cwd or os.getcwd()
         warnings.append(
-            "No git remote or .taosmd/project.toml found — using directory hash. "
+            "No git remote or .taosmd/project.toml found, using directory hash. "
             "This is unstable if the project is moved. "
             "Create .taosmd/project.toml with: project_id = \"my-project\""
         )
@@ -186,7 +187,7 @@ def get_project_id(
     cwd: str | None = None,
     explicit_id: str | None = None,
 ) -> str:
-    """Convenience wrapper — return the project fingerprint as a string.
+    """Convenience wrapper: return the project fingerprint as a string.
 
     Args:
         cwd: Working directory. Defaults to ``os.getcwd()``.
