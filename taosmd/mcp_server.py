@@ -90,26 +90,60 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
         )
 
     @mcp.tool()
-    async def memory_ingest(text: str, agent: str) -> dict:
+    async def memory_ingest(text: str, agent: str, project: str | None = None) -> dict:
         """Store a transcript or note in an agent's long-term memory.
 
         Shelves ``text`` and embeds it so it can be retrieved later with
         ``memory_search``. ``agent`` scopes the write to one agent's memory.
-        Returns ``{"archived", "agent", "data_dir"}``.
+        Optional ``project`` tags the memory with a project id so agents
+        working on the same project can share it (see ``memory_search``).
+        Returns ``{"archived", "agent", "project", "data_dir"}``.
         """
-        return await _dispatch(service.ingest(text, agent=agent, data_dir=data_dir))
+        opts = {"project": project} if project else {}
+        return await _dispatch(service.ingest(text, agent=agent, data_dir=data_dir, **opts))
 
     @mcp.tool()
-    async def memory_search(query: str, agent: str, limit: int = 5) -> list[dict]:
+    async def memory_search(
+        query: str,
+        agent: str,
+        limit: int = 5,
+        project: str | None = None,
+        also_include: list[str] | None = None,
+    ) -> list[dict]:
         """Search an agent's memory for passages relevant to ``query``.
 
         Returns up to ``limit`` ranked hits, each with
         ``text``/``source``/``timestamp``/``confidence``/``metadata``. Scoped
-        to ``agent``.
+        to ``agent``. Optional ``project`` scopes the search to one project;
+        ``also_include`` (a list of agent names, only honoured with ``project``)
+        adds those agents' memories within the project (cross-agent reads).
         """
+        opts: dict = {}
+        if project:
+            opts["project"] = project
+        if also_include:
+            opts["also_include"] = also_include
         return await _dispatch(
-            service.search(query, agent=agent, data_dir=data_dir, limit=limit)
+            service.search(query, agent=agent, data_dir=data_dir, limit=limit, **opts)
         )
+
+    @mcp.tool()
+    async def memory_list_projects() -> list[dict]:
+        """List projects that have stored memories.
+
+        Returns ``[{"project_id", "agents", "last_ingest"}]``. Useful for
+        discovering which project an agent shares with others before using
+        ``project`` / ``also_include`` on ``memory_search``.
+        """
+        return await _dispatch(service.list_projects(data_dir=data_dir))
+
+    @mcp.tool()
+    async def memory_list_shelves(project: str) -> list[dict]:
+        """List the agent shelves that have memories within ``project``.
+
+        Returns ``[{"agent", "facts", "last_ingest"}]`` for the given project.
+        """
+        return await _dispatch(service.list_shelves(project=project, data_dir=data_dir))
 
     @mcp.tool()
     async def memory_pending_list(agent: str) -> list[dict]:

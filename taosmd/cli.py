@@ -485,8 +485,41 @@ def _review_help() -> str:
     )
 
 
+def _projects_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd projects`` and ``taosmd shelves``: project-scoped discovery."""
+    import asyncio  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+
+    data_dir = args.data_dir
+    if args.cmd == "projects":
+        projects = asyncio.run(service.list_projects(data_dir=data_dir))
+        if not projects:
+            print("No project-tagged memories found.")
+            return 0
+        for p in projects:
+            agents = ", ".join(sorted(p.get("agents", [])))
+            print(
+                f"{p['project_id']:<14} agents=[{agents}]  "
+                f"last_ingest={int(p.get('last_ingest') or 0)}"
+            )
+        return 0
+
+    # shelves
+    shelves = asyncio.run(service.list_shelves(project=args.project, data_dir=data_dir))
+    if not shelves:
+        print(f"No shelves found for project {args.project!r}.")
+        return 0
+    for s in shelves:
+        print(
+            f"{s['agent']:<24} facts={s['facts']}  "
+            f"last_ingest={int(s.get('last_ingest') or 0)}"
+        )
+    return 0
+
+
 def _reconcile_cmd(args: argparse.Namespace) -> int:
-    """Handle ``taosmd reconcile`` — compare archive to vector store and repair gaps."""
+    """Handle ``taosmd reconcile``: compare archive to vector store and repair gaps."""
     import asyncio  # noqa: PLC0415
 
     from . import service  # noqa: PLC0415
@@ -791,6 +824,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Dry-run: report missing counts without modifying the vector store.",
     )
 
+    # ----- project discovery subcommands --------------------------------
+    sub.add_parser(
+        "projects",
+        help="List projects that have stored memories (project id, agents, last activity)",
+    )
+    shelves_p = sub.add_parser(
+        "shelves",
+        help="List the agent shelves that have memories within a project",
+    )
+    shelves_p.add_argument(
+        "--project", required=True,
+        help="Project id (from `taosmd projects` or taosmd.get_project_id())",
+    )
+
     # ----- mcp subcommand (MCP server over stdio) -----------------------
     mcp_p = sub.add_parser(
         "mcp",
@@ -851,6 +898,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "reconcile":
         return _reconcile_cmd(args)
+
+    if args.cmd in ("projects", "shelves"):
+        return _projects_cmd(args)
 
     registry = AgentRegistry(args.data_dir)
 

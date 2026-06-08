@@ -35,9 +35,11 @@ Endpoints
 ``GET  /``                 -> the read-only inspection UI (``text/html``)
 ``GET  /ui``               -> alias of ``GET /``
 ``GET  /health``           -> ``{"status": "ok", "version": <str>}``
-``POST /ingest``           ``{"text", "agent"}``           -> ingest result
-``POST /search``           ``{"query", "agent", "limit"?}`` -> ``{"hits": [...]}``
-``GET  /search?q=&agent=&limit=``                          -> ``{"hits": [...]}``
+``POST /ingest``           ``{"text", "agent", "project"?}`` -> ingest result
+``POST /search``           ``{"query", "agent", "limit"?, "project"?, "also_include"?}`` -> ``{"hits": [...]}``
+``GET  /search?q=&agent=&limit=&project=&also_include=a,b``  -> ``{"hits": [...]}``
+``GET  /projects``                                         -> ``{"projects": [...]}``
+``GET  /shelves?project=``                                 -> ``{"shelves": [...]}``
 ``GET  /pending?agent=``                                   -> ``{"pending": [...]}``
 ``POST /pending/resolve``  ``{"id", "decision", "note"?}`` -> resolve result
 ``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?}`` -> send receipt
@@ -587,6 +589,10 @@ def _make_handler(data_dir, runner: _ServiceLoop):
                     self._handle_search_post()
                 elif method == "POST" and path == "/ingest":
                     self._handle_ingest()
+                elif method == "GET" and path == "/projects":
+                    self._handle_list_projects()
+                elif method == "GET" and path == "/shelves":
+                    self._handle_list_shelves(query)
                 elif method == "GET" and path == "/pending":
                     self._handle_pending(query)
                 elif method == "POST" and path == "/pending/resolve":
@@ -623,11 +629,15 @@ def _make_handler(data_dir, runner: _ServiceLoop):
             body = self._read_json_body()
             text = body.get("text")
             agent = body.get("agent")
+            project = body.get("project")
             if not isinstance(text, str) or not text:
                 raise _BadRequest("'text' (non-empty string) is required")
             if not isinstance(agent, str) or not agent:
                 raise _BadRequest("'agent' (non-empty string) is required")
-            result = runner.run(service.ingest(text, agent=agent, data_dir=data_dir))
+            if project is not None and not isinstance(project, str):
+                raise _BadRequest("'project' must be a string when provided")
+            opts = {"project": project} if project else {}
+            result = runner.run(service.ingest(text, agent=agent, data_dir=data_dir, **opts))
             self._send_json(200, result)
 
         def _handle_search_post(self) -> None:
@@ -635,27 +645,55 @@ def _make_handler(data_dir, runner: _ServiceLoop):
             query = body.get("query")
             agent = body.get("agent")
             limit = body.get("limit", 5)
-            self._do_search(query, agent, limit)
+            project = body.get("project")
+            also_include = body.get("also_include")
+            self._do_search(query, agent, limit, project, also_include)
 
         def _handle_search_get(self, qs: dict) -> None:
             query = (qs.get("q") or qs.get("query") or [None])[0]
             agent = (qs.get("agent") or [None])[0]
             limit = (qs.get("limit") or [5])[0]
-            self._do_search(query, agent, limit)
+            project = (qs.get("project") or [None])[0]
+            # Comma-separated list in the query string, e.g. also_include=a,b
+            ai_raw = (qs.get("also_include") or [None])[0]
+            also_include = [s for s in ai_raw.split(",") if s] if ai_raw else None
+            self._do_search(query, agent, limit, project, also_include)
 
-        def _do_search(self, query, agent, limit) -> None:
+        def _do_search(self, query, agent, limit, project=None, also_include=None) -> None:
             if not isinstance(query, str) or not query:
                 raise _BadRequest("'query' (non-empty string) is required")
             if not isinstance(agent, str) or not agent:
                 raise _BadRequest("'agent' (non-empty string) is required")
+            if project is not None and not isinstance(project, str):
+                raise _BadRequest("'project' must be a string when provided")
+            if also_include is not None and not (
+                isinstance(also_include, list) and all(isinstance(s, str) for s in also_include)
+            ):
+                raise _BadRequest("'also_include' must be a list of strings when provided")
             try:
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            opts: dict = {}
+            if project:
+                opts["project"] = project
+            if also_include:
+                opts["also_include"] = also_include
             hits = runner.run(
-                service.search(query, agent=agent, data_dir=data_dir, limit=limit_i)
+                service.search(query, agent=agent, data_dir=data_dir, limit=limit_i, **opts)
             )
             self._send_json(200, {"hits": hits})
+
+        def _handle_list_projects(self) -> None:
+            projects = runner.run(service.list_projects(data_dir=data_dir))
+            self._send_json(200, {"projects": projects})
+
+        def _handle_list_shelves(self, qs: dict) -> None:
+            project = (qs.get("project") or [None])[0]
+            if not isinstance(project, str) or not project:
+                raise _BadRequest("'project' (non-empty string) is required")
+            shelves = runner.run(service.list_shelves(project=project, data_dir=data_dir))
+            self._send_json(200, {"shelves": shelves})
 
         def _handle_pending(self, qs: dict) -> None:
             agent = (qs.get("agent") or [None])[0]
@@ -812,6 +850,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     print(f"taosmd HTTP API listening on http://{bound_host}:{bound_port} ({where})")
     print(f"Inspection UI (read-only): http://{bound_host}:{bound_port}/")
     print("Endpoints: GET /health, POST /ingest, GET|POST /search, "
+          "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
           "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "
           "GET /a2a/channels, GET /a2a/members")

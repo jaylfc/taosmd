@@ -93,7 +93,7 @@ async def ingest(text, *, agent: str, data_dir=None, **opts) -> dict:
     """
     remote = _get_remote(data_dir)
     if remote is not None:
-        return await remote.ingest(text, agent)
+        return await remote.ingest(text, agent, **opts)
     return await _api.ingest(text, agent=agent, data_dir=data_dir, **opts)
 
 
@@ -109,8 +109,32 @@ async def search(query: str, *, agent: str, data_dir=None, limit: int = 5, **opt
     """
     remote = _get_remote(data_dir)
     if remote is not None:
-        return await remote.search(query, agent, limit=limit)
+        return await remote.search(query, agent, limit=limit, **opts)
     return await _api.search(query, agent=agent, data_dir=data_dir, limit=limit, **opts)
+
+
+async def list_projects(*, data_dir=None) -> list[dict]:
+    """List projects that have stored memories.
+
+    Thin wrapper over :func:`taosmd.api.list_projects`. Forwarded to
+    :class:`~taosmd.remote.RemoteClient` when a server URL is configured.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.list_projects()
+    return await _api.list_projects(data_dir=data_dir)
+
+
+async def list_shelves(*, project: str, data_dir=None) -> list[dict]:
+    """List the agent shelves that have memories within ``project``.
+
+    Thin wrapper over :func:`taosmd.api.list_shelves`. Forwarded to
+    :class:`~taosmd.remote.RemoteClient` when a server URL is configured.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.list_shelves(project=project)
+    return await _api.list_shelves(project=project, data_dir=data_dir)
 
 
 async def pending_list(*, agent: str | None = None, data_dir=None, limit: int = 20) -> list[dict]:

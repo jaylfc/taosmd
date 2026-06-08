@@ -120,7 +120,7 @@ projects = await taosmd.list_projects()
 shelves = await taosmd.list_shelves(project=pid)
 ```
 
-These are available on the Python API today. The HTTP, MCP, and CLI surfaces do not yet accept a `project` argument.
+These work across every surface. The Python API takes `project=`/`also_include=` on `ingest`/`search`; the HTTP server accepts `project` on `POST /ingest` and `project`/`also_include` on `/search`, plus `GET /projects` and `GET /shelves?project=`; the MCP server adds `project`/`also_include` to `memory_ingest`/`memory_search` and the `memory_list_projects`/`memory_list_shelves` tools; and the CLI has `taosmd projects` and `taosmd shelves --project <id>`.
 
 ## Migration scenarios
 

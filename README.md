@@ -344,8 +344,10 @@ Tools exposed (memory tools each take an `agent` argument, honouring the same pe
 
 | Tool | Purpose |
 | --- | --- |
-| `memory_ingest(text, agent)` | Store a transcript/note in an agent's memory |
-| `memory_search(query, agent, limit=5)` | Retrieve passages relevant to a query |
+| `memory_ingest(text, agent, project=None)` | Store a transcript/note in an agent's memory (optionally tagged with a project) |
+| `memory_search(query, agent, limit=5, project=None, also_include=None)` | Retrieve passages relevant to a query; scope to a project and optionally read other agents' memories within it |
+| `memory_list_projects()` | List projects that have stored memories |
+| `memory_list_shelves(project)` | List the agent shelves within a project |
 | `memory_pending_list(agent)` | List KG-update decisions awaiting review |
 | `memory_pending_resolve(decision_id, decision, note="")` | Resolve a pending decision (`accept`/`reject`/`modify`) |
 | `memory_stats(agent)` | Lightweight per-agent stats |
@@ -546,10 +548,12 @@ export TAOSMD_LLM_URL=http://<gpu-machine>:11434
 
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
-| `GET` | `/health` |, | `{"status": "ok", "version": <str>}` |
-| `POST` | `/ingest` | `{"text": str, "agent": str}` | `{"archived": int, "agent": str, "data_dir": str}` |
-| `POST` | `/search` | `{"query": str, "agent": str, "limit"?: int}` | `{"hits": [...]}` |
-| `GET` | `/search` | `?q=<query>&agent=<agent>&limit=<int>` | `{"hits": [...]}` |
+| `GET` | `/health` | (none) | `{"status": "ok", "version": <str>}` |
+| `POST` | `/ingest` | `{"text": str, "agent": str, "project"?: str}` | `{"archived": int, "agent": str, "project": str\|null, "data_dir": str}` |
+| `POST` | `/search` | `{"query": str, "agent": str, "limit"?: int, "project"?: str, "also_include"?: [str]}` | `{"hits": [...]}` |
+| `GET` | `/search` | `?q=<query>&agent=<agent>&limit=<int>&project=<id>&also_include=a,b` | `{"hits": [...]}` |
+| `GET` | `/projects` | (none) | `{"projects": [{"project_id", "agents", "last_ingest"}]}` |
+| `GET` | `/shelves` | `?project=<id>` | `{"shelves": [{"agent", "facts", "last_ingest"}]}` |
 | `GET` | `/pending` | `?agent=<agent>&limit=<int>` | `{"pending": [...]}` |
 | `POST` | `/pending/resolve` | `{"id": str, "decision": "accept"\|"reject"\|"modify", "note"?: str}` | `{"ok": bool, "applied_kg": bool, "resolution": str}` |
 

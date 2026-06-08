@@ -81,20 +81,49 @@ class RemoteClient:
     # Memory service methods — mirrors taosmd.service signatures
     # ------------------------------------------------------------------
 
-    async def ingest(self, text: str, agent: str, **_opts) -> dict:
-        """POST /ingest — shelve ``text`` into the remote agent's memory.
+    async def ingest(self, text: str, agent: str, *, project: str | None = None, **_opts) -> dict:
+        """POST /ingest: shelve ``text`` into the remote agent's memory.
 
-        Returns ``{"archived", "agent", "data_dir"}``.
+        Returns ``{"archived", "agent", "project", "data_dir"}``. ``project``
+        is forwarded so project-scoped memory works over the remote path.
         """
-        return await self._run("POST", "/ingest", {"text": text, "agent": agent})
+        body: dict = {"text": text, "agent": agent}
+        if project is not None:
+            body["project"] = project
+        return await self._run("POST", "/ingest", body)
 
-    async def search(self, query: str, agent: str, limit: int = 5, **_opts) -> list[dict]:
-        """POST /search — return ranked hits for ``query`` from the remote server.
+    async def search(
+        self,
+        query: str,
+        agent: str,
+        limit: int = 5,
+        *,
+        project: str | None = None,
+        also_include: list[str] | None = None,
+        **_opts,
+    ) -> list[dict]:
+        """POST /search: return ranked hits for ``query`` from the remote server.
 
-        Returns the ``hits`` list from the server response.
+        ``project`` and ``also_include`` are forwarded so project-scoped and
+        cross-agent reads work over the remote path. Returns the ``hits`` list.
         """
-        resp = await self._run("POST", "/search", {"query": query, "agent": agent, "limit": limit})
+        body: dict = {"query": query, "agent": agent, "limit": limit}
+        if project is not None:
+            body["project"] = project
+        if also_include is not None:
+            body["also_include"] = also_include
+        resp = await self._run("POST", "/search", body)
         return resp.get("hits", [])
+
+    async def list_projects(self, **_opts) -> list[dict]:
+        """GET /projects: list projects that have stored memories on the server."""
+        resp = await self._run("GET", "/projects")
+        return resp.get("projects", [])
+
+    async def list_shelves(self, *, project: str, **_opts) -> list[dict]:
+        """GET /shelves: list the agent shelves within ``project`` on the server."""
+        resp = await self._run("GET", "/shelves", params={"project": project})
+        return resp.get("shelves", [])
 
     async def pending_list(self, agent: str | None = None, limit: int = 20, **_opts) -> list[dict]:
         """GET /pending — return unresolved KG-update decisions.
