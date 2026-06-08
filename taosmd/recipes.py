@@ -319,3 +319,67 @@ def recommend(device_info: dict | None = None) -> list[Recipe]:
         return (0 if fits else 1, -_score_for(r))
 
     return sorted(list_recipes(), key=key)
+
+
+from . import config as _config
+from . import agents as _agents
+
+# Which librarian tasks count as "LLM extraction" for the lite path.
+_EXTRACTION_TASKS = ("fact_extraction", "preference_extraction",
+                     "intake_classification", "catalog_enrichment")
+
+
+def _librarian_for(recipe: Recipe) -> dict:
+    """Build the agent librarian block this recipe implies (write-through)."""
+    base = _agents._default_librarian()
+    base["fanout"]["default"] = recipe.librarian.get("fanout", "low")
+    base["fanout"]["auto_scale"] = recipe.librarian.get("worker_aware", True)
+    if not recipe.ingest.get("extraction", True):
+        base["enabled"] = False
+        for t in _EXTRACTION_TASKS:
+            if t in base["tasks"]:
+                base["tasks"][t] = False
+    return base
+
+
+def apply_recipe(agent: str, recipe_id: str, data_dir=None) -> Recipe:
+    """Apply a recipe to an agent: write its knobs through to the stores.
+
+    Writes applied_recipe_id + the flattened retrieval_config + the implied
+    librarian block to the agent record, and the generator model to config
+    when the recipe names one. Raises ValueError on an unknown id.
+    """
+    recipe = get_recipe(recipe_id)
+    if recipe is None:
+        raise ValueError(f"unknown recipe id: {recipe_id!r}")
+    _agents.set_agent_recipe_config(
+        agent, recipe_id=recipe_id,
+        retrieval_config=dict(recipe.retrieval),
+        librarian=_librarian_for(recipe), data_dir=data_dir)
+    gen = recipe.generator.get("model", "")
+    if gen:
+        _config.set_memory_model(gen, data_dir=data_dir)
+    return recipe
+
+
+def resolve_recipe(agent: str, data_dir=None) -> Recipe:
+    """Resolve the active recipe: per-agent -> global default -> recommend()[0].
+
+    On a fresh agent with nothing configured, lazily materialise recommend()[0]
+    via apply_recipe so the choice is stored and visible (write-through).
+    """
+    rid = _agents.get_applied_recipe(agent, data_dir=data_dir)
+    if rid and get_recipe(rid):
+        # Merge stored (possibly manually-edited) retrieval_config over the recipe.
+        recipe = get_recipe(rid)
+        stored = _agents.get_agent_retrieval_config(agent, data_dir=data_dir)
+        if stored:
+            merged = Recipe.from_dict(recipe.to_dict())
+            merged.retrieval.update(stored)
+            return merged
+        return recipe
+    gid = _config.get_default_recipe(data_dir=data_dir)
+    if gid and get_recipe(gid):
+        return apply_recipe(agent, gid, data_dir=data_dir)
+    top = recommend(None)[0]
+    return apply_recipe(agent, top.id, data_dir=data_dir)

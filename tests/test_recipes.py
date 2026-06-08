@@ -146,3 +146,32 @@ def test_agent_recipe_config_roundtrip(tmp_path):
     cfg = taosmd_agents.get_agent_retrieval_config("alice", data_dir=d)
     assert cfg["fusion"] == "rrf"
     assert cfg["candidate_top_k"] == 20
+
+
+def test_apply_recipe_writes_through_and_resolves(tmp_path):
+    # Isolate by passing data_dir explicitly (no env var / singleton reset;
+    # neither exists, see test_agent_recipe_config_roundtrip).
+    d = str(tmp_path)
+    taosmd_agents.ensure_agent("bob", data_dir=d)
+
+    recipes.apply_recipe("bob", "rrf-9b", data_dir=d)
+    assert taosmd_agents.get_applied_recipe("bob", data_dir=d) == "rrf-9b"
+
+    resolved = recipes.resolve_recipe("bob", data_dir=d)
+    assert resolved.id == "rrf-9b"
+    assert resolved.retrieval["fusion"] == "rrf"
+    # lite recipe disables the librarian (write-through to librarian switches)
+    recipes.apply_recipe("bob", "lite-pi", data_dir=d)
+    rec = taosmd_agents._registry(d).get_agent("bob")
+    assert rec["librarian"]["enabled"] is False
+
+
+def test_resolve_falls_back_to_recommend_when_unconfigured(tmp_path, monkeypatch):
+    d = str(tmp_path)
+    monkeypatch.setattr(recipes, "local_probe", lambda: {
+        "host": {"gpu": {"type": "none"}, "npu": {"type": "none"},
+                 "cpu": {"cores": 4}, "ram_mb": 8000}})
+    taosmd_agents.ensure_agent("carol", data_dir=d)  # no recipe, no global default
+    resolved = recipes.resolve_recipe("carol", data_dir=d)
+    # fresh install resolves to recommend()[0] for the probed (cpu) tier
+    assert resolved.metadata["tier"] in ("cpu", "pi-npu")
