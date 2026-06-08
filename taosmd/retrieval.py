@@ -645,7 +645,7 @@ def _filter_project_scope(
         if agent_set is not None:
             hit_agent = (
                 (user_md.get("agent") if isinstance(user_md, dict) else None)
-                or (md.get("agent") if isinstance(user_md, dict) else None)
+                or (md.get("agent") if isinstance(md, dict) else None)
                 or (md.get("agent_name") if isinstance(md, dict) else None)
             )
             if hit_agent is not None and hit_agent not in agent_set:

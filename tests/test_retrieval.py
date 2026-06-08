@@ -22,7 +22,7 @@ from taosmd.retrieval import (
 
 
 class MockVectorMemory:
-    async def search(self, query, limit=5, hybrid=True, fusion="rrf"):
+    async def search(self, query, limit=5, hybrid=True, fusion="rrf", project=None, search_agents=None):
         return [
             {"id": 1, "text": "Jay created taOS", "similarity": 0.95, "metadata": {}, "created_at": 1744531200.0},
             {"id": 2, "text": "taOS runs on Orange Pi", "similarity": 0.85, "metadata": {}, "created_at": 1744531200.0},
@@ -409,7 +409,7 @@ class PositionalVectorMemory:
     def __init__(self, rows: list[dict]):
         self._rows = rows
 
-    async def search(self, query, limit=5, hybrid=True, fusion="rrf"):
+    async def search(self, query, limit=5, hybrid=True, fusion="rrf", project=None, search_agents=None):
         # Return the first `limit` rows verbatim for a deterministic ranking.
         return [
             {

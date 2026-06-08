@@ -329,11 +329,16 @@ class VectorMemory:
                     meta = json.loads(row["metadata_json"])
                 except (json.JSONDecodeError, TypeError):
                     meta = {}
-                # Project filter: skip rows that don't match the project.
-                if project is not None and meta.get("project") != project:
+                # Project filter: skip rows positively tagged with a different
+                # project. Untagged (pre-project) rows are kept so existing
+                # standalone memory is never hidden.
+                row_project = meta.get("project")
+                if project is not None and row_project is not None and row_project != project:
                     continue
-                # Agent filter: skip rows whose agent isn't in the allowed set.
-                if agent_set is not None and meta.get("agent") not in agent_set:
+                # Agent filter: skip rows positively tagged with an out-of-scope
+                # agent. Untagged rows are kept (preserves standalone behaviour).
+                row_agent = meta.get("agent")
+                if agent_set is not None and row_agent is not None and row_agent not in agent_set:
                     continue
                 filtered.append(row)
             rows = filtered
