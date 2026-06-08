@@ -1,4 +1,12 @@
-import type { Hit, PendingItem, Channel, A2AMessage, HealthInfo } from "./types";
+import type {
+  Hit,
+  PendingItem,
+  Channel,
+  A2AMessage,
+  HealthInfo,
+  Project,
+  Shelf,
+} from "./types";
 
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(url, opts);
@@ -52,4 +60,16 @@ export async function getMessages(
     `/a2a/messages?thread=${encodeURIComponent(thread)}&limit=${limit}`
   );
   return messages;
+}
+
+export async function getProjects(): Promise<Project[]> {
+  const { projects } = await req<{ projects: Project[] }>("/projects");
+  return projects;
+}
+
+export async function getShelves(project: string): Promise<Shelf[]> {
+  const { shelves } = await req<{ shelves: Shelf[] }>(
+    `/shelves?project=${encodeURIComponent(project)}`
+  );
+  return shelves;
 }
