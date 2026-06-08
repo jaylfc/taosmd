@@ -340,7 +340,7 @@ Point an MCP client at it by spawning that command. For example, in a Claude Des
 }
 ```
 
-Tools exposed (each takes an `agent` argument, honouring the same per-agent isolation as the Python API):
+Tools exposed (memory tools each take an `agent` argument, honouring the same per-agent isolation as the Python API):
 
 | Tool | Purpose |
 | --- | --- |
@@ -349,8 +349,88 @@ Tools exposed (each takes an `agent` argument, honouring the same per-agent isol
 | `memory_pending_list(agent)` | List KG-update decisions awaiting review |
 | `memory_pending_resolve(decision_id, decision, note="")` | Resolve a pending decision (`accept`/`reject`/`modify`) |
 | `memory_stats(agent)` | Lightweight per-agent stats |
+| `a2a_channels()` | List all named channels on the A2A bus |
+| `a2a_members(channel)` | List distinct sender names observed on a channel |
+| `a2a_send(channel, sender, body, reply_to=None)` | Post a message to a channel |
+| `a2a_read(channel, since=None, limit=50)` | Read messages from a channel, oldest-first |
+| `a2a_join(channel, agent)` | Announce an agent's presence on a channel with a join marker |
 
 It reuses the same shared service layer as the [local HTTP/REST server](#api), so behaviour matches the Python API and CLI exactly. The MCP server is additive and opt-in — it only runs when you start it; standalone use is untouched, and `import taosmd` works whether or not the `mcp` SDK is installed.
+
+## Remote server (client/server split)
+
+By default taOSmd reads and writes a local data store on the same machine. When you want a thin client (a laptop, a desktop agent) to use memory that lives on a more capable machine (a Pi, a GPU box, a shared server), point the client at the server's HTTP URL and every data call routes there transparently.
+
+### Starting the server
+
+On the server machine, install taOSmd and start it as a background service, binding to all interfaces so remote clients can reach it:
+
+```bash
+# Install and start (binds 0.0.0.0:7900, installs systemd / LaunchAgent)
+./scripts/install-server.sh
+# or manually:
+taosmd serve --host 0.0.0.0 --port 7900 --install-service
+```
+
+The helper scripts `scripts/install-server.sh` (bash) and `scripts/install-server.ps1` (PowerShell) automate the install, health-check, and Tailscale setup guidance.
+
+### Pointing a client at the server
+
+On each client machine:
+
+```bash
+# Install the client package and point it at the server
+./scripts/install-client.sh http://pi.local:7900
+# or manually:
+pip install taosmd
+taosmd config set-server http://pi.local:7900
+```
+
+The helper scripts `scripts/install-client.sh` (bash) and `scripts/install-client.ps1` (PowerShell) automate the package install, URL configuration, skill install, and health check.
+
+You can also set the URL for a single invocation without touching the config:
+
+```bash
+taosmd --server http://pi.local:7900 agent list
+```
+
+Or export it for a shell session:
+
+```bash
+export TAOSMD_SERVER_URL=http://pi.local:7900
+```
+
+Resolution order (first non-empty wins): `TAOSMD_SERVER_URL` env var, then `server_url` in `~/.taosmd/config.json`, then local mode.
+
+### Checking and clearing the config
+
+```bash
+taosmd config show          # print server_url, whether a token is set, memory_model
+taosmd config set-server --clear   # revert to local mode
+```
+
+### Optional bearer token auth
+
+By default there is no authentication. If the server is on a trusted private network (Tailscale, a home LAN), the network boundary is the access control. For defence in depth, you can require a bearer token:
+
+```bash
+# On the server:
+taosmd config set-token <your-secret-token>
+# Restart the service to pick up the new token.
+taosmd serve --uninstall-service
+taosmd serve --host 0.0.0.0 --port 7900 --install-service
+
+# On each client:
+taosmd config set-token <your-secret-token>
+# Or, to keep the token out of config.json:
+export TAOSMD_TOKEN=<your-secret-token>
+```
+
+The token is sent as `Authorization: Bearer <token>` on every request. `GET /health` and the web inspector (`GET /`) are always public so monitoring probes keep working. Never commit the token to version control.
+
+### How the Python API and MCP server interact with remote mode
+
+The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as the local service module (`taosmd.service`). The CLI, Python API, and MCP server all check `TAOSMD_SERVER_URL` (and `config.json`) at startup and delegate to `RemoteClient` when a URL is configured. From the caller's perspective nothing changes: the same `taosmd.ingest()`, `taosmd.search()`, and A2A calls work in both modes.
 
 ## Key Features
 
@@ -503,6 +583,26 @@ taosmd serve --uninstall-service         # stop and remove
 ```
 
 See [docs/serve-service.md](docs/serve-service.md) for platform-specific details, log locations, and how to change host/port/data-dir after installation.
+
+### Maintenance: reconcile the vector store
+
+A crash between the archive write and the vector-store write in `ingest()` can leave a conversation turn in the archive but absent from vector recall. The archive is the source of truth; `reconcile` detects and repairs that gap:
+
+```bash
+taosmd reconcile                  # repair all registered agents
+taosmd reconcile --agent myagent  # repair one agent
+taosmd reconcile --check          # dry-run: report missing counts without modifying
+```
+
+`--check` exits non-zero when any turn is missing, so you can run it from a cron health-check. The repair path re-adds only turns that are genuinely absent; it never resurrects turns that were intentionally superseded by a correction. Safe to run after a crash or periodically via cron.
+
+### Install the taosmd-a2a skill
+
+```bash
+taosmd install-skill
+```
+
+Copies the bundled `taosmd-a2a` agent-setup skill into `~/.claude/skills/taosmd-a2a/` so it is available across all Claude Code projects. Pass `--force` to overwrite an existing installation.
 
 ## Running Benchmarks
 
