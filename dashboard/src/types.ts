@@ -1,4 +1,4 @@
-export type View = "memory" | "pending" | "a2a";
+export type View = "memory" | "pending" | "a2a" | "projects";
 
 export interface Hit {
   text: string;
@@ -36,4 +36,16 @@ export interface A2AMessage {
 export interface HealthInfo {
   status: string;
   version: string;
+}
+
+export interface Project {
+  project_id: string;
+  agents: string[];
+  last_ingest: number;
+}
+
+export interface Shelf {
+  agent: string;
+  facts: number;
+  last_ingest: number;
 }

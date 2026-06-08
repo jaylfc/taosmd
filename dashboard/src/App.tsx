@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { MemoryView } from "./views/MemoryView";
 import { PendingView } from "./views/PendingView";
 import { A2AView } from "./views/A2AView";
+import { ProjectsView } from "./views/ProjectsView";
 import { getHealth } from "./api";
 import type { View, HealthInfo } from "./types";
 
@@ -56,6 +57,7 @@ function HealthChip({ info }: { info: HealthInfo | null }) {
 
 const NAV: { id: View; label: string }[] = [
   { id: "memory", label: "Memory" },
+  { id: "projects", label: "Projects" },
   { id: "pending", label: "Pending" },
   { id: "a2a", label: "A2A channels" },
 ];
@@ -163,6 +165,7 @@ export function App() {
         {/* Content */}
         <main className="flex flex-1 min-w-0 overflow-y-auto" id={`panel-${view}`}>
           {view === "memory" && <MemoryView defaultAgent="default" />}
+          {view === "projects" && <ProjectsView />}
           {view === "pending" && <PendingView defaultAgent="default" />}
           {view === "a2a" && (
             <div className="flex flex-col flex-1 h-full min-h-0 w-full">
