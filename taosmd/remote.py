@@ -1,4 +1,4 @@
-"""Remote client for a taOSmd HTTP server — stdlib only, zero extra deps.
+"""Remote client for a taOSmd HTTP server, stdlib only, zero extra deps.
 
 ``RemoteClient`` mirrors the async methods exposed by :mod:`taosmd.service`
 (and therefore the local Python API) so callers can transparently point the
@@ -74,11 +74,11 @@ class RemoteClient:
             raise RuntimeError(f"taosmd remote: HTTP {exc.code} from {url}: {raw}") from exc
 
     async def _run(self, method: str, path: str, body: dict | None = None, params: dict | None = None) -> Any:
-        """Async wrapper — offloads the blocking urllib call via asyncio.to_thread."""
+        """Async wrapper: offloads the blocking urllib call via asyncio.to_thread."""
         return await asyncio.to_thread(self._request_json, method, path, body, params)
 
     # ------------------------------------------------------------------
-    # Memory service methods — mirrors taosmd.service signatures
+    # Memory service methods: mirrors taosmd.service signatures
     # ------------------------------------------------------------------
 
     async def ingest(self, text: str, agent: str, *, project: str | None = None, **_opts) -> dict:
@@ -126,7 +126,7 @@ class RemoteClient:
         return resp.get("shelves", [])
 
     async def pending_list(self, agent: str | None = None, limit: int = 20, **_opts) -> list[dict]:
-        """GET /pending — return unresolved KG-update decisions.
+        """GET /pending: return unresolved KG-update decisions.
 
         Returns the ``pending`` list from the server response.
         """
@@ -144,7 +144,7 @@ class RemoteClient:
         note: str = "",
         **_opts,
     ) -> dict:
-        """POST /pending/resolve — resolve a pending KG decision."""
+        """POST /pending/resolve: resolve a pending KG decision."""
         return await self._run(
             "POST", "/pending/resolve",
             {"id": decision_id, "decision": decision, "note": note},
@@ -159,7 +159,7 @@ class RemoteClient:
         reply_to: str | None = None,
         **_opts,
     ) -> dict:
-        """POST /a2a/send — post a message to the remote A2A bus.
+        """POST /a2a/send: post a message to the remote A2A bus.
 
         Returns the send receipt ``{"id", "from", "thread", "reply_to"}``.
         """
@@ -176,7 +176,7 @@ class RemoteClient:
         limit: int = 50,
         **_opts,
     ) -> list[dict]:
-        """GET /a2a/messages — return messages from the remote A2A bus, oldest-first.
+        """GET /a2a/messages: return messages from the remote A2A bus, oldest-first.
 
         Returns the ``messages`` list from the server response.
         """
@@ -189,12 +189,12 @@ class RemoteClient:
         return resp.get("messages", [])
 
     async def a2a_channels(self, **_opts) -> list[dict]:
-        """GET /a2a/channels — return a summary of every channel on the remote bus."""
+        """GET /a2a/channels: return a summary of every channel on the remote bus."""
         resp = await self._run("GET", "/a2a/channels")
         return resp.get("channels", [])
 
     async def a2a_members(self, *, channel: str, **_opts) -> list[str]:
-        """GET /a2a/members — return distinct sender names on ``channel``."""
+        """GET /a2a/members: return distinct sender names on ``channel``."""
         resp = await self._run("GET", "/a2a/members", params={"channel": channel})
         return resp.get("members", [])
 
@@ -204,7 +204,7 @@ class RemoteClient:
         Fetches ``GET /health`` (always available) and attempts a search
         with an empty query to probe liveness.  Returns a minimal dict with
         at least ``{"agent", "reachable"}``.  Does not raise on connection
-        errors — reports them in the returned dict instead so callers that
+        errors; reports them in the returned dict instead so callers that
         use stats for a health probe are not interrupted.
         """
         try:

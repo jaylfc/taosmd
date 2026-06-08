@@ -1,4 +1,4 @@
-"""Auto-setup for taOSmd — creates data directories, initialises stores,
+"""Auto-setup for taOSmd: creates data directories, initialises stores,
 and optionally installs a daily maintenance cron job.
 
 Usage:
@@ -21,7 +21,7 @@ DEFAULT_DATA_DIR = os.path.expanduser("~/.taosmd")
 
 
 async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
-    """Full taOSmd setup — creates all stores and verifies they work."""
+    """Full taOSmd setup: creates all stores and verifies they work."""
     data_path = Path(data_dir)
     data_path.mkdir(parents=True, exist_ok=True)
 
@@ -212,12 +212,12 @@ def _install_cron(data_dir: str):
         else:
             print(f"  ⚠ Cron install failed: {proc.stderr.strip()}")
     except FileNotFoundError:
-        print("  ⚠ crontab not available — skip nightly librarian install")
+        print("  ⚠ crontab not available, skip nightly librarian install")
 
 
 # Recommended enricher models per backend. The librarian / CatalogPipeline
 # probes Ollama (11434) first, then rkllama/qmd on RK3588 NPU (7832 or 8080).
-# Models are different formats per backend — Ollama uses GGUF via ``ollama
+# Models are different formats per backend. Ollama uses GGUF via ``ollama
 # pull``; rkllama uses RKLLM files downloaded from HuggingFace.
 _RECOMMENDED_OLLAMA_MODELS = [
     "qwen3.5:9b",           # 12 GB GPU tier (production leader)
@@ -227,7 +227,7 @@ _RECOMMENDED_OLLAMA_MODELS = [
     "gemma4:e4b",           # mid-tier generator
 ]
 
-# RK3588 NPU recipe per scripts/setup.sh — model lives in
+# RK3588 NPU recipe per scripts/setup.sh. Model lives in
 # ~/.rkllama/models/qwen3-4b-chat after huggingface-cli download.
 _RECOMMENDED_RKLLAMA_MODEL = "qwen3-4b-chat (Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm)"
 _RKLLAMA_PULL_CMD = (
@@ -244,12 +244,12 @@ def _preflight_enricher_model(
 ) -> None:
     """Check that at least one recommended enricher model is reachable.
 
-    Probes Ollama first (GPU/CPU users — the common case), then rkllama/qmd
+    Probes Ollama first (GPU/CPU users, the common case), then rkllama/qmd
     on the standard RK3588 NPU ports (Orange Pi / Rock 5 / Radxa users).
     Reports which backend has which recommended models; warns with the
     right pull command per backend if nothing recommended is installed.
 
-    Doesn't block setup — only warns. The librarian's ResourceManager will
+    Doesn't block setup, only warns. The librarian's ResourceManager will
     fall back to whatever IS available, but with no installed model the
     nightly crystallize step degrades to a no-op and the user wouldn't
     know without reading the cron logs.
@@ -313,7 +313,7 @@ def _preflight_enricher_model(
     print(f"     Recommended: {_RECOMMENDED_RKLLAMA_MODEL}")
     print(f"       {_RKLLAMA_PULL_CMD}")
     print()
-    print("     Setup will continue — the librarian falls back to whatever")
+    print("     Setup will continue. The librarian falls back to whatever")
     print("     IS available, but crystallize / contradiction-detect quality")
     print("     drops without a recommended model.")
 

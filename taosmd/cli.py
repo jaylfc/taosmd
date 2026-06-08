@@ -1,6 +1,6 @@
 """``taosmd`` command-line interface.
 
-Today this is just an agent registry CLI — list, add, remove agents.
+Today this is just an agent registry CLI: list, add, remove agents.
 Will grow as more operational surface needs to be reachable from the
 shell (e.g. compaction, re-indexing, exporting an agent's shelf).
 """
@@ -36,7 +36,7 @@ def _agent_list(registry: AgentRegistry, json_out: bool) -> int:
     if not agents:
         print("No agents registered.")
         return 0
-    # Tiny table — no external deps, fixed column widths.
+    # Tiny table, no external deps, fixed column widths.
     print(f"{'NAME':<24} {'DISPLAY':<24} {'CREATED':<18} {'LAST INGEST':<18} {'CHUNKS':>8}")
     for a in agents:
         print(
@@ -183,14 +183,14 @@ def _config_show() -> int:
     url = config.get_server_url()
     token = config.get_server_token()
     model = config.get_memory_model()
-    print(f"server_url   : {url or '(unset — local mode)'}")
+    print(f"server_url   : {url or '(unset, local mode)'}")
     print(f"server_token : {'(set)' if token else '(unset)'}")
     print(f"memory_model : {model or '(default)'}")
     return 0
 
 
 def _a2a_poll_cmd(args: argparse.Namespace) -> int:
-    """Handle ``taosmd a2a-poll`` — fetch new messages and update state file."""
+    """Handle ``taosmd a2a-poll``: fetch new messages and update state file."""
     import asyncio  # noqa: PLC0415
     import json  # noqa: PLC0415 (already imported at module level but guard for type-checker)
     from pathlib import Path  # noqa: PLC0415
@@ -267,7 +267,7 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
 
 
 def _install_skill_cmd(args: argparse.Namespace) -> int:
-    """Handle ``taosmd install-skill`` — copy the packaged skill into ~/.claude/skills/."""
+    """Handle ``taosmd install-skill``: copy the packaged skill into ~/.claude/skills/."""
     import shutil  # noqa: PLC0415
     from pathlib import Path  # noqa: PLC0415
     from importlib.resources import files as _pkg_files  # noqa: PLC0415
@@ -781,7 +781,7 @@ def main(argv: list[str] | None = None) -> int:
     serve_p.add_argument(
         "--host", default="127.0.0.1",
         help="Bind address (default 127.0.0.1, localhost-only). "
-             "Use 0.0.0.0 to expose on the LAN — no auth, so gate it yourself.",
+             "Use 0.0.0.0 to expose on the LAN, no auth, so gate it yourself.",
     )
     serve_p.add_argument(
         "--port", type=int, default=7900,

@@ -1,11 +1,11 @@
 """Catalog Pipeline Orchestrator (taOSmd).
 
 Orchestrates the three-stage session processing pipeline:
-  1. Split  — split day's archive JSONL into per-session files
-  2. Enrich — LLM-based topic/description/category enrichment
-  3. Crystallize — compact digest + KG lesson extraction (tier >= 2 only)
+  1. Split: split day's archive JSONL into per-session files
+  2. Enrich: LLM-based topic/description/category enrichment
+  3. Crystallize: compact digest + KG lesson extraction (tier >= 2 only)
 
-The pipeline runs synchronously — each stage completes before the next begins.
+The pipeline runs synchronously; each stage completes before the next begins.
 For resource-constrained scheduling, taOS wraps this with its own job queue.
 """
 
@@ -100,13 +100,13 @@ class CatalogPipeline:
         except Exception as exc:
             logger.debug("Ollama not reachable at %s: %s", self._llm_url, exc)
 
-        # Check rkllama/qmd (NPU on RK3588) — typically on port 7832
+        # Check rkllama/qmd (NPU on RK3588), typically on port 7832
         for npu_url in ["http://localhost:7832", "http://localhost:8080"]:
             try:
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     resp = await client.get(f"{npu_url}/health")
                     if resp.status_code == 200:
-                        # rkllama is running — it serves qwen3:4b on NPU
+                        # rkllama is running, it serves qwen3:4b on NPU
                         logger.info("NPU backend detected at %s", npu_url)
                         return (2, "qwen3:4b")
             except Exception:

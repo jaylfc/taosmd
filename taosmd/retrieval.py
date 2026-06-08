@@ -68,7 +68,7 @@ def _adapt_kg(results: list[dict]) -> list[dict]:
         else:
             # Anchor is the object side of the triple; the far node is the
             # subject.  query_entity() for incoming joins on subject_id →
-            # subject_name, so object_name is absent — use object_id (the
+            # subject_name, so object_name is absent; use object_id (the
             # normalised anchor key) as a readable fallback.
             subject = r.get("subject_name", r.get("subject_id", ""))
             obj = r.get("object_name") or r.get("object_id", "")
@@ -406,7 +406,7 @@ async def _apply_verification(
         )
         if not hall_quote:
             continue
-        # Build prompt — actual LLM call is caller's responsibility;
+        # Build prompt; actual LLM call is caller's responsibility;
         # we attach the prompt so callers with an llm client can call it.
         hit["_verification_prompt"] = verification_prompt(
             query,
@@ -547,7 +547,7 @@ async def _attach_neighbors(
             group = um.get(group_key)
             if group is None:
                 # Refuse to populate primary_keys with (None, pos) when the
-                # caller requested group filtering — otherwise hits missing
+                # caller requested group filtering; otherwise hits missing
                 # the group key would mask same-position neighbours from
                 # other groups during dedupe.
                 continue
@@ -692,24 +692,24 @@ async def retrieve(
 
             When supplied it must be a dict with the following keys:
 
-            * ``client``  — an ``httpx.AsyncClient`` already open for the
+            * ``client``: an ``httpx.AsyncClient`` already open for the
               session lifetime.
-            * ``ollama_url`` — base URL of the Ollama server.
-            * ``model``  — Ollama model tag to use for reranking (e.g.
+            * ``ollama_url``: base URL of the Ollama server.
+            * ``model``: Ollama model tag to use for reranking (e.g.
               ``"qwen3:4b"``).
 
             Optional keys:
 
-            * ``no_think_prefix`` (bool, default False) — prepend ``/no_think``
+            * ``no_think_prefix`` (bool, default False): prepend ``/no_think``
               to suppress chain-of-thought tokens on models that support it.
-            * ``timeout`` (float, default 60.0) — per-call timeout in seconds.
+            * ``timeout`` (float, default 60.0): per-call timeout in seconds.
 
             The reranker is applied after the cross-encoder stage (when
             ``reranker`` is also set) in "thorough" and "custom" strategies.
             On any network or parse failure the stage is skipped silently and
             the upstream ordering is preserved.
 
-            **Default is off** — full-scale validation on LoCoMo-1540 is still
+            **Default is off**: full-scale validation on LoCoMo-1540 is still
             pending.  Enabling this without benchmarking on your data is
             discouraged.
         agent: Registered agent name. When given, ``effective_fanout`` is
@@ -722,13 +722,13 @@ async def retrieve(
             surviving hit as a ``neighbors`` field. Looks up the vector source
             via ``get_by_position`` using the hit's
             ``metadata[position_key]`` (and optional ``[group_key]``).
-            Default 0 (off). Worth +0.089 on LoCoMo same-tier at adj=2 — see
+            Default 0 (off). Worth +0.089 on LoCoMo same-tier at adj=2; see
             ``docs/benchmarks.md``.
         position_key: Metadata key holding the integer position used for
             neighbour lookup (default ``"position"``).
         group_key: Optional metadata key constraining neighbours to share the
             same group as their host hit (e.g. ``"session"``). When ``None``
-            (default), neighbours can cross group boundaries — matches the
+            (default), neighbours can cross group boundaries, matching the
             LoCoMo benchmark's behaviour where ``turn_idx`` is global.
 
     Returns:

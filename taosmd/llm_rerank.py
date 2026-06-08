@@ -8,7 +8,7 @@ cross-document relations rather than scoring each doc in isolation.
 
 Inspired by Mem0's llm_reranker (Apache 2.0, mem0/reranker/llm_reranker.py)
 but uses a single listwise call instead of Mem0's per-candidate
-pointwise scoring — chosen for our local-tier latency budget where 20
+pointwise scoring, chosen for our local-tier latency budget where 20
 sequential ~3 s LLM calls per QA would dominate bench wall-clock.
 """
 
@@ -90,7 +90,7 @@ async def llm_listwise_rerank(
     using the same hit dict shape.
 
     On any failure (network, parse, timeout) returns the input
-    candidates truncated to ``top_k`` — i.e. trusts the upstream
+    candidates truncated to ``top_k``, i.e. trusts the upstream
     cross-encoder ranking.
     """
     if not candidates:

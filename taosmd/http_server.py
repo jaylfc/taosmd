@@ -1,30 +1,30 @@
 """Local HTTP/REST API for taOSmd memory (stdlib only, zero deps).
 
 An activation surface so non-Python apps and remote-on-LAN agents can read
-and write taOSmd memory without embedding the Python package — the spirit of
+and write taOSmd memory without embedding the Python package, in the spirit of
 ``qmd serve``. It is a thin JSON shell over :mod:`taosmd.service`, the same
 shared core the upcoming MCP server (#84) sits on, so behaviour matches the
 Python API and CLI exactly.
 
 Design choices (matching the project's local-first, offline, additive vision):
 
-* **stdlib only** — :class:`http.server.ThreadingHTTPServer` +
+* **stdlib only**: :class:`http.server.ThreadingHTTPServer` +
   :class:`~http.server.BaseHTTPRequestHandler`, :mod:`json`, no new deps.
-* **local-first** — binds ``127.0.0.1`` by default. Pass a different host
+* **local-first**: binds ``127.0.0.1`` by default. Pass a different host
   (e.g. ``0.0.0.0``) only to expose it on the LAN. There is **no auth**: on
   localhost that is fine (any local process already has the Python API); if
   you bind to a routable address, put it behind your own network controls.
-* **additive + opt-in** — the server only runs when you start it; the
+* **additive + opt-in**: the server only runs when you start it; the
   Python API, CLI, and standalone use are untouched.
-* **per-agent scoping** — every endpoint takes an ``agent`` and forwards it
+* **per-agent scoping**: every endpoint takes an ``agent`` and forwards it
   to the service layer, honouring the same isolation as the Python API.
 
 Concurrency model
 -----------------
 :class:`ThreadingHTTPServer` hands each request to its own thread, but the
 underlying stores hold thread-affine SQLite connections (created and cached
-on first use). So rather than ``asyncio.run`` per request — which would bind
-those connections to a request thread that later disappears — every async
+on first use). So rather than ``asyncio.run`` per request, which would bind
+those connections to a request thread that later disappears, every async
 service call is dispatched onto a single, long-lived background event-loop
 thread (see :class:`_ServiceLoop`). All DB work therefore happens in one
 context, sequentially, exactly like the single-threaded Python API. The
@@ -50,9 +50,9 @@ Endpoints
 
 Inspection UI
 -------------
-``GET /`` (and ``GET /ui``) serves a single self-contained HTML page — one
+``GET /`` (and ``GET /ui``) serves a single self-contained HTML page: one
 inline ``<style>`` and one inline vanilla ``<script>``, no external requests
-or CDNs — so it works fully offline. It is a **read-only** inspector: it lets
+or CDNs, so it works fully offline. It is a **read-only** inspector: it lets
 you search memory and view the pending-review queue for an agent and read the
 server health/version, all by consuming the JSON endpoints above via ``fetch``.
 It exposes no destructive actions (no ingest, no resolve). The JSON endpoints
@@ -93,7 +93,7 @@ def _webui_dir() -> Path | None:
         _ = ref  # suppress unused-variable on the import above
     except Exception:
         pass
-    # Use __file__-relative path — reliable in both source and wheel.
+    # Use __file__-relative path, reliable in both source and wheel.
     candidate = Path(__file__).parent / "webui"
     if (candidate / "index.html").exists():
         return candidate
@@ -125,7 +125,7 @@ DEFAULT_PORT = 7900
 
 
 # A single self-contained page: one inline <style> and one inline vanilla
-# <script>, no external requests, so it works fully offline. Read-only — it
+# <script>, no external requests, so it works fully offline. Read-only: it
 # only calls the GET /health, POST /search and GET /pending endpoints and
 # renders the results. No ingest/resolve/destructive actions are exposed.
 _INSPECTION_UI_HTML = """<!doctype html>
@@ -776,7 +776,7 @@ def _make_handler(data_dir, runner: _ServiceLoop):
             Runs in its own request thread (ThreadingHTTPServer); polls the
             archive once per second via the service loop and pushes new
             messages as ``data:`` SSE frames. Each ``runner.run(...)`` call
-            is a quick, bounded archive query — the sleep happens here in
+            is a quick, bounded archive query; the sleep happens here in
             the request thread, never inside the service loop. Disconnects
             are detected via write errors and exit the loop cleanly.
             """

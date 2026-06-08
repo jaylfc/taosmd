@@ -15,7 +15,7 @@ Prompts adapted from /tmp/memresearch/emem/src/emem/prompts/templates/
 
 Both call Ollama's /api/chat with format=json so the open-source generators
 return parseable JSON without us building an explicit JSON schema for every
-model. JSON-parse failure surfaces as an exception — the caller decides
+model. JSON-parse failure surfaces as an exception; the caller decides
 whether to fallback (the LoCoMo runner does turn-level fallback at ingest
 and an empty-filter fallback at retrieval).
 """
@@ -176,7 +176,7 @@ async def extract_session_edus(
 ) -> list[dict]:
     """Extract EDUs from one session. Returns list of {edu_text, source_turn_ids}.
 
-    Raises on transport / JSON-parse failure — caller decides fallback. (The
+    Raises on transport / JSON-parse failure; caller decides fallback. (The
     LoCoMo runner falls back to a per-turn EDU when this raises.)
     """
     user_msg = f"Session conversation:\n{session_text}\n\nSpeaker names: {', '.join(speaker_names)}"
@@ -216,7 +216,7 @@ async def filter_edus(
     """Filter candidate EDUs to those relevant to the query. Exact-text match.
 
     Returns a subset of `candidate_edus` (preserving original order). Empty
-    list on parse / transport failure rather than raising — at retrieval time
+    list on parse / transport failure rather than raising; at retrieval time
     we'd rather pass the unfiltered candidates through than crash the whole QA.
     """
     if not candidate_edus:

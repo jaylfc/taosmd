@@ -1,11 +1,11 @@
-"""Typed blob envelopes — what loaders produce, what extractors consume.
+"""Typed blob envelopes: what loaders produce, what extractors consume.
 
 The discriminated union (``Blob.kind`` is one of ``BlobType`` enum values)
 lets downstream consumers ``match`` on type rather than inspecting field
 shapes. Inspired by memobase's blob.py (``ChatBlob``, ``TranscriptBlob``,
 etc.) but pared down to what we actually need at the taOSmd tier.
 
-The envelopes are intentionally NOT pydantic — keeping them stdlib-only
+The envelopes are intentionally NOT pydantic; keeping them stdlib-only
 keeps the loader package importable without pulling pydantic into
 non-LLM code paths (matters for Pi tier where the dep matrix is tight).
 """
@@ -48,7 +48,7 @@ class TranscriptStamp:
     """One stamp in a transcript-shaped recording.
 
     ``start_timestamp_in_seconds`` is offset from start of recording, not
-    wall clock — matches what Whisper / VTT / SRT all give back. ``speaker``
+    wall clock, matching what Whisper / VTT / SRT all give back. ``speaker``
     is whichever label the diarisation produced (often "speaker_0" /
     "speaker_1"); empty when undiarised.
     """
@@ -62,7 +62,7 @@ class Blob:
     """Base envelope. Every typed blob inherits this + sets ``kind``.
 
     ``source_path`` is the filesystem path the loader read from (for
-    provenance). ``raw_text`` is a flattened-text view of the blob —
+    provenance). ``raw_text`` is a flattened-text view of the blob,
     handy fallback for legacy ingest paths that want a single string.
     Empty when expensive to compute; consumers should rely on the typed
     fields when present.

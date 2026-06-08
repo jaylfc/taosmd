@@ -385,7 +385,7 @@ async def list_pending_decisions(
 
     Per the agent-rules contract: call this at the start of every session
     and surface any pending decisions to the user before answering their
-    first non-trivial question. Never silently auto-resolve — the queue
+    first non-trivial question. Never silently auto-resolve; the queue
     exists because automatic resolution was the wrong call.
     """
     from pathlib import Path
@@ -612,7 +612,7 @@ async def supersede_vectors(match: str, *, data_dir=None) -> int:
 
     The manual counterpart to the automatic KG->vector link: lets a caller
     retire a stale fact from vector recall directly (e.g. when a correction
-    arrives outside the KG contradiction path). Zero-loss — the matched rows
+    arrives outside the KG contradiction path). Zero-loss: the matched rows
     are retained, only stamped ``valid_to`` so ``search()`` skips them.
     Returns the number of rows superseded.
     """

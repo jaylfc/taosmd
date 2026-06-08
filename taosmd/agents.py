@@ -1,4 +1,4 @@
-"""Agent registry — formal naming and isolation for multi-agent installs.
+"""Agent registry: formal naming and isolation for multi-agent installs.
 
 Per-agent indexes live at ``data/agent-memory/{name}/index.sqlite`` and
 have always existed; agents could just call ``search(agent="x")`` and
@@ -8,11 +8,11 @@ installs but left two real problems:
 1. Two agents in the same framework could pick the same name and start
    sharing memory without anyone noticing until a wrong fact surfaced.
 2. The agent install message couldn't say "I registered as X" with
-   certainty — there was no registration to point at.
+   certainty, there was no registration to point at.
 
 The registry is a single ``data/agents.json`` envelope that lists every
 agent on this taosmd install. Lazy creation on first write still works
-(back-compat) — search/ingest auto-register an agent if it isn't in the
+(back-compat): search/ingest auto-register an agent if it isn't in the
 registry yet, with ``display_name == name``. Explicit registration just
 gives the install agent a clean success/fail signal and lets the CLI
 list/remove agents.
@@ -47,7 +47,7 @@ class InvalidAgentNameError(ValueError):
     """Raised when a name fails the ``NAME_RE`` check."""
 
 
-# Librarian config — controls the LLM enrichment passes for an agent.
+# Librarian config: controls the LLM enrichment passes for an agent.
 # All tasks default ON for new agents on capable installs; the on/off
 # switches let users disable enrichment per-agent on resource-constrained
 # hardware or when they don't need it for a particular agent.
@@ -63,10 +63,10 @@ LIBRARIAN_TASKS = (
 )
 
 # Fan-out levels map to the integer K passed to each retrieval layer.
-# off  — single-result pass (K=1); essentially disables fan-out.
-# low  — conservative multi-doc (K=3); safe on Pi NPU with 8K context.
-# med  — moderate fan-out (K=10); suits GPU workers or large-context models.
-# high — extended reasoning (K=20); use only when context window allows.
+# off  -- single-result pass (K=1); essentially disables fan-out.
+# low  -- conservative multi-doc (K=3); safe on Pi NPU with 8K context.
+# med  -- moderate fan-out (K=10); suits GPU workers or large-context models.
+# high -- extended reasoning (K=20); use only when context window allows.
 FANOUT_LEVELS: dict[str, int] = {"off": 1, "low": 3, "med": 10, "high": 20}
 
 _FANOUT_ORDER = ["off", "low", "med", "high"]
@@ -74,7 +74,7 @@ _FANOUT_ORDER = ["off", "low", "med", "high"]
 
 def _default_fanout() -> dict:
     return {
-        # Opt-in level — low keeps latency safe on Pi-class hardware by default.
+        # Opt-in level: low keeps latency safe on Pi-class hardware by default.
         "default": "low",
         # When True, auto-bumps one tier on workers with GPU + TurboQuant + ≥12GB VRAM.
         "auto_scale": True,
@@ -152,7 +152,7 @@ class AgentRecord:
 class AgentRegistry:
     """File-backed registry of agents on this taosmd install.
 
-    Storage is a single JSON envelope rather than SQLite — agent records
+    Storage is a single JSON envelope rather than SQLite. Agent records
     are tiny, writes are rare, and a flat file makes the registry easy
     to back up alongside the rest of ``data/``.
     """
@@ -293,7 +293,7 @@ class AgentRegistry:
         """Return the librarian config for an agent.
 
         Older records may have been saved before the librarian field
-        existed — those get the default config back so callers don't
+        existed; those get the default config back so callers don't
         need a back-compat branch. Records saved before the fanout block
         was added get it auto-populated.
         """
@@ -322,7 +322,7 @@ class AgentRegistry:
           Nothing is stored on the agent.
         - ``tasks``: dict of per-task switches. Keys must come from
           :data:`LIBRARIAN_TASKS`. Unknown keys raise ValueError.
-        - ``fanout``: fan-out level — one of ``off | low | med | high``.
+        - ``fanout``: fan-out level, one of ``off | low | med | high``.
           Controls the per-layer top-K used during retrieval.
         - ``fanout_auto_scale``: when True the resolver bumps the fanout
           level one tier up on workers with GPU + TurboQuant + ≥12 GB VRAM.
@@ -343,7 +343,7 @@ class AgentRegistry:
 
             warnings.warn(
                 "per-agent librarian model is deprecated; the memory model "
-                "is now global — use taosmd.set_memory_model()",
+                "is now global; use taosmd.set_memory_model()",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -411,8 +411,8 @@ class AgentRegistry:
         Args:
             name: Registered agent name.
             worker_capabilities: Optional dict with keys:
-                - ``gpu_vram_gb`` (float/int) — VRAM in GB (default 0)
-                - ``turboquant`` (bool) — whether TurboQuant is active (default False)
+                - ``gpu_vram_gb`` (float/int): VRAM in GB (default 0)
+                - ``turboquant`` (bool): whether TurboQuant is active (default False)
 
         Returns:
             Integer K (1, 3, 10, or 20).
@@ -447,7 +447,7 @@ def run_if_enabled(agent_name: str, task: str, fn, *args, fallback=None, **kw):
     """Invoke fn only when the task is enabled for this agent; else return fallback.
 
     Designed to be the single gate point in orchestrators (catalog_pipeline,
-    retrieval). Extractors stay pure — they do not check agent config.
+    retrieval). Extractors stay pure; they do not check agent config.
 
     Usage:
         result = run_if_enabled(agent, fact_extraction, extract_facts, text,
@@ -473,7 +473,7 @@ def run_if_enabled(agent_name: str, task: str, fn, *args, fallback=None, **kw):
 
 # ---------------------------------------------------------------------------
 # Module-level convenience wrappers around a default registry rooted at
-# ./data — matches the rest of taosmd which assumes ./data unless told
+# ./data, matching the rest of taosmd which assumes ./data unless told
 # otherwise. Pass a different ``data_dir`` to AgentRegistry directly for
 # tests or non-default installs.
 # ---------------------------------------------------------------------------

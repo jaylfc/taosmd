@@ -5,7 +5,7 @@ results and traverse the temporal knowledge graph via BFS to discover
 related facts that embedding similarity alone would miss.
 
 This bridges the gap between "what the embedding matched" and "what's
-connected to what the embedding matched" — the KG knows relationships
+connected to what the embedding matched"; the KG knows relationships
 that aren't captured in vector space.
 """
 

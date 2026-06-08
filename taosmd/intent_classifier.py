@@ -4,7 +4,7 @@ Inspired by SimpleMem's Intent-Aware Retrieval Planning.
 Classifies query intent to determine which memory layers to search
 and in what order, instead of searching everything blindly.
 
-This is a lightweight, no-LLM classifier — runs in microseconds.
+This is a lightweight, no-LLM classifier; runs in microseconds.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ INTENT_TIMELINE = "timeline"       # "What was I working on Monday?", "Show my s
 # Search strategies per intent
 SEARCH_STRATEGIES = {
     INTENT_FACTUAL: {
-        "primary": "kg",        # Search KG first — structured facts
+        "primary": "kg",        # Search KG first, structured facts
         "secondary": "archive", # Then archive for context
         "tertiary": "qmd",     # QMD last
         "catalog_weight": 0.0,
@@ -32,7 +32,7 @@ SEARCH_STRATEGIES = {
         "qmd_weight": 0.2,
     },
     INTENT_RECENT: {
-        "primary": "archive",   # Search archive first — recent events
+        "primary": "archive",   # Search archive first, recent events
         "secondary": "kg",
         "tertiary": "qmd",
         "catalog_weight": 0.0,
@@ -89,7 +89,7 @@ SEARCH_STRATEGIES = {
 
 # Explicit tie-break priority, most-specific first. When two intents score
 # equally, the one earlier in this tuple wins. Previously the winner was just
-# whichever intent appeared first in INTENT_PATTERNS — deterministic, but an
+# whichever intent appeared first in INTENT_PATTERNS, deterministic but an
 # implicit side effect of dict order. Codifying it here makes the intended
 # precedence explicit and decouples it from pattern declaration order.
 INTENT_PRIORITY = (
@@ -98,7 +98,7 @@ INTENT_PRIORITY = (
     INTENT_PREFERENCE,   # preference phrasing ("usually", "favourite")
     INTENT_RECENT,       # recency phrasing ("yesterday", "latest")
     INTENT_TECHNICAL,    # "how does X work", "architecture"
-    INTENT_FACTUAL,      # generic "what is" — least specific signal
+    INTENT_FACTUAL,      # generic "what is", least specific signal
     INTENT_EXPLORATORY,  # fallback when nothing else matches
 )
 

@@ -2,7 +2,7 @@
 
 Stores text passages with their embeddings for semantic search.
 Uses QMD's /embed endpoint for on-device NPU-accelerated embedding.
-Vectors stored in SQLite for persistence — no external vector DB needed.
+Vectors stored in SQLite for persistence; no external vector DB needed.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def pack_sign_bits(embedding: list[float]) -> str:
     """Pack an embedding into a base64 string of sign bits (1 bit/dim).
 
     Each dimension becomes a single bit (1 if >= 0, else 0), so a 768-dim
-    float32 vector (3072 bytes) stores as 96 bytes — the 32x footprint of the
+    float32 vector (3072 bytes) stores as 96 bytes, the 32x footprint of the
     binary-quant path. Decode + score with :func:`hamming_similarity`.
     """
     import numpy as np
@@ -60,7 +60,7 @@ class VectorMemory:
 
     Supports:
     - QMD NPU embeddings (Qwen3-Embed-0.6B on RK3588)
-    - sentence-transformers CPU embeddings (all-MiniLM-L6-v2 — same as MemPalace)
+    - sentence-transformers CPU embeddings (all-MiniLM-L6-v2, same as MemPalace)
     """
 
     def __init__(
@@ -78,11 +78,11 @@ class VectorMemory:
         self._local_model_name = local_model
         self._onnx_path = onnx_path
         # Score retrieval by sign-bit Hamming similarity instead of full-precision
-        # cosine. Off by default — opt-in footprint/speed option for memory- or
+        # cosine. Off by default; opt-in footprint/speed option for memory- or
         # CPU-constrained (SBC) deployments: vectors are stored as packed sign
         # bits (1 bit/dim, 32x smaller) and scored by XOR+popcount. Recall-neutral
         # on LoCoMo-1540 (see docs/benchmarks.md). Must be fixed for a store's
-        # lifetime — a binary-quant store persists bit blobs, not float vectors,
+        # lifetime; a binary-quant store persists bit blobs, not float vectors,
         # so you cannot flip an existing DB between modes.
         self.binary_quant = binary_quant
         self._conn: sqlite3.Connection | None = None
@@ -136,14 +136,14 @@ class VectorMemory:
 
         Adds the nullable ``valid_to`` column to stores created before the
         correction-supersede feature. ``ALTER TABLE ... ADD COLUMN`` only
-        appends a NULL-defaulted column — no rows are rewritten or dropped, so
+        appends a NULL-defaulted column; no rows are rewritten or dropped, so
         every existing vector survives and stays active (valid_to IS NULL).
         """
         cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(vector_memory)")}
         if "valid_to" not in cols:
             self._conn.execute("ALTER TABLE vector_memory ADD COLUMN valid_to REAL")
         # Index creation is deferred to here (not in SCHEMA) so it runs *after*
-        # the column is guaranteed to exist — a legacy table only gains the
+        # the column is guaranteed to exist; a legacy table only gains the
         # column via the ALTER above, and CREATE INDEX in SCHEMA would fire
         # before that on the no-op CREATE TABLE IF NOT EXISTS path.
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_vm_valid ON vector_memory(valid_to)")
@@ -246,7 +246,7 @@ class VectorMemory:
             return -1
 
         # In binary-quant mode store only the packed sign bits (1 bit/dim, 32x
-        # smaller) — the full-precision floats are intentionally discarded, that
+        # smaller; the full-precision floats are intentionally discarded, that
         # footprint saving is the point of the mode. Cosine mode stores the
         # float vector as JSON as before.
         embedding_text = pack_sign_bits(embedding) if self.binary_quant else json.dumps(embedding)
@@ -257,7 +257,7 @@ class VectorMemory:
             (text, embedding_text, json.dumps(metadata or {}), now),
         )
         self._conn.commit()
-        self._bm25_dirty = True  # corpus changed — invalidate BM25 cache
+        self._bm25_dirty = True  # corpus changed; invalidate BM25 cache
         return cursor.lastrowid
 
     async def search(
@@ -272,23 +272,23 @@ class VectorMemory:
         """Semantic search with optional hybrid fusion.
 
         Fusion modes:
-          "rrf"            — RRF over (semantic ranks, keyword-presence-
+          "rrf":             RRF over (semantic ranks, keyword-presence-
                               heuristic ranks). Legacy "hybrid" path.
-          "bm25_rrf"       — RRF over (semantic ranks, proper BM25 ranks).
+          "bm25_rrf":        RRF over (semantic ranks, proper BM25 ranks).
                               Industrial BM25 (IDF + TF saturation + length
                               norm via bm25s) on raw text.
-          "bm25_lemma_rrf" — Same as bm25_rrf but BM25 indexes and queries
+          "bm25_lemma_rrf": Same as bm25_rrf but BM25 indexes and queries
                               run on spaCy-lemmatised text (handles
                               meetings/meeting, attending/attend etc.).
                               ~+50 ms/query for spaCy on top of BM25.
                               Falls back to bm25_rrf if spaCy unavailable.
-          "mem0_additive"  — Mem0-style additive scoring instead of RRF.
+          "mem0_additive":   Mem0-style additive scoring instead of RRF.
                               (semantic + sigmoid-normalised BM25 lemma) / 2.
                               Adaptive sigmoid params from query length.
                               Keeps signal magnitudes calibrated rather than
                               flattening to ranks.
-          "boost"          — Legacy additive keyword boost.
-          "none"           — Pure semantic cosine similarity.
+          "boost":           Legacy additive keyword boost.
+          "none":            Pure semantic cosine similarity.
 
         When hybrid=False, fusion mode is ignored and pure semantic is used.
 
@@ -309,8 +309,8 @@ class VectorMemory:
         keywords = [w.lower().strip("?.,!") for w in query.split() if len(w) > 2 and w.lower() not in stop]
 
         # Load all *active* embeddings and compute similarity. Superseded rows
-        # (valid_to IS NOT NULL) are soft-hidden from recall — mirroring the
-        # KG's active-triple filter — but the raw row is never deleted, so
+        # (valid_to IS NOT NULL) are soft-hidden from recall, mirroring the
+        # KG's active-triple filter, but the raw row is never deleted, so
         # zero-loss is preserved. This active filter covers every scoring path
         # below (cosine, binary-quant, and the pure-Python fallback) because
         # they all consume this single row set. No behaviour change when
@@ -376,7 +376,7 @@ class VectorMemory:
                 # Hamming similarity over packed sign bits. similarity =
                 # 1 - popcount(query_bits XOR doc_bits) / dim, which is bit-for-bit
                 # identical to the sign-agreement score ((eb·qb)/dim + 1)/2 the
-                # recall-neutral LoCoMo-1540 result was measured on — packing only
+                # recall-neutral LoCoMo-1540 result was measured on; packing only
                 # changes storage/speed, not ranking (see docs/benchmarks.md).
                 dim = len(query_emb)
                 query_bits = np.packbits(np.asarray(query_emb, dtype=np.float32) >= 0.0)
@@ -495,7 +495,7 @@ class VectorMemory:
                     boost = keyword_hits / len(keywords) * 0.3
                     similarities[i] = min(1.0, similarities[i] + boost)
 
-            # Pure semantic or boost mode — sort by similarity
+            # Pure semantic or boost mode; sort by similarity
             top_indices = np.argsort(similarities)[::-1][:limit]
 
             return [
@@ -580,8 +580,8 @@ class VectorMemory:
 
         Sets ``valid_to`` on the row so ``search()`` (and the adjacent-neighbour
         lookup) no longer return it, mirroring the KG's
-        :meth:`TemporalKnowledgeGraph.invalidate`. The raw row — text, embedding,
-        and metadata — is *retained*; it is only excluded from recall, never
+        :meth:`TemporalKnowledgeGraph.invalidate`. The raw row (text, embedding,
+        and metadata) is *retained*; it is only excluded from recall, never
         deleted. The append-only archive entry is likewise untouched, so
         zero-loss is preserved.
 
@@ -595,7 +595,7 @@ class VectorMemory:
         )
         self._conn.commit()
         if cursor.rowcount > 0:
-            self._bm25_dirty = True  # active corpus changed — invalidate BM25 cache
+            self._bm25_dirty = True  # active corpus changed; invalidate BM25 cache
         return cursor.rowcount > 0
 
     async def supersede_matching(self, text_or_substring: str, ended_at: float | None = None) -> int:
@@ -604,7 +604,7 @@ class VectorMemory:
         Used to wire corrections by content: when a fact is corrected, the
         chunk(s) still carrying the *old* value are excluded from active recall
         so the stale fact stops resurfacing in vector search too. As with
-        :meth:`supersede`, the raw rows are retained (zero-loss) — only their
+        :meth:`supersede`, the raw rows are retained (zero-loss); only their
         ``valid_to`` is stamped. Matching is a plain case-sensitive substring
         test on the stored (already secret-redacted) text. An empty/blank
         ``text_or_substring`` is a no-op (returns 0) so a missing correction
@@ -622,7 +622,7 @@ class VectorMemory:
         )
         self._conn.commit()
         if cursor.rowcount > 0:
-            self._bm25_dirty = True  # active corpus changed — invalidate BM25 cache
+            self._bm25_dirty = True  # active corpus changed; invalidate BM25 cache
         return cursor.rowcount
 
     async def iter_entries(
@@ -633,7 +633,7 @@ class VectorMemory:
         """Yield (text, metadata_dict) tuples for stored entries.
 
         Used by :func:`taosmd.api.reconcile` to enumerate the current vector
-        corpus — including superseded rows when ``include_superseded=True`` — so
+        corpus (including superseded rows when ``include_superseded=True``) so
         the reconcile logic can distinguish "truly absent" from "intentionally
         superseded". Superseded rows count as *present* in the multiset; their
         content is not re-added, so corrected/stale entries are never resurrected.

@@ -64,7 +64,7 @@ def score_and_rank(
 
     Threshold gates on the semantic score *before* combining; a candidate
     below ``threshold`` is dropped even if BM25/entity would have rescued
-    it. This is the "trust the dense recall floor" property — important
+    it. This is the "trust the dense recall floor" property, important
     in our regime where BM25 alone can promote keyword-spam.
 
     ``semantic_results`` items must each have an ``id`` and a ``score``

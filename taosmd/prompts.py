@@ -1,4 +1,4 @@
-"""Librarian prompts — the central persona and task templates.
+"""Librarian prompts: the central persona and task templates.
 
 Every LLM call in taosmd that does enrichment, extraction, classification
 or summarisation runs through this module. The shared persona keeps the
@@ -123,7 +123,7 @@ def persona_for(agent_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Task templates — every one composes persona_for(agent) + the task body.
+# Task templates: every one composes persona_for(agent) + the task body.
 # Each task explains WHERE the output goes, what consumes it, and the
 # quality bar to clear before returning.
 # ---------------------------------------------------------------------------

@@ -2,16 +2,16 @@
 
 Supports three platforms:
 
-* **Linux** — a systemd *user* unit (``~/.config/systemd/user/taosmd.service``),
+* **Linux**: a systemd *user* unit (``~/.config/systemd/user/taosmd.service``),
   no root required. The unit runs ``python -m taosmd serve`` with the
   host/port/data-dir baked in, restarts automatically on failure, and starts
   at login via ``WantedBy=default.target``.
 
-* **macOS** — a launchd LaunchAgent plist
+* **macOS**: a launchd LaunchAgent plist
   (``~/Library/LaunchAgents/com.taosmd.serve.plist``). Loaded via
   ``launchctl`` so it starts at login and keeps the process alive.
 
-* **Windows** — the CLI prints instructions pointing to
+* **Windows**: the CLI prints instructions pointing to
   ``scripts/install-service.ps1``, which registers a Scheduled Task with
   restart-on-failure via PowerShell. The Python side does not call
   ``schtasks``/``sc.exe`` directly, because doing so reliably (correct quoting,
@@ -78,7 +78,7 @@ def render_systemd_unit(
         Bind port (e.g. ``7900``).
     data_dir:
         Optional data directory.  When ``None`` the service inherits
-        ``$TAOSMD_DATA_DIR`` or the default ``~/.taosmd`` — the same
+        ``$TAOSMD_DATA_DIR`` or the default ``~/.taosmd``, the same
         resolution the foreground server would apply.
     """
     args = [python_exe, "-m", "taosmd", "serve", "--host", host, "--port", str(port)]
@@ -126,14 +126,14 @@ def uninstall_systemd() -> int:
     Returns 0 on success, non-zero on error.
     """
     rc = _run_systemctl(["disable", "--now", _SYSTEMD_UNIT_NAME])
-    # rc may be non-zero if the unit was never enabled — tolerate that.
+    # rc may be non-zero if the unit was never enabled; tolerate that.
     unit_path = Path.home() / ".config" / "systemd" / "user" / _SYSTEMD_UNIT_NAME
     if unit_path.exists():
         unit_path.unlink()
         print(f"Removed unit file: {unit_path}")
         _run_systemctl(["daemon-reload"])
     else:
-        print("Unit file not found — nothing to remove.")
+        print("Unit file not found, nothing to remove.")
     print("taosmd service stopped and uninstalled.")
     return 0
 
@@ -156,7 +156,7 @@ def _run_systemctl(args: list[str]) -> int:
         )
         return 1
     cmd = [systemctl, "--user"] + args
-    result = subprocess.run(cmd)  # noqa: S603 — explicit arg list, no shell=True
+    result = subprocess.run(cmd)  # noqa: S603 -- explicit arg list, no shell=True
     return result.returncode
 
 
@@ -285,7 +285,7 @@ def uninstall_launchd() -> int:
         plist_path.unlink()
         print(f"Removed plist: {plist_path}")
     else:
-        print("Plist not found — nothing to remove.")
+        print("Plist not found, nothing to remove.")
     print("taosmd LaunchAgent unloaded and uninstalled.")
     return 0
 
@@ -394,9 +394,9 @@ def install_service(
 
     Delegates to the platform-appropriate implementation:
 
-    * ``linux`` — systemd user unit
-    * ``darwin`` — launchd LaunchAgent
-    * ``win32`` — prints instructions for the PowerShell script
+    * ``linux``: systemd user unit
+    * ``darwin``: launchd LaunchAgent
+    * ``win32``: prints instructions for the PowerShell script
 
     Parameters
     ----------

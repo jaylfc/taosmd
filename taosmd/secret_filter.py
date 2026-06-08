@@ -69,9 +69,9 @@ def filter_text(text: str, mode: str = "redact") -> str:
     """Filter secrets from text before storage.
 
     Modes:
-        "redact" — replace secrets with [REDACTED:type] placeholders
-        "reject" — raise ValueError if secrets are found
-        "warn"   — return text unchanged but log a warning
+        "redact": replace secrets with [REDACTED:type] placeholders
+        "reject": raise ValueError if secrets are found
+        "warn":   return text unchanged but log a warning
     """
     if mode == "reject":
         if contains_secrets(text):

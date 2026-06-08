@@ -264,7 +264,7 @@ If no lessons or files, write "none" for that section."""
     def _fallback_crystallize(
         self, conversation: str,
     ) -> tuple[str, list[str], list[str], list[str]]:
-        """Fallback when LLM is unavailable — extract what we can from text."""
+        """Fallback when LLM is unavailable: extract what we can from text."""
         lines = conversation.split("\n")
         narrative = lines[0][:200] + "..." if lines else "Session recorded"
         return narrative, [], [], []

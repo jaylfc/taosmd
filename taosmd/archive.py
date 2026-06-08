@@ -258,7 +258,7 @@ class ArchiveStore:
     async def search_fts(self, query: str, limit: int = 20) -> list[dict]:
         """Full-text search across all archived content using FTS5.
 
-        This is the key method for LongMemEval-style recall — it searches
+        This is the key method for LongMemEval-style recall: it searches
         the raw verbatim text, not just extracted triples.
         """
         try:
@@ -390,7 +390,7 @@ class ArchiveStore:
         """Return True if the JSONL line passes its embedded SHA-256 check.
 
         Lines without a ``sha256`` key (written before checksums were added)
-        are treated as valid — the check is additive and backwards-compatible.
+        are treated as valid; the check is additive and backwards-compatible.
         A missing or blank line is considered invalid.
         """
         line = line.strip()
@@ -402,7 +402,7 @@ class ArchiveStore:
             return False
         stored = record.get("sha256")
         if stored is None:
-            # Legacy entry — no checksum, pass through.
+            # Legacy entry, no checksum, pass through.
             return True
         # Recompute over the line as it was written, i.e. without the sha256
         # key.  Strip sha256 before reserialising to reconstruct the original
@@ -418,7 +418,7 @@ class ArchiveStore:
 
         Returns ``{"date": date, "total": N, "ok": M, "bad": K, "legacy": L}``
         where ``legacy`` counts entries without a checksum (pre-checksum rows).
-        Does not raise on individual failures — the caller decides how to
+        Does not raise on individual failures; the caller decides how to
         handle them.
         """
         parts = date.split("-")

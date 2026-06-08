@@ -1,4 +1,4 @@
-"""LoaderInterface — the ABC every concrete loader implements.
+"""LoaderInterface: the ABC every concrete loader implements.
 
 Lifted from cognee's LoaderInterface (cognee/infrastructure/loaders/
 LoaderInterface.py): each loader declares which extensions and MIME
@@ -37,7 +37,7 @@ class LoaderInterface(ABC):
         """Return True when this loader claims a file with the given
         extension and / or MIME type. Extension comparison is case-
         insensitive and the leading dot is optional. Either argument can
-        be empty — the registry passes whichever it could determine.
+        be empty; the registry passes whichever it could determine.
         """
         ext = extension.lower().lstrip(".") if extension else ""
         mt = mime_type.lower() if mime_type else ""
@@ -59,18 +59,18 @@ class LoaderInterface(ABC):
         """Read the file at ``file_path`` and return a typed ``Blob``.
 
         Implementations should set ``Blob.source_path`` to a string of
-        ``file_path`` and populate ``raw_text`` opportunistically — when
+        ``file_path`` and populate ``raw_text`` opportunistically; when
         a string view is cheap to derive, it lets legacy ingest paths
         keep working. When it isn't cheap, leave it empty and rely on
         the typed fields.
 
         Two opt-in safety guards, both with standalone-safe defaults:
 
-          ``max_bytes`` — the file is rejected (``ValueError``) if it is
+          ``max_bytes``: the file is rejected (``ValueError``) if it is
           larger than this. Defaults to a generous 100 MB; pass ``None``
           to disable the check.
 
-          ``base_dir`` — when given, the resolved ``file_path`` must sit
+          ``base_dir``: when given, the resolved ``file_path`` must sit
           inside it or a ``ValueError`` is raised (path-traversal /
           symlink containment). Defaults to ``None`` (no restriction),
           so direct use against any path keeps working.

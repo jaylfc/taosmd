@@ -98,7 +98,7 @@ def temporal_rerank(results: list[dict], query: str, boost_factor: float = 0.2) 
         # Results from hybrid fusion (fusion="rrf", "bm25_rrf", …) carry an
         # ``rrf_score`` that is the field actually used for final ordering; pure
         # semantic results only carry ``similarity``.  Boosting the wrong field
-        # leaves the ranking unchanged — hence prefer rrf_score when it exists.
+        # leaves the ranking unchanged; hence prefer rrf_score when it exists.
         if boost > 0:
             if "rrf_score" in r:
                 r["rrf_score"] = r["rrf_score"] + boost

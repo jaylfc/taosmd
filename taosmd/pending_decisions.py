@@ -5,7 +5,7 @@ silently auto-resolves contradictions on singular predicates by invalidating
 the old triple and writing the new one. That's correct behaviour when the
 new claim is high-confidence (a directly-quoted user statement, say) but
 dangerous when it's a lower-confidence inference from a nightly catalog
-pass — the librarian might rewrite a real fact the user gave us last week
+pass; the librarian might rewrite a real fact the user gave us last week
 based on an ambiguous summary from yesterday.
 
 This module is the safety net. The store lives alongside the KG in the

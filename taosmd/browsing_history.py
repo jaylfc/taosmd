@@ -1,6 +1,6 @@
 """Lightweight browsing history for platform apps (Reddit, X, etc.).
 
-NOT a KnowledgeItem — no ingest, no embedding, no monitoring.
+NOT a KnowledgeItem: no ingest, no embedding, no monitoring.
 Just a breadcrumb trail of recently viewed content for quick recovery.
 """
 

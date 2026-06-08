@@ -55,7 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_triples_predicate ON kg_triples(predicate);
 CREATE INDEX IF NOT EXISTS idx_triples_valid ON kg_triples(valid_from, valid_to);
 """
 
-# Memory type classification — regex-free, keyword-based for speed
+# Memory type classification: regex-free, keyword-based for speed
 MEMORY_TYPES = {
     "fact": ["is", "are", "has", "was", "uses", "runs", "supports"],
     "preference": ["prefer", "always", "like to", "rather", "favorite", "default to"],
@@ -184,7 +184,7 @@ class TemporalKnowledgeGraph:
             # Always normalise (lowercase, underscore, synonym-resolve) so
             # downstream queries see consistent predicate spellings, even
             # when the caller used free-form input. Log a warning if the
-            # predicate ends up outside the vocab — visible drift signal.
+            # predicate ends up outside the vocab, visible drift signal.
             predicate = validate(predicate, strict=False)
 
         sub_id = await self.add_entity(subject, subject_type)
@@ -436,7 +436,7 @@ class TemporalKnowledgeGraph:
         opportunistically soft-superseded too (``valid_to`` stamped), so a
         corrected fact stops resurfacing in vector recall as well as in the
         typed KG. This closes the gap where corrections only superseded in the
-        KG layer. Default None preserves the legacy KG-only behaviour exactly —
+        KG layer. Default None preserves the legacy KG-only behaviour exactly.
         nothing about the vector store is touched. The supersede is best-effort:
         any failure is swallowed so a vmem hiccup can never block the KG write,
         and it never deletes a row (zero-loss).

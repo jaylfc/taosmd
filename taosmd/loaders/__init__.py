@@ -8,7 +8,7 @@ see structured data rather than a string blob.
 The registry picks a loader by file extension + MIME type; concrete
 loaders convert their source format into the canonical typed envelope.
 Existing string-based ingest paths (``process_conversation_turn`` etc.)
-keep working unchanged — this package adds an alternative typed path
+keep working unchanged. This package adds an alternative typed path
 for callers that have format-specific data on disk.
 
 Usage::

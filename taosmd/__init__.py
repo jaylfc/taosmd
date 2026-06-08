@@ -8,7 +8,7 @@ from .intent_classifier import classify_intent, get_search_strategy
 from .context_assembler import ContextAssembler
 from .browsing_history import BrowsingHistoryStore as BrowsingHistory
 
-# v0.2.0 — retrieval & processing
+# v0.2.0: retrieval & processing
 from .retention import retention_score, classify_tier, score_and_tier, find_near_duplicates, composite_score
 from .secret_filter import redact_secrets, contains_secrets, filter_text
 from .query_expansion import expand_query_fast, expand_query_llm, extract_entities_regex
@@ -36,7 +36,7 @@ from .api import (
 from . import project
 from .project import get_project_id, ProjectResolver, ProjectInfo
 
-# Activation surfaces — shared service layer + local HTTP/REST API (#85).
+# Activation surfaces: shared service layer + local HTTP/REST API (#85).
 # The MCP server (#84) reuses the same `service` core.
 from . import service
 from .http_server import serve
@@ -54,7 +54,7 @@ from .temporal_boost import temporal_rerank
 from .backend import MemoryBackend
 from .taosmd_backend import TaOSmdBackend
 
-# Agent registry — multi-agent isolation on a single taosmd install
+# Agent registry: multi-agent isolation on a single taosmd install
 from .agents import (
     AgentRegistry,
     AgentExistsError,
@@ -75,7 +75,7 @@ from .agents import (
 )
 from . import prompts
 
-# Install-wide config — the memory/Librarian model is a global setting.
+# Install-wide config: the memory/Librarian model is a global setting.
 from . import config
 from .config import get_memory_model, set_memory_model
 
@@ -173,7 +173,7 @@ __all__ = [
     "is_task_enabled",
     "effective_fanout",
     "FANOUT_LEVELS",
-    # Global config — system-wide memory model
+    # Global config: system-wide memory model
     "get_memory_model",
     "set_memory_model",
     # Librarian prompts

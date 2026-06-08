@@ -1,14 +1,14 @@
-"""Session Catalog — Timeline Directory over Zero-Loss Archives (taOSmd).
+"""Session Catalog: Timeline Directory over Zero-Loss Archives (taOSmd).
 
 A derived index that splits raw archive JSONL files into per-session files,
 creates a catalog DB with line pointers, and exposes fast query methods for
 temporal lookup, FTS, and context retrieval.
 
 The original archive files are NEVER modified. The catalog and split files are
-fully derived — delete and regenerate at any time.
+fully derived; delete and regenerate at any time.
 
 Retrieval path: when the intent classifier detects a temporal/timeline query
-("what was I working on Tuesday?"), the catalog is queried first — near-instant
+("what was I working on Tuesday?"), the catalog is queried first, for near-instant
 lookup vs expensive vector search.
 
 Session detection: 30-min gap heuristic. If no events for >30 min, a new
@@ -147,7 +147,7 @@ class SessionCatalog:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()
-        # Taxonomy columns — safe no-op if already present
+        # Taxonomy columns: safe no-op if already present
         _taxonomy_cols = [
             "ALTER TABLE sessions ADD COLUMN primary_project TEXT DEFAULT ''",
             "ALTER TABLE sessions ADD COLUMN primary_topic TEXT DEFAULT ''",
@@ -160,7 +160,7 @@ class SessionCatalog:
                 self._conn.execute(_sql)
             except Exception:
                 pass  # column already exists
-        # agent_name column — safe no-op if already present
+        # agent_name column: safe no-op if already present
         try:
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN agent_name TEXT DEFAULT ''"
@@ -581,7 +581,7 @@ class SessionCatalog:
             tier:       tier to set on success (default 2 = LLM-enriched).
             agent_name: optional agent slug to scope enrichment. When set, only
                 archive rows belonging to this agent are enriched. When None
-                (default), behaves as before — unscoped across all agents.
+                (default), behaves as before, unscoped across all agents.
 
         Returns:
             Updated session dict, or None if session_id is not found.
@@ -654,13 +654,13 @@ class SessionCatalog:
                 raise ValueError("empty field in JSON response")
             return topic, description, category
         except (json.JSONDecodeError, KeyError, ValueError):
-            # legacy — fallback when JSON parse fails
+            # legacy fallback when JSON parse fails
             return self._parse_enrichment(text)
 
     def _parse_enrichment(self, text: str) -> tuple[str, str, str]:
         """Parse an LLM response into (topic, description, category).
 
-        legacy — fallback when JSON parse fails (used by _llm_enrich).
+        Legacy fallback when JSON parse fails (used by _llm_enrich).
 
         Expected format:
             TOPIC: <topic>

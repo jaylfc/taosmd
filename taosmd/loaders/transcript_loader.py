@@ -1,18 +1,18 @@
-"""TranscriptLoader — reads transcript JSON into a ``TranscriptBlob``.
+"""TranscriptLoader: reads transcript JSON into a ``TranscriptBlob``.
 
 Accepted shapes:
 
-  Shape A — Whisper-style segments:
+  Shape A: Whisper-style segments:
     {"segments": [{"start": 0.0, "end": 4.2, "text": "Hello.", "speaker": "spk_0"}, ...]}
 
-  Shape B — already-canonical TranscriptStamp list:
+  Shape B: already-canonical TranscriptStamp list:
     {"transcripts": [{"start_timestamp_in_seconds": 0.0,
                       "speaker": "spk_0", "text": "Hello."}, ...]}
 
-  Shape C — plain list of stamps (either of the above field names per row):
+  Shape C: plain list of stamps (either of the above field names per row):
     [{"start": 0.0, "speaker": "spk_0", "text": "Hello."}, ...]
 
-VTT / SRT parsing isn't here — those are separate enough to deserve
+VTT / SRT parsing isn't here; those are separate enough to deserve
 their own loader if a user surfaces. For now, JSON only.
 """
 

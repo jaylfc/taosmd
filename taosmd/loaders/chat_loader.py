@@ -1,20 +1,20 @@
-"""ChatLoader — reads chat-shaped JSON files into a ``ChatBlob``.
+"""ChatLoader: reads chat-shaped JSON files into a ``ChatBlob``.
 
 Accepted shapes:
 
-  Shape A — list of message dicts (matches OpenAI / Anthropic message
+  Shape A: list of message dicts (matches OpenAI / Anthropic message
   arrays and most chat-export tools):
     [
       {"role": "user", "content": "hi", "timestamp": 1716000000.0},
       {"role": "assistant", "content": "hello", "alias": "Alex"}
     ]
 
-  Shape B — object with a ``messages`` key (matches several agent
+  Shape B: object with a ``messages`` key (matches several agent
   frameworks that include extra session metadata at the top level):
     {"messages": [...], "agent": "alex", "session_id": "..."}
 
   Each message can include any of ``role``, ``content``, ``alias``,
-  ``timestamp`` — missing fields default to ``""`` / ``0.0``.
+  ``timestamp``; missing fields default to ``""`` / ``0.0``.
 
 Anything else falls through to ``DocLoader`` via the registry.
 """

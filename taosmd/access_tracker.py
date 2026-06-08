@@ -1,11 +1,11 @@
-"""Access Tracker — tracks query diversity and consolidation for memories (taOSmd).
+"""Access Tracker: tracks query diversity and consolidation for memories (taOSmd).
 
 Records which queries accessed which memories, enabling the composite scoring
 system to compute query_diversity (how many DIFFERENT queries retrieved a memory)
 and consolidation_count (how many processing phases reinforced it).
 
 Separate from the KG/vector stores so it doesn't require schema migrations.
-Works across all memory layers — any store can call track_access().
+Works across all memory layers; any store can call track_access().
 """
 
 from __future__ import annotations

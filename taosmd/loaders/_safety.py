@@ -3,14 +3,14 @@
 Two small, stdlib-only helpers that loaders call from their ``load()``
 entry point before touching a file:
 
-  * ``check_size`` — refuse files larger than ``max_bytes`` so a stray
+  * ``check_size``: refuse files larger than ``max_bytes`` so a stray
     multi-gigabyte file can't blow up memory on a ``f.read()``. The cap
     is generous by default (100 MB) and configurable per call.
 
-  * ``resolve_within`` — when a caller pins a ``base_dir``, refuse paths
+  * ``resolve_within``: when a caller pins a ``base_dir``, refuse paths
     that resolve outside it (``../../etc/passwd``, an absolute escape, a
-    symlink pointing out of the tree). When ``base_dir`` is ``None`` —
-    the default — nothing is restricted and the resolved path is
+    symlink pointing out of the tree). When ``base_dir`` is ``None``
+    (the default) nothing is restricted and the resolved path is
     returned unchanged, so standalone use against an arbitrary path is
     never broken.
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# Generous default — large enough that no normal chat / transcript /
+# Generous default: large enough that no normal chat / transcript /
 # email / doc file trips it, small enough to stop a runaway read.
 DEFAULT_MAX_BYTES = 100 * 1024 * 1024  # 100 MB
 
@@ -54,7 +54,7 @@ def resolve_within(path: str | Path, base_dir: str | Path | None = None) -> Path
     only ever matches that exact file.
 
     With ``base_dir=None`` (the default) this is just ``Path(path)``
-    resolved — no restriction, so direct standalone use of any path is
+    resolved, no restriction, so direct standalone use of any path is
     unaffected.
 
     With ``base_dir`` given, the resolved path must sit inside the

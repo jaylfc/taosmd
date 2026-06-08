@@ -3,29 +3,29 @@
 An activation surface so any MCP-capable agent (Claude, Cursor, Codex,
 OpenWebUI, …) can read and write taOSmd memory and the agent-to-agent bus
 directly, without a custom integration. It is a thin shell over
-:mod:`taosmd.service` — the same shared core the local HTTP/REST server (#85)
-sits on — so behaviour matches the Python API and CLI exactly.
+:mod:`taosmd.service`, the same shared core the local HTTP/REST server (#85)
+sits on, so behaviour matches the Python API and CLI exactly.
 
 Design choices (matching the project's local-first, offline, additive vision):
 
-* **optional dependency** — the ``mcp`` Python SDK is imported lazily/guarded
+* **optional dependency**: the ``mcp`` Python SDK is imported lazily/guarded
   here, so ``import taosmd`` (and standalone use) never fails when ``mcp`` is
   not installed. Install with ``pip install taosmd[mcp]``.
-* **local-first / offline** — the server speaks the stdio transport (the
+* **local-first / offline**: the server speaks the stdio transport (the
   standard for desktop MCP clients); there is no network listener and no
   cloud dependency.
-* **additive + opt-in** — the server only runs when you start it via
+* **additive + opt-in**: the server only runs when you start it via
   ``taosmd mcp`` (or :func:`serve_stdio`); the Python API, CLI, and HTTP
   server are untouched.
-* **per-agent scoping** — every tool takes an ``agent`` argument and forwards
+* **per-agent scoping**: every tool takes an ``agent`` argument and forwards
   it to the service layer, honouring the same isolation as the Python API.
 
 Concurrency model
 -----------------
 FastMCP runs each tool call on its own asyncio event loop, but the underlying
 stores hold thread-affine SQLite connections (created and cached on first
-use). So rather than running service coroutines directly on FastMCP's loop —
-which would bind those connections to whichever loop happens to be live — every
+use). So rather than running service coroutines directly on FastMCP's loop,
+which would bind those connections to whichever loop happens to be live, every
 async service call is dispatched onto a single, long-lived background
 event-loop thread (the same :class:`taosmd.http_server._ServiceLoop` the HTTP
 server uses). All DB work therefore happens in one context, sequentially,

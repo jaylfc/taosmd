@@ -1,4 +1,4 @@
-"""Loader registry — picks the right loader for a path.
+"""Loader registry: picks the right loader for a path.
 
 Iteration order matters: more-specific loaders go first so that
 ``ChatLoader`` (which claims ``*.chat.json``) wins over a hypothetical
@@ -81,6 +81,6 @@ def pick_loader(file_path: str | Path) -> LoaderInterface:
     for loader_cls in REGISTRY:
         if loader_cls.can_handle(extension=ext, mime_type=mime_type):
             return loader_cls()
-    # Belt-and-braces — REGISTRY ends with DocLoader so this is
+    # Belt-and-braces: REGISTRY ends with DocLoader so this is
     # unreachable, but defend against someone removing the catch-all.
     return DocLoader()

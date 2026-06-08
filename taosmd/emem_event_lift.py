@@ -1,9 +1,9 @@
-"""EMem pass-2 — lift EDUs into typed (subject, predicate, object) triples.
+"""EMem pass-2: lift EDUs into typed (subject, predicate, object) triples.
 
 Pass 1 (``taosmd.emem_edu.extract_session_edus``) decomposes a conversation
 session into atomic Elementary Discourse Units like "Bob traveled to Tokyo
 for 5 days in March 2024 for the Global AI Innovation Symposium". That's
-already the validated SH-specialist retrieval recipe — see PR #74 and
+already the validated SH-specialist retrieval recipe; see PR #74 and
 docs/benchmarks.md.
 
 Pass 2 turns each EDU into structured KG triples whose predicates are
@@ -38,21 +38,21 @@ from .predicate_vocab import ALLOWED_PREDICATES, normalise
 
 # The system prompt lists every allowed predicate inline so the model can
 # pick from a fixed set rather than inventing new ones. We keep the list
-# sorted + comma-separated for token efficiency. Renders at ~250 tokens —
+# sorted + comma-separated for token efficiency. Renders at ~250 tokens,
 # acceptable per-call overhead for a 5-15 s LLM round trip.
 def _allowed_predicates_inline() -> str:
     return ", ".join(sorted(ALLOWED_PREDICATES))
 
 
 _SYSTEM_PROMPT = """\
-You are extracting structured (subject, predicate, object) triples from a single Elementary Discourse Unit (EDU) — a short, atomic factual statement.
+You are extracting structured (subject, predicate, object) triples from a single Elementary Discourse Unit (EDU), a short, atomic factual statement.
 
 For each triple:
 - subject and object must be normalised entity names. Lowercase, use the most informative name (e.g. "bob" not "he", "global ai innovation symposium 2024" not "the conference").
 - predicate MUST be one of these allowed predicates and nothing else:
 {predicates_inline}
 
-If a fact's natural predicate isn't in the allowed list, EITHER pick the closest match OR drop the triple — do not invent a new predicate. Drop triples you can't express cleanly.
+If a fact's natural predicate isn't in the allowed list, EITHER pick the closest match OR drop the triple. Do not invent a new predicate. Drop triples you can't express cleanly.
 
 Return JSON of the form:
   {{"event_type": "<short label, e.g. 'travel', 'meeting', 'employment_change'>",
@@ -119,19 +119,19 @@ async def lift_edu_to_triples(
 
     Returns ``{"event_type": str, "triples": [{"subject", "predicate", "object"}]}``.
     Predicates are normalised + filtered against ``ALLOWED_PREDICATES`` here
-    in the client (belt-and-braces — the system prompt asks for it, but
+    in the client (belt-and-braces: the system prompt asks for it, but
     smaller models occasionally invent). Triples whose predicate doesn't
     survive normalisation/filtering are silently dropped (logged at debug
     by the caller if it cares); we'd rather lose a noisy triple than write
     a free-form one and corrode the vocab.
 
     Returns ``{"event_type": "none", "triples": []}`` on transport / JSON
-    error — caller can treat empty as "nothing extracted" without needing
+    error; caller can treat empty as "nothing extracted" without needing
     to differentiate "nothing there" from "extractor failed".
 
     ``model`` is a ``provider:model`` (or bare model) string. When omitted
     it resolves to the system-wide memory model (see :mod:`taosmd.config`),
-    falling back to ``llama3.1:8b`` — the prior pass-2 default — when no
+    falling back to ``llama3.1:8b`` (the prior pass-2 default) when no
     global is configured.
     """
     if not model:
@@ -189,7 +189,7 @@ async def lift_edus_to_events(
 
     Sequential calls (not concurrent) to avoid hammering Ollama under
     NUM_PARALLEL=1, which is the default LoCoMo bench config. Caller can
-    parallelise across sessions if they want — within a session, pass-1
+    parallelise across sessions if they want; within a session, pass-1
     already serialised on ingest order.
     """
     out: list[dict[str, Any]] = []

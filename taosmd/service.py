@@ -6,7 +6,7 @@ functions rather than reaching into :mod:`taosmd.api` directly. Keeping the
 glue in one place means a single, consistent contract for every adapter and
 guarantees their behaviour matches the Python API exactly.
 
-The functions here are deliberately thin — they reuse
+The functions here are deliberately thin; they reuse
 :func:`taosmd.api.ingest`, :func:`taosmd.api.search`,
 :func:`taosmd.api.list_pending_decisions`, and
 :func:`taosmd.api.resolve_pending_decision` (and therefore
@@ -42,7 +42,7 @@ def _get_remote(data_dir=None):
     is configured, otherwise ``None`` (use local path).
 
     When ``data_dir`` is explicitly provided (as the http_server always does),
-    the server-URL is resolved **only from the config file** in that data dir —
+    the server-URL is resolved **only from the config file** in that data dir;
     the ``TAOSMD_SERVER_URL`` env var is intentionally ignored.  This prevents
     the running HTTP server from reading the env var and proxying its own
     requests back to itself (infinite loop).  The env override is only active
@@ -346,7 +346,7 @@ async def a2a_channels(*, data_dir=None) -> list[dict]:
     """Return a summary of every channel (named thread) on the A2A bus.
 
     Derived entirely from existing :data:`~taosmd.archive.EVENT_A2A` archive
-    events — no additional schema. Groups by ``app_id`` (which equals the
+    events, no additional schema. Groups by ``app_id`` (which equals the
     thread name) and aggregates membership, message count, and timestamps.
 
     Each item has shape ``{"channel", "members", "message_count",

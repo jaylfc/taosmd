@@ -1,4 +1,4 @@
-"""DocLoader — catch-all for plain text + markdown into a ``DocBlob``.
+"""DocLoader: catch-all for plain text + markdown into a ``DocBlob``.
 
 This is the loader the registry picks when nothing more specific
 claims a file. It does no parsing beyond extracting an optional title

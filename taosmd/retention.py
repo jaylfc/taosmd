@@ -7,10 +7,10 @@ psychologically-grounded decay curve.
 Formula: score = salience * exp(-lambda * days) + sigma * sum(1/daysSinceAccess)
 
 Tiers:
-  hot     (score >= 0.7)  — always available, prioritised in search
-  warm    (score >= 0.4)  — available, normal retrieval
-  cold    (score >= 0.15) — available but deprioritised
-  evictable (score < 0.15) — candidate for removal
+  hot     (score >= 0.7): always available, prioritised in search
+  warm    (score >= 0.4): available, normal retrieval
+  cold    (score >= 0.15): available but deprioritised
+  evictable (score < 0.15): candidate for removal
 
 Also handles:
   - TTL-based expiry (forgetAfter field)
@@ -23,7 +23,7 @@ import math
 import time
 
 # Decay parameters (tuned for daily granularity)
-LAMBDA = 0.01       # Base decay rate — slow, memories last weeks
+LAMBDA = 0.01       # Base decay rate, slow, memories last weeks
 SIGMA = 0.3         # Reinforcement weight for access history
 
 # Tier thresholds
@@ -230,7 +230,7 @@ def composite_score(
 
 
 def _recency_score(created_at: float, last_accessed_at: float, now: float) -> float:
-    """Compute recency signal — more recent = higher score."""
+    """Compute recency signal: more recent = higher score."""
     most_recent = max(created_at, last_accessed_at) if last_accessed_at else created_at
     if most_recent <= 0:
         return 0.0

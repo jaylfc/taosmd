@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 
 # Patterns that indicate relationships
-# Subject pattern: anchored more tightly — 1 to 5 words before the verb
+# Subject pattern: anchored more tightly, 1 to 5 words before the verb
 _S = r"((?:[\w\-]+\s+){0,4}[\w\-]+)"
 # Object pattern: everything after the verb until sentence end
 _O = r"([\w][\w\s\-]{1,50}?)"
@@ -283,7 +283,7 @@ async def process_conversation_turn(
             # When pending_store is provided AND the fact's confidence is
             # below defer_below_confidence, the new triple is queued for
             # user review instead of auto-resolving against the existing
-            # fact — see taosmd/pending_decisions.py.
+            # fact; see taosmd/pending_decisions.py.
             fact_confidence = float(fact.get("confidence", default_fact_confidence))
             result = await kg.add_triple_with_contradiction_check(
                 subject=fact["subject"],

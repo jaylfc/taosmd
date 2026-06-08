@@ -1,12 +1,12 @@
-"""EmailLoader — reads RFC 5322 .eml into an ``EmailBlob``.
+"""EmailLoader: reads RFC 5322 .eml into an ``EmailBlob``.
 
 Uses the stdlib ``email`` module so we don't pull a parser dep. Handles
 both ``.eml`` and ``.mbox`` files; for mbox, the first message in the
-file is used (multi-message mbox would need a different envelope — a
+file is used (multi-message mbox would need a different envelope, a
 ``MailboxBlob`` containing many ``EmailBlob``s; defer until we have a
 real caller).
 
-Threading via ``Message-Id`` + ``In-Reply-To`` headers — both surfaced
+Threading via ``Message-Id`` + ``In-Reply-To`` headers, both surfaced
 on the blob so downstream extractors can rebuild thread trees later.
 """
 
@@ -44,7 +44,7 @@ class EmailLoader(LoaderInterface):
         with open(safe_path, "rb") as f:
             msg = email.message_from_binary_file(f, policy=policy.default)
 
-        # body — prefer text/plain part, fall back to flat string.
+        # body: prefer text/plain part, fall back to flat string.
         if msg.is_multipart():
             body = ""
             for part in msg.walk():

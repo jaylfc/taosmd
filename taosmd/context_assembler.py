@@ -4,11 +4,11 @@ Inspired by MemPalace's L0-L3 layer system and Letta's virtual context memory,
 with a core/archival split inspired by agentmemory.
 
 Layers:
-  L0: Identity — who is the agent, who is the user (~100 tokens, always loaded)
-  L1: Active facts — current KG facts about the user + project (~200 tokens)
+  L0: Identity: who is the agent, who is the user (~100 tokens, always loaded)
+  L1: Active facts: current KG facts about the user + project (~200 tokens)
       Split into CORE (pinned, always present) and ARCHIVAL (paged by retention score)
-  L2: Relevant memories — semantic search results from recent context (~500 tokens)
-  L3: Deep recall — archive search, full KG traversal (on-demand, ~1000 tokens)
+  L2: Relevant memories: semantic search results from recent context (~500 tokens)
+  L3: Deep recall: archive search, full KG traversal (on-demand, ~1000 tokens)
 
 Core/Archival Split:
   Core memories (pinned=True) always get 30% of the L1 budget.
@@ -99,8 +99,8 @@ def truncate_to_tokens(text: str, max_tokens: int) -> str:
     """
     if estimate_tokens(text) <= max_tokens:
         return text
-    # Reserve budget for the trailing ellipsis so the returned string —
-    # marker included — still lands within max_tokens.
+    # Reserve budget for the trailing ellipsis so the returned string,
+    # marker included, still lands within max_tokens.
     ellipsis = "..."
     budget = max_tokens - estimate_tokens(ellipsis)
     if budget <= 0:
