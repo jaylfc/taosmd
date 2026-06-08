@@ -287,6 +287,42 @@ class AgentRegistry:
                 return dict(a)
         raise AgentNotFoundError(f"agent {name!r} is not registered")
 
+    # ----- recipe config -----------------------------------------------
+
+    def get_applied_recipe(self, name: str) -> str | None:
+        """Return the id of the recipe last applied to this agent, or None."""
+        rid = self.get_agent(name).get("applied_recipe_id")
+        return rid if isinstance(rid, str) and rid else None
+
+    def get_agent_retrieval_config(self, name: str) -> dict:
+        """Return the flattened retrieval knobs stored on the agent record."""
+        return dict(self.get_agent(name).get("retrieval_config") or {})
+
+    def set_agent_recipe_config(
+        self,
+        name: str,
+        *,
+        recipe_id: str,
+        retrieval_config: dict,
+        librarian: dict | None = None,
+    ) -> dict:
+        """Write-through the applied recipe id + its flattened retrieval knobs.
+
+        Mirrors :meth:`update_stats`: mutate the record in the loaded envelope
+        and re-save via the registry's atomic ``_write``. Optionally replaces
+        the librarian block (used by the lite path). Returns the record.
+        """
+        data = self._read()
+        for a in data["agents"]:
+            if a["name"] == name:
+                a["applied_recipe_id"] = recipe_id
+                a["retrieval_config"] = dict(retrieval_config)
+                if librarian is not None:
+                    a["librarian"] = librarian
+                self._write(data)
+                return dict(a)
+        raise AgentNotFoundError(f"agent {name!r} is not registered")
+
     # ----- librarian config --------------------------------------------
 
     def get_librarian(self, name: str) -> dict:
@@ -481,7 +517,13 @@ def run_if_enabled(agent_name: str, task: str, fn, *args, fallback=None, **kw):
 _default_registry: AgentRegistry | None = None
 
 
-def _registry() -> AgentRegistry:
+def _registry(data_dir: Path | str | None = None) -> AgentRegistry:
+    # When a data_dir is given (tests, non-default installs), build a registry
+    # rooted there rather than touching the process-wide singleton. This is the
+    # same isolation the AgentRegistry(tmp_path) fixture in tests/test_agents.py
+    # relies on; there is no module-level singleton-reset hook.
+    if data_dir is not None:
+        return AgentRegistry(data_dir)
     global _default_registry
     if _default_registry is None:
         _default_registry = AgentRegistry()
@@ -508,8 +550,8 @@ def delete_agent(name: str, *, drop_data: bool = False) -> None:
     _registry().delete_agent(name, drop_data=drop_data)
 
 
-def ensure_agent(name: str, *, display_name: str = "") -> dict:
-    return _registry().ensure_agent(name, display_name=display_name)
+def ensure_agent(name: str, *, display_name: str = "", data_dir: Path | str | None = None) -> dict:
+    return _registry(data_dir).ensure_agent(name, display_name=display_name)
 
 
 def update_stats(
@@ -519,6 +561,37 @@ def update_stats(
     total_chunks: int | None = None,
 ) -> dict:
     return _registry().update_stats(name, last_ingest_at=last_ingest_at, total_chunks=total_chunks)
+
+
+def get_applied_recipe(name: str, data_dir: Path | str | None = None) -> str | None:
+    """Return the recipe id last applied to an agent, or None if unset."""
+    return _registry(data_dir).get_applied_recipe(name)
+
+
+def get_agent_retrieval_config(name: str, data_dir: Path | str | None = None) -> dict:
+    """Return the flattened retrieval knobs stored on an agent record."""
+    return _registry(data_dir).get_agent_retrieval_config(name)
+
+
+def set_agent_recipe_config(
+    name: str,
+    *,
+    recipe_id: str,
+    retrieval_config: dict,
+    librarian: dict | None = None,
+    data_dir: Path | str | None = None,
+) -> dict:
+    """Persist an agent's applied recipe id + flattened retrieval knobs.
+
+    Write-through via the registry's atomic store; does not hand-write
+    agents.json. Optionally replaces the librarian block (lite path).
+    """
+    return _registry(data_dir).set_agent_recipe_config(
+        name,
+        recipe_id=recipe_id,
+        retrieval_config=retrieval_config,
+        librarian=librarian,
+    )
 
 
 def get_librarian(name: str) -> dict:
@@ -587,6 +660,9 @@ __all__ = [
     "delete_agent",
     "ensure_agent",
     "update_stats",
+    "get_applied_recipe",
+    "get_agent_retrieval_config",
+    "set_agent_recipe_config",
     "get_librarian",
     "set_librarian",
     "is_task_enabled",

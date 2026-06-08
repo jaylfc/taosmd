@@ -79,6 +79,19 @@ from . import prompts
 from . import config
 from .config import get_memory_model, set_memory_model
 
+# Recipes: first-class named config bundles (schema, registry, recommend,
+# resolve, apply). See docs/superpowers/specs/2026-06-08-recipes-design.md.
+from .recipes import (
+    recipe_schema,
+    list_recipes,
+    get_recipe,
+    recommend,
+    resolve_recipe,
+    apply_recipe,
+    Recipe,
+    local_probe,
+)
+
 from importlib.resources import files
 
 
@@ -176,6 +189,15 @@ __all__ = [
     # Global config: system-wide memory model
     "get_memory_model",
     "set_memory_model",
+    # Recipes: named config bundles
+    "recipe_schema",
+    "list_recipes",
+    "get_recipe",
+    "recommend",
+    "resolve_recipe",
+    "apply_recipe",
+    "Recipe",
+    "local_probe",
     # Librarian prompts
     "prompts",
 ]

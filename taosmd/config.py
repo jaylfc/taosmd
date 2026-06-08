@@ -32,6 +32,8 @@ _MEMORY_MODEL_KEY = "memory_model"
 _SERVER_URL_KEY = "server_url"
 # Key under which the optional remote server bearer token is stored.
 _SERVER_TOKEN_KEY = "server_token"
+# Key under which the global default recipe id is stored.
+_DEFAULT_RECIPE_KEY = "default_recipe"
 
 
 def _resolve_data_dir(data_dir=None) -> str:
@@ -99,6 +101,35 @@ def set_memory_model(model: str, clear: bool = False, data_dir=None) -> None:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("model must be a non-empty string (or pass clear=True)")
         data[_MEMORY_MODEL_KEY] = model.strip()
+    _write(data, data_dir)
+
+
+def get_default_recipe(data_dir=None) -> str | None:
+    """Return the configured global default recipe id, or None if unset."""
+    rid = _read(data_dir).get(_DEFAULT_RECIPE_KEY)
+    if isinstance(rid, str) and rid.strip():
+        return rid
+    return None
+
+
+def set_default_recipe(recipe_id: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the global default recipe id (or clear it).
+
+    Args:
+        recipe_id: Stable recipe slug. Ignored when ``clear`` is True.
+        clear: when True, remove the setting (unset -> ``get`` returns None).
+
+    Raises:
+        ValueError: when ``clear`` is False and ``recipe_id`` is not a
+            non-empty string.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_DEFAULT_RECIPE_KEY, None)
+    else:
+        if not isinstance(recipe_id, str) or not recipe_id.strip():
+            raise ValueError("recipe_id must be a non-empty string (or pass clear=True)")
+        data[_DEFAULT_RECIPE_KEY] = recipe_id.strip()
     _write(data, data_dir)
 
 
@@ -208,6 +239,8 @@ __all__ = [
     "get_memory_model",
     "set_memory_model",
     "resolve_memory_model",
+    "get_default_recipe",
+    "set_default_recipe",
     "get_server_url",
     "set_server_url",
     "get_server_token",

@@ -105,7 +105,7 @@ Recipe
   generator:
     model               str    provider:model for answer synthesis, or "" to inherit
   librarian:
-    fanout              enum   off | conservative | balanced | aggressive (default balanced)
+    fanout              enum   off | low | med | high                 (default low)
     worker_aware        bool   scale fanout by worker capabilities    (default true)
   metadata:                    (read-only, display + ranking input)
     tier            enum   pi-npu | cpu | gpu-4gb | gpu-8gb | gpu-12gb | unconstrained
