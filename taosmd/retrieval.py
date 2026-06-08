@@ -287,6 +287,8 @@ async def _query_source(
     limit: int,
     project: str | None = None,
     search_agents: list[str] | None = None,
+    fusion: str = "boost",
+    candidate_limit: int | None = None,
 ) -> list[dict]:
     """Query a single source and return adapted results.
 
@@ -296,8 +298,9 @@ async def _query_source(
         if name == "vector":
             raw = await source.search(
                 query,
-                limit=limit,
+                limit=candidate_limit or limit,
                 hybrid=True,
+                fusion=fusion,
                 project=project,
                 search_agents=search_agents,
             )
@@ -668,6 +671,8 @@ async def retrieve(
     agent_name: str = "",
     verify: bool = False,
     adjacent_neighbors: int = 0,
+    fusion: str = "boost",
+    candidate_top_k: int | None = None,
     position_key: str = "position",
     group_key: str | None = None,
     project: str | None = None,
@@ -724,6 +729,10 @@ async def retrieve(
             ``metadata[position_key]`` (and optional ``[group_key]``).
             Default 0 (off). Worth +0.089 on LoCoMo same-tier at adj=2; see
             ``docs/benchmarks.md``.
+        fusion: Hybrid fusion mode passed through to the vector source search
+            (e.g. "boost", "rrf", "mem0_additive"). Default "boost".
+        candidate_top_k: Per-source candidate pool size fetched before
+            rerank/final-limit. Default None means use ``limit``.
         position_key: Metadata key holding the integer position used for
             neighbour lookup (default ``"position"``).
         group_key: Optional metadata key constraining neighbours to share the
@@ -755,6 +764,7 @@ async def retrieve(
                 name, src, query, fetch_limit,
                 project=project if name == "vector" else None,
                 search_agents=search_agents if name == "vector" else None,
+                fusion=fusion, candidate_limit=candidate_top_k,
             ))
             for name, src in available.items()
         ]
@@ -794,14 +804,17 @@ async def retrieve(
         results: list[dict] = []
 
         if primary and primary in sources:
-            results = await _query_source(primary, sources[primary], query, fetch_limit)
+            results = await _query_source(primary, sources[primary], query, fetch_limit,
+                                          fusion=fusion, candidate_limit=candidate_top_k)
         elif sources:
             # Fall back to first available source
             first_name, first_src = next(iter(sources.items()))
-            results = await _query_source(first_name, first_src, query, fetch_limit)
+            results = await _query_source(first_name, first_src, query, fetch_limit,
+                                          fusion=fusion, candidate_limit=candidate_top_k)
 
         if len(results) < limit and secondary and secondary in sources:
-            secondary_results = await _query_source(secondary, sources[secondary], query, fetch_limit)
+            secondary_results = await _query_source(secondary, sources[secondary], query, fetch_limit,
+                                                    fusion=fusion, candidate_limit=candidate_top_k)
             merged = _rrf_merge([results, secondary_results])
             results = _deduplicate(merged)
 
@@ -819,10 +832,12 @@ async def retrieve(
         results: list[dict] = []
 
         if primary and primary in sources:
-            results = await _query_source(primary, sources[primary], query, fetch_limit)
+            results = await _query_source(primary, sources[primary], query, fetch_limit,
+                                          fusion=fusion, candidate_limit=candidate_top_k)
         elif sources:
             first_name, first_src = next(iter(sources.items()))
-            results = await _query_source(first_name, first_src, query, fetch_limit)
+            results = await _query_source(first_name, first_src, query, fetch_limit,
+                                          fusion=fusion, candidate_limit=candidate_top_k)
 
         results = results[:limit]
         if adjacent_neighbors > 0:
@@ -839,7 +854,8 @@ async def retrieve(
         strategy_info = get_search_strategy(query)
 
         tasks = [
-            asyncio.create_task(_query_source(name, src, query, fetch_limit))
+            asyncio.create_task(_query_source(name, src, query, fetch_limit,
+                                              fusion=fusion, candidate_limit=candidate_top_k))
             for name, src in filtered_sources.items()
         ]
         results_per_source = await asyncio.gather(*tasks, return_exceptions=True)
