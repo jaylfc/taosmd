@@ -123,3 +123,26 @@ def test_default_recipe_get_set_clear(tmp_path):
     assert taosmd_config.get_default_recipe(data_dir=d) == "rrf-9b"
     taosmd_config.set_default_recipe("", clear=True, data_dir=d)
     assert taosmd_config.get_default_recipe(data_dir=d) is None
+
+
+from taosmd import agents as taosmd_agents
+
+
+def test_agent_recipe_config_roundtrip(tmp_path):
+    # The agents module has no singleton-reset hook or TAOSMD_DATA_DIR env;
+    # existing agent tests isolate by rooting an AgentRegistry at tmp_path
+    # (see tests/test_agents.py). The recipe helpers take the same data_dir,
+    # so we point them at tmp_path rather than poking a global singleton.
+    d = str(tmp_path)
+    taosmd_agents.ensure_agent("alice", data_dir=d)
+    assert taosmd_agents.get_applied_recipe("alice", data_dir=d) is None
+    taosmd_agents.set_agent_recipe_config(
+        "alice", recipe_id="rrf-9b",
+        retrieval_config={"limit": 5, "candidate_top_k": 20, "fusion": "rrf",
+                          "reranker": "none", "adjacent_neighbors": 2,
+                          "llm_reranker": True, "strategy": "thorough"},
+        data_dir=d)
+    assert taosmd_agents.get_applied_recipe("alice", data_dir=d) == "rrf-9b"
+    cfg = taosmd_agents.get_agent_retrieval_config("alice", data_dir=d)
+    assert cfg["fusion"] == "rrf"
+    assert cfg["candidate_top_k"] == 20
