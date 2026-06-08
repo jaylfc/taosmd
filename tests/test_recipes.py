@@ -111,3 +111,15 @@ def test_recommend_uses_local_probe_when_none(monkeypatch):
                  "cpu": {"cores": 4}, "ram_mb": 8000}})
     ranked = recipes.recommend(None)
     assert ranked[0].metadata["tier"] in ("cpu", "pi-npu")
+
+
+from taosmd import config as taosmd_config
+
+
+def test_default_recipe_get_set_clear(tmp_path):
+    d = str(tmp_path)
+    assert taosmd_config.get_default_recipe(data_dir=d) is None
+    taosmd_config.set_default_recipe("rrf-9b", data_dir=d)
+    assert taosmd_config.get_default_recipe(data_dir=d) == "rrf-9b"
+    taosmd_config.set_default_recipe("", clear=True, data_dir=d)
+    assert taosmd_config.get_default_recipe(data_dir=d) is None
