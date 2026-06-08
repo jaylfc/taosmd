@@ -279,3 +279,43 @@ def tier_of(device_info: dict) -> str:
     if npu.get("type") not in (None, "none"):
         return "pi-npu"
     return "cpu"
+
+
+# Tier capability order: a recipe whose tier needs MORE than the device has
+# must never outrank one that fits. Lower index = lighter requirement.
+_TIER_RANK = {"pi-npu": 0, "cpu": 0, "gpu-4gb": 1, "gpu-8gb": 2,
+              "gpu-12gb": 3, "unconstrained": 4}
+
+
+def _fits(recipe_tier: str, device_tier: str) -> bool:
+    """True if a recipe built for recipe_tier can run on device_tier."""
+    # CPU/pi devices cannot run gpu-tier recipes; gpu devices can run lighter.
+    dev = _TIER_RANK.get(device_tier, 0)
+    req = _TIER_RANK.get(recipe_tier, 0)
+    if device_tier in ("cpu", "pi-npu"):
+        return recipe_tier in ("cpu", "pi-npu")
+    return req <= dev
+
+
+def _score_for(recipe: Recipe) -> float:
+    """A single comparable quality number for ranking (lenient judge, else 0)."""
+    scores = recipe.metadata.get("scores", {})
+    return scores.get("gemma4:e2b", 0.0)
+
+
+def recommend(device_info: dict | None = None) -> list[Recipe]:
+    """Rank the built-in registry best-first for the given (or probed) device.
+
+    Recipes that do not fit the device tier are sorted last; among fitting
+    recipes, higher benchmarked quality ranks first. Returns Recipe objects.
+    """
+    if device_info is None:
+        device_info = local_probe()
+    device_tier = tier_of(device_info)
+
+    def key(r: Recipe):
+        fits = _fits(r.metadata.get("tier", "cpu"), device_tier)
+        # fits first (True sorts before False via not-fits=0), then quality desc
+        return (0 if fits else 1, -_score_for(r))
+
+    return sorted(list_recipes(), key=key)

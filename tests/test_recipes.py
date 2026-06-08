@@ -85,3 +85,29 @@ def test_local_probe_tier_classifier():
     assert recipes.tier_of({"host": {"gpu": {"type": "none"},
                                      "npu": {"type": "none"}, "cpu": {"cores": 4},
                                      "ram_mb": 8000}}) == "cpu"
+
+
+def test_recommend_ranks_leader_first_on_gpu12():
+    info = {"host": {"gpu": {"type": "nvidia", "vram_mb": 12000},
+                     "npu": {"type": "none"}, "cpu": {"cores": 8}, "ram_mb": 32000}}
+    ranked = recipes.recommend(info)
+    assert ranked[0].id == "maxsim-rerank-9b"
+    assert all(hasattr(r, "id") for r in ranked)
+
+
+def test_recommend_avoids_gpu_recipes_on_pi():
+    info = {"host": {"gpu": {"type": "none"}, "npu": {"type": "rknpu"},
+                     "cpu": {"cores": 8}, "ram_mb": 16000}}
+    ranked = recipes.recommend(info)
+    assert ranked[0].id == "lite-pi"
+    # A 9B GPU recipe must never outrank the lite recipe on a Pi.
+    assert ranked.index(recipes.get_recipe("lite-pi")) < ranked.index(
+        recipes.get_recipe("maxsim-rerank-9b"))
+
+
+def test_recommend_uses_local_probe_when_none(monkeypatch):
+    monkeypatch.setattr(recipes, "local_probe", lambda: {
+        "host": {"gpu": {"type": "none"}, "npu": {"type": "none"},
+                 "cpu": {"cores": 4}, "ram_mb": 8000}})
+    ranked = recipes.recommend(None)
+    assert ranked[0].metadata["tier"] in ("cpu", "pi-npu")
