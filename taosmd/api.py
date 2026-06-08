@@ -623,6 +623,8 @@ async def supersede_vectors(match: str, *, data_dir=None) -> int:
 __all__ = [
     "ingest",
     "search",
+    "list_projects",
+    "list_shelves",
     "list_pending_decisions",
     "resolve_pending_decision",
     "supersede_vectors",

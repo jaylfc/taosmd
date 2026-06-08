@@ -22,7 +22,19 @@ from . import loaders
 from .session_catalog import SessionCatalog
 from .catalog_pipeline import CatalogPipeline
 from .retrieval import retrieve
-from .api import ingest, search, list_pending_decisions, resolve_pending_decision
+from .api import (
+    ingest,
+    search,
+    list_projects,
+    list_shelves,
+    list_pending_decisions,
+    resolve_pending_decision,
+)
+
+# Project identity: git-remote-derived fingerprint for cross-agent memory
+# sharing (the project= / also_include= args on ingest/search).
+from . import project
+from .project import get_project_id, ProjectResolver, ProjectInfo
 
 # Activation surfaces — shared service layer + local HTTP/REST API (#85).
 # The MCP server (#84) reuses the same `service` core.
@@ -107,6 +119,13 @@ __all__ = [
     "retrieve",
     "ingest",
     "search",
+    # Project identity + cross-agent discovery
+    "project",
+    "get_project_id",
+    "ProjectResolver",
+    "ProjectInfo",
+    "list_projects",
+    "list_shelves",
     # Activation surfaces
     "service",
     "serve",
