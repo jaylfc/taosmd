@@ -73,12 +73,20 @@ class VectorMemory:
         onnx_path: str = "",
         binary_quant: bool = False,
         late_interaction: bool = False,
+        colbert_model: str = "",
     ):
         self._db_path = str(db_path)
         self._qmd_url = qmd_url
+        self._onnx_path = onnx_path
+        # When a ColBERT model is specified, route through the local (sentence-
+        # transformers) embed path and enable late-interaction MaxSim scoring.
+        self._colbert_model = colbert_model
+        if colbert_model:
+            embed_mode = "local"
+            local_model = colbert_model
+            late_interaction = True
         self._embed_mode = embed_mode
         self._local_model_name = local_model
-        self._onnx_path = onnx_path
         # Score retrieval by sign-bit Hamming similarity instead of full-precision
         # cosine. Off by default — opt-in footprint/speed option for memory- or
         # CPU-constrained (SBC) deployments: vectors are stored as packed sign
@@ -203,14 +211,15 @@ class VectorMemory:
     async def embed_tokens(self, text: str, task: str = "search_document") -> list[list[float]]:
         """Return per-token L2-normalised embeddings (ColBERT-style).
 
-        The MiniLM ONNX model emits per-token vectors (outputs[0], shape
-        (1, seq, 384)) which :meth:`_embed_onnx` mean-pools away. This returns
-        them instead: one L2-normalised 384-dim vector per real (non-padding)
-        token, with padding stripped via the attention mask. Only the ONNX path
-        is supported (the bench uses embed_mode="onnx").
+        Supports two backends:
+        - ONNX (MiniLM): extracts per-token hidden states before mean-pooling.
+        - sentence-transformers ColBERT models: uses output_value="token_embeddings"
+          which returns the model's per-token output (incl. any projection layer).
         """
+        if self._embed_mode == "local" and self._colbert_model and self._local_model is not None:
+            return self._embed_tokens_st(text)
         if not (self._embed_mode == "onnx" and self._onnx_session is not None):
-            raise RuntimeError("late_interaction requires embed_mode=onnx")
+            raise RuntimeError("late_interaction requires embed_mode=onnx or a ColBERT model")
 
         import numpy as np
 
@@ -243,9 +252,37 @@ class VectorMemory:
         """Embed using local sentence-transformers model (CPU)."""
         try:
             emb = self._local_model.encode(text[:512], convert_to_numpy=True)
-            return emb.tolist()
+            if hasattr(emb, "tolist"):
+                return emb.tolist()
+            import numpy as np
+            return np.mean(emb, axis=0).tolist() if emb.ndim == 2 else emb.tolist()
         except Exception as e:
             logger.debug("Local embedding failed: %s", e)
+            return []
+
+    def _embed_tokens_st(self, text: str) -> list[list[float]]:
+        """Per-token embeddings via a sentence-transformers ColBERT model.
+
+        Calls encode() with output_value="token_embeddings" which returns the
+        per-token output after any projection layer (e.g. the 128-dim ColBERT
+        linear head). Vectors are L2-normalised before being returned.
+        """
+        import numpy as np
+        try:
+            token_embs = self._local_model.encode(
+                text[:512],
+                output_value="token_embeddings",
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+            # Single sentence → (seq_len, dim) array
+            if isinstance(token_embs, np.ndarray):
+                return token_embs.tolist()
+            # Fallback: list of per-token arrays
+            return [v.tolist() for v in token_embs]
+        except Exception as e:
+            logger.warning("ColBERT token embedding failed: %s", e)
             return []
 
     async def _embed_qmd(self, text: str) -> list[float]:

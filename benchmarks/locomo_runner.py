@@ -1266,6 +1266,7 @@ async def run(args: argparse.Namespace) -> int:
                 onnx_path=args.onnx_path,
                 binary_quant=args.binary_quant,
                 late_interaction=args.late_interaction,
+                colbert_model=getattr(args, "colbert_model", ""),
             )
             await vmem.init(http_client=client)
             kg = None
@@ -1627,6 +1628,14 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Score retrieval by MiniLM token-level MaxSim (ColBERT-style late "
             "interaction) instead of pooled cosine. Experimental, opt-in."
+        ),
+    )
+    p.add_argument(
+        "--colbert-model", default="", dest="colbert_model",
+        help=(
+            "HuggingFace model name (or local path) for a proper ColBERT model to "
+            "use via sentence-transformers. When set, implies --late-interaction and "
+            "--embed-mode local. Example: answerdotai/answerai-colbert-small-v1"
         ),
     )
     return p.parse_args()
