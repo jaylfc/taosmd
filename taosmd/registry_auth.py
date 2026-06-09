@@ -80,9 +80,13 @@ class RegistryVerifier:
 
     The Ed25519 public key is fetched once and cached (it rotates rarely). The
     revocation set is fetched and re-fetched on ``refresh_interval`` so revokes
-    propagate without a restart, matching the registry poll-and-cache model. If
-    a revocation refresh fails, the last known-good set is kept (fail-safe: a
-    transient registry outage must not silently un-revoke an agent).
+    propagate without a restart, matching the registry poll-and-cache model.
+
+    Revocation failures are handled fail-closed where it matters: if the feed
+    has NEVER loaded, :meth:`authorize` raises (we cannot prove an agent is
+    unrevoked, so we refuse). Once a known-good set is cached, a later refresh
+    failure keeps that set (a transient outage must not silently un-revoke an
+    agent, nor take the whole bus down).
 
     ``pubkey_loader`` and ``revoked_loader`` are injected so the network layer
     can be supplied by the caller (and stubbed in tests). ``clock`` defaults to
@@ -114,13 +118,17 @@ class RegistryVerifier:
             try:
                 self._revoked = set(self._revoked_loader())
                 self._revoked_fetched_at = now
-            except Exception as exc:  # noqa: BLE001 - keep last-good set
+            except Exception as exc:  # noqa: BLE001
                 if self._revoked_fetched_at is None:
-                    logger.warning("registry revocation fetch failed, "
-                                   "no cached set yet: %s", exc)
-                else:
-                    logger.warning("registry revocation refresh failed, "
-                                   "using last-good set: %s", exc)
+                    # Never loaded: we cannot prove an agent is unrevoked, so
+                    # fail CLOSED rather than fall through to an empty allowlist.
+                    raise AuthError(
+                        f"revocation feed unavailable, refusing to authorise: {exc}"
+                    ) from exc
+                # Already have a known-good set: keep it across a transient
+                # refresh failure (fail-safe, never silently un-revokes).
+                logger.warning("registry revocation refresh failed, "
+                               "using last-good set: %s", exc)
         return self._revoked
 
     def authorize(self, token: str, claimed_from: str) -> dict:
