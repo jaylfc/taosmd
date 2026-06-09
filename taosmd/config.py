@@ -34,6 +34,7 @@ _SERVER_URL_KEY = "server_url"
 _SERVER_TOKEN_KEY = "server_token"
 # Key under which the global default recipe id is stored.
 _DEFAULT_RECIPE_KEY = "default_recipe"
+_REGISTRY_URL_KEY = "registry_url"
 
 
 def _resolve_data_dir(data_dir=None) -> str:
@@ -187,6 +188,53 @@ def set_server_url(url: str, clear: bool = False, data_dir=None) -> None:
         if not isinstance(url, str) or not url.strip():
             raise ValueError("url must be a non-empty string (or pass clear=True)")
         data[_SERVER_URL_KEY] = url.strip()
+    _write(data, data_dir)
+
+
+# ---------------------------------------------------------------------------
+# Agent registry URL (opt-in A2A bus authentication)
+# ---------------------------------------------------------------------------
+
+def get_registry_url(data_dir=None) -> str | None:
+    """Return the configured taOS agent-registry base URL, or ``None``.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_REGISTRY_URL`` environment variable
+    2. ``registry_url`` key in ``~/.taosmd/config.json``
+
+    When set, the A2A bus authenticates senders against this registry (verify
+    the EdDSA-JWT against ``<url>/api/agents/registry/pubkey`` and check the
+    revocation feed). When unset, the bus keeps free-handle behaviour so a
+    standalone install is unaffected.
+    """
+    env = os.environ.get("TAOSMD_REGISTRY_URL")
+    if env and env.strip():
+        return env.strip()
+    url = _read(data_dir).get(_REGISTRY_URL_KEY)
+    if isinstance(url, str) and url.strip():
+        return url.strip()
+    return None
+
+
+def set_registry_url(url: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the agent-registry base URL (or clear it).
+
+    Args:
+        url: Base URL of the taOS registry, e.g. ``"http://taos:8000"``.
+            Ignored when ``clear`` is True.
+        clear: when True, remove the setting (bus reverts to free handles).
+
+    Raises:
+        ValueError: when ``clear`` is False and ``url`` is not a non-empty string.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_REGISTRY_URL_KEY, None)
+    else:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string (or pass clear=True)")
+        data[_REGISTRY_URL_KEY] = url.strip()
     _write(data, data_dir)
 
 
