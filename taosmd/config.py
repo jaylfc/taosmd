@@ -38,6 +38,13 @@ _REGISTRY_URL_KEY = "registry_url"
 # Key under which the registry auth token (taOS local/admin token) is stored.
 # Used to poll the auth-gated registry revoked feed; the pubkey feed is public.
 _REGISTRY_TOKEN_KEY = "registry_token"
+# Who manages this taosmd instance: "standalone" (default) or "taos".
+_MANAGED_BY_KEY = "managed_by"
+# Override: serve the web dashboard even when managed_by=taos.
+_SERVE_DASHBOARD_KEY = "serve_dashboard"
+
+MANAGED_BY_STANDALONE = "standalone"
+MANAGED_BY_TAOS = "taos"
 
 
 def _resolve_data_dir(data_dir=None) -> str:
@@ -330,6 +337,69 @@ def set_server_token(token: str, clear: bool = False, data_dir=None) -> None:
     _write(data, data_dir)
 
 
+def get_managed_by(data_dir=None) -> str:
+    """Return the managed_by value: ``"standalone"`` (default) or ``"taos"``.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_MANAGED_BY`` environment variable
+    2. ``managed_by`` key in ``~/.taosmd/config.json``
+    3. ``"standalone"`` (default)
+
+    When ``"taos"``, the taOS app owns the auth/permission UX and the web
+    dashboard is hidden by default (controlled by :func:`get_serve_dashboard`).
+    taOS writes this at provision time; standalone installs never set it.
+    """
+    env = os.environ.get("TAOSMD_MANAGED_BY")
+    if env and env.strip() in (MANAGED_BY_STANDALONE, MANAGED_BY_TAOS):
+        return env.strip()
+    val = _read(data_dir).get(_MANAGED_BY_KEY)
+    if val in (MANAGED_BY_STANDALONE, MANAGED_BY_TAOS):
+        return val
+    return MANAGED_BY_STANDALONE
+
+
+def set_managed_by(value: str, data_dir=None) -> None:
+    """Persist the managed_by value (``"standalone"`` or ``"taos"``).
+
+    Raises:
+        ValueError: when ``value`` is not one of the allowed strings.
+    """
+    if value not in (MANAGED_BY_STANDALONE, MANAGED_BY_TAOS):
+        raise ValueError(f"managed_by must be 'standalone' or 'taos', got {value!r}")
+    data = _read(data_dir)
+    data[_MANAGED_BY_KEY] = value
+    _write(data, data_dir)
+
+
+def get_serve_dashboard(data_dir=None) -> bool:
+    """Return whether the web dashboard should be served.
+
+    Resolution order:
+
+    1. ``TAOSMD_SERVE_DASHBOARD`` env var (``"1"`` or ``"true"`` = True)
+    2. ``serve_dashboard`` bool in ``~/.taosmd/config.json``
+    3. Derived default: True when managed_by=standalone, False when managed_by=taos.
+
+    When managed_by=taos, the taOS apps render all UI. taOS can override this
+    back to True via the config key or env var for debugging.
+    """
+    env = os.environ.get("TAOSMD_SERVE_DASHBOARD")
+    if env is not None:
+        return env.strip().lower() in ("1", "true", "yes")
+    data = _read(data_dir)
+    if _SERVE_DASHBOARD_KEY in data:
+        return bool(data[_SERVE_DASHBOARD_KEY])
+    return get_managed_by(data_dir) == MANAGED_BY_STANDALONE
+
+
+def set_serve_dashboard(value: bool, data_dir=None) -> None:
+    """Persist the serve_dashboard override."""
+    data = _read(data_dir)
+    data[_SERVE_DASHBOARD_KEY] = bool(value)
+    _write(data, data_dir)
+
+
 __all__ = [
     "get_memory_model",
     "set_memory_model",
@@ -344,4 +414,10 @@ __all__ = [
     "set_registry_url",
     "get_registry_token",
     "set_registry_token",
+    "get_managed_by",
+    "set_managed_by",
+    "get_serve_dashboard",
+    "set_serve_dashboard",
+    "MANAGED_BY_STANDALONE",
+    "MANAGED_BY_TAOS",
 ]

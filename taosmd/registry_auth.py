@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Registry endpoints, relative to the configured base URL (taOS contract).
 PUBKEY_PATH = "/api/agents/registry/pubkey"
 REVOKED_PATH = "/api/agents/registry/revoked"
+GRANTS_PATH = "/api/agents/registry/grants"
 
 # The literal ``iss`` the taOS registry mints into every token (#159). The bus
 # pins this so a token from any other issuer is rejected.
@@ -195,6 +196,91 @@ def _http_get(url: str, timeout: float = 5.0, token: str | None = None) -> str:
         req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
         return resp.read().decode("utf-8")
+
+
+def parse_grants_response(body: str) -> list[dict]:
+    """Extract grant records from a registry grants-feed response body.
+
+    Returns the raw list of grant dicts; callers filter by expires_at.
+    Each record is expected to carry at least ``canonical_id``.
+    """
+    obj = json.loads(body)
+    if isinstance(obj, dict):
+        obj = obj.get("grants", [])
+    return [r for r in (obj or []) if isinstance(r, dict) and r.get("canonical_id")]
+
+
+class GrantsVerifier:
+    """Caching wrapper that checks whether an agent has an active permission grant.
+
+    Polls ``GET /api/agents/registry/grants`` (admin-only) on interval and
+    caches the result. The bus enforcement gate requires *both* a valid JWT
+    (RegistryVerifier) *and* an active grant (this class).
+
+    Fail semantics mirror RegistryVerifier: if the feed has NEVER loaded,
+    :meth:`has_grant` raises AuthError (fail-closed — cannot prove a grant
+    exists). Once a known-good list is cached, a transient refresh failure
+    keeps the last-good set rather than silently removing all grants.
+
+    Phase 1 (initial deploy): ``expires_at`` is always null, so every record
+    in the feed counts as active. Phase 2 adds real expiries.
+    """
+
+    def __init__(self, *, grants_loader, refresh_interval: float = 300.0,
+                 clock=time.time):
+        self._grants_loader = grants_loader
+        self._refresh_interval = refresh_interval
+        self._clock = clock
+        self._grants: list[dict] = []
+        self._fetched_at: float | None = None
+
+    def _get_grants(self) -> list[dict]:
+        now = self._clock()
+        stale = (self._fetched_at is None
+                 or now - self._fetched_at >= self._refresh_interval)
+        if stale:
+            try:
+                self._grants = self._grants_loader()
+                self._fetched_at = now
+            except Exception as exc:  # noqa: BLE001
+                if self._fetched_at is None:
+                    raise AuthError(
+                        f"grants feed unavailable, refusing to authorise: {exc}"
+                    ) from exc
+                logger.warning("grants feed refresh failed, using last-good set: %s", exc)
+        return self._grants
+
+    def has_grant(self, canonical_id: str, scope: str | None = None) -> bool:
+        """Return True if the agent has at least one active (unexpired) grant.
+
+        When ``scope`` is given, at least one grant must match that scope.
+        When ``scope`` is ``None``, any active grant for the agent suffices.
+        Raises :class:`AuthError` if the feed has never been loaded.
+        """
+        now = self._clock()
+        grants = self._get_grants()
+        for g in grants:
+            if g.get("canonical_id") != canonical_id:
+                continue
+            exp = g.get("expires_at")
+            if exp is not None and exp < now:
+                continue
+            if scope is not None and g.get("scope") != scope:
+                continue
+            return True
+        return False
+
+
+def grants_verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
+                              opener=_http_get, clock=time.time,
+                              grants_token: str | None = None) -> "GrantsVerifier":
+    """Build a :class:`GrantsVerifier` that fetches from a registry base URL."""
+    base = base_url.rstrip("/")
+    return GrantsVerifier(
+        grants_loader=lambda: parse_grants_response(
+            opener(base + GRANTS_PATH, token=grants_token)),
+        refresh_interval=refresh_interval, clock=clock,
+    )
 
 
 def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,

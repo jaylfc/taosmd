@@ -454,7 +454,8 @@ class _ServiceLoop:
         self._loop.close()
 
 
-def _make_handler(data_dir, runner: _ServiceLoop, verifier=None):
+def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
+                  grants_verifier=None):
     """Build a handler class bound to a fixed ``data_dir``.
 
     ThreadingHTTPServer instantiates the handler per request, so the data dir
@@ -470,19 +471,30 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None):
     # This is the token the *server* checks (not the client's outbound token).
     _server_token: str | None = _config.get_server_token(data_dir)
 
+    # Whether to serve the web dashboard (/ /ui static assets SPA fallback).
+    # Defaults True for standalone installs; False when managed_by=taos (taOS
+    # apps render everything). Overridable via config/env.
+    _serve_dashboard: bool = _config.get_serve_dashboard(data_dir)
+
     # Opt-in A2A registry verifier. Injected for tests; otherwise built from the
     # configured registry URL. When None, the bus trusts the handle (standalone).
     _registry_verifier = verifier
+    _grants_verifier = grants_verifier
     if _registry_verifier is None:
         _registry_url = _config.get_registry_url(data_dir)
         if _registry_url:
             from . import registry_auth  # noqa: PLC0415 - optional path
-            # The revoked feed is admin-gated (#710): send the configured taOS
-            # local token on it; pin the issuer to the registry's value.
+            # The revoked and grants feeds are admin-gated (#710/#719): send the
+            # configured taOS local token on them; pin the issuer.
+            _admin_token = _config.get_registry_token(data_dir)
             _registry_verifier = registry_auth.verifier_from_url(
                 _registry_url,
-                revoked_token=_config.get_registry_token(data_dir),
+                revoked_token=_admin_token,
                 expected_iss=registry_auth.REGISTRY_ISS,
+            )
+            _grants_verifier = registry_auth.grants_verifier_from_url(
+                _registry_url,
+                grants_token=_admin_token,
             )
 
     # Paths that are always public regardless of the token setting.
@@ -601,7 +613,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None):
                 return
             try:
                 if method == "GET" and path in ("/", "/ui"):
-                    self._serve_spa()
+                    if _serve_dashboard:
+                        self._serve_spa()
+                    else:
+                        self._send_json(404, {"error": "dashboard disabled (managed_by=taos)"})
                 elif method == "GET" and path == "/health":
                     self._send_json(200, {"status": "ok", "version": __version__})
                 elif method == "GET" and path == "/search":
@@ -629,9 +644,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None):
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
-                elif method == "GET" and self._try_serve_static(parts.path):
+                elif method == "GET" and _serve_dashboard and self._try_serve_static(parts.path):
                     return  # static asset served
-                elif method == "GET":
+                elif method == "GET" and _serve_dashboard:
                     # SPA routing: unknown non-API paths return index.html
                     self._serve_spa()
                 else:
@@ -766,7 +781,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None):
             if not isinstance(body_text, str) or not body_text:
                 raise _BadRequest("'body' (non-empty string) is required")
             # Registry auth (opt-in): when a verifier is configured, the sender
-            # must present a registry-minted EdDSA-JWT whose sub matches 'from'.
+            # must present a registry-minted EdDSA-JWT whose sub matches 'from',
+            # AND must have an active permission grant in the grants feed.
             if _registry_verifier is not None:
                 from . import registry_auth  # noqa: PLC0415 - optional path
                 auth = self.headers.get("Authorization", "")
@@ -779,6 +795,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None):
                 except registry_auth.AuthError as exc:
                     self._send_json(403, {"error": f"registry auth: {exc}"})
                     return
+                # Grant check: token proves identity; grant proves permission.
+                if _grants_verifier is not None:
+                    try:
+                        if not _grants_verifier.has_grant(from_):
+                            self._send_json(403, {"error": f"registry auth: no active grant for {from_!r}"})
+                            return
+                    except registry_auth.AuthError as exc:
+                        self._send_json(403, {"error": f"registry auth: {exc}"})
+                        return
             result = runner.run(
                 service.a2a_send(
                     sender=from_, body=body_text,
@@ -857,7 +882,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None):
 
 
 def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None,
-                verifier=None):
+                verifier=None, grants_verifier=None):
     """Create (but do not start) a :class:`ThreadingHTTPServer`.
 
     Useful for tests that need to bind an ephemeral port (``port=0``) and read
@@ -869,7 +894,10 @@ def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=Non
     directly should call ``server.service_loop.close()`` during teardown.
     """
     runner = _ServiceLoop()
-    httpd = ThreadingHTTPServer((host, port), _make_handler(data_dir, runner, verifier))
+    httpd = ThreadingHTTPServer(
+        (host, port),
+        _make_handler(data_dir, runner, verifier, grants_verifier),
+    )
     httpd.service_loop = runner
     return httpd
 
