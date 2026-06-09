@@ -247,6 +247,22 @@ def test_verifier_uses_last_good_revocation_when_refresh_fails():
         v.authorize(token, "agent-x")
 
 
+def test_verifier_fails_closed_when_revocation_never_loaded():
+    # If the revocation feed has NEVER loaded, we cannot prove an agent is not
+    # revoked, so authorize must reject (fail-closed) even for a valid signature.
+    priv_pem, pub_pem = _keypair()
+
+    def always_fails():
+        raise OSError("registry unreachable at startup")
+
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: pub_pem, revoked_loader=always_fails,
+    )
+    token = _sign(priv_pem, {"sub": "agent-1"})
+    with pytest.raises(registry_auth.AuthError):
+        v.authorize(token, "agent-1")
+
+
 # --- response parsers (tolerant of the registry's exact JSON shape) ----------
 
 _PEM = ("-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n"
