@@ -24,16 +24,16 @@ If that fails, try:
 python -c "import taosmd; print(taosmd.__version__)"
 ```
 
-If neither succeeds, install it:
-
-```
-pip install git+https://github.com/jaylfc/taosmd
-```
-
-or, if the package is published to PyPI:
+If neither succeeds, install it from PyPI:
 
 ```
 pip install taosmd
+```
+
+or, for the latest unreleased changes, from GitHub:
+
+```
+pip install git+https://github.com/jaylfc/taosmd
 ```
 
 Verify the install succeeded before continuing. If installation fails, stop and report the error to the user.

@@ -50,7 +50,7 @@ The agent will pull the repo, run the install, register itself, append the per-t
 
 ### One-Line Setup (manual)
 
-> **Note:** A v0.3.0 PyPI release is prepared and will be published shortly; until it is live, `pip install taosmd` will not resolve, so install from source: `git clone` then `pip install -e .` (add the MCP server with `pip install -e ".[mcp]"`), verified on a clean environment. The one-line bootstrap (which additionally installs Ollama and downloads the embedding and LLM models) is newer and still being validated across clean machines, so please report issues.
+> **Install:** `pip install taosmd` (add the MCP server with `pip install "taosmd[mcp]"`). For a source/dev install instead, `git clone` then `pip install -e .`. The one-line bootstrap below additionally installs Ollama and downloads the embedding and LLM models; it is newer and still being validated across clean machines, so please report issues.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash

@@ -8,7 +8,7 @@ Print the setup guide from the taosmd package, then execute it. taOSmd must be
 importable to read the guide, so install it first if it is missing:
 
 ```
-python -c "import taosmd" 2>/dev/null || pip install git+https://github.com/jaylfc/taosmd
+python -c "import taosmd" 2>/dev/null || pip install taosmd
 python -c "import taosmd; print(taosmd.a2a_setup_guide())"
 ```
 
