@@ -477,7 +477,13 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None):
         _registry_url = _config.get_registry_url(data_dir)
         if _registry_url:
             from . import registry_auth  # noqa: PLC0415 - optional path
-            _registry_verifier = registry_auth.verifier_from_url(_registry_url)
+            # The revoked feed is admin-gated (#710): send the configured taOS
+            # local token on it; pin the issuer to the registry's value.
+            _registry_verifier = registry_auth.verifier_from_url(
+                _registry_url,
+                revoked_token=_config.get_registry_token(data_dir),
+                expected_iss=registry_auth.REGISTRY_ISS,
+            )
 
     # Paths that are always public regardless of the token setting.
     _PUBLIC_PATHS = frozenset({"/", "/ui", "/health"})

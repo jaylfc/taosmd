@@ -35,6 +35,9 @@ _SERVER_TOKEN_KEY = "server_token"
 # Key under which the global default recipe id is stored.
 _DEFAULT_RECIPE_KEY = "default_recipe"
 _REGISTRY_URL_KEY = "registry_url"
+# Key under which the registry auth token (taOS local/admin token) is stored.
+# Used to poll the auth-gated registry revoked feed; the pubkey feed is public.
+_REGISTRY_TOKEN_KEY = "registry_token"
 
 
 def _resolve_data_dir(data_dir=None) -> str:
@@ -238,6 +241,50 @@ def set_registry_url(url: str, clear: bool = False, data_dir=None) -> None:
     _write(data, data_dir)
 
 
+def get_registry_token(data_dir=None) -> str | None:
+    """Return the configured registry auth token (taOS local/admin), or ``None``.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_REGISTRY_TOKEN`` environment variable
+    2. ``registry_token`` key in ``~/.taosmd/config.json``
+
+    The token is sent as ``Authorization: Bearer <token>`` only on the
+    auth-gated registry revoked feed; the pubkey feed is public and is fetched
+    without it. Unset means the revoked poll is unauthenticated (pre-#710
+    behaviour). The token is never logged or printed.
+    """
+    env = os.environ.get("TAOSMD_REGISTRY_TOKEN")
+    if env and env.strip():
+        return env.strip()
+    token = _read(data_dir).get(_REGISTRY_TOKEN_KEY)
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def set_registry_token(token: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the registry auth token (or clear it).
+
+    Args:
+        token: The taOS local/admin token used to poll the revoked feed.
+            Ignored when ``clear`` is True.
+        clear: when True, remove the setting.
+
+    Raises:
+        ValueError: when ``clear`` is False and ``token`` is not a
+            non-empty string.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_REGISTRY_TOKEN_KEY, None)
+    else:
+        if not isinstance(token, str) or not token.strip():
+            raise ValueError("token must be a non-empty string (or pass clear=True)")
+        data[_REGISTRY_TOKEN_KEY] = token.strip()
+    _write(data, data_dir)
+
+
 # ---------------------------------------------------------------------------
 # Remote server bearer token
 # ---------------------------------------------------------------------------
@@ -293,4 +340,8 @@ __all__ = [
     "set_server_url",
     "get_server_token",
     "set_server_token",
+    "get_registry_url",
+    "set_registry_url",
+    "get_registry_token",
+    "set_registry_token",
 ]

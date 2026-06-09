@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 PUBKEY_PATH = "/api/agents/registry/pubkey"
 REVOKED_PATH = "/api/agents/registry/revoked"
 
+# The literal ``iss`` the taOS registry mints into every token (#159). The bus
+# pins this so a token from any other issuer is rejected.
+REGISTRY_ISS = "taos-registry"
+
 
 class AuthError(Exception):
     """Raised when a token fails verification or the auth policy."""
@@ -179,22 +183,37 @@ def parse_revoked_response(body: str) -> set[str]:
     return revoked
 
 
-def _http_get(url: str, timeout: float = 5.0) -> str:
-    with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+def _http_get(url: str, timeout: float = 5.0, token: str | None = None) -> str:
+    """GET ``url`` and return the body text.
+
+    When ``token`` is given it is sent as ``Authorization: Bearer <token>``.
+    The pubkey endpoint is public (no token); only the auth-gated revoked feed
+    passes one (the #710 contract).
+    """
+    req = urllib.request.Request(url)  # noqa: S310
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
         return resp.read().decode("utf-8")
 
 
 def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
                       opener=_http_get, clock=time.time,
-                      expected_iss: str | None = None) -> "RegistryVerifier":
+                      expected_iss: str | None = None,
+                      revoked_token: str | None = None) -> "RegistryVerifier":
     """Build a :class:`RegistryVerifier` that fetches from a registry base URL.
 
     The HTTP getter is injectable (``opener``) so callers/tests can supply
     their own transport. Standalone code never calls this (no registry URL).
+
+    ``revoked_token`` is the taOS local/admin token sent as a Bearer header on
+    the revoked-feed poll (the #710 contract moved it behind admin auth). The
+    pubkey endpoint stays public and is fetched without a token.
     """
     base = base_url.rstrip("/")
     return RegistryVerifier(
         pubkey_loader=lambda: parse_pubkey_response(opener(base + PUBKEY_PATH)),
-        revoked_loader=lambda: parse_revoked_response(opener(base + REVOKED_PATH)),
+        revoked_loader=lambda: parse_revoked_response(
+            opener(base + REVOKED_PATH, token=revoked_token)),
         refresh_interval=refresh_interval, clock=clock, expected_iss=expected_iss,
     )

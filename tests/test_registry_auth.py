@@ -309,7 +309,7 @@ def test_verifier_from_url_fetches_pubkey_and_revoked_from_contract_paths():
     priv_pem, pub_pem = _keypair()
     seen = []
 
-    def fake_opener(url):
+    def fake_opener(url, token=None):
         seen.append(url)
         if url.endswith(registry_auth.PUBKEY_PATH):
             return json.dumps({"pubkey": pub_pem})
@@ -327,3 +327,76 @@ def test_verifier_from_url_fetches_pubkey_and_revoked_from_contract_paths():
 
     assert "http://taos:8000" + registry_auth.PUBKEY_PATH in seen
     assert "http://taos:8000" + registry_auth.REVOKED_PATH in seen
+
+
+# --- #710 contract: revoked feed is auth-gated, pubkey feed is public --------
+
+
+def test_verifier_from_url_sends_token_on_revoked_feed_only():
+    # Per #710 the revoked feed requires Authorization: Bearer <token>; the
+    # pubkey endpoint is public and must be fetched WITHOUT the token.
+    import json
+    priv_pem, pub_pem = _keypair()
+    calls = []
+
+    def fake_opener(url, token=None):
+        calls.append((url, token))
+        if url.endswith(registry_auth.PUBKEY_PATH):
+            return json.dumps({"public_key": pub_pem})
+        if url.endswith(registry_auth.REVOKED_PATH):
+            return json.dumps({"revoked": []})
+        raise AssertionError(f"unexpected url {url}")
+
+    v = registry_auth.verifier_from_url(
+        "http://taos:8000", opener=fake_opener, revoked_token="admin-token")
+    v.authorize(_sign(priv_pem, {"sub": "a"}), "a")
+
+    pubkey_tokens = [t for u, t in calls if u.endswith(registry_auth.PUBKEY_PATH)]
+    revoked_tokens = [t for u, t in calls if u.endswith(registry_auth.REVOKED_PATH)]
+    assert pubkey_tokens == [None]            # public: no token
+    assert revoked_tokens == ["admin-token"]  # auth-gated: token sent
+
+
+def test_http_get_sets_authorization_header_when_token_given(monkeypatch):
+    captured = {}
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"body-bytes"
+
+    def fake_urlopen(req, timeout=None):
+        captured["auth"] = req.get_header("Authorization")
+        return _FakeResp()
+
+    monkeypatch.setattr(registry_auth.urllib.request, "urlopen", fake_urlopen)
+    out = registry_auth._http_get("http://reg/x", token="secret-tok")
+    assert out == "body-bytes"
+    assert captured["auth"] == "Bearer secret-tok"
+
+
+def test_http_get_omits_authorization_header_without_token(monkeypatch):
+    captured = {}
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"ok"
+
+    def fake_urlopen(req, timeout=None):
+        captured["auth"] = req.get_header("Authorization")
+        return _FakeResp()
+
+    monkeypatch.setattr(registry_auth.urllib.request, "urlopen", fake_urlopen)
+    registry_auth._http_get("http://reg/x")
+    assert captured["auth"] is None
