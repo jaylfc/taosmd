@@ -454,7 +454,7 @@ class _ServiceLoop:
         self._loop.close()
 
 
-def _make_handler(data_dir, runner: _ServiceLoop):
+def _make_handler(data_dir, runner: _ServiceLoop, verifier=None):
     """Build a handler class bound to a fixed ``data_dir``.
 
     ThreadingHTTPServer instantiates the handler per request, so the data dir
@@ -469,6 +469,15 @@ def _make_handler(data_dir, runner: _ServiceLoop):
     # Read the server-side expected token once at handler-class creation time.
     # This is the token the *server* checks (not the client's outbound token).
     _server_token: str | None = _config.get_server_token(data_dir)
+
+    # Opt-in A2A registry verifier. Injected for tests; otherwise built from the
+    # configured registry URL. When None, the bus trusts the handle (standalone).
+    _registry_verifier = verifier
+    if _registry_verifier is None:
+        _registry_url = _config.get_registry_url(data_dir)
+        if _registry_url:
+            from . import registry_auth  # noqa: PLC0415 - optional path
+            _registry_verifier = registry_auth.verifier_from_url(_registry_url)
 
     # Paths that are always public regardless of the token setting.
     _PUBLIC_PATHS = frozenset({"/", "/ui", "/health"})
@@ -750,6 +759,20 @@ def _make_handler(data_dir, runner: _ServiceLoop):
                 raise _BadRequest("'from' (non-empty string) is required")
             if not isinstance(body_text, str) or not body_text:
                 raise _BadRequest("'body' (non-empty string) is required")
+            # Registry auth (opt-in): when a verifier is configured, the sender
+            # must present a registry-minted EdDSA-JWT whose sub matches 'from'.
+            if _registry_verifier is not None:
+                from . import registry_auth  # noqa: PLC0415 - optional path
+                auth = self.headers.get("Authorization", "")
+                token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+                if not token:
+                    self._send_json(401, {"error": "registry auth: Bearer token required"})
+                    return
+                try:
+                    _registry_verifier.authorize(token, from_)
+                except registry_auth.AuthError as exc:
+                    self._send_json(403, {"error": f"registry auth: {exc}"})
+                    return
             result = runner.run(
                 service.a2a_send(
                     sender=from_, body=body_text,
@@ -827,7 +850,8 @@ def _make_handler(data_dir, runner: _ServiceLoop):
     return TaosmdHandler
 
 
-def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None):
+def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None,
+                verifier=None):
     """Create (but do not start) a :class:`ThreadingHTTPServer`.
 
     Useful for tests that need to bind an ephemeral port (``port=0``) and read
@@ -839,7 +863,7 @@ def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=Non
     directly should call ``server.service_loop.close()`` during teardown.
     """
     runner = _ServiceLoop()
-    httpd = ThreadingHTTPServer((host, port), _make_handler(data_dir, runner))
+    httpd = ThreadingHTTPServer((host, port), _make_handler(data_dir, runner, verifier))
     httpd.service_loop = runner
     return httpd
 
