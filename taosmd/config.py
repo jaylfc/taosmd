@@ -34,6 +34,17 @@ _SERVER_URL_KEY = "server_url"
 _SERVER_TOKEN_KEY = "server_token"
 # Key under which the global default recipe id is stored.
 _DEFAULT_RECIPE_KEY = "default_recipe"
+_REGISTRY_URL_KEY = "registry_url"
+# Key under which the registry auth token (taOS local/admin token) is stored.
+# Used to poll the auth-gated registry revoked feed; the pubkey feed is public.
+_REGISTRY_TOKEN_KEY = "registry_token"
+# Who manages this taosmd instance: "standalone" (default) or "taos".
+_MANAGED_BY_KEY = "managed_by"
+# Override: serve the web dashboard even when managed_by=taos.
+_SERVE_DASHBOARD_KEY = "serve_dashboard"
+
+MANAGED_BY_STANDALONE = "standalone"
+MANAGED_BY_TAOS = "taos"
 
 
 def _resolve_data_dir(data_dir=None) -> str:
@@ -191,6 +202,97 @@ def set_server_url(url: str, clear: bool = False, data_dir=None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Agent registry URL (opt-in A2A bus authentication)
+# ---------------------------------------------------------------------------
+
+def get_registry_url(data_dir=None) -> str | None:
+    """Return the configured taOS agent-registry base URL, or ``None``.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_REGISTRY_URL`` environment variable
+    2. ``registry_url`` key in ``~/.taosmd/config.json``
+
+    When set, the A2A bus authenticates senders against this registry (verify
+    the EdDSA-JWT against ``<url>/api/agents/registry/pubkey`` and check the
+    revocation feed). When unset, the bus keeps free-handle behaviour so a
+    standalone install is unaffected.
+    """
+    env = os.environ.get("TAOSMD_REGISTRY_URL")
+    if env and env.strip():
+        return env.strip()
+    url = _read(data_dir).get(_REGISTRY_URL_KEY)
+    if isinstance(url, str) and url.strip():
+        return url.strip()
+    return None
+
+
+def set_registry_url(url: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the agent-registry base URL (or clear it).
+
+    Args:
+        url: Base URL of the taOS registry, e.g. ``"http://taos:8000"``.
+            Ignored when ``clear`` is True.
+        clear: when True, remove the setting (bus reverts to free handles).
+
+    Raises:
+        ValueError: when ``clear`` is False and ``url`` is not a non-empty string.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_REGISTRY_URL_KEY, None)
+    else:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string (or pass clear=True)")
+        data[_REGISTRY_URL_KEY] = url.strip()
+    _write(data, data_dir)
+
+
+def get_registry_token(data_dir=None) -> str | None:
+    """Return the configured registry auth token (taOS local/admin), or ``None``.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_REGISTRY_TOKEN`` environment variable
+    2. ``registry_token`` key in ``~/.taosmd/config.json``
+
+    The token is sent as ``Authorization: Bearer <token>`` only on the
+    auth-gated registry revoked feed; the pubkey feed is public and is fetched
+    without it. Unset means the revoked poll is unauthenticated (pre-#710
+    behaviour). The token is never logged or printed.
+    """
+    env = os.environ.get("TAOSMD_REGISTRY_TOKEN")
+    if env and env.strip():
+        return env.strip()
+    token = _read(data_dir).get(_REGISTRY_TOKEN_KEY)
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def set_registry_token(token: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the registry auth token (or clear it).
+
+    Args:
+        token: The taOS local/admin token used to poll the revoked feed.
+            Ignored when ``clear`` is True.
+        clear: when True, remove the setting.
+
+    Raises:
+        ValueError: when ``clear`` is False and ``token`` is not a
+            non-empty string.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_REGISTRY_TOKEN_KEY, None)
+    else:
+        if not isinstance(token, str) or not token.strip():
+            raise ValueError("token must be a non-empty string (or pass clear=True)")
+        data[_REGISTRY_TOKEN_KEY] = token.strip()
+    _write(data, data_dir)
+
+
+# ---------------------------------------------------------------------------
 # Remote server bearer token
 # ---------------------------------------------------------------------------
 
@@ -235,6 +337,69 @@ def set_server_token(token: str, clear: bool = False, data_dir=None) -> None:
     _write(data, data_dir)
 
 
+def get_managed_by(data_dir=None) -> str:
+    """Return the managed_by value: ``"standalone"`` (default) or ``"taos"``.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_MANAGED_BY`` environment variable
+    2. ``managed_by`` key in ``~/.taosmd/config.json``
+    3. ``"standalone"`` (default)
+
+    When ``"taos"``, the taOS app owns the auth/permission UX and the web
+    dashboard is hidden by default (controlled by :func:`get_serve_dashboard`).
+    taOS writes this at provision time; standalone installs never set it.
+    """
+    env = os.environ.get("TAOSMD_MANAGED_BY")
+    if env and env.strip() in (MANAGED_BY_STANDALONE, MANAGED_BY_TAOS):
+        return env.strip()
+    val = _read(data_dir).get(_MANAGED_BY_KEY)
+    if val in (MANAGED_BY_STANDALONE, MANAGED_BY_TAOS):
+        return val
+    return MANAGED_BY_STANDALONE
+
+
+def set_managed_by(value: str, data_dir=None) -> None:
+    """Persist the managed_by value (``"standalone"`` or ``"taos"``).
+
+    Raises:
+        ValueError: when ``value`` is not one of the allowed strings.
+    """
+    if value not in (MANAGED_BY_STANDALONE, MANAGED_BY_TAOS):
+        raise ValueError(f"managed_by must be 'standalone' or 'taos', got {value!r}")
+    data = _read(data_dir)
+    data[_MANAGED_BY_KEY] = value
+    _write(data, data_dir)
+
+
+def get_serve_dashboard(data_dir=None) -> bool:
+    """Return whether the web dashboard should be served.
+
+    Resolution order:
+
+    1. ``TAOSMD_SERVE_DASHBOARD`` env var (``"1"`` or ``"true"`` = True)
+    2. ``serve_dashboard`` bool in ``~/.taosmd/config.json``
+    3. Derived default: True when managed_by=standalone, False when managed_by=taos.
+
+    When managed_by=taos, the taOS apps render all UI. taOS can override this
+    back to True via the config key or env var for debugging.
+    """
+    env = os.environ.get("TAOSMD_SERVE_DASHBOARD")
+    if env is not None:
+        return env.strip().lower() in ("1", "true", "yes")
+    data = _read(data_dir)
+    if _SERVE_DASHBOARD_KEY in data:
+        return bool(data[_SERVE_DASHBOARD_KEY])
+    return get_managed_by(data_dir) == MANAGED_BY_STANDALONE
+
+
+def set_serve_dashboard(value: bool, data_dir=None) -> None:
+    """Persist the serve_dashboard override."""
+    data = _read(data_dir)
+    data[_SERVE_DASHBOARD_KEY] = bool(value)
+    _write(data, data_dir)
+
+
 __all__ = [
     "get_memory_model",
     "set_memory_model",
@@ -245,4 +410,14 @@ __all__ = [
     "set_server_url",
     "get_server_token",
     "set_server_token",
+    "get_registry_url",
+    "set_registry_url",
+    "get_registry_token",
+    "set_registry_token",
+    "get_managed_by",
+    "set_managed_by",
+    "get_serve_dashboard",
+    "set_serve_dashboard",
+    "MANAGED_BY_STANDALONE",
+    "MANAGED_BY_TAOS",
 ]

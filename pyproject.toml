@@ -23,6 +23,10 @@ benchmarks = ["mem0ai>=0.1.0", "mempalace"]
 # MCP server surface (#84) — optional so the core install stays lean.
 # Install with: pip install taosmd[mcp]
 mcp = ["mcp"]
+# Opt-in A2A bus authentication against a taOS agent registry (EdDSA-JWT).
+# Only needed when a registry URL is configured; core stays lean for Pi tiers.
+# Install with: pip install taosmd[registry]
+registry = ["pyjwt>=2.8", "cryptography>=42"]
 
 [tool.setuptools.packages.find]
 include = ["taosmd*"]
