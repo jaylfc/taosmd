@@ -65,6 +65,22 @@ MaxSim+rerank is first on every judge (clearly under gemma and qwen3-instruct at
 
 **Judge methodology change (Jun 2026).** The original external strict judge `qwen3:4b` is a thinking model whose current ollama build no longer emits clean YES/NO verdicts (it preambles, or does not commit within a reasonable token budget), so it is retired as a judge. The strict column now uses two non-thinking judges: `llama3.1:8b` and the non-thinking `qwen3:4b-instruct-2507` (HF GGUF). The lenient judge is unchanged (`gemma4:e2b`). The legacy `qwen3:4b` figures in the leaderboard below (for example RRF 0.557, mem0 0.540) came from an older `qwen3:4b` build and are not directly comparable to the new strict judges; they are kept for history.
 
+### Lighter recipes and a larger generator (tri-judge)
+
+The same three judges, applied to the lighter recipes we ship and to a larger-generator probe. The two full-1540 rows are directly comparable to the leader table above. The 35B row is a 200-QA subset and is **not** comparable to the full-1540 numbers (different sample, roughly ±0.02 noise); it is a generator-size probe, not a leaderboard entry. All five rows use the same `judge_rejudged` rescore as the leader table.
+
+| Recipe | Generator | Scale | Lenient `gemma4:e2b` | Strict `llama3.1:8b` | Strict `qwen3:4b-instruct-2507` |
+|---|---|---|---|---|---|
+| fast-8b (RRF, k=20 + adj=2, no reranker) | llama3.1:8b | full 1540 | 0.636 | 0.433 | 0.608 |
+| lite (no-LLM ingest, boost fusion, k=5 + adj=2) | qwen3.5:9b | full 1540 | 0.607 | 0.353 | 0.568 |
+| leader recipe + larger generator | qwen3.6:35b-a3b Q4_K_M | subset 200 | 0.715 | 0.465 | 0.675 |
+
+Reading these honestly:
+
+- **fast-8b trades roughly 0.04 to 0.05 for a 4 GB footprint and about 2.4x throughput.** It stays within 0.05 of the leader on the lenient and qwen-instruct judges, and it actually edges the leader on the strict llama judge (0.433 vs 0.394). That judge is harsh and compresses the field, so an 8B generator can come out ahead inside the noise band. That is not a reason to prefer it on a 12 GB box, but it is a fair reason to run it on a 4 GB one.
+- **lite (no-LLM ingest) keeps most of the recall with zero per-turn extraction cost.** It lands about 0.04 to 0.07 below the leader across judges, the price of dropping fact and event enrichment and relying on raw embedding recall. The intended tier is a Pi 4B or any CPU-only box where an LLM call per turn is not affordable.
+- **The 35B generator probe is encouraging but unproven at full scale.** On the 200-QA subset it leads every judge, but subset-200 over-claims have bitten us before (the llama+RRF cell collapsed by 0.16 SH when validated at full 1540). A matched full-1540 run is needed before any promotion. See the TurboQuant spec (`docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) for the planned full run.
+
 ### Leaderboard (legacy external `qwen3:4b` judge, same dataset + same prompt)
 
 | System | Generator | Retrieval config | Ext Judge | Notes |

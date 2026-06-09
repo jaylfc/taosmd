@@ -174,12 +174,13 @@ _register(Recipe(
     generator={"model": "ollama:llama3.1:8b"},
     librarian={"fanout": "low", "worker_aware": True},
     metadata={"tier": "gpu-4gb",
-              "scores": {},
-              "pros": ["About 2.4x faster than the 9B leader, only ~0.02 lower",
-                       "Fits a 4 GB GPU; good for multiple agents on one card"],
-              "cons": ["Not full-1540 tri-judged; subset/cross-tier figure only"],
+              "scores": {"gemma4:e2b": 0.636, "llama3.1:8b": 0.433,
+                         "qwen3:4b-instruct-2507": 0.608},
+              "pros": ["About 2.4x faster than the 9B leader, fits a 4 GB GPU",
+                       "Edges the leader on the strict llama judge (noise band)"],
+              "cons": ["About 0.04 to 0.05 below the leader on the other two judges"],
               "est_latency": "low", "est_footprint": "low",
-              "source": "docs/benchmarks.md generator candidates (subset)"}))
+              "source": "docs/benchmarks.md full-1540 tri-judge"}))
 
 _register(Recipe(
     id="lite-pi",
@@ -191,12 +192,14 @@ _register(Recipe(
     generator={"model": ""},
     librarian={"fanout": "low", "worker_aware": False},
     metadata={"tier": "pi-npu",
-              "scores": {},
+              "scores": {"gemma4:e2b": 0.607, "llama3.1:8b": 0.353,
+                         "qwen3:4b-instruct-2507": 0.568},
               "pros": ["No LLM extraction cost per turn; safe on Pi 4B CPU",
                        "Archive + embed + retrieve unchanged, so recall holds"],
-              "cons": ["No enriched facts/events; relies on raw embedding recall"],
+              "cons": ["No enriched facts/events; relies on raw embedding recall",
+                       "About 0.04 to 0.07 below the leader across judges"],
               "est_latency": "low", "est_footprint": "low",
-              "source": "Midas-class no-LLM-ingest, low tier"}))
+              "source": "docs/benchmarks.md full-1540 tri-judge"}))
 
 
 def get_recipe(recipe_id: str) -> Recipe | None:
