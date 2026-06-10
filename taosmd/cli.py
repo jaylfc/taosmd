@@ -430,6 +430,28 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
     state_file = Path(args.state_file).expanduser()
     channel = args.channel
 
+    # --- load / initialise state (BEFORE the fetch, so the ts cursor can
+    # bound the query) ----------------------------------------------------
+    state: dict = {}
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            state = {}
+    last_id: int = state.get(channel, -1)
+    last_ts: float | None = None
+    try:
+        last_ts = float(state.get("_ts", {}).get(channel))
+    except (TypeError, ValueError, AttributeError):
+        last_ts = None
+
+    # Fetch from just before the ts cursor (1s overlap; the id filter below
+    # dedups). A plain most-recent-500 fetch silently dropped anything older
+    # than the 500th message after a long cron outage; the cursor plus a wide
+    # window bounds the query to genuinely-new rows instead.
+    since = (last_ts - 1.0) if last_ts is not None else None
+    fetch_limit = 2000
+
     # --- resolve messages from remote or local service -------------------
     # A fetch failure (bus unreachable, server down) must not dump a traceback
     # into a cron inbox, and must not touch the state file (so the cursor is
@@ -442,16 +464,16 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
             client = RemoteClient(server_url)
 
             async def _fetch(since):
-                return await client.a2a_feed(thread=channel, since=since, limit=500)
+                return await client.a2a_feed(thread=channel, since=since, limit=fetch_limit)
 
-            messages = asyncio.run(_fetch(None))
+            messages = asyncio.run(_fetch(since))
         else:
             from . import service  # noqa: PLC0415
 
             async def _fetch_local(since):
-                return await service.a2a_feed(thread=channel, since=since, limit=500)
+                return await service.a2a_feed(thread=channel, since=since, limit=fetch_limit)
 
-            messages = asyncio.run(_fetch_local(None))
+            messages = asyncio.run(_fetch_local(since))
     except Exception as exc:  # noqa: BLE001 - any fetch error: one line, no traceback
         print(
             f"taosmd a2a-poll: could not reach the bus "
@@ -460,14 +482,15 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # --- load / initialise state ----------------------------------------
-    state: dict = {}
-    if state_file.exists():
-        try:
-            state = json.loads(state_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            state = {}
-    last_id: int = state.get(channel, -1)
+    if len(messages) >= fetch_limit:
+        # The window overflowed; the feed returns the most recent N, so
+        # messages between the cursor and the oldest returned row were
+        # dropped. Say so instead of pretending the poll was complete.
+        print(
+            f"taosmd a2a-poll: WARNING fetched {fetch_limit} messages (window "
+            f"full) — older unseen messages on {channel!r} may have been skipped",
+            file=sys.stderr,
+        )
 
     # --- filter to only new messages ------------------------------------
     exclude = getattr(args, "exclude", None)
@@ -479,6 +502,11 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
             msg_id_int = int(msg_id)
         except (TypeError, ValueError):
             continue
+        try:
+            ts_val = float(msg.get("ts"))
+            last_ts = ts_val if last_ts is None else max(last_ts, ts_val)
+        except (TypeError, ValueError):
+            pass
         if msg_id_int <= last_id:
             continue
         if exclude and msg.get("from") == exclude:
@@ -498,6 +526,8 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
     # next run treats as a reset (cursor -1) and re-emits the whole channel.
     # Write to a temp file in the same dir, then atomically rename over it.
     state[channel] = last_id
+    if last_ts is not None:
+        state.setdefault("_ts", {})[channel] = last_ts
     state_file.parent.mkdir(parents=True, exist_ok=True)
     tmp = state_file.with_name(state_file.name + ".tmp")
     tmp.write_text(json.dumps(state, indent=2))

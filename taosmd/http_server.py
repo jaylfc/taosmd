@@ -921,6 +921,14 @@ def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=Non
     closing it is handled by :func:`serve`. Tests that drive ``make_server``
     directly should call ``server.service_loop.close()`` during teardown.
     """
+    if verifier is not None and grants_verifier is None:
+        # Identity without permission is half the locked auth contract
+        # (token proves who you are; a grant proves you may post). Warn
+        # loudly so a deployment cannot end up with partial auth silently.
+        logger.warning(
+            "registry auth: a registry verifier is configured but no grants "
+            "verifier — A2A sends will be identity-checked but NOT grant-checked"
+        )
     runner = _ServiceLoop()
     httpd = ThreadingHTTPServer(
         (host, port),

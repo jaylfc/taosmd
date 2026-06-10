@@ -67,7 +67,10 @@ def authed_server(tmp_path, monkeypatch):
             return json.dumps({"pubkey": PUB_PEM})
         return json.dumps([])  # nothing revoked
 
-    verifier = registry_auth.verifier_from_url("http://reg.test", opener=fake_opener)
+    # expected_iss=None opts out of issuer pinning (the default is now the
+    # pinned taOS registry iss); this fixture tests the auth mechanics alone.
+    verifier = registry_auth.verifier_from_url(
+        "http://reg.test", opener=fake_opener, expected_iss=None)
     httpd = http_server.make_server("127.0.0.1", 0, data_dir=str(data_dir),
                                     verifier=verifier)
     httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))

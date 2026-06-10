@@ -317,7 +317,8 @@ def test_verifier_from_url_fetches_pubkey_and_revoked_from_contract_paths():
             return json.dumps([{"canonical_id": "agent-gone", "revoked_at": 1}])
         raise AssertionError(f"unexpected url {url}")
 
-    v = registry_auth.verifier_from_url("http://taos:8000/", opener=fake_opener)
+    v = registry_auth.verifier_from_url(
+        "http://taos:8000/", opener=fake_opener, expected_iss=None)
 
     # a live agent authorises
     assert v.authorize(_sign(priv_pem, {"sub": "agent-ok"}), "agent-ok")["sub"] == "agent-ok"
@@ -348,7 +349,8 @@ def test_verifier_from_url_sends_token_on_revoked_feed_only():
         raise AssertionError(f"unexpected url {url}")
 
     v = registry_auth.verifier_from_url(
-        "http://taos:8000", opener=fake_opener, revoked_token="admin-token")
+        "http://taos:8000", opener=fake_opener, revoked_token="admin-token",
+        expected_iss=None)
     v.authorize(_sign(priv_pem, {"sub": "a"}), "a")
 
     pubkey_tokens = [t for u, t in calls if u.endswith(registry_auth.PUBKEY_PATH)]

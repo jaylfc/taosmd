@@ -263,8 +263,17 @@ class GrantsVerifier:
             if g.get("canonical_id") != canonical_id:
                 continue
             exp = g.get("expires_at")
-            if exp is not None and exp < now:
-                continue
+            if exp is not None:
+                try:
+                    exp = float(exp)
+                except (TypeError, ValueError):
+                    # Un-parseable expiry (e.g. an ISO-8601 string before we
+                    # support it): treat the grant as expired (fail closed)
+                    # rather than raising TypeError into a 500 on every send.
+                    logger.warning("grant for %r has unparseable expires_at %r; treating as expired", canonical_id, exp)
+                    continue
+                if exp < now:
+                    continue
             if scope is not None and g.get("scope") != scope:
                 continue
             return True
@@ -285,7 +294,7 @@ def grants_verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
 
 def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
                       opener=_http_get, clock=time.time,
-                      expected_iss: str | None = None,
+                      expected_iss: str | None = REGISTRY_ISS,
                       revoked_token: str | None = None) -> "RegistryVerifier":
     """Build a :class:`RegistryVerifier` that fetches from a registry base URL.
 

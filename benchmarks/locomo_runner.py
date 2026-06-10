@@ -1357,6 +1357,23 @@ async def run(args: argparse.Namespace) -> int:
 
     _print_summary(meta, by_category, overall)
     print(f"\nwrote {out_path}")
+
+    # A run where every QA errored must not look like a successful 0.000
+    # score: the empty results file is indistinguishable from a misconfigured
+    # run downstream (rescore tools print a verdict of n=0, chains move on).
+    if failed_qa and not results:
+        print(
+            f"\nERROR: all {failed_qa} QAs failed — results file is empty. "
+            "Search the log above for 'qa failed:' to see the underlying error.",
+            file=sys.stderr,
+        )
+        return 1
+    if results and failed_qa > len(results):
+        print(
+            f"\nWARNING: {failed_qa} QAs failed vs {len(results)} succeeded — "
+            "results are likely unrepresentative.",
+            file=sys.stderr,
+        )
     return 0
 
 
