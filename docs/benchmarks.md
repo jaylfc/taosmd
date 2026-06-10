@@ -89,10 +89,15 @@ Distinct from the leader's cross-encoder rerank: this lever scores retrieval can
 |---|---|---|---|---|
 | dense baseline | full 1540 | 0.674 | 0.377 | 0.598 |
 | + MiniLM MaxSim (`--late-interaction`) | full 1540 | 0.711 | 0.378 | 0.642 |
+| + answerai-colbert-small backbone (`--colbert-model`) | full 1540 | 0.716 | 0.388 | 0.656 |
 
 Reading it honestly: the subset-200 read (+0.060 gemma) shrank to **+0.037 gemma / +0.044 qwen-instruct at full scale, and the strict llama judge sees nothing** (+0.001 — that judge compresses the field; the same pattern as fast-8b above). Still a real, two-judge-confirmed win for a lever that costs no reranker model: it lands 0.711 gemma vs the full leader's 0.748 without the bge-v2-m3 download or its per-query latency.
 
-A proper ColBERT-trained model improves on MiniLM further on the 200-QA subset (gemma judge, preliminary): dense 0.680 → MiniLM MaxSim 0.740 → **`answerdotai/answerai-colbert-small-v1` 0.760**, from a 33M-parameter model. Full-1540 confirmation + a stacked answerai+rerank probe are queued. Known issue: `colbert-ir/colbertv2.0` cannot be loaded via plain sentence-transformers — ST drops its `linear.weight` projection head and every query errors on a dimension mismatch (the run produced zero results); it needs a pylate-style loader before its number means anything.
+answerai-colbert-small-v1 (33M) is confirmed at full-1540: 0.716 lenient gemma4:e2b, 0.388 strict llama3.1:8b, 0.656 strict qwen3:4b-instruct-2507. It beats MiniLM MaxSim on all three judges, but the subset-200 gap (+0.020 gemma, 0.760 vs 0.740) shrank to +0.005 / +0.010 / +0.014 at full scale: a real but small edge, consistent in sign across judges.
+
+Stacking the bge-v2-m3 cross-encoder reranker on top of answerai retrieval is a confirmed negative: subset-200 gemma 0.720 vs 0.760 for answerai alone. The reranker reorders an already token-level-matched pool and hurts. Recorded so nobody retries it blind.
+
+Known issue: `colbert-ir/colbertv2.0` cannot be loaded via plain sentence-transformers — ST drops its `linear.weight` projection head and every query errors on a dimension mismatch (the run produced zero results); it needs a pylate-style loader before its number means anything. The pylate loader now exists on branch `feat/pylate-loader`; a projected-space vs backbone comparison is queued for the next GPU window.
 
 **CPU-tier viability (retrieval-only, judge-free).** Measured with the
 retrieval-latency probe (`benchmarks/retrieval_latency_probe.py`, branch
