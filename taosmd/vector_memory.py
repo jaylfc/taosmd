@@ -239,8 +239,20 @@ class VectorMemory:
 
         outputs = self._onnx_session.run(None, feed)
 
-        # outputs[0] is the per-token hidden states (1, seq, 384).
-        token_embeddings = np.asarray(outputs[0][0], dtype=np.float32)  # (seq, 384)
+        # outputs[0] is the per-token hidden states (1, seq, dim).
+        token_embeddings = np.asarray(outputs[0][0], dtype=np.float32)  # (seq, dim)
+        if token_embeddings.shape[-1] != _EMBED_DIM:
+            # The stored blobs are reshaped as (-1, _EMBED_DIM) at search
+            # time, so a wrong-dim model would silently write garbage and
+            # then fail every query (this is exactly how the colbertv2.0
+            # probe died: ST drops its 768->128 projection head). Fail at
+            # the first embed instead.
+            raise RuntimeError(
+                f"late_interaction expects {_EMBED_DIM}-dim token output, got "
+                f"{token_embeddings.shape[-1]} from {self._onnx_path or self._colbert_model!r}. "
+                "ColBERT checkpoints with a projection head (e.g. colbertv2.0) "
+                "need a pylate-style loader, not a bare transformer export."
+            )
         mask = np.asarray(inputs["attention_mask"][0], dtype=bool)      # (seq,)
         token_embeddings = token_embeddings[mask]                       # drop padding
         # L2-normalise each token vector so dot product == cosine for MaxSim.
@@ -261,11 +273,14 @@ class VectorMemory:
             return []
 
     def _embed_tokens_st(self, text: str) -> list[list[float]]:
-        """Per-token embeddings via a sentence-transformers ColBERT model.
+        """Per-token embeddings via a sentence-transformers model.
 
-        Calls encode() with output_value="token_embeddings" which returns the
-        per-token output after any projection layer (e.g. the 128-dim ColBERT
-        linear head). Vectors are L2-normalised before being returned.
+        NOTE: ST's output_value="token_embeddings" returns the TRANSFORMER
+        module's token output, BEFORE any Pooling/Dense module — a ColBERT
+        projection head is NOT applied on this path. What you get is
+        backbone-token MaxSim, which is empirically strong but is not the
+        model's trained ColBERT space; loading via pylate is required for
+        the projected space. Vectors are L2-normalised before return.
         """
         import numpy as np
         try:
@@ -276,11 +291,23 @@ class VectorMemory:
                 convert_to_numpy=True,
                 show_progress_bar=False,
             )
-            # Single sentence → (seq_len, dim) array
-            if isinstance(token_embs, np.ndarray):
-                return token_embs.tolist()
-            # Fallback: list of per-token arrays
-            return [v.tolist() for v in token_embs]
+            if not isinstance(token_embs, np.ndarray):
+                token_embs = np.asarray([np.asarray(v) for v in token_embs])
+            if token_embs.ndim != 2 or token_embs.shape[-1] != _EMBED_DIM:
+                # Stored blobs are reshaped as (-1, _EMBED_DIM) at search
+                # time; a wrong-dim model writes garbage that fails every
+                # query later (how the colbertv2.0 probe died). Fail at the
+                # first embed with the actionable cause instead.
+                raise RuntimeError(
+                    f"late_interaction expects {_EMBED_DIM}-dim token output, got "
+                    f"shape {token_embs.shape} from {self._colbert_model!r}. "
+                    "Models whose backbone hidden size differs (or whose quality "
+                    "lives in a projection head, e.g. colbertv2.0) need a "
+                    "pylate-style loader."
+                )
+            return token_embs.tolist()
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.warning("ColBERT token embedding failed: %s", e)
             return []
