@@ -217,6 +217,98 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
     return {"archived": archived, "agent": agent, "project": project, "data_dir": stores["data_dir"]}
 
 
+async def ingest_batch(
+    items,
+    *,
+    agent: str,
+    project: str | None = None,
+    data_dir=None,
+) -> dict:
+    """Bulk-shelve memory chunks with idempotent re-import (#25 contract).
+
+    The migration path for external memory stores (taOS user memory): each
+    item carries its own stable ``id`` (the caller's content hash) so the
+    whole batch can be re-POSTed safely — items whose ``id`` is already
+    stored are counted in ``skipped`` instead of duplicated.
+
+    Args:
+        items: List of ``{"text": str, "id": str?, "metadata": dict?}``.
+            ``text`` is required per item. ``id`` is the caller's stable
+            content hash, preserved as ``source_id`` in the stored metadata
+            and used for dedup. ``metadata`` is preserved verbatim (e.g.
+            ``collection``/``title`` for taOS user memory).
+        agent: Registered agent name (e.g. ``"user-memory"``). Auto-registered
+            if absent.
+        project: Optional project fingerprint, as in :func:`ingest`.
+        data_dir: Optional taosmd data dir (see :func:`ingest`).
+
+    Returns:
+        ``{"ingested": int, "skipped": int, "agent": str, "data_dir": str}``.
+        ``skipped`` counts duplicate ids (incl. in-batch repeats) and
+        empty-text items.
+
+    Raises:
+        ValueError: On a structurally invalid request (bad agent, items not
+            a list, an item that is not a dict or lacks a string ``text``).
+            Validation runs before any write so a 400 never leaves a
+            half-applied batch.
+    """
+    if not agent:
+        raise ValueError("agent name is required")
+    if not isinstance(items, list):
+        raise ValueError("'items' must be a list")
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"items[{i}] must be an object")
+        if not isinstance(item.get("text"), str):
+            raise ValueError(f"items[{i}].text (string) is required")
+        if item.get("id") is not None and not isinstance(item["id"], str):
+            raise ValueError(f"items[{i}].id must be a string when provided")
+        if item.get("metadata") is not None and not isinstance(item["metadata"], dict):
+            raise ValueError(f"items[{i}].metadata must be an object when provided")
+
+    stores = await _ensure_stores(data_dir)
+
+    from taosmd.agents import ensure_agent, update_stats
+    ensure_agent(agent)
+
+    seen = stores["vector"].existing_source_ids(agent=agent)
+    ingested = 0
+    skipped = 0
+    for item in items:
+        text = item["text"].strip()
+        sid = item.get("id")
+        if not text or (sid and sid in seen):
+            skipped += 1
+            continue
+        user_md = dict(item.get("metadata") or {})
+        if sid:
+            user_md["source_id"] = sid
+        await stores["archive"].record(
+            "conversation",
+            {"content": text, "metadata": user_md},
+            agent_name=agent,
+            summary=text[:80],
+            project=project,
+        )
+        meta: dict = {"agent": agent, "metadata": user_md}
+        if project:
+            meta["project"] = project
+        await stores["vector"].add(text, metadata=meta)
+        if sid:
+            seen.add(sid)
+        ingested += 1
+
+    if ingested:
+        update_stats(agent, last_ingest_at=int(time.time()))
+    return {
+        "ingested": ingested,
+        "skipped": skipped,
+        "agent": agent,
+        "data_dir": stores["data_dir"],
+    }
+
+
 def _format_hit(hit: dict) -> dict:
     """Reshape a retrieve() hit into the agent-rules contract shape.
 
@@ -259,6 +351,7 @@ async def search(
     project: str | None = None,
     also_include: list[str] | None = None,
     limit: int = 5,
+    mode: str | None = None,
     data_dir=None,
 ) -> list[dict]:
     """Search the librarian's shelves for passages relevant to ``query``.
@@ -278,10 +371,16 @@ async def search(
             memories should be included in the search results (cross-agent
             reads). Only effective when ``project`` is also set.
         limit: Maximum number of hits to return.
+        mode: Optional retrieval mode. ``"bm25"`` skips query embedding and
+            recipe resolution entirely and returns BM25-only hits (the #25
+            user-memory contract: keyword search-as-you-type, sub-300ms).
+            Default ``None`` is the full recipe-driven retrieval path.
         data_dir: Optional taosmd data dir (see :func:`ingest`).
     """
     if not agent:
         raise ValueError("agent name is required")
+    if mode not in (None, "", "bm25"):
+        raise ValueError(f"unsupported search mode: {mode!r} (supported: 'bm25')")
     if not query:
         return []
 
@@ -293,6 +392,34 @@ async def search(
     # Register against the same data_dir the recipe layer resolves against, so
     # resolve_recipe() can read/write this agent's record.
     ensure_agent(agent, data_dir=data_dir)
+
+    # Build the list of agent names to search across.
+    # When project + also_include are set, we search the calling agent
+    # plus any explicitly included agents within the same project.
+    search_agents = [agent]
+    if project and also_include:
+        for name in also_include:
+            if name != agent:
+                search_agents.append(name)
+
+    if mode == "bm25":
+        # BM25-only path: no embed call, no recipe/reranker resolution. Hits
+        # come straight off the vector store's BM25 index in the same
+        # contract shape as the full path.
+        raw = await stores["vector"].search_bm25(
+            query, limit=limit, project=project, search_agents=search_agents
+        )
+        hits = []
+        for h in raw:
+            md = dict(h.get("metadata") or {})
+            md.setdefault("created_at", h.get("created_at"))
+            hits.append(_format_hit({
+                "text": h.get("text", ""),
+                "source": "vector",
+                "source_score": h.get("similarity", 0.0),
+                "metadata": md,
+            }))
+        return hits
 
     # Resolve the active recipe (per-agent -> global default -> recommend()[0])
     # and map its retrieval knobs onto the retrieve() call below.
@@ -315,15 +442,6 @@ async def search(
 
     # per-agent fanout (recipe-derived via librarian.fanout) governs retrieval breadth; recipe.retrieval.candidate_top_k sets the pre-rerank pool. retrieval.limit is advisory in SP1.
     effective_limit = limit
-
-    # Build the list of agent names to search across.
-    # When project + also_include are set, we search the calling agent
-    # plus any explicitly included agents within the same project.
-    search_agents = [agent]
-    if project and also_include:
-        for name in also_include:
-            if name != agent:
-                search_agents.append(name)
 
     raw = await _retrieve(
         query,

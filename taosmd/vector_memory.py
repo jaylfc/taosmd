@@ -42,6 +42,44 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _bm25_python_rank(query: str, texts: list[str]) -> list[tuple[int, float]]:
+    """Dependency-free Okapi BM25; best-first (index, score) over ``texts``.
+
+    Fallback for :meth:`VectorMemory.search_bm25` when bm25s is not
+    installed. Matches the bm25s defaults the fusion paths were benchmarked
+    with: k1=1.5, b=0.75, Lucene IDF, lowercase + non-word-split tokens.
+    """
+    import math
+    import re
+
+    k1, b = 1.5, 0.75
+    docs = [re.findall(r"\w+", t.lower()) for t in texts]
+    n = len(docs)
+    avgdl = (sum(len(d) for d in docs) / n) if n else 0.0
+    avgdl = avgdl or 1.0
+    df: dict[str, int] = {}
+    for d in docs:
+        for term in set(d):
+            df[term] = df.get(term, 0) + 1
+
+    q_terms = re.findall(r"\w+", query.lower())
+    scored = []
+    for i, d in enumerate(docs):
+        tf: dict[str, int] = {}
+        for term in d:
+            tf[term] = tf.get(term, 0) + 1
+        score = 0.0
+        for term in q_terms:
+            f = tf.get(term)
+            if not f:
+                continue
+            idf = math.log(1.0 + (n - df[term] + 0.5) / (df[term] + 0.5))
+            score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * len(d) / avgdl))
+        scored.append((i, score))
+    scored.sort(key=lambda pair: -pair[1])
+    return scored
+
+
 def pack_sign_bits(embedding: list[float]) -> str:
     """Pack an embedding into a base64 string of sign bits (1 bit/dim).
 
@@ -260,6 +298,145 @@ class VectorMemory:
         self._bm25_dirty = True  # corpus changed; invalidate BM25 cache
         return cursor.lastrowid
 
+    def _load_active_rows(self, project: str | None = None, search_agents: list[str] | None = None):
+        """Fetch active (non-superseded) rows, scoped by project/agent.
+
+        Untagged rows are kept by both filters so pre-project / standalone
+        memory is never hidden. Shared by the semantic and BM25-only paths so
+        scoping rules cannot drift between them.
+        """
+        rows = self._conn.execute(
+            "SELECT id, text, embedding, metadata_json, created_at FROM vector_memory "
+            "WHERE valid_to IS NULL"
+        ).fetchall()
+
+        if project is not None or search_agents is not None:
+            filtered = []
+            agent_set = set(search_agents) if search_agents else None
+            for row in rows:
+                try:
+                    meta = json.loads(row["metadata_json"])
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+                # Project filter: skip rows positively tagged with a different
+                # project. Untagged (pre-project) rows are kept so existing
+                # standalone memory is never hidden.
+                row_project = meta.get("project")
+                if project is not None and row_project is not None and row_project != project:
+                    continue
+                # Agent filter: skip rows positively tagged with an out-of-scope
+                # agent. Untagged rows are kept (preserves standalone behaviour).
+                row_agent = meta.get("agent")
+                if agent_set is not None and row_agent is not None and row_agent not in agent_set:
+                    continue
+                filtered.append(row)
+            rows = filtered
+        return rows
+
+    def existing_source_ids(self, agent: str | None = None) -> set[str]:
+        """Return the user-metadata ``source_id`` values already stored.
+
+        Backs idempotent re-imports over ``POST /ingest/batch`` (#25): items
+        whose ``id`` is already present are skipped instead of duplicated.
+        Rows tagged with a different agent are excluded when ``agent`` is set;
+        untagged rows are included, matching the search-scoping rules.
+        """
+        out: set[str] = set()
+        for row in self._load_active_rows(search_agents=[agent] if agent else None):
+            try:
+                meta = json.loads(row["metadata_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            inner = meta.get("metadata")
+            sid = inner.get("source_id") if isinstance(inner, dict) else None
+            if sid:
+                out.add(str(sid))
+        return out
+
+    async def search_bm25(
+        self,
+        query: str,
+        limit: int = 5,
+        project: str | None = None,
+        search_agents: list[str] | None = None,
+    ) -> list[dict]:
+        """BM25-only retrieval: no query embedding, no semantic scoring.
+
+        The fast path for short-form keyword search (the #25 user-memory
+        contract: search-as-you-type, sub-300ms SLA). Uses bm25s when
+        installed (same index parameters as the bm25_rrf fusion path, cached
+        in ``_bm25_cache``); otherwise falls back to a dependency-free Okapi
+        BM25 with identical k1/b. ``similarity`` carries the sigmoid-normalised
+        BM25 score so it reads in the same 0-1 confidence range as cosine
+        hits. Rows with zero term overlap are dropped rather than padded in.
+        """
+        if not query:
+            return []
+        rows = self._load_active_rows(project=project, search_agents=search_agents)
+        if not rows:
+            return []
+
+        ids = [row["id"] for row in rows]
+        texts = [row["text"] for row in rows]
+        metas = [row["metadata_json"] for row in rows]
+        created = [row["created_at"] for row in rows]
+
+        ranked = self._bm25_rank(query, texts)
+
+        from taosmd.utils.scoring import get_bm25_params, normalize_bm25
+        midpoint, steepness = get_bm25_params(query)
+
+        out = []
+        for idx, raw in ranked:
+            if len(out) >= limit:
+                break
+            if raw <= 0.0:
+                break  # ranked is best-first; everything after has no overlap
+            try:
+                meta = json.loads(metas[idx])
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            out.append({
+                "id": ids[idx],
+                "text": texts[idx],
+                "bm25_score": round(float(raw), 4),
+                "similarity": round(normalize_bm25(float(raw), midpoint, steepness), 4),
+                "metadata": meta,
+                "created_at": created[idx],
+            })
+        return out
+
+    def _bm25_rank(self, query: str, texts: list[str]) -> list[tuple[int, float]]:
+        """Rank ``texts`` against ``query`` by BM25; best-first (index, score).
+
+        bm25s path reuses the same cache discipline as the fusion modes:
+        keyed entry holding (retriever, texts) so any corpus or scope change
+        forces a rebuild.
+        """
+        try:
+            import bm25s
+
+            cache_key = "bm25_only"
+            cached = self._bm25_cache.get(cache_key)
+            if self._bm25_dirty or cached is None or cached[1] != texts:
+                corpus_tokens = bm25s.tokenize(texts, stopwords=None, stemmer=None)
+                retriever = bm25s.BM25(k1=1.5, b=0.75)
+                retriever.index(corpus_tokens)
+                self._bm25_cache[cache_key] = (retriever, texts)
+                self._bm25_dirty = False
+            else:
+                retriever = cached[0]
+            query_tokens = bm25s.tokenize([query], stopwords=None, stemmer=None)
+            k = len(texts)
+            indices, scores = retriever.retrieve(query_tokens, k=k)
+            return [(int(indices[0][r]), float(scores[0][r])) for r in range(k)]
+        except ImportError:
+            logger.warning(
+                "bm25s not installed; using pure-Python BM25 fallback "
+                "(pip install bm25s for the fast path)"
+            )
+            return _bm25_python_rank(query, texts)
+
     async def search(
         self,
         query: str,
@@ -315,33 +492,7 @@ class VectorMemory:
         # below (cosine, binary-quant, and the pure-Python fallback) because
         # they all consume this single row set. No behaviour change when
         # nothing has been superseded.
-        rows = self._conn.execute(
-            "SELECT id, text, embedding, metadata_json, created_at FROM vector_memory "
-            "WHERE valid_to IS NULL"
-        ).fetchall()
-
-        # Filter by project and/or agent scope when specified.
-        if project is not None or search_agents is not None:
-            filtered = []
-            agent_set = set(search_agents) if search_agents else None
-            for row in rows:
-                try:
-                    meta = json.loads(row["metadata_json"])
-                except (json.JSONDecodeError, TypeError):
-                    meta = {}
-                # Project filter: skip rows positively tagged with a different
-                # project. Untagged (pre-project) rows are kept so existing
-                # standalone memory is never hidden.
-                row_project = meta.get("project")
-                if project is not None and row_project is not None and row_project != project:
-                    continue
-                # Agent filter: skip rows positively tagged with an out-of-scope
-                # agent. Untagged rows are kept (preserves standalone behaviour).
-                row_agent = meta.get("agent")
-                if agent_set is not None and row_agent is not None and row_agent not in agent_set:
-                    continue
-                filtered.append(row)
-            rows = filtered
+        rows = self._load_active_rows(project=project, search_agents=search_agents)
 
         if not rows:
             return []

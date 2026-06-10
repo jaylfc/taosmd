@@ -36,8 +36,9 @@ Endpoints
 ``GET  /ui``               -> alias of ``GET /``
 ``GET  /health``           -> ``{"status": "ok", "version": <str>}``
 ``POST /ingest``           ``{"text", "agent", "project"?}`` -> ingest result
-``POST /search``           ``{"query", "agent", "limit"?, "project"?, "also_include"?}`` -> ``{"hits": [...]}``
-``GET  /search?q=&agent=&limit=&project=&also_include=a,b``  -> ``{"hits": [...]}``
+``POST /ingest/batch``     ``{"items": [{"text", "id"?, "metadata"?}], "agent", "project"?}`` -> ``{"ingested", "skipped", ...}``
+``POST /search``           ``{"query", "agent", "limit"?, "project"?, "also_include"?, "mode"?}`` -> ``{"hits": [...]}``
+``GET  /search?q=&agent=&limit=&project=&also_include=a,b&mode=bm25``  -> ``{"hits": [...]}``
 ``GET  /projects``                                         -> ``{"projects": [...]}``
 ``GET  /shelves?project=``                                 -> ``{"shelves": [...]}``
 ``GET  /pending?agent=``                                   -> ``{"pending": [...]}``
@@ -625,6 +626,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_search_post()
                 elif method == "POST" and path == "/ingest":
                     self._handle_ingest()
+                elif method == "POST" and path == "/ingest/batch":
+                    self._handle_ingest_batch()
                 elif method == "GET" and path == "/projects":
                     self._handle_list_projects()
                 elif method == "GET" and path == "/shelves":
@@ -676,6 +679,25 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             result = runner.run(service.ingest(text, agent=agent, data_dir=data_dir, **opts))
             self._send_json(200, result)
 
+        def _handle_ingest_batch(self) -> None:
+            body = self._read_json_body()
+            items = body.get("items")
+            agent = body.get("agent")
+            project = body.get("project")
+            if not isinstance(items, list):
+                raise _BadRequest("'items' (list) is required")
+            if not isinstance(agent, str) or not agent:
+                raise _BadRequest("'agent' (non-empty string) is required")
+            if project is not None and not isinstance(project, str):
+                raise _BadRequest("'project' must be a string when provided")
+            opts = {"project": project} if project else {}
+            # Per-item shape validation lives in api.ingest_batch and runs
+            # before any write; its ValueError surfaces as a 400 here.
+            result = runner.run(
+                service.ingest_batch(items, agent=agent, data_dir=data_dir, **opts)
+            )
+            self._send_json(200, result)
+
         def _handle_search_post(self) -> None:
             body = self._read_json_body()
             query = body.get("query")
@@ -683,7 +705,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             limit = body.get("limit", 5)
             project = body.get("project")
             also_include = body.get("also_include")
-            self._do_search(query, agent, limit, project, also_include)
+            mode = body.get("mode")
+            self._do_search(query, agent, limit, project, also_include, mode)
 
         def _handle_search_get(self, qs: dict) -> None:
             query = (qs.get("q") or qs.get("query") or [None])[0]
@@ -693,9 +716,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             # Comma-separated list in the query string, e.g. also_include=a,b
             ai_raw = (qs.get("also_include") or [None])[0]
             also_include = [s for s in ai_raw.split(",") if s] if ai_raw else None
-            self._do_search(query, agent, limit, project, also_include)
+            mode = (qs.get("mode") or [None])[0]
+            self._do_search(query, agent, limit, project, also_include, mode)
 
-        def _do_search(self, query, agent, limit, project=None, also_include=None) -> None:
+        def _do_search(self, query, agent, limit, project=None, also_include=None, mode=None) -> None:
             if not isinstance(query, str) or not query:
                 raise _BadRequest("'query' (non-empty string) is required")
             if not isinstance(agent, str) or not agent:
@@ -710,11 +734,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if mode is not None and not isinstance(mode, str):
+                raise _BadRequest("'mode' must be a string when provided")
             opts: dict = {}
             if project:
                 opts["project"] = project
             if also_include:
                 opts["also_include"] = also_include
+            if mode:
+                opts["mode"] = mode
             hits = runner.run(
                 service.search(query, agent=agent, data_dir=data_dir, limit=limit_i, **opts)
             )
@@ -913,7 +941,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     where = "localhost only" if bound_host in {"127.0.0.1", "::1"} else "LAN-reachable (no auth)"
     print(f"taosmd HTTP API listening on http://{bound_host}:{bound_port} ({where})")
     print(f"Inspection UI (read-only): http://{bound_host}:{bound_port}/")
-    print("Endpoints: GET /health, POST /ingest, GET|POST /search, "
+    print("Endpoints: GET /health, POST /ingest, POST /ingest/batch, GET|POST /search, "
           "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
           "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "

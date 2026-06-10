@@ -378,3 +378,74 @@ def test_a2a_members_populated(live_server):
     status, body = _get(f"{live_server}/a2a/members?channel=chan1")
     assert status == 200
     assert set(body["members"]) == {"agent-x", "agent-y"}
+
+
+# ---------------------------------------------------------------------------
+# POST /ingest/batch + ?mode=bm25 (#25 user-memory contract)
+# ---------------------------------------------------------------------------
+
+def test_ingest_batch_roundtrip_and_idempotent_reimport(live_server):
+    items = [
+        {"text": "Reverse a list in Python with slicing.",
+         "id": "abc123", "metadata": {"collection": "snippets", "title": "Reverse"}},
+        {"text": "The planning meeting moved to Thursday.",
+         "id": "def456", "metadata": {"collection": "notes", "title": "Meeting"}},
+    ]
+    status, body = _post(
+        f"{live_server}/ingest/batch", {"agent": "user-memory", "items": items},
+    )
+    assert status == 200
+    assert body["ingested"] == 2
+    assert body["skipped"] == 0
+
+    # Re-POST of the same batch must skip everything on id (migration re-run).
+    status, body = _post(
+        f"{live_server}/ingest/batch", {"agent": "user-memory", "items": items},
+    )
+    assert status == 200
+    assert body["ingested"] == 0
+    assert body["skipped"] == 2
+
+    # BM25-only search over the migrated chunks: GET with mode=bm25.
+    status, body = _get(
+        f"{live_server}/search?q=planning+meeting+Thursday&agent=user-memory&limit=10&mode=bm25"
+    )
+    assert status == 200
+    assert body["hits"], "expected a bm25 hit for overlapping keywords"
+    hit = body["hits"][0]
+    assert "meeting" in hit["text"]
+    assert set(hit.keys()) >= {"text", "source", "timestamp", "confidence", "metadata"}
+    assert hit["metadata"].get("collection") == "notes"
+    assert hit["metadata"].get("source_id") == "def456"
+
+    # POST body form of the same search.
+    status, body = _post(
+        f"{live_server}/search",
+        {"query": "reverse python list", "agent": "user-memory", "mode": "bm25"},
+    )
+    assert status == 200
+    assert body["hits"]
+    assert "Reverse" in body["hits"][0]["text"]
+
+
+def test_ingest_batch_validation_errors(live_server):
+    status, body = _post(f"{live_server}/ingest/batch", {"agent": "a"})
+    assert status == 400
+    assert "items" in body["error"]
+
+    status, body = _post(f"{live_server}/ingest/batch", {"items": []})
+    assert status == 400
+    assert "agent" in body["error"]
+
+    status, body = _post(
+        f"{live_server}/ingest/batch",
+        {"agent": "a", "items": [{"id": "no-text"}]},
+    )
+    assert status == 400
+    assert "text" in body["error"]
+
+
+def test_search_unknown_mode_is_400(live_server):
+    status, body = _get(f"{live_server}/search?q=x&agent=a&mode=cosine9000")
+    assert status == 400
+    assert "unsupported search mode" in body["error"]

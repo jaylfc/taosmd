@@ -24,6 +24,7 @@ from .catalog_pipeline import CatalogPipeline
 from .retrieval import retrieve
 from .api import (
     ingest,
+    ingest_batch,
     search,
     list_projects,
     list_shelves,
@@ -131,6 +132,7 @@ __all__ = [
     # Retrieval
     "retrieve",
     "ingest",
+    "ingest_batch",
     "search",
     # Project identity + cross-agent discovery
     "project",

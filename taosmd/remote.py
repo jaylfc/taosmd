@@ -92,6 +92,18 @@ class RemoteClient:
             body["project"] = project
         return await self._run("POST", "/ingest", body)
 
+    async def ingest_batch(
+        self, items: list[dict], agent: str, *, project: str | None = None, **_opts
+    ) -> dict:
+        """POST /ingest/batch: bulk-shelve items with idempotent re-import.
+
+        Returns ``{"ingested", "skipped", "agent", "data_dir"}``.
+        """
+        body: dict = {"items": items, "agent": agent}
+        if project is not None:
+            body["project"] = project
+        return await self._run("POST", "/ingest/batch", body)
+
     async def search(
         self,
         query: str,
@@ -100,18 +112,22 @@ class RemoteClient:
         *,
         project: str | None = None,
         also_include: list[str] | None = None,
+        mode: str | None = None,
         **_opts,
     ) -> list[dict]:
         """POST /search: return ranked hits for ``query`` from the remote server.
 
         ``project`` and ``also_include`` are forwarded so project-scoped and
-        cross-agent reads work over the remote path. Returns the ``hits`` list.
+        cross-agent reads work over the remote path. ``mode="bm25"`` selects
+        the server's BM25-only path. Returns the ``hits`` list.
         """
         body: dict = {"query": query, "agent": agent, "limit": limit}
         if project is not None:
             body["project"] = project
         if also_include is not None:
             body["also_include"] = also_include
+        if mode:
+            body["mode"] = mode
         resp = await self._run("POST", "/search", body)
         return resp.get("hits", [])
 

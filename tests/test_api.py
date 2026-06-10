@@ -206,3 +206,155 @@ def test_format_hit_falls_back_to_source_score():
     formatted = taosmd_api._format_hit(hit)
     assert formatted["confidence"] == 0.95
     assert formatted["source"] == "kg"
+
+
+# ---------------------------------------------------------------------------
+# ingest_batch + mode="bm25" search (#25 user-memory contract)
+# ---------------------------------------------------------------------------
+
+def _batch_items():
+    return [
+        {"text": "Reverse a list in Python with list.reverse() or slicing.",
+         "id": "hash-py-reverse",
+         "metadata": {"collection": "snippets", "title": "Python list reverse"}},
+        {"text": "The quarterly planning meeting moved to Thursday afternoon.",
+         "id": "hash-meeting",
+         "metadata": {"collection": "notes", "title": "Planning meeting"}},
+    ]
+
+
+def test_ingest_batch_ingests_and_dedups(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    first = asyncio.run(taosmd.ingest_batch(
+        _batch_items(), agent="user-memory", data_dir=str(isolated_data_dir),
+    ))
+    assert first["ingested"] == 2
+    assert first["skipped"] == 0
+
+    # Re-importing the same batch is idempotent: everything skips on id.
+    again = asyncio.run(taosmd.ingest_batch(
+        _batch_items(), agent="user-memory", data_dir=str(isolated_data_dir),
+    ))
+    assert again["ingested"] == 0
+    assert again["skipped"] == 2
+
+    # A mixed batch only ingests the novel item; in-batch repeats also skip.
+    mixed = _batch_items() + [
+        {"text": "Fresh chunk with no prior hash.", "id": "hash-fresh"},
+        {"text": "Fresh chunk with no prior hash.", "id": "hash-fresh"},
+    ]
+    third = asyncio.run(taosmd.ingest_batch(
+        mixed, agent="user-memory", data_dir=str(isolated_data_dir),
+    ))
+    assert third["ingested"] == 1
+    assert third["skipped"] == 3
+
+
+def test_ingest_batch_skips_empty_text_counts(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    result = asyncio.run(taosmd.ingest_batch(
+        [{"text": "   "}, {"text": "real content", "id": "h1"}],
+        agent="user-memory",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert result["ingested"] == 1
+    assert result["skipped"] == 1
+
+
+def test_ingest_batch_validates_before_writing(isolated_data_dir):
+    stores = _setup_stores(isolated_data_dir)
+    with pytest.raises(ValueError, match="items"):
+        asyncio.run(taosmd.ingest_batch(
+            "not-a-list", agent="user-memory", data_dir=str(isolated_data_dir),
+        ))
+    with pytest.raises(ValueError, match=r"items\[1\]\.text"):
+        asyncio.run(taosmd.ingest_batch(
+            [{"text": "ok", "id": "h1"}, {"id": "h2"}],
+            agent="user-memory",
+            data_dir=str(isolated_data_dir),
+        ))
+    # Fail-fast validation: the valid first item must NOT have been written.
+    assert stores["vector"].existing_source_ids() == set()
+    with pytest.raises(ValueError, match="agent name is required"):
+        asyncio.run(taosmd.ingest_batch([], agent="", data_dir=str(isolated_data_dir)))
+
+
+def test_search_mode_bm25_skips_embedding(isolated_data_dir):
+    """mode="bm25" must never call embed() and must return the contract shape."""
+    stores = _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest_batch(
+        _batch_items(), agent="user-memory", data_dir=str(isolated_data_dir),
+    ))
+
+    async def _explode(text: str, task: str = "search_query") -> list[float]:
+        raise AssertionError("embed() must not be called on the bm25 path")
+
+    stores["vector"].embed = _explode  # type: ignore[assignment]
+
+    hits = asyncio.run(taosmd.search(
+        "planning meeting Thursday",
+        agent="user-memory",
+        mode="bm25",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert hits, "expected a BM25 hit for overlapping keywords"
+    hit = hits[0]
+    assert set(hit.keys()) >= {"text", "source", "timestamp", "confidence", "metadata"}
+    assert "meeting" in hit["text"]
+    assert hit["source"] == "vector"
+    assert 0.0 < hit["confidence"] <= 1.0
+    # User metadata (collection/title/source_id) survives the round trip.
+    assert hit["metadata"].get("collection") == "notes"
+    assert hit["metadata"].get("source_id") == "hash-meeting"
+
+    # Zero term overlap -> no hits, not arbitrary padding.
+    misses = asyncio.run(taosmd.search(
+        "zzqx unrelated",
+        agent="user-memory",
+        mode="bm25",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert misses == []
+
+
+def test_search_mode_bm25_python_fallback(isolated_data_dir, monkeypatch):
+    """With bm25s unavailable the pure-Python BM25 must serve the same path."""
+    import sys
+
+    _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest_batch(
+        _batch_items(), agent="user-memory", data_dir=str(isolated_data_dir),
+    ))
+    monkeypatch.setitem(sys.modules, "bm25s", None)  # forces ImportError
+
+    hits = asyncio.run(taosmd.search(
+        "reverse a Python list",
+        agent="user-memory",
+        mode="bm25",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert hits, "pure-Python BM25 fallback returned no hits"
+    assert "reverse" in hits[0]["text"].lower()
+    assert 0.0 < hits[0]["confidence"] <= 1.0
+
+
+def test_search_rejects_unknown_mode(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    with pytest.raises(ValueError, match="unsupported search mode"):
+        asyncio.run(taosmd.search(
+            "anything", agent="a", mode="vector9000", data_dir=str(isolated_data_dir),
+        ))
+
+
+def test_bm25_python_rank_orders_by_relevance():
+    from taosmd.vector_memory import _bm25_python_rank
+
+    texts = [
+        "the cat sat on the mat",
+        "dogs chase cats around the garden",
+        "a completely unrelated sentence about tax law",
+    ]
+    ranked = _bm25_python_rank("cat mat", texts)
+    assert ranked[0][0] == 0, "exact-term doc should rank first"
+    assert ranked[0][1] > 0.0
+    assert ranked[-1][1] == 0.0, "no-overlap doc should score zero"
