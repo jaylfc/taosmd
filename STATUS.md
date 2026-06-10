@@ -2,7 +2,7 @@
 
 Working snapshot for whoever picks this repo up next. Updated whenever meaningful state changes. Shipped changes live in [CHANGELOG.md](CHANGELOG.md); measured results live in [docs/benchmarks.md](docs/benchmarks.md); the task list of record is GitHub issues.
 
-Last updated: 2026-06-10 (evening)
+Last updated: 2026-06-10 (late evening)
 
 ## Current state
 
@@ -11,7 +11,8 @@ Last updated: 2026-06-10 (evening)
 
 ## In flight
 
-- GPU bench box: answerai-colbert-small full-1540 confirmation plus a stacked answerai + reranker probe, followed by a qwen3:14b judge column (the LoCoMo-Refined community judge) and a gemma4:12b generator A/B.
+- GPU bench box, three chained runs queued overnight: (1) answerai-colbert-small full-1540 confirmation (the stacked answerai + reranker probe already reported 0.720, below answerai alone at 0.760, a recorded negative); (2) a qwen3:14b judge column over all full-1540 prediction files plus a gemma4:12b generator A/B; (3) a full LoCoMo-Refined run (generation with the leader recipe on the 1,382 refined questions, then their official Qwen3-14B judge pointed at local Ollama).
+- Branch `feat/pylate-loader` (pushed): loads ColBERT models through pylate so projection heads actually apply; per-instance token dim; 221 tests green. Ready for a projected-space vs backbone comparison next GPU window.
 - Branch `bench/retrieval-latency-probe`: retrieval-only R@K + latency harness (no LLM dependency). Candidate for merge after the colbert branch lands.
 - Branch `feat/colbert-models-probe`: late-interaction and `--colbert-model` support, wrong-dimension guards added. Note: it was cut from a stale base, so rebase onto master before merging.
 
