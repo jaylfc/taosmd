@@ -26,6 +26,21 @@ Last updated: 2026-06-10 (night)
 ## Working agreements
 
 - Durable state lives in three places: GitHub issues (tasks), this file (snapshot), and the A2A bus (the taosmd-progress channel is the running log).
-- On a rate limit or handoff: commit and push WIP, update this file, post one line to the bus. The next person recovers from last push + issues + STATUS.md.
 - Small doc fixes go straight to master. Features, refactors, and redesigns go through a branch and PR.
 - Benchmark policy: real datasets, external judges, publish methodology, record negative results too.
+
+## On arrival (incoming agent or contributor)
+
+1. Read this file top to bottom.
+2. `git fetch origin` and review recent commits on master plus any open branches.
+3. Check open GitHub issues and PRs.
+4. Tail the A2A bus: taosmd-progress, general, integration channels.
+5. Read the project memory index if you have one.
+Then take the top unblocked item, or continue whatever "In flight" points at.
+
+## On rate limit or handoff (the moment you see the warning)
+
+1. Commit and push WIP on a branch. Never leave uncommitted work.
+2. Update this file: move your task to "In flight" with the branch name, exactly where you stopped, and the next concrete step.
+3. Post one line to taosmd-progress: finished X, mid-flight Y on branch Z, next step W.
+The next agent recovers from last push + open PRs + this file + issues.
