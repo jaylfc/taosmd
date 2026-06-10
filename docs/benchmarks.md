@@ -94,6 +94,25 @@ Reading it honestly: the subset-200 read (+0.060 gemma) shrank to **+0.037 gemma
 
 A proper ColBERT-trained model improves on MiniLM further on the 200-QA subset (gemma judge, preliminary): dense 0.680 → MiniLM MaxSim 0.740 → **`answerdotai/answerai-colbert-small-v1` 0.760**, from a 33M-parameter model. Full-1540 confirmation + a stacked answerai+rerank probe are queued. Known issue: `colbert-ir/colbertv2.0` cannot be loaded via plain sentence-transformers — ST drops its `linear.weight` projection head and every query errors on a dimension mismatch (the run produced zero results); it needs a pylate-style loader before its number means anything.
 
+**CPU-tier viability (retrieval-only, judge-free).** Measured with the
+retrieval-latency probe (`benchmarks/retrieval_latency_probe.py`, branch
+`bench/retrieval-latency-probe`): subset-200, R@K = share of questions whose
+annotated evidence lands in the retrieved set, per-query wall-clock on a
+16-core x86 CPU VPS (no GPU), `--reranker off`:
+
+| Retrieval config | R@K | p50 / p95 latency |
+|---|---|---|
+| dense (MiniLM ONNX) | 0.641 | 72 / 79 ms |
+| + MiniLM MaxSim (`--late-interaction`) | 0.813 | 85 / 93 ms |
+| + answerai-colbert-small backbone (`--colbert-model`) | 0.854 | 110 / 122 ms |
+
+Late interaction costs 13-38 ms per query on CPU and buys +0.17 to +0.21
+evidence recall: the lever is viable on CPU-only tiers, not just the GPU box.
+(Note: the answerai row is the model's 384-dim backbone token output, not its
+trained ColBERT projection space — sentence-transformers does not apply
+projection heads on the token path; a pylate loader is queued to measure the
+true projected space.)
+
 ### Leaderboard (legacy external `qwen3:4b` judge, same dataset + same prompt)
 
 | System | Generator | Retrieval config | Ext Judge | Notes |
