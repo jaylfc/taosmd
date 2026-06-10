@@ -6,7 +6,7 @@ Last updated: 2026-06-10 (night)
 
 ## Current state
 
-- **master** is healthy: 655 tests passing. The taOS user-memory unification surface (`POST /ingest/batch` with idempotent re-import, `mode=bm25` on search) shipped in PR #149 and is verified live by the downstream consumer. A post-merge review pass landed six hardening fixes (see CHANGELOG, Unreleased / Fixed).
+- **master** is healthy: 702 tests passing. NEW: the dependency-aware task-graph component shipped (PR #150): `taosmd tasks` CLI, `/tasks` HTTP surface with a ready queue and a `prime` briefing endpoint, MCP tools, all mutations archive-backed and replayable. Beads concepts credited. `taosmd tasks ready` is now the canonical what-next query for incoming agents once deployed. The taOS user-memory unification surface (`POST /ingest/batch` with idempotent re-import, `mode=bm25` on search) shipped in PR #149 and is verified live by the downstream consumer. A post-merge review pass landed six hardening fixes (see CHANGELOG, Unreleased / Fixed).
 - **Benchmarks:** the late-interaction retrieval lever is confirmed at full-1540 scale (+0.037 lenient / +0.044 strict-instruct over the dense baseline, with no reranker in the loop). A retrieval-only CPU probe shows the lever is viable without a GPU: evidence recall 0.641 (dense) to 0.854 (answerai backbone) at ~110ms per query on a 16-core CPU box. Full tables and caveats in docs/benchmarks.md.
 
 ## In flight
