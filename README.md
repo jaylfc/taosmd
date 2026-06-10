@@ -494,6 +494,8 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 - **Zero cloud dependencies**, runs entirely on local hardware
 - **Framework-agnostic**, Python API, CLI, [MCP server](#mcp-server), and local HTTP/REST API work with any agent framework
 - **Hybrid search**, semantic similarity + keyword overlap boosting
+- **Late-interaction retrieval (opt-in)**, token-level MaxSim scoring lifts evidence recall from 0.64 to 0.85 on LoCoMo and runs in about 110ms per query on a 16-core CPU, no GPU or reranker needed ([numbers](docs/benchmarks.md))
+- **Bulk ingest with safe re-import**, `POST /ingest/batch` dedupes on your content hashes, plus a BM25-only search mode for instant keyword lookups
 - **Temporal facts**, validity windows, point-in-time queries
 - **Contradiction detection**, corrected facts supersede across both the typed knowledge graph (via `valid_to` invalidation) and the vector recall layer (matching chunks soft-hidden, not deleted); recall returns only the active fact
 - **Zero-loss archive**, append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
@@ -604,14 +606,17 @@ export TAOSMD_LLM_URL=http://<gpu-machine>:11434
 |--------|------|---------|----------|
 | `GET` | `/health` | (none) | `{"status": "ok", "version": <str>}` |
 | `POST` | `/ingest` | `{"text": str, "agent": str, "project"?: str}` | `{"archived": int, "agent": str, "project": str\|null, "data_dir": str}` |
-| `POST` | `/search` | `{"query": str, "agent": str, "limit"?: int, "project"?: str, "also_include"?: [str]}` | `{"hits": [...]}` |
-| `GET` | `/search` | `?q=<query>&agent=<agent>&limit=<int>&project=<id>&also_include=a,b` | `{"hits": [...]}` |
+| `POST` | `/ingest/batch` | `{"items": [{"text": str, "id"?: str, "metadata"?: obj}], "agent": str, "project"?: str}` | `{"ingested": int, "skipped": int, ...}` |
+| `POST` | `/search` | `{"query": str, "agent": str, "limit"?: int, "project"?: str, "also_include"?: [str], "mode"?: "bm25"}` | `{"hits": [...]}` |
+| `GET` | `/search` | `?q=<query>&agent=<agent>&limit=<int>&project=<id>&also_include=a,b&mode=bm25` | `{"hits": [...]}` |
 | `GET` | `/projects` | (none) | `{"projects": [{"project_id", "agents", "last_ingest"}]}` |
 | `GET` | `/shelves` | `?project=<id>` | `{"shelves": [{"agent", "facts", "last_ingest"}]}` |
 | `GET` | `/pending` | `?agent=<agent>&limit=<int>` | `{"pending": [...]}` |
 | `POST` | `/pending/resolve` | `{"id": str, "decision": "accept"\|"reject"\|"modify", "note"?: str}` | `{"ok": bool, "applied_kg": bool, "resolution": str}` |
 
 Each hit in `/search` results has the agent-rules contract shape: `{text, source, timestamp, confidence, metadata}`.
+
+`/ingest/batch` is the bulk-import path: each item can carry a stable `id` (your content hash), preserved as `source_id` and used to skip already-imported items, so the whole batch can be re-POSTed safely after a partial migration. `mode=bm25` on `/search` skips query embedding entirely and returns keyword-ranked hits in about 10ms, built for search-as-you-type UIs over short-form memory; the default mode remains the full recipe-driven retrieval.
 
 ### Agent-to-agent (A2A) bus
 
@@ -699,7 +704,7 @@ If taOSmd is useful to you:
 
 ## License
 
-MIT + Commons Clause v1.0 — copyright JAN LABS LTD.
+MIT + Commons Clause v1.0, copyright JAN LABS LTD.
 
 Free to use, fork, modify, and embed. You may not sell taOSmd itself as a hosted or managed service. See [LICENSE](./LICENSE) for the full terms.
 
