@@ -496,6 +496,7 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 - **Hybrid search**, semantic similarity + keyword overlap boosting
 - **Late-interaction retrieval (opt-in)**, token-level MaxSim scoring lifts evidence recall from 0.64 to 0.85 on LoCoMo and runs in about 110ms per query on a 16-core CPU, no GPU or reranker needed ([numbers](docs/benchmarks.md))
 - **Bulk ingest with safe re-import**, `POST /ingest/batch` dedupes on your content hashes, plus a BM25-only search mode for instant keyword lookups
+- **Dependency-aware task graph**, `taosmd tasks` gives multi-agent teams a ready queue (open tasks with no open blockers) and a `prime` briefing endpoint for session handoffs; every mutation is an append-only archive event, so the task tables are replayable history (concept credit: [beads](https://github.com/gastownhall/beads))
 - **Temporal facts**, validity windows, point-in-time queries
 - **Contradiction detection**, corrected facts supersede across both the typed knowledge graph (via `valid_to` invalidation) and the vector recall layer (matching chunks soft-hidden, not deleted); recall returns only the active fact
 - **Zero-loss archive**, append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
@@ -613,6 +614,12 @@ export TAOSMD_LLM_URL=http://<gpu-machine>:11434
 | `GET` | `/shelves` | `?project=<id>` | `{"shelves": [{"agent", "facts", "last_ingest"}]}` |
 | `GET` | `/pending` | `?agent=<agent>&limit=<int>` | `{"pending": [...]}` |
 | `POST` | `/pending/resolve` | `{"id": str, "decision": "accept"\|"reject"\|"modify", "note"?: str}` | `{"ok": bool, "applied_kg": bool, "resolution": str}` |
+| `POST` | `/tasks` | `{"title": str, "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [id]}` | task object |
+| `GET` | `/tasks` | `?status=&project=&assignee=&limit=` | `{"tasks": [...]}` |
+| `GET` | `/tasks/ready` | `?project=&assignee=&limit=` | unblocked tasks, priority order |
+| `GET` | `/tasks/prime` | `?project=&assignee=` | `{"text": <briefing>, "tasks": [...]}` |
+| `POST` | `/tasks/{id}` | `{"status"?, "assignee"?, "priority"?, "body"?}` | updated task |
+| `POST` | `/tasks/{id}/edges` (+ `/edges/remove`) | `{"to_id": str, "type": "blocks"\|"parent"\|"relates"\|"duplicates"}` | edge receipt |
 
 Each hit in `/search` results has the agent-rules contract shape: `{text, source, timestamp, confidence, metadata}`.
 
