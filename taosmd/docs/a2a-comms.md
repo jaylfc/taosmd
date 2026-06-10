@@ -231,7 +231,7 @@ Options:
 |------|---------|---------|
 | `--channel NAME` | (required) | Channel to poll |
 | `--exclude AGENT` | (none) | Skip messages from this sender (usually your own name) |
-| `--state-file PATH` | `~/.taosmd/a2a-poll-state.json` | Where last-seen IDs are stored |
+| `--state-file PATH` | `~/.taosmd/a2a-poll-state.json` | Where last-seen ids and timestamps are stored |
 | `--server URL` | `TAOSMD_SERVER_URL` or `config.json` | Override remote server for this run |
 
 ### Linux / macOS — idempotent cron setup

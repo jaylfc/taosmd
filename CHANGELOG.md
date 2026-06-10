@@ -19,6 +19,25 @@
   BM25 index reuses the fusion-path cache). Uses `bm25s` when installed and
   falls back to a dependency-free Okapi BM25 (same k1/b) when not.
 
+### Fixed
+- A benchmark run where every QA errored previously wrote an empty results
+  file and exited 0; `locomo_runner.py` now exits 1 (and warns when failures
+  outnumber successes).
+- `taosmd a2a-poll` could silently drop messages older than the most recent
+  500 after a long gap between polls. The state file now also keeps a
+  per-channel timestamp cursor used to bound the fetch, with a warning if
+  the window still overflows.
+- `GrantsVerifier.has_grant` no longer raises (surfacing as a 500 on every
+  A2A send) when a grant carries a non-numeric `expires_at`; unparseable
+  expiries are treated as expired.
+- `verifier_from_url` now pins the expected JWT issuer to the taOS registry
+  by default; pass `expected_iss=None` to opt out explicitly.
+- `make_server` warns when a registry verifier is configured without a
+  grants verifier (identity checked but grants silently skipped).
+- Cross-encoder reranking works under transformers 5.x again
+  (`token_type_ids` are requested explicitly when the ONNX session needs
+  them).
+
 ## 0.3.0
 
 First PyPI release. `pip install taosmd` now works (previous versions were
