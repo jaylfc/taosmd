@@ -97,6 +97,23 @@ async def ingest(text, *, agent: str, data_dir=None, **opts) -> dict:
     return await _api.ingest(text, agent=agent, data_dir=data_dir, **opts)
 
 
+async def ingest_batch(items, *, agent: str, data_dir=None, **opts) -> dict:
+    """Bulk-shelve memory chunks with idempotent re-import.
+
+    Thin wrapper over :func:`taosmd.api.ingest_batch`. ``items`` is a list of
+    ``{"text", "id"?, "metadata"?}`` dicts; items whose ``id`` was already
+    ingested are skipped. Returns ``{"ingested", "skipped", "agent",
+    "data_dir"}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.ingest_batch(items, agent, **opts)
+    return await _api.ingest_batch(items, agent=agent, data_dir=data_dir, **opts)
+
+
 async def search(query: str, *, agent: str, data_dir=None, limit: int = 5, **opts) -> list[dict]:
     """Search memory for passages relevant to ``query``.
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Bulk ingest with idempotent re-import.** `POST /ingest/batch` (and
+  `taosmd.ingest_batch()` / `RemoteClient.ingest_batch()`) shelves a list of
+  `{"text", "id"?, "metadata"?}` items in one call. Each item's `id` (the
+  caller's stable content hash) is preserved as `source_id` and used to skip
+  already-ingested items, so a migration batch can be re-POSTed safely.
+  Returns `{"ingested", "skipped"}`. Built for the taOS user-memory
+  unification (taOS#25): one-shot cutover of `user_memory_chunks` into a
+  shared `user-memory` agent namespace.
+- **BM25-only search mode.** `?mode=bm25` on `GET|POST /search` (and
+  `mode="bm25"` on `taosmd.search()`) skips query embedding and recipe
+  resolution entirely and returns BM25-ranked hits in the unchanged contract
+  shape, with `confidence` carrying the sigmoid-normalised BM25 score. The
+  search-as-you-type path for short-form user memory (sub-300ms SLA; the
+  BM25 index reuses the fusion-path cache). Uses `bm25s` when installed and
+  falls back to a dependency-free Okapi BM25 (same k1/b) when not.
+
 ## 0.3.0
 
 First PyPI release. `pip install taosmd` now works (previous versions were
