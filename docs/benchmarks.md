@@ -81,6 +81,19 @@ Reading these honestly:
 - **lite (no-LLM ingest) keeps most of the recall with zero per-turn extraction cost.** It lands about 0.04 to 0.07 below the leader across judges, the price of dropping fact and event enrichment and relying on raw embedding recall. The intended tier is a Pi 4B or any CPU-only box where an LLM call per turn is not affordable.
 - **The 35B generator probe is encouraging but unproven at full scale.** On the 200-QA subset it leads every judge, but subset-200 over-claims have bitten us before (the llama+RRF cell collapsed by 0.16 SH when validated at full 1540). A matched full-1540 run is needed before any promotion. See the TurboQuant spec (`docs/specs/2026-04-29-qwen36-turboquant-benchmark-design.md`) for the planned full run.
 
+### Late-interaction retrieval (token-level MaxSim at retrieval time, tri-judge)
+
+Distinct from the leader's cross-encoder rerank: this lever scores retrieval candidates with token-level MaxSim (ColBERT-style late interaction) instead of a single dense cosine, with **no reranker in the loop**. Probed with MiniLM per-token embeddings (`--late-interaction`), then with a proper ColBERT-trained model (`--colbert-model`). Full-1540, same tri-judge rescore as the tables above; the baseline row is the identical config minus late interaction (mem0_additive, k=10, retrieval k=20, adj=2, no expansion, no reranker).
+
+| Config (qwen3.5:9b, no reranker) | Scale | Lenient `gemma4:e2b` | Strict `llama3.1:8b` | Strict `qwen3:4b-instruct-2507` |
+|---|---|---|---|---|
+| dense baseline | full 1540 | 0.674 | 0.377 | 0.598 |
+| + MiniLM MaxSim (`--late-interaction`) | full 1540 | 0.711 | 0.378 | 0.642 |
+
+Reading it honestly: the subset-200 read (+0.060 gemma) shrank to **+0.037 gemma / +0.044 qwen-instruct at full scale, and the strict llama judge sees nothing** (+0.001 — that judge compresses the field; the same pattern as fast-8b above). Still a real, two-judge-confirmed win for a lever that costs no reranker model: it lands 0.711 gemma vs the full leader's 0.748 without the bge-v2-m3 download or its per-query latency.
+
+A proper ColBERT-trained model improves on MiniLM further on the 200-QA subset (gemma judge, preliminary): dense 0.680 → MiniLM MaxSim 0.740 → **`answerdotai/answerai-colbert-small-v1` 0.760**, from a 33M-parameter model. Full-1540 confirmation + a stacked answerai+rerank probe are queued. Known issue: `colbert-ir/colbertv2.0` cannot be loaded via plain sentence-transformers — ST drops its `linear.weight` projection head and every query errors on a dimension mismatch (the run produced zero results); it needs a pylate-style loader before its number means anything.
+
 ### Leaderboard (legacy external `qwen3:4b` judge, same dataset + same prompt)
 
 | System | Generator | Retrieval config | Ext Judge | Notes |
