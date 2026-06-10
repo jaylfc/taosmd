@@ -3,6 +3,29 @@
 ## Unreleased
 
 ### Added
+- **Task graph component.** New `taosmd/tasks.py` module implements a
+  dependency-aware task graph backed by SQLite (`tasks.db` under the data
+  dir). Tasks have content-hash IDs (`t-<sha256[:12]>`) that are safe for
+  concurrent multi-agent creation without coordination. A `task_edges` table
+  expresses `blocks`, `parent`, `relates`, and `duplicates` relationships.
+  Edges are soft-removed (never deleted). A `ready_tasks` SQL view derives
+  the ready queue directly from the edge table: a task is ready when it is
+  open and has no active blocking edge whose source task is still live.
+  Every mutation is appended to the zero-loss archive before touching
+  projection tables, so `rebuild_from_archive()` can replay the full history
+  into fresh tables at any time.
+  Exposed via: 7 HTTP endpoints (`POST /tasks`, `GET /tasks`, `GET
+  /tasks/ready`, `GET /tasks/prime`, `POST /tasks/{id}`, `POST
+  /tasks/{id}/edges`, `POST /tasks/{id}/edges/remove`); `taosmd tasks
+  add|list|ready|prime|start|close|block` CLI subcommands; and 5 MCP tools
+  (`task_add`, `task_ready`, `task_prime`, `task_update`, `task_edge`).
+  The `GET /tasks/prime` endpoint (and `taosmd tasks prime` CLI) returns a
+  token-budgeted session-bootstrap briefing covering ready, in-progress,
+  blocked, and recently-closed tasks, suitable for direct injection into an
+  agent system prompt.
+  Concept credit: the dependency-graph, ready-queue, and prime ideas come
+  from beads (github.com/gastownhall/beads); this is an independent minimal
+  implementation for the taosmd substrate.
 - **Bulk ingest with idempotent re-import.** `POST /ingest/batch` (and
   `taosmd.ingest_batch()` / `RemoteClient.ingest_batch()`) shelves a list of
   `{"text", "id"?, "metadata"?}` items in one call. Each item's `id` (the

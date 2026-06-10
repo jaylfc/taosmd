@@ -449,5 +449,168 @@ async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
     return sorted(members)
 
 
+async def task_create(
+    title: str,
+    *,
+    body: str | None = None,
+    project: str | None = None,
+    assignee: str | None = None,
+    priority: int = 0,
+    depends_on: list[str] | None = None,
+    created_by: str,
+    data_dir=None,
+) -> dict:
+    """Create a task and return the task object.
+
+    Thin wrapper over :func:`taosmd.tasks.create_task`. When a remote server
+    URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.task_create(
+            title, body=body, project=project, assignee=assignee,
+            priority=priority, depends_on=depends_on, created_by=created_by,
+        )
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.create_task(
+        title, body=body, project=project, assignee=assignee,
+        priority=priority, depends_on=depends_on, created_by=created_by,
+        data_dir=data_dir,
+    )
+
+
+async def task_list(
+    *,
+    status: str | None = None,
+    project: str | None = None,
+    assignee: str | None = None,
+    limit: int = 50,
+    data_dir=None,
+) -> list[dict]:
+    """Return tasks matching the given filters.
+
+    Thin wrapper over :func:`taosmd.tasks.list_tasks`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.task_list(
+            status=status, project=project, assignee=assignee, limit=limit
+        )
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.list_tasks(
+        status=status, project=project, assignee=assignee,
+        limit=limit, data_dir=data_dir,
+    )
+
+
+async def task_ready(
+    *,
+    project: str | None = None,
+    assignee: str | None = None,
+    limit: int = 20,
+    data_dir=None,
+) -> list[dict]:
+    """Return the ready-queue ordered list.
+
+    Thin wrapper over :func:`taosmd.tasks.ready_tasks`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.task_ready(
+            project=project, assignee=assignee, limit=limit
+        )
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.ready_tasks(
+        project=project, assignee=assignee, limit=limit, data_dir=data_dir,
+    )
+
+
+async def task_prime(
+    *,
+    project: str | None = None,
+    assignee: str | None = None,
+    data_dir=None,
+) -> dict:
+    """Return the prime session-bootstrap briefing.
+
+    Thin wrapper over :func:`taosmd.tasks.prime`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.task_prime(project=project, assignee=assignee)
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.prime(project=project, assignee=assignee, data_dir=data_dir)
+
+
+async def task_update(
+    task_id: str,
+    *,
+    status: str | None = None,
+    assignee: str | None = None,
+    priority: int | None = None,
+    body: str | None = None,
+    data_dir=None,
+) -> dict:
+    """Update a task and return the updated object.
+
+    Thin wrapper over :func:`taosmd.tasks.update_task`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.task_update(
+            task_id, status=status, assignee=assignee,
+            priority=priority, body=body,
+        )
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.update_task(
+        task_id, status=status, assignee=assignee,
+        priority=priority, body=body, data_dir=data_dir,
+    )
+
+
+async def task_add_edge(
+    from_id: str,
+    to_id: str,
+    edge_type: str,
+    created_by: str,
+    *,
+    data_dir=None,
+) -> dict:
+    """Add an edge between two tasks.
+
+    Thin wrapper over :func:`taosmd.tasks.add_edge`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.task_add_edge(from_id, to_id, edge_type, created_by)
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.add_edge(
+        from_id, to_id, edge_type, created_by, data_dir=data_dir
+    )
+
+
+async def task_remove_edge(
+    from_id: str,
+    to_id: str,
+    edge_type: str,
+    *,
+    data_dir=None,
+) -> dict:
+    """Soft-remove an edge (sets removed_ts, never deletes).
+
+    Thin wrapper over :func:`taosmd.tasks.remove_edge`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.task_remove_edge(from_id, to_id, edge_type)
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.remove_edge(
+        from_id, to_id, edge_type, data_dir=data_dir
+    )
+
+
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
-           "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members"]
+           "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
+           "task_create", "task_list", "task_ready", "task_prime",
+           "task_update", "task_add_edge", "task_remove_edge"]
