@@ -2,7 +2,7 @@
 
 Stores text passages with their embeddings for semantic search.
 Uses QMD's /embed endpoint for on-device NPU-accelerated embedding.
-Vectors stored in SQLite for persistence — no external vector DB needed.
+Vectors stored in SQLite for persistence - no external vector DB needed.
 """
 
 from __future__ import annotations
@@ -17,8 +17,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Embedding dimension of the MiniLM ONNX model (all-MiniLM-L6-v2). Used by the
-# late-interaction path to recover token-matrix shapes from flat float16 blobs.
+# Default token embedding dimension (all-MiniLM-L6-v2 backbone). Kept as a
+# module-level constant for backward-compat imports in existing tests.
+# Inside VectorMemory, prefer self._token_dim which may differ for pylate models.
 _EMBED_DIM = 384
 
 SCHEMA = """
@@ -111,8 +112,14 @@ class VectorMemory:
         self._conn: sqlite3.Connection | None = None
         self._http = None
         self._local_model = None
+        self._pylate_model = None
         self._onnx_session = None
         self._onnx_tokenizer = None
+        # Per-instance token embedding dimension. Default matches the MiniLM
+        # backbone (384). Set to the model's actual projected dim at init time
+        # when a pylate ColBERT model is loaded (e.g. 128 for colbertv2.0).
+        # All token-blob storage and reshape sites use this, not _EMBED_DIM.
+        self._token_dim: int = _EMBED_DIM
 
     async def init(self, http_client=None) -> None:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -124,13 +131,70 @@ class VectorMemory:
 
         # Load local embedding model if requested
         if self._embed_mode == "local":
-            try:
-                from sentence_transformers import SentenceTransformer
-                self._local_model = SentenceTransformer(self._local_model_name)
-                logger.info("Loaded local embedding model: %s", self._local_model_name)
-            except ImportError:
-                logger.warning("sentence-transformers not installed, falling back to QMD")
-                self._embed_mode = "qmd"
+            if self._colbert_model:
+                # Try the pylate path first so the trained projection head is
+                # applied. Fall back to sentence-transformers with a warning if
+                # pylate is not installed.
+                pylate_loaded = False
+                try:
+                    from pylate import models as pylate_models  # type: ignore[import-untyped]
+                    self._pylate_model = pylate_models.ColBERT(
+                        model_name_or_path=self._colbert_model
+                    )
+                    # Determine the projected output dimension by encoding a short
+                    # probe string. pylate returns (1, seq, dim); take the last axis.
+                    import numpy as np
+                    probe_out = self._pylate_model.encode(
+                        ["probe"],
+                        is_query=False,
+                        show_progress_bar=False,
+                        convert_to_numpy=True,
+                    )
+                    # probe_out may be a list of arrays or a 3-D array.
+                    probe_arr = np.asarray(probe_out[0])  # (seq, dim)
+                    self._token_dim = int(probe_arr.shape[-1])
+                    logger.info(
+                        "Loaded ColBERT model via pylate: %s (token dim=%d)",
+                        self._colbert_model,
+                        self._token_dim,
+                    )
+                    pylate_loaded = True
+                except ImportError:
+                    logger.warning(
+                        "pylate not installed; falling back to sentence-transformers "
+                        "for %s. The projection head will NOT be applied and token "
+                        "vectors will be backbone-dim. Run: pip install pylate",
+                        self._colbert_model,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "pylate ColBERT load failed (%s); falling back to "
+                        "sentence-transformers for %s",
+                        exc,
+                        self._colbert_model,
+                    )
+
+                if not pylate_loaded:
+                    try:
+                        from sentence_transformers import SentenceTransformer
+                        self._local_model = SentenceTransformer(self._colbert_model)
+                        logger.info(
+                            "Loaded ColBERT model via sentence-transformers (fallback): %s",
+                            self._colbert_model,
+                        )
+                    except ImportError:
+                        logger.warning(
+                            "sentence-transformers not installed, falling back to QMD"
+                        )
+                        self._embed_mode = "qmd"
+            else:
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    self._local_model = SentenceTransformer(self._local_model_name)
+                    logger.info("Loaded local embedding model: %s", self._local_model_name)
+                except ImportError:
+                    logger.warning("sentence-transformers not installed, falling back to QMD")
+                    self._embed_mode = "qmd"
         elif self._embed_mode == "onnx":
             try:
                 import onnxruntime as ort
@@ -211,13 +275,31 @@ class VectorMemory:
     async def embed_tokens(self, text: str, task: str = "search_document") -> list[list[float]]:
         """Return per-token L2-normalised embeddings (ColBERT-style).
 
-        Supports two backends:
+        Supports three backends:
+        - pylate ColBERT (preferred when colbert_model is set): applies the
+          trained projection head, returning vectors in the model's actual
+          trained space (e.g. 128-dim for colbertv2.0).
+        - sentence-transformers fallback: uses output_value="token_embeddings"
+          which returns the backbone's token output BEFORE any projection.
         - ONNX (MiniLM): extracts per-token hidden states before mean-pooling.
-        - sentence-transformers ColBERT models: uses output_value="token_embeddings"
-          which returns the model's per-token output (incl. any projection layer).
         """
-        if self._embed_mode == "local" and self._colbert_model and self._local_model is not None:
-            return self._embed_tokens_st(text)
+        is_query = (task == "search_query")
+        if self._embed_mode == "local" and self._colbert_model:
+            if self._pylate_model is not None:
+                result = self._embed_tokens_pylate(text, is_query=is_query)
+            elif self._local_model is not None:
+                result = self._embed_tokens_st(text)
+            else:
+                result = []
+            if result:
+                got_dim = len(result[0])
+                if got_dim != self._token_dim:
+                    raise RuntimeError(
+                        f"late_interaction token dim {got_dim} does not match "
+                        f"store _token_dim {self._token_dim}. Mixed-dim corpora "
+                        "are not supported within one store instance."
+                    )
+            return result
         if not (self._embed_mode == "onnx" and self._onnx_session is not None):
             raise RuntimeError("late_interaction requires embed_mode=onnx or a ColBERT model")
 
@@ -241,14 +323,14 @@ class VectorMemory:
 
         # outputs[0] is the per-token hidden states (1, seq, dim).
         token_embeddings = np.asarray(outputs[0][0], dtype=np.float32)  # (seq, dim)
-        if token_embeddings.shape[-1] != _EMBED_DIM:
-            # The stored blobs are reshaped as (-1, _EMBED_DIM) at search
+        if token_embeddings.shape[-1] != self._token_dim:
+            # The stored blobs are reshaped as (-1, self._token_dim) at search
             # time, so a wrong-dim model would silently write garbage and
             # then fail every query (this is exactly how the colbertv2.0
             # probe died: ST drops its 768->128 projection head). Fail at
             # the first embed instead.
             raise RuntimeError(
-                f"late_interaction expects {_EMBED_DIM}-dim token output, got "
+                f"late_interaction expects {self._token_dim}-dim token output, got "
                 f"{token_embeddings.shape[-1]} from {self._onnx_path or self._colbert_model!r}. "
                 "ColBERT checkpoints with a projection head (e.g. colbertv2.0) "
                 "need a pylate-style loader, not a bare transformer export."
@@ -293,13 +375,13 @@ class VectorMemory:
             )
             if not isinstance(token_embs, np.ndarray):
                 token_embs = np.asarray([np.asarray(v) for v in token_embs])
-            if token_embs.ndim != 2 or token_embs.shape[-1] != _EMBED_DIM:
-                # Stored blobs are reshaped as (-1, _EMBED_DIM) at search
+            if token_embs.ndim != 2 or token_embs.shape[-1] != self._token_dim:
+                # Stored blobs are reshaped as (-1, self._token_dim) at search
                 # time; a wrong-dim model writes garbage that fails every
                 # query later (how the colbertv2.0 probe died). Fail at the
                 # first embed with the actionable cause instead.
                 raise RuntimeError(
-                    f"late_interaction expects {_EMBED_DIM}-dim token output, got "
+                    f"late_interaction expects {self._token_dim}-dim token output, got "
                     f"shape {token_embs.shape} from {self._colbert_model!r}. "
                     "Models whose backbone hidden size differs (or whose quality "
                     "lives in a projection head, e.g. colbertv2.0) need a "
@@ -310,6 +392,47 @@ class VectorMemory:
             raise
         except Exception as e:
             logger.warning("ColBERT token embedding failed: %s", e)
+            return []
+
+    def _embed_tokens_pylate(self, text: str, *, is_query: bool = False) -> list[list[float]]:
+        """Per-token embeddings via the pylate ColBERT model.
+
+        pylate applies the full model including any Dense/projection head, so
+        the returned vectors live in the model's trained ColBERT space (e.g.
+        128-dim for colbertv2.0, 128-dim for answerai-colbert-small-v1).
+
+        Vectors are L2-normalised before return (consistent with the ONNX/ST
+        paths so MaxSim dot products equal cosine similarities).
+        """
+        import numpy as np
+        try:
+            out = self._pylate_model.encode(
+                [text[:512]],
+                is_query=is_query,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+            # pylate returns a list of per-document arrays or a 3-D array.
+            # Shape of out[0] is (seq_len, dim).
+            token_embs = np.asarray(out[0], dtype=np.float32)
+            if token_embs.ndim != 2:
+                raise RuntimeError(
+                    f"pylate encode returned unexpected shape {token_embs.shape}"
+                )
+            dim = token_embs.shape[-1]
+            if dim != self._token_dim:
+                raise RuntimeError(
+                    f"pylate token dim {dim} does not match store _token_dim "
+                    f"{self._token_dim}. Mixed-dim corpora are not supported."
+                )
+            # L2-normalise each token vector so dot product == cosine for MaxSim.
+            norms = np.linalg.norm(token_embs, axis=1, keepdims=True)
+            token_embs = token_embs / (norms + 1e-8)
+            return token_embs.tolist()
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.warning("pylate token embedding failed: %s", exc)
             return []
 
     async def _embed_qmd(self, text: str) -> list[float]:
@@ -335,10 +458,10 @@ class VectorMemory:
         text, _ = redact_secrets(text)
 
         if self.late_interaction:
-            # Late-interaction mode stores the full token matrix (seq_len x 384)
+            # Late-interaction mode stores the full token matrix (seq_len x dim)
             # as a base64 float16 blob — large (a matrix per memory, not one
             # vector), but that's the point of the MaxSim probe. The shape is
-            # recovered on read as nbytes/(_EMBED_DIM*2) tokens x _EMBED_DIM.
+            # recovered on read as nbytes/(self._token_dim*2) tokens x self._token_dim.
             import numpy as np
 
             token_mat = await self.embed_tokens(text, task="search_document")
@@ -415,7 +538,7 @@ class VectorMemory:
 
             # Parse all stored embeddings. In binary-quant mode the column holds
             # base64 packed sign bits; in late-interaction mode it holds a base64
-            # float16 token matrix (decoded to a seq_len x 384 float32 array); in
+            # float16 token matrix (decoded to a seq_len x _token_dim float32 array); in
             # cosine mode it holds a JSON float list.
             ids = []
             texts = []
@@ -427,7 +550,7 @@ class VectorMemory:
                     raw = row["embedding"]
                     if self.late_interaction:
                         blob = base64.b64decode(raw)
-                        emb = np.frombuffer(blob, dtype=np.float16).reshape(-1, _EMBED_DIM).astype(np.float32)
+                        emb = np.frombuffer(blob, dtype=np.float16).reshape(-1, self._token_dim).astype(np.float32)
                         emb = emb if emb.size else None
                     elif self.binary_quant:
                         emb = base64.b64decode(raw)
