@@ -202,6 +202,21 @@ async def run(args: argparse.Namespace) -> int:
                 colbert_model=args.colbert_model,
             )
             await vmem.init(http_client=client)
+            # Canary embed: a missing ONNX file or unreachable qmd server
+            # makes embed() return [] per text, which ingests an EMPTY corpus
+            # and "succeeds" with R@K 0.000 (this happened on the VPS: no
+            # model.onnx -> silent qmd fallback -> no qmd -> 0.000 in 7s).
+            # Refuse to measure nothing.
+            canary = await vmem.embed("canary embedding check", task="search_document")
+            if not canary:
+                print(
+                    f"ERROR: embed() returned empty for mode={args.embed_mode!r} "
+                    f"(onnx_path={args.onnx_path!r}, qmd_url={args.qmd_url!r}). "
+                    "The embedding backend is not actually available — fix it "
+                    "before measuring (a missing model silently falls back).",
+                    file=sys.stderr,
+                )
+                return 2
             added, ingest_s, turn_index = await _ingest_conversation(vmem, conv)
             ingest_stats.append({
                 "conversation_id": conv_id,
