@@ -754,6 +754,127 @@ def _review_help() -> str:
     )
 
 
+def _fmt_task_line(t: dict) -> str:
+    """Format a single task as one line of output."""
+    extra = ""
+    if t.get("assignee"):
+        extra += f" @{t['assignee']}"
+    if t.get("priority"):
+        extra += f" p{t['priority']}"
+    status = t.get("status", "open")
+    return f"[{t['id']}] ({status}) {t['title']}{extra}"
+
+
+def _tasks_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd tasks`` subcommand group."""
+    import asyncio  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+
+    data_dir = args.data_dir
+
+    if args.tasks_cmd == "add":
+        task = asyncio.run(
+            service.task_create(
+                args.title,
+                body=args.body,
+                project=args.project,
+                assignee=args.assignee,
+                priority=args.priority,
+                depends_on=args.depends_on,
+                created_by=args.created_by,
+                data_dir=data_dir,
+            )
+        )
+        print(_fmt_task_line(task))
+        return 0
+
+    if args.tasks_cmd == "list":
+        tasks = asyncio.run(
+            service.task_list(
+                status=args.status,
+                project=args.project,
+                assignee=args.assignee,
+                limit=args.limit,
+                data_dir=data_dir,
+            )
+        )
+        if not tasks:
+            print("No tasks found.")
+            return 0
+        for t in tasks:
+            print(_fmt_task_line(t))
+        return 0
+
+    if args.tasks_cmd == "ready":
+        tasks = asyncio.run(
+            service.task_ready(
+                project=args.project,
+                assignee=args.assignee,
+                limit=args.limit,
+                data_dir=data_dir,
+            )
+        )
+        if not tasks:
+            print("No ready tasks.")
+            return 0
+        for t in tasks:
+            print(_fmt_task_line(t))
+        return 0
+
+    if args.tasks_cmd == "prime":
+        result = asyncio.run(
+            service.task_prime(
+                project=args.project,
+                assignee=args.assignee,
+                data_dir=data_dir,
+            )
+        )
+        print(result["text"])
+        return 0
+
+    if args.tasks_cmd == "start":
+        opts: dict = {"status": "in_progress"}
+        if getattr(args, "assignee", None):
+            opts["assignee"] = args.assignee
+        try:
+            task = asyncio.run(
+                service.task_update(args.task_id, data_dir=data_dir, **opts)
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(_fmt_task_line(task))
+        return 0
+
+    if args.tasks_cmd == "close":
+        try:
+            task = asyncio.run(
+                service.task_update(args.task_id, status="closed", data_dir=data_dir)
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(_fmt_task_line(task))
+        return 0
+
+    if args.tasks_cmd == "block":
+        try:
+            edge = asyncio.run(
+                service.task_add_edge(
+                    args.blocker_id, args.task_id, "blocks", "cli",
+                    data_dir=data_dir,
+                )
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"edge: {edge['from_id']} --[blocks]--> {edge['to_id']}")
+        return 0
+
+    return 1
+
+
 def _projects_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd projects`` and ``taosmd shelves``: project-scoped discovery."""
     import asyncio  # noqa: PLC0415
@@ -1172,6 +1293,60 @@ def main(argv: list[str] | None = None) -> int:
         help="Project id (from `taosmd projects` or taosmd.get_project_id())",
     )
 
+    # ----- tasks subcommand group ---------------------------------------
+    tasks_p = sub.add_parser(
+        "tasks",
+        help="Dependency-aware task graph: add, list, ready queue, prime briefing",
+    )
+    tasks_sub = tasks_p.add_subparsers(dest="tasks_cmd", required=True)
+
+    # tasks add
+    t_add_p = tasks_sub.add_parser("add", help="Create a new task")
+    t_add_p.add_argument("--title", required=True, help="Task title")
+    t_add_p.add_argument("--body", default=None, help="Task description / body")
+    t_add_p.add_argument("--project", default=None, help="Project id")
+    t_add_p.add_argument("--assignee", default=None, help="Agent handle to assign")
+    t_add_p.add_argument("--priority", type=int, default=0, help="Priority (higher = more urgent, default 0)")
+    t_add_p.add_argument(
+        "--depends-on", dest="depends_on", action="append", default=None,
+        metavar="TASK_ID",
+        help="Task IDs that must close before this task is ready. Repeat for multiple.",
+    )
+    t_add_p.add_argument("--by", dest="created_by", default="cli", help="Creator handle (default: cli)")
+
+    # tasks list
+    t_list_p = tasks_sub.add_parser("list", help="List tasks with optional filters")
+    t_list_p.add_argument("--status", default=None, help="Filter by status (open|in_progress|blocked|closed|superseded)")
+    t_list_p.add_argument("--project", default=None, help="Filter by project id")
+    t_list_p.add_argument("--assignee", default=None, help="Filter by assignee")
+    t_list_p.add_argument("--limit", type=int, default=50, help="Max results (default 50)")
+
+    # tasks ready
+    t_ready_p = tasks_sub.add_parser("ready", help="Show tasks that are ready to run (no active blockers)")
+    t_ready_p.add_argument("--project", default=None, help="Filter by project id")
+    t_ready_p.add_argument("--assignee", default=None, help="Filter by assignee")
+    t_ready_p.add_argument("--limit", type=int, default=20, help="Max results (default 20)")
+
+    # tasks prime
+    t_prime_p = tasks_sub.add_parser("prime", help="Print the session-bootstrap briefing")
+    t_prime_p.add_argument("--project", default=None, help="Filter by project id")
+    t_prime_p.add_argument("--assignee", default=None, help="Filter by assignee")
+
+    # tasks start (update status to in_progress)
+    t_start_p = tasks_sub.add_parser("start", help="Mark a task as in progress")
+    t_start_p.add_argument("task_id", help="Task ID")
+    t_start_p.add_argument("--assignee", default=None, help="Assign to this agent handle")
+
+    # tasks close (update status to closed)
+    t_close_p = tasks_sub.add_parser("close", help="Mark a task as closed")
+    t_close_p.add_argument("task_id", help="Task ID")
+
+    # tasks block (add a blocks edge: blocker -> blocked)
+    t_block_p = tasks_sub.add_parser("block", help="Mark one task as blocked by another")
+    t_block_p.add_argument("task_id", help="The task to mark as blocked")
+    t_block_p.add_argument("--by", dest="blocker_id", required=True, metavar="BLOCKER_ID",
+                            help="The task that is blocking it")
+
     # ----- mcp subcommand (MCP server over stdio) -----------------------
     mcp_p = sub.add_parser(
         "mcp",
@@ -1218,6 +1393,9 @@ def main(argv: list[str] | None = None) -> int:
         return http_server.serve(
             host=args.host, port=args.port, data_dir=args.serve_data_dir,
         )
+
+    if args.cmd == "tasks":
+        return _tasks_cmd(args)
 
     if args.cmd == "mcp":
         from . import mcp_server  # noqa: PLC0415

@@ -231,4 +231,130 @@ class RemoteClient:
         return {"agent": agent, "reachable": reachable, "server_version": health.get("version")}
 
 
+    async def task_create(
+        self,
+        title: str,
+        *,
+        body: str | None = None,
+        project: str | None = None,
+        assignee: str | None = None,
+        priority: int = 0,
+        depends_on: list[str] | None = None,
+        created_by: str,
+        **_opts,
+    ) -> dict:
+        """POST /tasks: create a task on the remote server."""
+        payload: dict = {"title": title, "created_by": created_by, "priority": priority}
+        if body is not None:
+            payload["body"] = body
+        if project is not None:
+            payload["project"] = project
+        if assignee is not None:
+            payload["assignee"] = assignee
+        if depends_on is not None:
+            payload["depends_on"] = depends_on
+        return await self._run("POST", "/tasks", payload)
+
+    async def task_list(
+        self,
+        *,
+        status: str | None = None,
+        project: str | None = None,
+        assignee: str | None = None,
+        limit: int = 50,
+        **_opts,
+    ) -> list[dict]:
+        """GET /tasks: list tasks from the remote server."""
+        params: dict = {"limit": limit}
+        if status is not None:
+            params["status"] = status
+        if project is not None:
+            params["project"] = project
+        if assignee is not None:
+            params["assignee"] = assignee
+        resp = await self._run("GET", "/tasks", params=params)
+        return resp.get("tasks", [])
+
+    async def task_ready(
+        self,
+        *,
+        project: str | None = None,
+        assignee: str | None = None,
+        limit: int = 20,
+        **_opts,
+    ) -> list[dict]:
+        """GET /tasks/ready: return the ready queue from the remote server."""
+        params: dict = {"limit": limit}
+        if project is not None:
+            params["project"] = project
+        if assignee is not None:
+            params["assignee"] = assignee
+        resp = await self._run("GET", "/tasks/ready", params=params)
+        return resp.get("tasks", [])
+
+    async def task_prime(
+        self,
+        *,
+        project: str | None = None,
+        assignee: str | None = None,
+        **_opts,
+    ) -> dict:
+        """GET /tasks/prime: fetch the prime briefing from the remote server."""
+        params: dict = {}
+        if project is not None:
+            params["project"] = project
+        if assignee is not None:
+            params["assignee"] = assignee
+        return await self._run("GET", "/tasks/prime", params=params or None)
+
+    async def task_update(
+        self,
+        task_id: str,
+        *,
+        status: str | None = None,
+        assignee: str | None = None,
+        priority: int | None = None,
+        body: str | None = None,
+        **_opts,
+    ) -> dict:
+        """POST /tasks/{id}: update a task on the remote server."""
+        payload: dict = {}
+        if status is not None:
+            payload["status"] = status
+        if assignee is not None:
+            payload["assignee"] = assignee
+        if priority is not None:
+            payload["priority"] = priority
+        if body is not None:
+            payload["body"] = body
+        return await self._run("POST", f"/tasks/{task_id}", payload)
+
+    async def task_add_edge(
+        self,
+        from_id: str,
+        to_id: str,
+        edge_type: str,
+        created_by: str,
+        **_opts,
+    ) -> dict:
+        """POST /tasks/{id}/edges: add an edge on the remote server."""
+        return await self._run(
+            "POST", f"/tasks/{from_id}/edges",
+            {"to_id": to_id, "type": edge_type, "created_by": created_by},
+        )
+
+    async def task_remove_edge(
+        self,
+        from_id: str,
+        to_id: str,
+        edge_type: str,
+        **_opts,
+    ) -> dict:
+        """POST /tasks/{id}/edges/remove: soft-remove an edge on the remote server."""
+        return await self._run(
+            "POST", f"/tasks/{from_id}/edges/remove",
+            {"to_id": to_id, "type": edge_type},
+        )
+
+
 __all__ = ["RemoteClient"]

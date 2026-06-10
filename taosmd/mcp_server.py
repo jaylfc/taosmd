@@ -223,6 +223,131 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
             )
         )
 
+    # ---- Task graph tools -------------------------------------------------------
+
+    @mcp.tool()
+    async def task_add(
+        title: str,
+        created_by: str,
+        body: str | None = None,
+        project: str | None = None,
+        assignee: str | None = None,
+        priority: int = 0,
+        depends_on: list[str] | None = None,
+    ) -> dict:
+        """Create a new task in the task graph.
+
+        ``title`` and ``created_by`` are required. ``depends_on`` is an
+        optional list of task IDs that must be closed before this task is
+        ready (creates ``blocks`` edges automatically). Returns the created
+        task object including its content-hash ``id``.
+        """
+        return await _dispatch(
+            service.task_create(
+                title,
+                body=body,
+                project=project,
+                assignee=assignee,
+                priority=priority,
+                depends_on=depends_on,
+                created_by=created_by,
+                data_dir=data_dir,
+            )
+        )
+
+    @mcp.tool()
+    async def task_ready(
+        project: str | None = None,
+        assignee: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Return the ready-queue: tasks that are open and have no active blockers.
+
+        Ordered by priority descending, then creation time ascending (oldest
+        first). Use this as the canonical "what should I work on next?" query.
+        """
+        return await _dispatch(
+            service.task_ready(
+                project=project,
+                assignee=assignee,
+                limit=limit,
+                data_dir=data_dir,
+            )
+        )
+
+    @mcp.tool()
+    async def task_prime(
+        project: str | None = None,
+        assignee: str | None = None,
+    ) -> dict:
+        """Fetch the session-bootstrap briefing for this task graph.
+
+        Returns ``{"text": str, "tasks": [...]}``. The ``text`` is a
+        token-budgeted plain-text summary covering ready tasks, in-progress
+        tasks, blocked tasks, and recently closed tasks (last 24h). Suitable
+        for direct injection into a session system prompt. ``tasks`` contains
+        the raw task objects referenced in the briefing.
+        """
+        return await _dispatch(
+            service.task_prime(
+                project=project,
+                assignee=assignee,
+                data_dir=data_dir,
+            )
+        )
+
+    @mcp.tool()
+    async def task_update(
+        task_id: str,
+        status: str | None = None,
+        assignee: str | None = None,
+        priority: int | None = None,
+        body: str | None = None,
+    ) -> dict:
+        """Update a task's status, assignee, priority, or body.
+
+        ``status`` must be one of ``open``, ``in_progress``, ``blocked``,
+        ``closed``, ``superseded``. Closing a task sets ``closed_ts``
+        automatically. Returns the updated task object.
+        """
+        return await _dispatch(
+            service.task_update(
+                task_id,
+                status=status,
+                assignee=assignee,
+                priority=priority,
+                body=body,
+                data_dir=data_dir,
+            )
+        )
+
+    @mcp.tool()
+    async def task_edge(
+        from_id: str,
+        to_id: str,
+        edge_type: str,
+        created_by: str,
+        remove: bool = False,
+    ) -> dict:
+        """Add or remove an edge between two tasks.
+
+        ``edge_type`` must be one of ``blocks``, ``parent``, ``relates``,
+        ``duplicates``. When ``remove=True``, soft-removes an existing active
+        edge by setting ``removed_ts`` (never deletes). Removing a ``blocks``
+        edge restores readiness of the downstream task.
+        """
+        if remove:
+            return await _dispatch(
+                service.task_remove_edge(
+                    from_id, to_id, edge_type, data_dir=data_dir
+                )
+            )
+        return await _dispatch(
+            service.task_add_edge(
+                from_id, to_id, edge_type, created_by, data_dir=data_dir
+            )
+        )
+
     return mcp
 
 

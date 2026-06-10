@@ -48,6 +48,13 @@ Endpoints
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
+``POST /tasks``            ``{"title", "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [...], "created_by"}`` -> task object
+``GET  /tasks``            ``?status=&project=&assignee=&limit=``  -> ``{"tasks": [...]}``
+``GET  /tasks/ready``      ``?project=&assignee=&limit=``  -> ``{"tasks": [...]}``
+``GET  /tasks/prime``      ``?project=&assignee=``         -> ``{"text": ..., "tasks": [...]}``
+``POST /tasks/{id}``       ``{"status"?, "assignee"?, "priority"?, "body"?}`` -> updated task object
+``POST /tasks/{id}/edges`` ``{"to_id", "type", "created_by"}``     -> edge record
+``POST /tasks/{id}/edges/remove`` ``{"to_id", "type"}``   -> edge record with removed_ts
 
 Inspection UI
 -------------
@@ -647,6 +654,36 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
+                # Task graph endpoints — prefix matching for /tasks/{id} paths
+                elif method == "POST" and path == "/tasks":
+                    self._handle_task_create()
+                elif method == "GET" and path == "/tasks":
+                    self._handle_task_list(query)
+                elif method == "GET" and path == "/tasks/ready":
+                    self._handle_task_ready(query)
+                elif method == "GET" and path == "/tasks/prime":
+                    self._handle_task_prime(query)
+                elif method == "POST" and path.startswith("/tasks/"):
+                    # /tasks/{id}/edges/remove  or  /tasks/{id}/edges  or  /tasks/{id}
+                    rest = path[len("/tasks/"):]
+                    if rest.endswith("/edges/remove"):
+                        task_id = rest[: -len("/edges/remove")]
+                        if not task_id:
+                            self._send_json(404, {"error": "task id required"})
+                        else:
+                            self._handle_task_remove_edge(task_id)
+                    elif rest.endswith("/edges"):
+                        task_id = rest[: -len("/edges")]
+                        if not task_id:
+                            self._send_json(404, {"error": "task id required"})
+                        else:
+                            self._handle_task_add_edge(task_id)
+                    else:
+                        task_id = rest
+                        if not task_id:
+                            self._send_json(404, {"error": "task id required"})
+                        else:
+                            self._handle_task_update(task_id)
                 elif method == "GET" and _serve_dashboard and self._try_serve_static(parts.path):
                     return  # static asset served
                 elif method == "GET" and _serve_dashboard:
@@ -906,6 +943,156 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 # Client disconnected; exit the thread cleanly.
                 return
 
+        # ----- task graph handlers ----------------------------------------
+
+        def _handle_task_create(self) -> None:
+            body = self._read_json_body()
+            title = body.get("title")
+            created_by = body.get("created_by")
+            if not isinstance(title, str) or not title:
+                raise _BadRequest("'title' (non-empty string) is required")
+            if not isinstance(created_by, str) or not created_by:
+                raise _BadRequest("'created_by' (non-empty string) is required")
+            task_body = body.get("body")
+            project = body.get("project")
+            assignee = body.get("assignee")
+            priority = body.get("priority", 0)
+            depends_on = body.get("depends_on")
+            try:
+                priority = int(priority)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'priority' must be an integer") from exc
+            if depends_on is not None and not isinstance(depends_on, list):
+                raise _BadRequest("'depends_on' must be a list of task IDs when provided")
+            result = runner.run(
+                service.task_create(
+                    title,
+                    body=task_body,
+                    project=project,
+                    assignee=assignee,
+                    priority=priority,
+                    depends_on=depends_on,
+                    created_by=created_by,
+                    data_dir=data_dir,
+                )
+            )
+            self._send_json(200, result)
+
+        def _handle_task_list(self, qs: dict) -> None:
+            status = (qs.get("status") or [None])[0]
+            project = (qs.get("project") or [None])[0]
+            assignee = (qs.get("assignee") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            tasks = runner.run(
+                service.task_list(
+                    status=status,
+                    project=project,
+                    assignee=assignee,
+                    limit=limit_i,
+                    data_dir=data_dir,
+                )
+            )
+            self._send_json(200, {"tasks": tasks})
+
+        def _handle_task_ready(self, qs: dict) -> None:
+            project = (qs.get("project") or [None])[0]
+            assignee = (qs.get("assignee") or [None])[0]
+            limit_raw = (qs.get("limit") or [20])[0]
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            tasks = runner.run(
+                service.task_ready(
+                    project=project,
+                    assignee=assignee,
+                    limit=limit_i,
+                    data_dir=data_dir,
+                )
+            )
+            self._send_json(200, {"tasks": tasks})
+
+        def _handle_task_prime(self, qs: dict) -> None:
+            project = (qs.get("project") or [None])[0]
+            assignee = (qs.get("assignee") or [None])[0]
+            result = runner.run(
+                service.task_prime(
+                    project=project,
+                    assignee=assignee,
+                    data_dir=data_dir,
+                )
+            )
+            self._send_json(200, result)
+
+        def _handle_task_update(self, task_id: str) -> None:
+            body = self._read_json_body()
+            status = body.get("status")
+            assignee = body.get("assignee")
+            priority = body.get("priority")
+            task_body = body.get("body")
+            if priority is not None:
+                try:
+                    priority = int(priority)
+                except (TypeError, ValueError) as exc:
+                    raise _BadRequest("'priority' must be an integer") from exc
+            try:
+                result = runner.run(
+                    service.task_update(
+                        task_id,
+                        status=status,
+                        assignee=assignee,
+                        priority=priority,
+                        body=task_body,
+                        data_dir=data_dir,
+                    )
+                )
+            except ValueError as exc:
+                raise _BadRequest(str(exc)) from exc
+            self._send_json(200, result)
+
+        def _handle_task_add_edge(self, from_id: str) -> None:
+            body = self._read_json_body()
+            to_id = body.get("to_id")
+            edge_type = body.get("type")
+            created_by = body.get("created_by", "unknown")
+            if not isinstance(to_id, str) or not to_id:
+                raise _BadRequest("'to_id' (non-empty string) is required")
+            if not isinstance(edge_type, str) or not edge_type:
+                raise _BadRequest("'type' (non-empty string) is required")
+            try:
+                result = runner.run(
+                    service.task_add_edge(
+                        from_id, to_id, edge_type, created_by,
+                        data_dir=data_dir,
+                    )
+                )
+            except ValueError as exc:
+                raise _BadRequest(str(exc)) from exc
+            self._send_json(200, result)
+
+        def _handle_task_remove_edge(self, from_id: str) -> None:
+            body = self._read_json_body()
+            to_id = body.get("to_id")
+            edge_type = body.get("type")
+            if not isinstance(to_id, str) or not to_id:
+                raise _BadRequest("'to_id' (non-empty string) is required")
+            if not isinstance(edge_type, str) or not edge_type:
+                raise _BadRequest("'type' (non-empty string) is required")
+            try:
+                result = runner.run(
+                    service.task_remove_edge(
+                        from_id, to_id, edge_type,
+                        data_dir=data_dir,
+                    )
+                )
+            except ValueError as exc:
+                raise _BadRequest(str(exc)) from exc
+            self._send_json(200, result)
+
     return TaosmdHandler
 
 
@@ -953,7 +1140,9 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
           "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
           "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "
-          "GET /a2a/channels, GET /a2a/members")
+          "GET /a2a/channels, GET /a2a/members, "
+          "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
+          "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

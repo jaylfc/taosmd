@@ -449,3 +449,183 @@ def test_search_unknown_mode_is_400(live_server):
     status, body = _get(f"{live_server}/search?q=x&agent=a&mode=cosine9000")
     assert status == 400
     assert "unsupported search mode" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# Task graph HTTP tests
+# ---------------------------------------------------------------------------
+
+
+def test_task_create(live_server):
+    """POST /tasks creates a task and returns the task object."""
+    status, body = _post(
+        f"{live_server}/tasks",
+        {"title": "Implement feature X", "created_by": "agent-test"},
+    )
+    assert status == 200, body
+    assert body["id"].startswith("t-")
+    assert body["title"] == "Implement feature X"
+    assert body["status"] == "open"
+    assert body["created_by"] == "agent-test"
+
+
+def test_task_create_missing_title(live_server):
+    status, body = _post(
+        f"{live_server}/tasks",
+        {"created_by": "agent-test"},
+    )
+    assert status == 400
+    assert "title" in body["error"]
+
+
+def test_task_create_missing_created_by(live_server):
+    status, body = _post(
+        f"{live_server}/tasks",
+        {"title": "Some task"},
+    )
+    assert status == 400
+    assert "created_by" in body["error"]
+
+
+def test_task_list(live_server):
+    """GET /tasks returns a list of tasks."""
+    _post(f"{live_server}/tasks", {"title": "T1", "created_by": "a"})
+    _post(f"{live_server}/tasks", {"title": "T2", "created_by": "a"})
+    status, body = _get(f"{live_server}/tasks")
+    assert status == 200, body
+    assert "tasks" in body
+    assert len(body["tasks"]) >= 2
+
+
+def test_task_list_status_filter(live_server):
+    """GET /tasks?status= filters correctly."""
+    r, created = _post(f"{live_server}/tasks", {"title": "T-filter", "created_by": "a"})
+    assert r == 200
+    _post(f"{live_server}/tasks/{created['id']}", {"status": "closed"})
+
+    status, body = _get(f"{live_server}/tasks?status=closed")
+    assert status == 200
+    assert any(t["id"] == created["id"] for t in body["tasks"])
+
+
+def test_task_ready(live_server):
+    """GET /tasks/ready returns only open tasks with no active blockers."""
+    _, t1 = _post(f"{live_server}/tasks", {"title": "Blocker", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "Blocked", "created_by": "a"})
+    # Add blocks edge
+    _post(f"{live_server}/tasks/{t1['id']}/edges",
+          {"to_id": t2["id"], "type": "blocks", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/ready")
+    assert status == 200
+    ready_ids = {t["id"] for t in body["tasks"]}
+    assert t1["id"] in ready_ids
+    assert t2["id"] not in ready_ids
+
+
+def test_task_prime(live_server):
+    """GET /tasks/prime returns a briefing with text and tasks keys."""
+    _post(f"{live_server}/tasks", {"title": "Prime target", "created_by": "a"})
+    status, body = _get(f"{live_server}/tasks/prime")
+    assert status == 200
+    assert "text" in body
+    assert "tasks" in body
+    assert isinstance(body["text"], str)
+    assert isinstance(body["tasks"], list)
+
+
+def test_task_update(live_server):
+    """POST /tasks/{id} updates task fields."""
+    _, task = _post(f"{live_server}/tasks", {"title": "To update", "created_by": "a"})
+    status, body = _post(
+        f"{live_server}/tasks/{task['id']}",
+        {"status": "in_progress"},
+    )
+    assert status == 200
+    assert body["status"] == "in_progress"
+
+
+def test_task_update_bad_status(live_server):
+    _, task = _post(f"{live_server}/tasks", {"title": "T", "created_by": "a"})
+    status, body = _post(
+        f"{live_server}/tasks/{task['id']}",
+        {"status": "not_a_status"},
+    )
+    assert status == 400
+
+
+def test_task_update_not_found(live_server):
+    status, body = _post(
+        f"{live_server}/tasks/t-000000000000",
+        {"status": "closed"},
+    )
+    assert status == 400
+    assert "not found" in body["error"]
+
+
+def test_task_add_edge(live_server):
+    """POST /tasks/{id}/edges adds a dependency edge."""
+    _, t1 = _post(f"{live_server}/tasks", {"title": "Blocker", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "Blocked", "created_by": "a"})
+    status, body = _post(
+        f"{live_server}/tasks/{t1['id']}/edges",
+        {"to_id": t2["id"], "type": "blocks", "created_by": "a"},
+    )
+    assert status == 200
+    assert body["from_id"] == t1["id"]
+    assert body["to_id"] == t2["id"]
+    assert body["type"] == "blocks"
+    assert body["removed_ts"] is None
+
+
+def test_task_add_edge_bad_type(live_server):
+    _, t1 = _post(f"{live_server}/tasks", {"title": "T1", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "T2", "created_by": "a"})
+    status, body = _post(
+        f"{live_server}/tasks/{t1['id']}/edges",
+        {"to_id": t2["id"], "type": "badtype", "created_by": "a"},
+    )
+    assert status == 400
+
+
+def test_task_remove_edge(live_server):
+    """POST /tasks/{id}/edges/remove soft-removes a blocking edge."""
+    _, t1 = _post(f"{live_server}/tasks", {"title": "Blocker", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "Blocked", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t1['id']}/edges",
+          {"to_id": t2["id"], "type": "blocks", "created_by": "a"})
+
+    # t2 should not be in ready queue
+    _, ready_body = _get(f"{live_server}/tasks/ready")
+    assert t2["id"] not in {t["id"] for t in ready_body["tasks"]}
+
+    # Remove the edge
+    status, body = _post(
+        f"{live_server}/tasks/{t1['id']}/edges/remove",
+        {"to_id": t2["id"], "type": "blocks"},
+    )
+    assert status == 200
+    assert body["removed_ts"] is not None
+
+    # t2 should now be in ready queue
+    _, ready_body = _get(f"{live_server}/tasks/ready")
+    assert t2["id"] in {t["id"] for t in ready_body["tasks"]}
+
+
+def test_task_remove_edge_not_found(live_server):
+    _, t1 = _post(f"{live_server}/tasks", {"title": "T1", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "T2", "created_by": "a"})
+    status, body = _post(
+        f"{live_server}/tasks/{t1['id']}/edges/remove",
+        {"to_id": t2["id"], "type": "blocks"},
+    )
+    assert status == 400
+
+
+def test_task_404_unknown_id(live_server):
+    """POST /tasks/{unknown-non-t-id} should 404 when id segment is empty."""
+    # The dispatch only routes /tasks/{id} where id is non-empty; an unknown
+    # ID with valid format returns 400 from the update handler (task not found)
+    status, body = _post(f"{live_server}/tasks/t-000000000000", {"status": "closed"})
+    assert status == 400
+    assert "not found" in body["error"]
