@@ -9,6 +9,7 @@ The report at `docs/research-report.md` is a living lab-report-meets-review-pape
 
 ## Structure (fixed top-level sections, never reordered)
 
+0. Index: the navigation layer (see Index system below).
 1. Abstract: current one-paragraph state of results.
 2. Methodology: judge protocol, datasets, metrics, hardware tiers, and the measured reasons behind each choice.
 3. Results: evidence tables; every number traceable.
@@ -16,6 +17,15 @@ The report at `docs/research-report.md` is a living lab-report-meets-review-pape
 5. Reproducibility: exact commands, model versions, dataset provenance.
 6. Ongoing work (pre-registered): experiments declared BEFORE results exist.
 7. Revision log: append-only, stamped.
+
+## Index system (agents navigate by this; keep it perfect)
+
+Directly under the title, before the Abstract, the report carries two things:
+
+1. A table of contents linking every section and subsection by GitHub anchor.
+2. The finding index: one table row per finding, experiment, or negative result, with columns ID | one line | section anchor | status | provenance. IDs are stable and never reused: F-NNN for findings, E-NNN for experiments (E-001 and E-002 are the surprisal and hallucination-rate kill-shots), N-NNN for negative results. An experiment keeps its E id when its outcome moves to Results (becoming also an F row) or Negative results (an N row); the index cross-links them.
+
+Rules: every new entry anywhere in the report gets an index row in the same edit; an agent must be able to answer "what do we know about X" by reading the index alone and jumping once; grep-friendly one-liners (name the lever, the number, the dataset). The index is part of every revision-log diff.
 
 ## Hard gates
 
@@ -36,7 +46,8 @@ Plain human prose. No em dashes. No AI attribution or AI-pattern phrasing. Produ
 2. Place the finding (Results or Negative results), with provenance.
 3. If it resolves a pre-registered experiment, move and quote the original kill criterion verbatim.
 4. Update the Abstract only if the headline state changed.
-5. Append the revision-log entry.
-6. Run the voice checks (no em dashes, casing, no AI tells) before committing.
+5. Update the index: new rows for new entries, status flips for moved ones.
+6. Append the revision-log entry.
+7. Run the voice checks (no em dashes, casing, no AI tells) before committing.
 
 Concept credit: pre-registration and negative-result enforcement patterns surveyed from community academic-writing skills (Imbad0202/academic-research-skills, lingzhi227/agent-research-skills); this skill is an independent minimal implementation for a living repo document.
