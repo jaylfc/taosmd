@@ -37,7 +37,7 @@ def test_recipe_schema_is_valid_object_with_four_sections():
 def test_registry_has_unique_ids_and_required_metadata():
     ids = [r.id for r in recipes.list_recipes()]
     assert len(ids) == len(set(ids)), "duplicate recipe ids"
-    assert {"maxsim-rerank-9b", "rrf-9b", "fast-8b", "lite-pi"} <= set(ids)
+    assert {"maxsim-rerank-9b", "rrf-9b", "fast-8b", "lite-pi", "lateint-9b"} <= set(ids)
     for r in recipes.list_recipes():
         assert r.metadata.get("tier")
         assert r.metadata.get("source")
@@ -56,6 +56,26 @@ def test_leader_scores_match_benchmarks_doc():
     # The leader row must contain all three numbers (drift guard).
     for n in ("0.748", "0.394", "0.659"):
         assert n in doc, f"{n} missing from benchmarks.md"
+
+
+def test_lateint_recipe_scores_match_benchmarks_doc():
+    """The lateint-9b recipe scores in the registry must equal docs/benchmarks.md."""
+    recipe = recipes.get_recipe("lateint-9b")
+    assert recipe is not None
+    assert recipe.metadata["scores"] == {
+        "gemma4:e2b": 0.716,
+        "llama3.1:8b": 0.388,
+        "qwen3:4b-instruct-2507": 0.656,
+        "qwen3:14b": 0.542,
+    }
+    doc = Path("docs/benchmarks.md").read_text()
+    # All four numbers must appear in the benchmarks doc (drift guard).
+    for n in ("0.716", "0.388", "0.656", "0.542"):
+        assert n in doc, f"{n} missing from benchmarks.md"
+    # Must declare late_interaction and colbert_model in retrieval config.
+    assert recipe.retrieval.get("late_interaction") is True
+    assert recipe.retrieval.get("colbert_model") == "answerdotai/answerai-colbert-small-v1"
+    assert recipe.retrieval.get("reranker") == "none"
 
 
 def test_lite_recipe_disables_extraction_and_reranker():
