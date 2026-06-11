@@ -294,8 +294,12 @@ _INSPECTION_UI_HTML = """<!doctype html>
   var $ = function (id) { return document.getElementById(id); };
 
   function esc(v) {
+    // Escapes for BOTH element and attribute contexts: quotes must be
+    // encoded because values like the A2A sender name are interpolated
+    // into attributes (data-sender="..."), and the bus is free-handle.
     return String(v == null ? "" : v)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
   function chip(label, value) {
     if (value === undefined || value === null || value === "") return "";
