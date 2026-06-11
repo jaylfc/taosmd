@@ -1054,8 +1054,13 @@ async def _process_qa(
                 predicted = draft
         else:
             predicted = draft
-    except Exception as exc:
-        predicted = f"[generation_error: {exc}]"
+    except Exception:
+        # A QA without a real prediction is a FAILED QA, not a 0-scoring row.
+        # Swallowing the error here once turned a missing Ollama model into
+        # 200 "[generation_error: 404]" predictions that judged 0.000 and
+        # looked like a real (terrible) generator. Let _guarded count it as
+        # failed_qa; the all-failed exit-1 guard then aborts loudly.
+        raise
     gen_ms = (time.time() - t1) * 1000.0
 
     judge = await _judge(client, gen_url, model, question, reference, predicted, backend=llm_backend)
