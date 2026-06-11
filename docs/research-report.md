@@ -41,6 +41,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | F-006 | Librarian vocabulary-gap lever: +15.4% composite on long-horizon sessions (gemma4:e2b, 2026-04-15) | [3.5](#35-longmemeval-s-end-to-end) | confirmed | docs/benchmarks.md section "Librarian layer vocabulary-gap benchmark" |
 | F-007 | lateint-9b shipped recipe: answerai + mem0_additive + k=10, retrieval_k=20, adj=2, no reranker | [3.6](#36-shipped-recipe-lateint-9b) | confirmed | CHANGELOG.md Unreleased, "Late-interaction retrieval lever and lateint-9b recipe" |
 | F-008 | Same-model judging inflates scores 15-22 pp vs external judge (quantified on qwen3.5:9b self-judge: +0.10 on this stack) | [2.1](#21-external-multi-judge-protocol) | confirmed | docs/benchmarks.md section "Judge sensitivity what we are really measuring" |
+| F-009 | Extraction-hallucination rate 18.8 percent (PARTIAL+UNSUPPORTED) over 526 claims, cross-family verified | [3.5](#35-extraction-hallucination-rate-f-009) | confirmed | bench host 20260611 e2 verifier summary |
 | N-001 | CLAG cluster pre-filter: worst variant -0.285 gemma, best variant -0.085 gemma; not shipped | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md section "CLAG cluster pre-filter negative at our tier, not shipped" |
 | N-002 | Chain-of-Memory: -0.16 single-hop for +0.02 overall at 1.8x latency (frontier-tuned, lossy at our tier) | [4](#4-negative-results) | confirmed negative | project memory (reference_memory_landscape_may2026.md), Chain-of-Memory TESTED May 31 |
 | N-003 | Few-shot prompting: -0.017 vs leader (full-stack + 5 exemplars = 0.540 vs 0.557 leader) | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md section "Negative results levers we tested that regressed at 9B + adj=2" |
@@ -48,10 +49,10 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | N-005 | answerai + bge-v2-m3 reranker stacked: 0.720 vs 0.760 answerai alone (subset-200 gemma) | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md "Late-interaction retrieval", confirmed negative sentence |
 | N-006 | gemma4:12b first A/B: generation errors stored as zero-scoring predictions; methods lesson, run was invalid | [4](#4-negative-results) | retracted (methods failure, not result) | CHANGELOG.md Unreleased Fixed, "Generation failures in the LoCoMo runner were stored as zero-scoring [generation_error: ...]" |
 | N-007 | gemma4:12b generator A/B: 0.630/0.580 vs qwen3.5:9b 0.680 same config; not an upgrade | [4](#4-negative-results) | confirmed negative | bench host 20260611 gemma12b_redo verdicts |
-| E-001 | Surprisal retrieval prior + surprise-boundary chunking; kill criterion: no variant beats baseline R@K by more than 0.02 on subset-200 | [6](#6-ongoing-work-pre-registered) | pre-registered | STATUS.md "bench/e1-surprisal finishing" |
-| E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | pre-registered | STATUS.md "bench/e2-claim-verification" |
+| E-001 | Surprisal: prior FLAT (dead); chunking +0.086 but CONFOUNDED (cap not enforced, per-chunk credit); corrected re-run in flight | [6](#6-ongoing-work-pre-registered) | unresolved | STATUS.md "bench/e1-surprisal finishing" |
+| E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | resolved -> F-009 | STATUS.md "bench/e2-claim-verification" |
 | E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | in flight | STATUS.md "all 1382 predictions matched" |
-| E-004 | pylate projected-space vs backbone comparison: answerai, colbertv2, LateOn, ColBERT-Zero | [6](#6-ongoing-work-pre-registered) | pre-registered | STATUS.md "feat/pylate-loader pushed, 221 tests green" |
+| E-004 | pylate projected-space vs backbone comparison: answerai, colbertv2, LateOn, ColBERT-Zero | [6](#6-ongoing-work-pre-registered) | inconclusive (loader fault) | STATUS.md "feat/pylate-loader pushed, 221 tests green" |
 
 ---
 
@@ -214,6 +215,14 @@ This recipe is the recommended configuration for tiers where a cross-encoder dow
 
 ---
 
+### 3.5 Extraction-Hallucination Rate (F-009)
+
+A cross-family claim-verification pass measured how often the extraction step stores claims that are not fully supported by their source turns. gemma4:e2b extracted claims; a different family, qwen3:4b-instruct-2507, judged each claim SUPPORTED, PARTIAL, or UNSUPPORTED against the exact source text the extractor saw. Using different families on the two sides guards against a model rubber-stamping its own output.
+
+Across 526 claims from three conversations, the PARTIAL plus UNSUPPORTED rate was 18.8 percent (verifier error rate 0.2 percent, one claim). Per conversation: conv-26 22.0 percent (168 claims), conv-30 12.6 percent (103 claims), conv-41 19.2 percent (255 claims). In plain terms, close to one in five extracted facts is not fully supported by the turn it was drawn from. This is a measurement nobody else in this space reports, and it is the quantitative case for the provenance-and-verification direction: a memory layer that keeps the source can measure and re-verify its own claims, while an extraction-only layer cannot.
+
+Source: bench host results 20260611 e2 claim-verifier pairs and summary.
+
 ## 4. Negative Results
 
 Negative results are recorded with the same rigor as wins. A lever that failed is a finding.
@@ -335,7 +344,7 @@ Hypothesis: turns that carry high surprisal relative to the running conversation
 
 Kill criterion (verbatim): "no variant beats baseline R@K by more than 0.02 on subset-200."
 
-Status: branch bench/e1-surprisal is finishing as of 2026-06-11.
+Result (2026-06-11), recorded honestly: the surprisal PRIOR variant was flat, +0.0000 R@K at every weight (0.25, 0.5, 1.0) over a 0.641 baseline on subset-200. The prior path is dead. The surprise-boundary CHUNKING variant reported +0.0859 (0.727), which clears the kill threshold on paper, BUT the result is confounded and is NOT being claimed as a win: the chunker produced a mean chunk length of 22.54 turns against a stated maximum of 6, which means its size cap was not being enforced, and evidence was credited per-chunk rather than per-turn, so a single giant chunk trivially counted as a hit for every turn it spanned. A corrected re-run is in flight on the CPU VPS (size cap enforced, per-turn evidence credit, prior variant dropped); only its numbers will count. Until then E-001 is unresolved.
 
 **E-002. Extraction-hallucination rate via cross-family claim verification.**
 
@@ -345,7 +354,7 @@ Design: gemma4:e2b extracts claims from stored memories; qwen3:4b-instruct judge
 
 Reporting threshold (verbatim): "a PARTIAL plus UNSUPPORTED rate above 3 to 5 percent is a finding in itself."
 
-Status: branch bench/e2-claim-verification is pushed, 41 tests green, as of 2026-06-11.
+Result (2026-06-11): RESOLVED, recorded as finding F-009. The PARTIAL plus UNSUPPORTED rate was 18.8 percent across 526 claims from three conversations, far above the 3 to 5 percent reporting threshold, so it is a finding. See F-009 in Results.
 
 **E-003. LoCoMo-Refined full run.**
 
@@ -361,6 +370,8 @@ The current answerai numbers (F-003, F-004, F-007) use the model's 384-dim backb
 
 Decision rule (verbatim): "the recipe model upgrades only if projected beats backbone outside noise on subset-200."
 
+First attempt (2026-06-11) was INCONCLUSIVE due to a probable loader fault: answerai loaded through the pylate projected path scored 0.050 on subset-200, against 0.760 for the same model's backbone. A trained projection head cannot make a model fifteen times worse than its own backbone, so this is read as a pylate-path bug, not a real projected-space result. The pylate probe is held until the loader is root-caused; no projected-space number is claimed.
+
 Models to compare: answerai-colbert-small-v1, colbertv2.0 (needs pylate-style loader; plain sentence-transformers drops its linear.weight projection head), LateOn, ColBERT-Zero.
 
 Status: ready for the next GPU window.
@@ -375,3 +386,4 @@ This log is append-only. History is never rewritten.
 |---|---|---|
 | 2026-06-11 | 1 | First edition. Sections 0-7 drafted. Index rows F-001 through F-008, N-001 through N-006, E-001 through E-004. All numbers sourced from docs/benchmarks.md, CHANGELOG.md, and STATUS.md. |
 | 2026-06-11 | 1.1 | Added N-007 (gemma4:12b generator A/B, confirmed negative) with its index row. E-003 noted as still in flight after a judge-stage client-timeout crash on the harness side; a timeout-patched judge-only rerun is queued. |
+| 2026-06-11 | 1.2 | E-002 resolved to finding F-009 (extraction-hallucination rate 18.8 percent, cross-family). E-001 recorded honestly: prior flat, chunking result confounded by an unenforced size cap and per-chunk evidence credit, corrected re-run in flight, unresolved. E-004 marked inconclusive after the pylate projected path scored 0.050 vs 0.760 backbone, read as a loader fault. |

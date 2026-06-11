@@ -140,6 +140,16 @@ with a corrected answer key, so they are judge-comparable but not
 set-comparable. A full LoCoMo-Refined run (their questions, their judge) is in
 flight.
 
+### v2 pillar kill-shots (Jun 2026)
+
+Two pre-registered experiments toward the next-generation engine, recorded with their declared kill criteria.
+
+**Extraction-hallucination rate (E-002).** Cross-family verification: gemma4:e2b extracts claims, qwen3:4b-instruct-2507 judges each as SUPPORTED, PARTIAL, or UNSUPPORTED against the exact source text. Over 526 claims from three conversations the PARTIAL plus UNSUPPORTED rate was 18.8 percent (per-conversation 12.6 to 22.0 percent; verifier error 0.2 percent). Close to one in five extracted facts is not fully supported by its source. The reporting threshold was 3 to 5 percent, so this is a finding.
+
+**Surprisal retrieval lever (E-001).** Judge-free R@K on subset-200. The surprisal PRIOR was flat (+0.0000 at weights 0.25 / 0.5 / 1.0 over a 0.641 baseline); that path is dead. The surprise-boundary CHUNKING variant reported +0.0859, but the result is confounded and not claimed: the chunker produced a 22.54-turn mean against a stated 6-turn cap (the cap was not enforced) and credited evidence per chunk rather than per turn. A corrected re-run (cap enforced, per-turn credit) is in flight on the CPU VPS; only its numbers will count.
+
+**pylate projected space (E-004).** Inconclusive on the first attempt: answerai via the pylate projected path scored 0.050 on subset-200 against 0.760 for the same model's backbone, read as a loader fault rather than a real result. Held until root-caused.
+
 ### Leaderboard (legacy external `qwen3:4b` judge, same dataset + same prompt)
 
 | System | Generator | Retrieval config | Ext Judge | Notes |
