@@ -43,6 +43,10 @@
   falls back to a dependency-free Okapi BM25 (same k1/b) when not.
 
 ### Fixed
+- Generation failures in the LoCoMo runner were stored as zero-scoring
+  `[generation_error: ...]` predictions, letting a broken setup (for example
+  a missing Ollama model) impersonate a catastrophically bad generator. They
+  now count as failed QAs and an all-failed run aborts loudly.
 - A benchmark run where every QA errored previously wrote an empty results
   file and exited 0; `locomo_runner.py` now exits 1 (and warns when failures
   outnumber successes).
