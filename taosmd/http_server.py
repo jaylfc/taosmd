@@ -628,10 +628,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             When NO token is presented the call is a no-op: the original
             ``project`` is returned unchanged and ``True`` is returned.
 
-            ``identity`` is the agent/actor string from the request body
-            (e.g. ``agent`` for ingest/search, ``created_by`` for tasks).
-            When the request has no such field, pass ``None`` and the token's
-            own ``sub`` will be used as the identity for the authorize check.
+            ``identity`` (the request's ``agent``/``created_by`` field) is
+            accepted for symmetry but NOT compared against ``sub``: for data
+            endpoints the agent field names a target shelf, not the caller
+            (the taOS proxy writes the ``user-memory`` shelf under its own
+            controller token). The token's own ``sub`` is used for the
+            authorize check, which still enforces signature, issuer, and
+            revocation; whether ``sub`` may act on a given shelf is the
+            deferred identity-keying work, not this layer.
 
             Returns ``(resolved_project, ok)`` where ``ok=False`` means the
             response has already been written and the caller must return.
@@ -657,7 +661,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raw_sub = unverified.get("sub", "") or ""
             except Exception:  # noqa: BLE001
                 pass
-            claimed_identity = identity if identity else raw_sub
+            claimed_identity = raw_sub
             try:
                 claims = _registry_verifier.authorize(token, claimed_identity)
             except _ra.AuthError as exc:

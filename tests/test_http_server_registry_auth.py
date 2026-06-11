@@ -339,3 +339,20 @@ def test_global_grant_holder_passes_any_project(project_server):
                               {"text": "global agent", "agent": "agent-global"},
                               token=token)
     assert status == 200, body
+
+
+def test_token_binding_allows_delegated_shelf_writes(project_server):
+    """The agent field names a target shelf, not the caller: a verified token
+    whose sub differs from the agent field must still bind and pass (the taOS
+    proxy writes the user-memory shelf under its own controller token)."""
+    token = pyjwt.encode(
+        {"sub": "agent-1", "iss": registry_auth.REGISTRY_ISS, "project_id": "proj-a"},
+        PRIV_PEM, algorithm="EdDSA",
+    )
+    status, body = _post_json(
+        project_server, "/ingest",
+        {"text": "delegated shelf write", "agent": "user-memory"},
+        token=token,
+    )
+    assert status == 200
+    assert body["project"] == "proj-a"
