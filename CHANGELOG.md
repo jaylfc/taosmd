@@ -3,6 +3,31 @@
 ## Unreleased
 
 ### Added
+- **Retrieval-time TTL filter (`forget_after` / `forget_reason`).** Callers
+  may include `forget_after` (unix float) and an optional `forget_reason`
+  (string) in user metadata when calling `VectorMemory.add` or the HTTP
+  `POST /ingest` and `POST /ingest/batch` endpoints. Once `forget_after`
+  passes, the row is hidden from `search()` and `search_bm25()` exactly like
+  a superseded row. The raw row is never deleted (zero-loss: the archive is
+  untouched). Non-numeric or missing `forget_after` values are silently
+  ignored so existing memories are unaffected. The feature requires no schema
+  change; the fields live in the existing `metadata_json` column alongside
+  other user metadata. Inspired by supermemory's `forgetAfter` concept;
+  implemented as a zero-loss filter at retrieval time rather than a hard
+  delete. `_load_active_rows` accepts an optional `now` parameter (defaults
+  to `time.time()`) so tests can control the clock without monkey-patching.
+
+- **Three-number bench summary in the LoCoMo runner.** The `_summary`
+  aggregate and the `overall` block of the result JSON now carry
+  `mean_latency_ms` (mean per-row retrieval + generation time),
+  `p95_latency_ms`, and `mean_context_tokens` (mean context chars sent to
+  the generator divided by 4). `_process_qa` stores `context_chars` per row
+  so the estimate is exact. `_print_summary` displays the triple on its own
+  line below the accuracy table. The existing accuracy columns (F1, BLEU-1,
+  Judge, R@K) are preserved without modification. Inspired by supermemory's
+  MemScore philosophy of never collapsing accuracy, latency, and context cost
+  into a single number.
+
 - **Admin surface: shelf lifecycle and A2A channel admin (taOS#774).** New
   `taosmd/admin.py` module and six HTTP endpoints gated behind the configured
   server token (fail-closed: 403 when no token is set, 401 on wrong token).

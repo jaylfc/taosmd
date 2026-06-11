@@ -51,7 +51,13 @@ Endpoints
 ``GET  /ui``               -> alias of ``GET /``
 ``GET  /health``           -> ``{"status": "ok", "version": <str>}``
 ``POST /ingest``           ``{"text", "agent", "project"?}`` -> ingest result
-``POST /ingest/batch``     ``{"items": [{"text", "id"?, "metadata"?}], "agent", "project"?}`` -> ``{"ingested", "skipped", ...}``
+                           Metadata note: callers may include ``forget_after`` (unix float) and
+                           ``forget_reason`` (str) in the user metadata dict.  Rows whose
+                           ``forget_after`` has passed are hidden from retrieval (zero-loss:
+                           the raw row is never deleted).
+``POST /ingest/batch``     ``{"items": [{"text", "id"?, "metadata"?: {"forget_after"?: float, "forget_reason"?: str, ...}}], "agent", "project"?}`` -> ``{"ingested", "skipped", ...}``
+                           Per-item ``metadata`` may include ``forget_after`` (unix float) and
+                           ``forget_reason`` (str) with the same TTL semantics as single ingest.
 ``POST /search``           ``{"query", "agent", "limit"?, "project"?, "also_include"?, "mode"?}`` -> ``{"hits": [...]}``
 ``GET  /search?q=&agent=&limit=&project=&also_include=a,b&mode=bm25``  -> ``{"hits": [...]}``
 ``GET  /projects``                                         -> ``{"projects": [...]}``
