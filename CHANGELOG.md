@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **Living research report (`docs/research-report.md`).** First edition of the
+  living technical report: abstract, methodology (external tri-judge protocol,
+  hardware tiers, dataset provenance), full results tables with provenance to
+  docs/benchmarks.md, first-class negative results section (N-001 through
+  N-006), four pre-registered experiments (E-001 through E-004) with verbatim
+  kill criteria, reproducibility commands, and a navigable finding index (F-001
+  through F-008). README benchmark section links to it.
 - **Retrieval-time TTL filter (`forget_after` / `forget_reason`).** Callers
   may include `forget_after` (unix float) and an optional `forget_reason`
   (string) in user metadata when calling `VectorMemory.add` or the HTTP
