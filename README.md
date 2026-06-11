@@ -245,7 +245,7 @@ Full table, the 9B quant cliff (8 quants from Q2 through Q6, including the 8 GB-
 ## Architecture
 
 ```
-taOSmd Memory Stack (v0.2):
+taOSmd Memory Stack (v0.3):
 
 Memory Layers:
 ├── Temporal Knowledge Graph      structured facts with validity windows

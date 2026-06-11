@@ -11,9 +11,12 @@ Design choices (matching the project's local-first, offline, additive vision):
 * **stdlib only**: :class:`http.server.ThreadingHTTPServer` +
   :class:`~http.server.BaseHTTPRequestHandler`, :mod:`json`, no new deps.
 * **local-first**: binds ``127.0.0.1`` by default. Pass a different host
-  (e.g. ``0.0.0.0``) only to expose it on the LAN. There is **no auth**: on
-  localhost that is fine (any local process already has the Python API); if
-  you bind to a routable address, put it behind your own network controls.
+  (e.g. ``0.0.0.0``) only to expose it on the LAN. There is **no auth by
+  default**: on localhost that is fine (any local process already has the
+  Python API). When binding to a routable address, set a bearer token
+  (``TAOSMD_TOKEN`` or ``taosmd config set-token``) so every data and A2A
+  endpoint requires ``Authorization: Bearer``, and put the port behind your
+  own network controls as defense in depth.
 
 Security note
 -------------
