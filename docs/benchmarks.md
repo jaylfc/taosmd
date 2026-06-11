@@ -31,7 +31,7 @@ Harness: [`benchmarks/longmemeval_runner.py`](../benchmarks/longmemeval_runner.p
 
 | System | Score | Metric | Notes |
 |--------|-------|--------|-------|
-| **taosmd** | **97.0%** | end-to-end Judge | this repo |
+| **taOSmd** | **97.0%** | end-to-end Judge | this repo |
 | MemPalace | 96.6% | Recall@5 | retrieval-only |
 | agentmemory | 95.2% | Recall@5 | retrieval-only |
 | SuperMemory | 81.6% | Recall@5 | retrieval-only, cloud embeddings |
@@ -45,7 +45,7 @@ A system can have excellent Recall@5 and still fail end-to-end Judge if the gene
 
 ## LoCoMo — multi-session conversational memory (1540 QAs)
 
-LoCoMo-10: 10 multi-session conversations, 1540 question-answer pairs across Single-hop / Temporal / Multi-hop / Open-dom categories. Harder dataset than LongMemEval-S — longer conversations (50+ sessions, 400–700 turns), more categories, more QAs. We run it on smaller generators (5B–9B quants on a 12 GB GPU) to measure how the taosmd architecture behaves at the compute tier we target, not at gpt-4o-mini scale.
+LoCoMo-10: 10 multi-session conversations, 1540 question-answer pairs across Single-hop / Temporal / Multi-hop / Open-dom categories. Harder dataset than LongMemEval-S — longer conversations (50+ sessions, 400–700 turns), more categories, more QAs. We run it on smaller generators (5B–9B quants on a 12 GB GPU) to measure how the taOSmd architecture behaves at the compute tier we target, not at gpt-4o-mini scale.
 
 End-to-end Judge here is graded by an **external** LLM (`qwen3:4b`) — distinct from the generator — with 100 % coverage, 0 errors across all runs. Self-judge numbers (the generator grading its own output) are reported for reference but aren't the headline.
 
@@ -143,28 +143,28 @@ flight.
 
 | System | Generator | Retrieval config | Ext Judge | Notes |
 |---|---|---|---|---|
-| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF | **0.557** | **leader — full stack with RRF fusion** |
-| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF + multi-level | 0.552 | adding multi-level on top of leader regresses by -0.005 |
-| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp | 0.545 | full stack without RRF |
-| **taosmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF + few-shot | 0.540 | few-shot on top of the leader regresses by -0.017 |
-| **taosmd** | qwen3.5:9b | adj=3 | 0.532 | broader context window |
-| **taosmd** | qwen3.5:9b | adj=2 + multi-level retrieval | 0.524 | turns + summaries + events |
-| **taosmd** | qwen3.5:9b | adj=2 + RRF only | 0.500 | RRF without scaffolding regresses at 9B |
-| **taosmd** | qwen3.5:9b | adj=2 + multi-level + RRF | 0.495 | negative interaction without k=20 scaffolding |
-| **taosmd** | qwen3.5:9b | adj=2 + BGE-v2-m3 reranker | 0.522 | stronger cross-encoder, marginal lift at this tier |
-| **taosmd** | qwen3.5:9b | adj=2 | 0.516 | simplest 9B leader |
-| **taosmd** | qwen3.5:9b | k=20 + adj=1 + llm-exp | 0.509 | full stack at adj=1 |
-| **taosmd** | gemma4:e2b | adj=2 | 0.499 | 5B best — same architecture, smaller generator |
-| **taosmd** | qwen3.5:9b | adj=2 + HyDE + full stack | 0.486 | HyDE drags the leader recipe down — see negative results |
-| **taosmd** | qwen3.5:9b | adj=1 | 0.481 | |
-| **taosmd** | gemma4:e2b | k=20 + adj=1 + llm-exp | 0.482 | 5B stack |
-| **taosmd** | gemma4:e2b | adj=1 (C3) | 0.465 | baseline adjacent-turns win |
-| **taosmd** | gemma4:e2b | baseline (prompt-opt) | 0.410 | reference point |
+| **taOSmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF | **0.557** | **leader — full stack with RRF fusion** |
+| **taOSmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF + multi-level | 0.552 | adding multi-level on top of leader regresses by -0.005 |
+| **taOSmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp | 0.545 | full stack without RRF |
+| **taOSmd** | qwen3.5:9b | k=20 + adj=2 + llm-exp + RRF + few-shot | 0.540 | few-shot on top of the leader regresses by -0.017 |
+| **taOSmd** | qwen3.5:9b | adj=3 | 0.532 | broader context window |
+| **taOSmd** | qwen3.5:9b | adj=2 + multi-level retrieval | 0.524 | turns + summaries + events |
+| **taOSmd** | qwen3.5:9b | adj=2 + RRF only | 0.500 | RRF without scaffolding regresses at 9B |
+| **taOSmd** | qwen3.5:9b | adj=2 + multi-level + RRF | 0.495 | negative interaction without k=20 scaffolding |
+| **taOSmd** | qwen3.5:9b | adj=2 + BGE-v2-m3 reranker | 0.522 | stronger cross-encoder, marginal lift at this tier |
+| **taOSmd** | qwen3.5:9b | adj=2 | 0.516 | simplest 9B leader |
+| **taOSmd** | qwen3.5:9b | k=20 + adj=1 + llm-exp | 0.509 | full stack at adj=1 |
+| **taOSmd** | gemma4:e2b | adj=2 | 0.499 | 5B best — same architecture, smaller generator |
+| **taOSmd** | qwen3.5:9b | adj=2 + HyDE + full stack | 0.486 | HyDE drags the leader recipe down — see negative results |
+| **taOSmd** | qwen3.5:9b | adj=1 | 0.481 | |
+| **taOSmd** | gemma4:e2b | k=20 + adj=1 + llm-exp | 0.482 | 5B stack |
+| **taOSmd** | gemma4:e2b | adj=1 (C3) | 0.465 | baseline adjacent-turns win |
+| **taOSmd** | gemma4:e2b | baseline (prompt-opt) | 0.410 | reference point |
 | MemPalace | gemma4:e2b | chromadb + MiniLM | 0.336 | same generator + same dataset, different architecture |
-| **taosmd** | qwen3.5:9b | full-context (no retrieval) | 0.090 | retrieval ablation — see section below |
+| **taOSmd** | qwen3.5:9b | full-context (no retrieval) | 0.090 | retrieval ablation — see section below |
 | mem0 | gemma4:e2b | chromadb + nomic-embed, infer=False | 0.060 | same generator + same dataset, different architecture |
 
-All taosmd rows on the same commit series (`feat/locomo-param-configs` merged to master). Every row pins its config, generator, judge, and dataset.
+All taOSmd rows on the same commit series (`feat/locomo-param-configs` merged to master). Every row pins its config, generator, judge, and dataset.
 
 ### Key architectural findings
 
@@ -250,7 +250,7 @@ Other memory systems publish LoCoMo Judge numbers using `gpt-4o-mini` as the gen
 
 | System | Score | Generator | Notes |
 |---|---|---|---|
-| **taosmd** (this repo) | **0.509** | **qwen3.5:9b (local, 12 GB GPU)** | stack on 9B |
+| **taOSmd** (this repo) | **0.509** | **qwen3.5:9b (local, 12 GB GPU)** | stack on 9B |
 | OpenAI memory / Letta / LangMem | 0.50–0.52 | gpt-4o-mini (hosted) | mem0 paper baseline |
 | Mem0 | 0.660 | gpt-4o-mini | arxiv 2504.19413 |
 | Mem0^g (graph variant) | 0.684 | gpt-4o-mini | mem0 paper |
@@ -414,8 +414,8 @@ Comparison to published systems on the same dataset:
 |---|---|---|---|
 | EMem | 0.83 (gpt-4o-mini) | gpt-4o-mini | unknown — would need to bench |
 | Nemori | ~0.78 (gpt-4o-mini) | gpt-4o-mini | unknown |
-| **taosmd qwen3.5:9b leader** | **0.28 (qwen3:4b)** | qwen3:4b | **0.53 (gemma4:e2b)** |
-| **taosmd qwen3.6-MoE leader** | **0.21 (qwen3:4b)** | qwen3:4b | **0.51 (gemma4:e2b)** |
+| **taOSmd qwen3.5:9b leader** | **0.28 (qwen3:4b)** | qwen3:4b | **0.53 (gemma4:e2b)** |
+| **taOSmd qwen3.6-MoE leader** | **0.21 (qwen3:4b)** | qwen3:4b | **0.51 (gemma4:e2b)** |
 
 Our system at gemma4:e2b judge is **0.53 Single-hop** versus EMem's published 0.83 — a real gap of ~0.30, not the ~0.55 our qwen3:4b numbers suggested. The remaining gap is closer to "their generator (gpt-4o-mini) is much stronger than ours (qwen3.5:9b)" plus "they have EDU-level retrieval and LLM filtering" — both real, addressable architectural deltas, not unmovable ceilings.
 
@@ -649,14 +649,14 @@ Full timeline, per-category breakdowns, and provenance log: `docs/specs/2026-04-
 
 ## Hardware tiers — recommended configurations
 
-The taosmd architecture is portable; what changes per hardware tier is which generator + which retrieval flags fit the compute budget. The following recommendations name what is **measured** vs. **expected based on architecture** so you can calibrate trust.
+The taOSmd architecture is portable; what changes per hardware tier is which generator + which retrieval flags fit the compute budget. The following recommendations name what is **measured** vs. **expected based on architecture** so you can calibrate trust.
 
 ### Always-on defaults (every tier)
 
 - **Embedder**: `all-MiniLM-L6-v2` ONNX on CPU. 384-dim, ~90 MB, 0.3–10 ms per embed across all tested CPUs. Avoid PyTorch — it's 200× slower for the same quality at this model size.
 - **Reranker**: `ms-marco-MiniLM` ONNX on CPU. Same backend, second-stage rerank over top-K vector hits.
 - **Don't enable** `--multihop-decompose`. Regresses at every model size we measured (5B: -0.093, 9B: even worse). Footgun.
-- **Skip** `--context-format session_date`. No-op once the answer prompt has absolute dates (taosmd's prompt-opt default).
+- **Skip** `--context-format session_date`. No-op once the answer prompt has absolute dates (taOSmd's prompt-opt default).
 
 ### 12 GB NVIDIA GPU (RTX 3060, RTX 3060 Ti, RTX 4060 Ti) — measured
 
@@ -722,7 +722,7 @@ LoCoMo measurements (qwen3:4b via Ollama with CUDA, all with `--adjacent-turns 2
 | **adj=2 + k=10 + RRF fusion** | **0.530** | flat (+0.000) |
 | adj=2 + k=10 + boost fusion (baseline) | 0.530 | — |
 
-**0.530 on a 4 GB GPU is 0.027 below the 12 GB leader (0.557)** — a remarkably small gap given the VRAM is one third and the generator is a 4 B model not a 9 B. Strong confirmation that taosmd's architecture scales down to consumer-tier GPUs without a quality cliff.
+**0.530 on a 4 GB GPU is 0.027 below the 12 GB leader (0.557)** — a remarkably small gap given the VRAM is one third and the generator is a 4 B model not a 9 B. Strong confirmation that taOSmd's architecture scales down to consumer-tier GPUs without a quality cliff.
 
 Notes on what this tells us:
 

@@ -29,24 +29,24 @@ Zero cloud dependencies. Zero API keys. NPU if you have one, CPU if you don't, c
 
 ### Let your agent install it
 
-The cleanest way to install taosmd is to ask your agent to do it. Paste this message into Claude Code, Cursor, your OpenClaw shell, whatever:
+The cleanest way to install taOSmd is to ask your agent to do it. Paste this message into Claude Code, Cursor, your OpenClaw shell, whatever:
 
-> Please install taosmd as my memory system. The repo is github.com/jaylfc/taosmd.
+> Please install taOSmd as my memory system. The repo is github.com/jaylfc/taosmd.
 >
 > 1. Read the README so you understand what you're installing.
 > 2. Run the install script: `curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash`. Report any errors and stop if it fails.
 > 3. Register yourself as an agent so you have your own isolated index. Pick a stable agent name (lowercase, no spaces), the same name you'll use every time you call the librarian. If I have multiple agents in this framework, ask me what to name this one before registering.
 > 4. Verify the install: call `taosmd.search("hello", agent="<your-name>")`, it should return an empty result, not an error.
-> 5. Append the "Memory, taosmd" rules block to my agent file (CLAUDE.md / system prompt / AGENTS.md, whatever your framework reads every turn). Pull the block via `python -c "import taosmd; print(taosmd.agent_rules())"`, the file is shipped as package data at `taosmd/docs/agent-rules.md` so this works from both editable and wheel installs. Replace `<your-agent-name>` with the name you registered as.
+> 5. Append the "Memory, taOSmd" rules block to my agent file (CLAUDE.md / system prompt / AGENTS.md, whatever your framework reads every turn). Pull the block via `python -c "import taosmd; print(taosmd.agent_rules())"`, the file is shipped as package data at `taosmd/docs/agent-rules.md` so this works from both editable and wheel installs. Replace `<your-agent-name>` with the name you registered as.
 > 6. Confirm it's installed and tell me your agent name so I know how to refer to your memory.
 >
 > Don't summarise the repo or paraphrase the rules. Copy them verbatim, the wording is the contract.
 
-The agent will pull the repo, run the install, register itself, append the per-turn rules block to its own instruction file, and verify everything works. After that, every turn it runs it'll check the librarian when it's uncertain, see [taosmd/docs/agent-rules.md](taosmd/docs/agent-rules.md) for the rules block it installs (also available via `taosmd.agent_rules()`).
+The agent will pull the repo, run the install, register itself, append the per-turn rules block to its own instruction file, and verify everything works. After that, every turn it runs it'll check the librarian when it's uncertain, see [taOSmd/docs/agent-rules.md](taOSmd/docs/agent-rules.md) for the rules block it installs (also available via `taosmd.agent_rules()`).
 
-**Multiple agents in one framework?** Same install message works. The agent will ask you to name it before registering, so each agent gets its own shelf. The taosmd service stays one process with one shared set of stores; per-agent isolation is enforced by an `agent` tag on every row, not by separate files. See [docs/multi-agent.md](docs/multi-agent.md) for the full naming convention, project-scoped and cross-agent memory, migration scenarios, and a five-agent worked example.
+**Multiple agents in one framework?** Same install message works. The agent will ask you to name it before registering, so each agent gets its own shelf. The taOSmd service stays one process with one shared set of stores; per-agent isolation is enforced by an `agent` tag on every row, not by separate files. See [docs/multi-agent.md](docs/multi-agent.md) for the full naming convention, project-scoped and cross-agent memory, migration scenarios, and a five-agent worked example.
 
-**Inside taOS?** Don't use this. taOS provisions taosmd automatically when you deploy an agent, and the rules block is baked into the agent template. This install path is for standalone framework users.
+**Inside taOS?** Don't use this. taOS provisions taOSmd automatically when you deploy an agent, and the rules block is baked into the agent template. This install path is for standalone framework users.
 
 ### One-Line Setup (manual)
 
@@ -670,7 +670,7 @@ taosmd reconcile --check          # dry-run: report missing counts without modif
 
 `--check` exits non-zero when any turn is missing, so you can run it from a cron health-check. The repair path re-adds only turns that are genuinely absent; it never resurrects turns that were intentionally superseded by a correction. Safe to run after a crash or periodically via cron.
 
-### Install the taosmd-a2a skill
+### Install the taOSmd-a2a skill
 
 ```bash
 taosmd install-skill

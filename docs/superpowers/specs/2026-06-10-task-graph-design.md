@@ -10,7 +10,7 @@ Scope: New `taosmd/tasks.py` module, HTTP endpoints, CLI subcommands, and MCP to
 
 Multi-agent handoffs today have no shared, durable record of what work exists, what
 is blocked, and what an agent should pick up next when it starts a new session. The
-A2A bus moves messages between agents in real time; taosmd memory stores
+A2A bus moves messages between agents in real time; taOSmd memory stores
 conversation knowledge. Neither answers the question: "what tasks are open right now,
 which ones are ready to run, and what context does a fresh agent session need to get
 started fast?"
@@ -37,12 +37,12 @@ command as a session-bootstrap briefing that summarises what needs doing right n
 The beads binary itself was rejected for integration. Dolt is too heavy for the Pi
 tier (the primary deployment target) and would introduce a second daemon alongside
 taosmd serve, which violates the lean-core principle. Instead, this spec takes the
-concepts and builds an independent minimal implementation on taosmd's existing SQLite
+concepts and builds an independent minimal implementation on taOSmd's existing SQLite
 substrate.
 
 Credit line: "Concept credit: the dependency-graph, ready-queue, and prime ideas
 come from beads (github.com/gastownhall/beads); this is an independent minimal
-implementation for the taosmd substrate."
+implementation for the taOSmd substrate."
 
 ## Scope and Non-goals
 
@@ -50,7 +50,7 @@ This component covers task-graph storage, a ready-queue view, and a prime briefi
 endpoint. It is explicitly not:
 
 - A messaging layer. The A2A bus exists for that.
-- A memory or knowledge layer. taosmd memory remains the source of truth for
+- A memory or knowledge layer. taOSmd memory remains the source of truth for
   conversation knowledge and retrieved facts.
 - A git-like branching database. No Dolt-style versioning. A single live server
   is the target; archive replay covers rebuild if needed.
@@ -58,11 +58,11 @@ endpoint. It is explicitly not:
 - A memory-decay system for tasks. The memory layer owns knowledge expiry;
   tasks in this layer are archived, not decayed.
 
-The A2A bus and taosmd memory are unchanged by this component.
+The A2A bus and taOSmd memory are unchanged by this component.
 
 ## Core Design Principle: Archive-Backed Projection
 
-Tasks follow the same zero-loss principle that governs taosmd memory. Every mutation
+Tasks follow the same zero-loss principle that governs taOSmd memory. Every mutation
 (create, status change, edge add, edge remove, assign) is appended to the archive as
 an event with `event_type = "task"`. The SQLite tables described below are a queryable
 projection built from those events.
@@ -179,7 +179,7 @@ title as the reason), and recently closed tasks (last 24 hours by default). The 
 budget is enforced by counting approximate tokens (word count * 1.3) and truncating
 lower-priority sections before ready tasks.
 
-This is the beads `bd prime` concept applied to the taosmd context. An agent that
+This is the beads `bd prime` concept applied to the taOSmd context. An agent that
 calls `/tasks/prime` at session start gets a complete picture of the task graph state
 without scanning message history. taOS will wire this into the handoff bootstrap
 flow; Claude Code sessions can call it via MCP.
@@ -226,7 +226,7 @@ session startup and provide a task management UI. That integration is being buil
 the taOS side (@taOS is coordinating).
 
 **Claude Code sessions via MCP or CLI**: Any Claude Code session working on the
-taosmd codebase can call `taosmd tasks ready` to find the next open task and
+taOSmd codebase can call `taosmd tasks ready` to find the next open task and
 `taosmd tasks prime` to get the full session briefing.
 
 **STATUS.md**: Once shipped, the on-arrival checklist gains `taosmd tasks ready` as

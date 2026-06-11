@@ -71,7 +71,7 @@
   agent system prompt.
   Concept credit: the dependency-graph, ready-queue, and prime ideas come
   from beads (github.com/gastownhall/beads); this is an independent minimal
-  implementation for the taosmd substrate.
+  implementation for the taOSmd substrate.
 - **Bulk ingest with idempotent re-import.** `POST /ingest/batch` (and
   `taosmd.ingest_batch()` / `RemoteClient.ingest_batch()`) shelves a list of
   `{"text", "id"?, "metadata"?}` items in one call. Each item's `id` (the

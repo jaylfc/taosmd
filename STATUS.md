@@ -25,7 +25,7 @@ Last updated: 2026-06-11
 
 ## Working agreements
 
-- Durable state lives in three places: GitHub issues (tasks), this file (snapshot), and the A2A bus (the taosmd-progress channel is the running log).
+- Durable state lives in three places: GitHub issues (tasks), this file (snapshot), and the A2A bus (the taOSmd-progress channel is the running log).
 - Small doc fixes go straight to master. Features, refactors, and redesigns go through a branch and PR.
 - Benchmark policy: real datasets, external judges, publish methodology, record negative results too.
 
@@ -34,7 +34,7 @@ Last updated: 2026-06-11
 1. Read this file top to bottom.
 2. `git fetch origin` and review recent commits on master plus any open branches.
 3. Check open GitHub issues and PRs.
-4. Tail the A2A bus: taosmd-progress, general, integration channels.
+4. Tail the A2A bus: taOSmd-progress, general, integration channels.
 5. Read the project memory index if you have one.
 Then take the top unblocked item, or continue whatever "In flight" points at.
 
@@ -42,5 +42,5 @@ Then take the top unblocked item, or continue whatever "In flight" points at.
 
 1. Commit and push WIP on a branch. Never leave uncommitted work.
 2. Update this file: move your task to "In flight" with the branch name, exactly where you stopped, and the next concrete step.
-3. Post one line to taosmd-progress: finished X, mid-flight Y on branch Z, next step W.
+3. Post one line to taOSmd-progress: finished X, mid-flight Y on branch Z, next step W.
 The next agent recovers from last push + open PRs + this file + issues.
