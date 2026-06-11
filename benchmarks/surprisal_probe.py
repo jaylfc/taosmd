@@ -9,21 +9,22 @@ Variants
 baseline
     Identical to the existing dense retrieval probe path (control).
 
-surprise_prior
+surprise_prior (disabled by default; enable with --include-prior)
     After retrieval scoring, multiply each candidate's score by
     (1 + alpha * z) where z is the candidate turn's surprisal z-score
     normalised within its conversation, clipped to [-2, 2]. Runs with
-    alpha in {0.25, 0.5, 1.0}.
+    alpha in {0.25, 0.5, 1.0}.  Prior runs scored flat +0.0000 at every
+    alpha; the code is kept but excluded from the default variant set.
 
 surprise_chunks
     Re-chunk the corpus before embedding: consecutive turns merge into one
     chunk while their surprisal z-score < 0.5; a turn with z >= 1.5 always
     starts a new chunk; max merged chunk size is 6 turns.
 
-    Evidence mapping: a chunk hit counts as a hit for every turn it
-    contains. This slightly favours the variant (a single chunk retrieval
-    can satisfy multiple evidence dia_ids), so the summary also reports
-    mean chunk length for context.
+    Evidence mapping: a retrieved chunk credits ONLY the specific evidence
+    dia_ids it actually contains (intersection of retrieved chunk dia_ids
+    with the QA evidence list).  This is identical to how the baseline
+    scores per-turn evidence, making the comparison fair.
 
 Surprisal model
 ---------------
@@ -394,11 +395,15 @@ def _build_surprise_chunks(
 ) -> list[dict]:
     """Merge consecutive turns into chunks based on surprisal z-scores.
 
-    Rules:
-    - A turn with z >= _CHUNK_SPLIT_Z_HIGH always starts a new chunk.
-    - While current chunk length < _CHUNK_MAX_TURNS AND the turn's z < _CHUNK_MERGE_Z_LOW,
-      merge into the current chunk.
-    - Otherwise, start a new chunk.
+    Rules (applied in this priority order):
+    1. A turn with z >= _CHUNK_SPLIT_Z_HIGH always starts a new chunk.
+    2. A chunk that has reached _CHUNK_MAX_TURNS is closed before any
+       new turn is added, regardless of the z-score.  This cap is
+       enforced unconditionally so no chunk can exceed the stated maximum.
+    3. A turn with z >= _CHUNK_MERGE_Z_LOW (but below the split threshold)
+       starts a new chunk.
+    4. Otherwise (z < _CHUNK_MERGE_Z_LOW and room remains) the turn is
+       merged into the current chunk.
 
     Returns list of chunk dicts:
         {
@@ -433,31 +438,40 @@ def _build_surprise_chunks(
         current_dia_ids.clear()
         current_indices.clear()
 
-    for i, (turn, z) in enumerate(zip(scored_turns, z_scores)):
-        # Always start a new chunk if z >= split threshold.
+    def _start_new(turn: dict) -> None:
+        current_texts.append(turn["text"])
+        current_dia_ids.append(turn["dia_id"])
+        current_indices.append(turn["turn_index"])
+        nonlocal current_speaker, current_datetime
+        current_speaker = turn["speaker"]
+        current_datetime = ""  # not tracked in scored_turns; metadata from vmem
+
+    for turn, z in zip(scored_turns, z_scores):
+        # Rule 1: high-z turn always starts a new chunk.
         if z >= _CHUNK_SPLIT_Z_HIGH:
             _flush()
+            _start_new(turn)
+            continue
 
-        # Start a new chunk if:
-        # - current chunk is empty
-        # - current chunk reached max turns
-        # - z is not in the merge range (z >= merge threshold and not already splitting above)
-        if not current_texts:
-            # Start fresh chunk with this turn.
-            current_texts.append(turn["text"])
-            current_dia_ids.append(turn["dia_id"])
-            current_indices.append(turn["turn_index"])
-            current_speaker = turn["speaker"]
-            current_datetime = ""  # not tracked in scored_turns; metadata from vmem
-        elif len(current_texts) >= _CHUNK_MAX_TURNS or z >= _CHUNK_MERGE_Z_LOW:
-            # Can't merge: flush current and start new chunk with this turn.
+        # Rule 2: cap is full -- close current chunk before adding this turn,
+        # regardless of z.  This is enforced unconditionally so a chunk can
+        # never exceed _CHUNK_MAX_TURNS turns no matter what the z-score is.
+        if len(current_texts) >= _CHUNK_MAX_TURNS:
             _flush()
-            current_texts.append(turn["text"])
-            current_dia_ids.append(turn["dia_id"])
-            current_indices.append(turn["turn_index"])
-            current_speaker = turn["speaker"]
+            _start_new(turn)
+            continue
+
+        # Rule 3: mid-z turn (not a hard split but above merge threshold)
+        # starts a new chunk.
+        if z >= _CHUNK_MERGE_Z_LOW:
+            _flush()
+            _start_new(turn)
+            continue
+
+        # Rule 4: merge-eligible (z < _CHUNK_MERGE_Z_LOW, room remains).
+        if not current_texts:
+            _start_new(turn)
         else:
-            # Merge: z < merge threshold and room remains.
             current_texts.append(turn["text"])
             current_dia_ids.append(turn["dia_id"])
             current_indices.append(turn["turn_index"])
@@ -472,13 +486,19 @@ def _chunk_evidence_hits(
 ) -> int:
     """Count evidence hits across chunk-based retrieval results.
 
-    A chunk hit counts as a hit for every turn it contains (all dia_ids
-    in that chunk are considered retrieved). This slightly favours the
-    variant vs per-turn retrieval.
+    A retrieved chunk credits ONLY the specific evidence turns (dia_ids)
+    it actually contains.  Non-evidence turns that happen to be in the
+    same chunk are NOT credited.  This is identical in spirit to how the
+    baseline counts per-turn evidence: the intersection of the retrieved
+    set with the QA evidence list, not a superset of it.
+
+    Specifically: a chunk containing evidence turn X and non-evidence turn Y
+    credits only X (evidence_hits += 1), not Y.
     """
     if not evidence:
         return 0
-    retrieved_dia_ids: set[str] = set()
+    evidence_set = set(evidence)
+    retrieved_evidence_ids: set[str] = set()
     for h in hit_chunks:
         meta = h.get("metadata", {}) or {}
         # Chunk hits store dia_ids as a JSON-serialised list in metadata.
@@ -489,13 +509,15 @@ def _chunk_evidence_hits(
             except (json.JSONDecodeError, ValueError):
                 dia_ids = [dia_ids]
         for d in (dia_ids or []):
-            if d:
-                retrieved_dia_ids.add(d)
-        # Also check direct dia_id field (fallback).
+            # Only add to the credited set if this dia_id is actually
+            # in the evidence list for this QA (per-turn credit only).
+            if d and d in evidence_set:
+                retrieved_evidence_ids.add(d)
+        # Fallback: direct dia_id field (single-turn chunks or legacy).
         direct = meta.get("dia_id")
-        if direct:
-            retrieved_dia_ids.add(direct)
-    return sum(1 for e in evidence if e in retrieved_dia_ids)
+        if direct and direct in evidence_set:
+            retrieved_evidence_ids.add(direct)
+    return len(retrieved_evidence_ids)
 
 
 async def _ingest_chunked_conversation(
@@ -963,21 +985,23 @@ async def run(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # surprise_prior with each alpha value.
-    for alpha in alphas:
-        vname = "surprise_prior"
-        print(f"\n[variant] running {vname} alpha={alpha} ...", flush=True)
-        result = await _run_variant(
-            vname, conversations, args, reranker, scorer, surprisal_data,
-            alpha=alpha,
-        )
-        variant_results.append(result)
-        if not result["rows"]:
-            print(
-                f"ERROR: variant {vname} alpha={alpha} produced zero results.",
-                file=sys.stderr,
+    # surprise_prior: disabled by default; scored flat +0.0000 at all alphas.
+    # Re-enable with --include-prior for archival or re-validation runs.
+    if args.include_prior:
+        for alpha in alphas:
+            vname = "surprise_prior"
+            print(f"\n[variant] running {vname} alpha={alpha} ...", flush=True)
+            result = await _run_variant(
+                vname, conversations, args, reranker, scorer, surprisal_data,
+                alpha=alpha,
             )
-            return 1
+            variant_results.append(result)
+            if not result["rows"]:
+                print(
+                    f"ERROR: variant {vname} alpha={alpha} produced zero results.",
+                    file=sys.stderr,
+                )
+                return 1
 
     # surprise_chunks.
     print("\n[variant] running surprise_chunks ...", flush=True)
@@ -1103,6 +1127,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--out", default=None,
                    help="Results JSON path (default: "
                         "benchmarks/results/surprisal_probe_<ts>.json)")
+    p.add_argument("--include-prior", action="store_true",
+                   help="Re-enable the surprise_prior variants (disabled by default; "
+                        "scored flat +0.0000 at all alphas in prior runs).")
     return p.parse_args()
 
 

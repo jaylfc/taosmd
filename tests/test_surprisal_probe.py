@@ -176,6 +176,32 @@ class TestBuildSurpriseChunks:
                 f"Chunk exceeded max size: {chunk}"
             )
 
+    def test_cap_enforced_on_50_turn_conversation(self):
+        """Synthetic 50-turn conversation: no chunk may exceed _CHUNK_MAX_TURNS.
+
+        This is the regression test for the cap bug where mean chunk length
+        came out 22.54 turns/chunk despite the stated maximum of 6.  All
+        z-scores are zero (identical NLLs after normalisation), which is the
+        worst case for the cap: no split signals, everything merge-eligible.
+        """
+        n = 50
+        turns = _make_turns(n)
+        z = [0.0] * n  # all merge-eligible; cap must still be enforced
+        chunks = _build_surprise_chunks(turns, z)
+        assert chunks, "Expected at least one chunk for 50-turn conversation"
+        for chunk in chunks:
+            assert len(chunk["turn_indices"]) <= _CHUNK_MAX_TURNS, (
+                f"Cap violated: chunk has {len(chunk['turn_indices'])} turns "
+                f"(max {_CHUNK_MAX_TURNS}): {chunk['turn_indices']}"
+            )
+        # All 50 turns must appear exactly once.
+        all_indices = []
+        for c in chunks:
+            all_indices.extend(c["turn_indices"])
+        assert sorted(all_indices) == list(range(n)), (
+            "Not all turns were accounted for after chunking"
+        )
+
     def test_all_turns_accounted(self):
         """Every input turn must appear in exactly one output chunk."""
         n = 10
@@ -256,6 +282,32 @@ class TestChunkEvidenceHits:
             "score": 1.0,
         }
         assert _chunk_evidence_hits([hit], ["d1"]) == 1
+
+    def test_per_turn_credit_only(self):
+        """A chunk containing evidence turn X and non-evidence turn Y credits
+        only X -- non-evidence turns in the same chunk are NOT credited.
+
+        This verifies that the evidence-hit accounting is identical in spirit
+        to the baseline's per-turn _evidence_hits: only the intersection of
+        retrieved dia_ids with the QA evidence list is counted.
+        """
+        # Chunk contains both the evidence turn (dX) and a non-evidence turn (dY).
+        hit = self._make_hit(["dX", "dY"])
+        evidence = ["dX"]  # only dX is evidence; dY is not
+        result = _chunk_evidence_hits([hit], evidence)
+        # Must credit dX (1 hit), must NOT credit dY.
+        assert result == 1, (
+            f"Expected 1 evidence credit for dX only, got {result}"
+        )
+
+    def test_non_evidence_turn_in_chunk_not_credited(self):
+        """A chunk that contains ONLY non-evidence turns returns zero hits
+        even if the chunk was retrieved."""
+        hit = self._make_hit(["dY", "dZ"])  # neither is evidence
+        evidence = ["dX"]
+        assert _chunk_evidence_hits([hit], evidence) == 0, (
+            "Non-evidence turns in a retrieved chunk must not produce a hit"
+        )
 
 
 # ---------------------------------------------------------------------------
