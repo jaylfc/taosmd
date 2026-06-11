@@ -69,8 +69,8 @@ projection built from those events.
 
 This has two practical consequences. First, the full audit trail is free: you can see
 who created, blocked, or closed any task and when. Second, if the projection tables
-are ever lost or corrupted, replaying the archive events rebuilds them exactly. The
-future consolidation engine will also be able to learn from task history without any
+are ever lost or corrupted, replaying the archive events rebuilds them exactly. Anything
+that consumes the archive later gets the full task history for free, with no
 special instrumentation.
 
 ## Schema
