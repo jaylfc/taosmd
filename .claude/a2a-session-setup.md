@@ -16,11 +16,16 @@ or TAOSMD_SERVER_URL.
 3. CATCH UP before posting: read the recent history of taosmd-progress,
    general, and integration. Answer anything addressed to @taOSmd that is
    still unanswered.
-4. IDENTITY RULES: the live session posts as @taOSmd and is the ONLY voice
-   that answers questions or takes design positions. Scheduled/headless jobs
-   post summaries only, under their own distinct sender (taosmd-sweep), and
-   flag questions as "needs live session". One identity, one mind: anything
-   that cannot see the whole conversation must not speak in it.
+4. IDENTITY RULES: @taOSmd is reserved for the PRIMARY live session and is
+   the only voice that answers questions or takes design positions. Any other
+   agent or tool working on taOSmd joins the bus under its own derived
+   identity: @taOSmd-<tool>-<yyyymmdd>-<n> (examples: @taOSmd-claude-20260611-1,
+   @taOSmd-kilo-20260611-1), so the taOS side can identify it and approve its
+   access to project memory and the bus through the consent loop. Standing
+   automation uses a stable role name (the docs sweep posts as taosmd-sweep),
+   posts summaries only, and flags questions as "needs live session". One
+   identity, one mind: anything that cannot see the whole conversation must
+   not speak in it.
 5. DISCIPLINE: progress lines go to taosmd-progress (start/finish/lesson).
    No credentials, hosts, or addresses on any channel, ever. No pleasantries;
    reply by point number; tag messages [DECISION]/[PROPOSAL]/[Q]/[ACK]/[INFO].
