@@ -66,6 +66,10 @@ def recipe_schema() -> dict:
                                            "description": "Positional neighbours per hit"},
                     "llm_reranker": {"type": "boolean", "default": False,
                                      "description": "Listwise LLM second pass"},
+                    "late_interaction": {"type": "boolean", "default": False,
+                                         "description": "ColBERT-style token-level MaxSim scoring"},
+                    "colbert_model": {"type": "string", "default": "",
+                                      "description": "HuggingFace model ID for the ColBERT backbone"},
                 },
             },
             "ingest": {
@@ -199,6 +203,30 @@ _register(Recipe(
               "cons": ["No enriched facts/events; relies on raw embedding recall",
                        "About 0.04 to 0.07 below the leader across judges"],
               "est_latency": "low", "est_footprint": "low",
+              "source": "docs/benchmarks.md full-1540 tri-judge"}))
+
+_register(Recipe(
+    id="lateint-9b",
+    name="Late-interaction MaxSim (CPU-viable, no reranker)",
+    retrieval={"strategy": "thorough", "limit": 10, "candidate_top_k": 20,
+               "fusion": "mem0_additive", "reranker": "none",
+               "adjacent_neighbors": 2, "llm_reranker": False,
+               "late_interaction": True,
+               "colbert_model": "answerdotai/answerai-colbert-small-v1"},
+    ingest={"extraction": True, "extraction_model": "", "embed_verbatim": True},
+    generator={"model": "ollama:qwen3.5:9b"},
+    librarian={"fanout": "med", "worker_aware": True},
+    metadata={"tier": "gpu-8gb",
+              "scores": {"gemma4:e2b": 0.716, "llama3.1:8b": 0.388,
+                         "qwen3:4b-instruct-2507": 0.656,
+                         "qwen3:14b": 0.542},
+              "pros": ["No reranker model download required",
+                       "+0.04 over dense retrieval on strict judges",
+                       "Retrieval CPU-viable at about 110ms per query"],
+              "cons": ["Requires sentence-transformers for the token embedding path",
+                       "Backbone MaxSim, not the trained ColBERT projected space yet (pylate measures that next)",
+                       "Larger per-memory footprint than pooled cosine (full token matrix stored)"],
+              "est_latency": "medium", "est_footprint": "medium",
               "source": "docs/benchmarks.md full-1540 tri-judge"}))
 
 

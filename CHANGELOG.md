@@ -3,6 +3,24 @@
 ## Unreleased
 
 ### Added
+- **Late-interaction retrieval lever and `lateint-9b` recipe.** VectorMemory
+  now supports ColBERT-style token-level MaxSim scoring (`late_interaction=True`,
+  `colbert_model="answerdotai/answerai-colbert-small-v1"`) as an opt-in
+  retrieval mode. Each memory stores a full token matrix (seq_len x 384 float16)
+  instead of a single pooled vector; retrieval scores each document by
+  mean_q(max_t(q_t . d_t)) (ColBERT MaxSim). Two backends: the existing MiniLM
+  ONNX path (backbone token vectors) and sentence-transformers (falls through to
+  pylate when installed, for the trained projected space). A pylate loader is
+  included for ColBERT models that apply a projection head; it auto-detects the
+  output dimension and stores it per-instance in `_token_dim` so mixed-dim
+  corpora fail loudly rather than silently writing garbage. The new `lateint-9b`
+  recipe uses answerai-colbert-small-v1 with mem0_additive fusion, top_k 10,
+  retrieval_top_k 20, adjacent_neighbors 2, and no reranker. Measured scores on
+  full-1540 (tri-judge): gemma4:e2b 0.716, llama3.1:8b 0.388,
+  qwen3:4b-instruct-2507 0.656, qwen3:14b 0.542. The backbone MaxSim path
+  (this PR) replaces dense cosine with no reranker download required; the pylate
+  projected-space comparison is queued separately. The `--late-interaction` and
+  `--colbert-model` flags are wired into the LoCoMo runner for benchmarking.
 - **Project-scoped grants (taOS#744).** Registry grant rows now carry an
   optional `project_id` field; `GrantsVerifier.has_grant` accepts a matching
   `project_id` keyword argument and a grant row with no `project_id` acts as

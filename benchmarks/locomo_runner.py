@@ -790,16 +790,23 @@ async def _retrieve(
     top_k: int,
     reranker: object | None = None,
     fusion: str = "boost",
+    rerank_top_k: int | None = None,
 ) -> list[dict]:
     if strategy == "vector-only":
         # fusion: "boost" (default, legacy additive keyword boost) | "rrf"
         # (Reciprocal Rank Fusion across semantic + keyword) | "none" (pure
         # semantic cosine). The fusion logic lives in VectorMemory.search.
+        #
+        # Coarse-to-fine: ``top_k`` is the candidate POOL fetched from vector
+        # search; when a cross-encoder reranker is present it re-scores that
+        # pool and NARROWS to ``rerank_top_k`` (the final context size). Without
+        # this narrowing the full pool flows into adjacency injection, bloating
+        # the generator context — so rerank_top_k must be set when reranking.
         raw = await vmem.search(query, limit=top_k, fusion=fusion)
         hits = [{"text": r["text"], "metadata": r.get("metadata", {}),
                  "score": r.get("similarity", 0.0)} for r in raw]
         if reranker is not None and getattr(reranker, "available", False):
-            hits = reranker.rerank(query, hits, top_k)
+            hits = reranker.rerank(query, hits, rerank_top_k or top_k)
         return hits
     # TODO: wire cross-encoder reranker for strategy="full"; for now reuse retrieve() with vector source only.
     hits = await retrieve(query, strategy="thorough", sources={"vector": vmem},
@@ -842,6 +849,7 @@ async def _process_qa(
     gen_temp: float = 0.2,
     emem_edu_filter: bool = False,
     emem_edu_filter_model: str = "",
+    inline_judge: bool = True,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -929,7 +937,7 @@ async def _process_qa(
             seen_texts: set[str] = set()
             all_hits: list[dict] = []
             for sq in sub_queries:
-                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker, fusion=fusion)
+                sq_hits = await _retrieve(strategy, sq, vmem, retrieval_top_k, reranker, fusion=fusion, rerank_top_k=top_k)
                 for h in sq_hits:
                     t = h.get("text", "")
                     if t not in seen_texts:
@@ -938,7 +946,7 @@ async def _process_qa(
             # Cap at retrieval_top_k, preserving order
             hits = all_hits[:retrieval_top_k]
         else:
-            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion)
+            hits = await _retrieve(strategy, retrieval_query, vmem, retrieval_top_k, reranker, fusion=fusion, rerank_top_k=top_k)
 
         # Optional LLM listwise rerank — runs AFTER the cross-encoder narrows.
         # Single LLM call per QA scores all candidates as a list, returns
@@ -1063,7 +1071,13 @@ async def _process_qa(
         raise
     gen_ms = (time.time() - t1) * 1000.0
 
-    judge = await _judge(client, gen_url, model, question, reference, predicted, backend=llm_backend)
+    # Inline self-judge (generator judges its own answer). Off when --no-inline-judge:
+    # it's a full extra generation per QA, and our verdicts come from the external
+    # dual-judge rescore (locomo_rescore.py), so for probe runs it's wasted cost.
+    judge = (
+        await _judge(client, gen_url, model, question, reference, predicted, backend=llm_backend)
+        if inline_judge else 0.0
+    )
 
     return {
         "conversation_id": conv_id,
@@ -1226,6 +1240,7 @@ async def run(args: argparse.Namespace) -> int:
                     expansion_model=args.expansion_model,
                     emem_edu_filter=(args.emem_edu and not args.emem_edu_no_filter),
                     emem_edu_filter_model=args.emem_edu_filter_model or args.emem_edu_extract_model,
+                    inline_judge=not args.no_inline_judge,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -1254,6 +1269,9 @@ async def run(args: argparse.Namespace) -> int:
                 qmd_url=args.qmd_url,
                 embed_mode=args.embed_mode,
                 onnx_path=args.onnx_path,
+                binary_quant=args.binary_quant,
+                late_interaction=args.late_interaction,
+                colbert_model=getattr(args, "colbert_model", ""),
             )
             await vmem.init(http_client=client)
             kg = None
@@ -1607,6 +1625,39 @@ def _parse_args() -> argparse.Namespace:
             "first N aren't a balanced sample of the whole set — wait "
             "until at least 40-50%% before reading SH trend with "
             "confidence."
+        ),
+    )
+    p.add_argument(
+        "--no-inline-judge", action="store_true",
+        help=(
+            "Skip the inline self-judge (generator judging its own answer) — a "
+            "full extra generation per QA. Verdicts come from the external "
+            "dual-judge rescore (locomo_rescore.py) anyway, so this ~halves "
+            "probe run time. Inline 'judge' field is recorded as 0.0."
+        ),
+    )
+    p.add_argument(
+        "--binary-quant", action="store_true",
+        help=(
+            "Score first-stage vector retrieval by sign-bit Hamming similarity "
+            "instead of full-precision cosine (VectorMemory.binary_quant). "
+            "Recall-neutral footprint/speed option; combine with a wide "
+            "--retrieval-top-k + --reranker for coarse-to-fine retrieval."
+        ),
+    )
+    p.add_argument(
+        "--late-interaction", action="store_true",
+        help=(
+            "Score retrieval by MiniLM token-level MaxSim (ColBERT-style late "
+            "interaction) instead of pooled cosine. Experimental, opt-in."
+        ),
+    )
+    p.add_argument(
+        "--colbert-model", default="", dest="colbert_model",
+        help=(
+            "HuggingFace model name (or local path) for a proper ColBERT model to "
+            "use via sentence-transformers. When set, implies --late-interaction and "
+            "--embed-mode local. Example: answerdotai/answerai-colbert-small-v1"
         ),
     )
     return p.parse_args()
