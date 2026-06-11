@@ -47,6 +47,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | N-004 | HyDE: -0.060 standalone, -0.071 vs leader when stacked; poison-pill across every stack it joins | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md section "Negative results levers we tested that regressed at 9B + adj=2" |
 | N-005 | answerai + bge-v2-m3 reranker stacked: 0.720 vs 0.760 answerai alone (subset-200 gemma) | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md "Late-interaction retrieval", confirmed negative sentence |
 | N-006 | gemma4:12b first A/B: generation errors stored as zero-scoring predictions; methods lesson, run was invalid | [4](#4-negative-results) | retracted (methods failure, not result) | CHANGELOG.md Unreleased Fixed, "Generation failures in the LoCoMo runner were stored as zero-scoring [generation_error: ...]" |
+| N-007 | gemma4:12b generator A/B: 0.630/0.580 vs qwen3.5:9b 0.680 same config; not an upgrade | [4](#4-negative-results) | confirmed negative | bench host 20260611 gemma12b_redo verdicts |
 | E-001 | Surprisal retrieval prior + surprise-boundary chunking; kill criterion: no variant beats baseline R@K by more than 0.02 on subset-200 | [6](#6-ongoing-work-pre-registered) | pre-registered | STATUS.md "bench/e1-surprisal finishing" |
 | E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | pre-registered | STATUS.md "bench/e2-claim-verification" |
 | E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | in flight | STATUS.md "all 1382 predictions matched" |
@@ -257,6 +258,12 @@ Source: CHANGELOG.md Unreleased Fixed: "Generation failures in the LoCoMo runner
 
 ---
 
+**N-007. gemma4:12b as the generator.**
+
+The newest in-budget generator candidate (released one week before testing, marketed as near-26B quality at half the memory) lost the A/B against the incumbent: 0.630 lenient / 0.580 strict qwen-instruct on the subset-200 dense baseline, versus 0.680 for qwen3.5:9b on the same config. The lenient judge shares the challenger's model family, which biases toward the challenger, making the loss more credible rather than less. Recipes keep qwen3.5:9b. The first run of this A/B is recorded separately as a methods lesson: an unavailable model impersonated a bad generator through silently stored generation errors (see N-006).
+
+Source: bench host results 20260611 gemma12b_redo verdicts; docs/benchmarks.md, the generator reading list.
+
 ## 5. Reproducibility
 
 **Install.**
@@ -367,3 +374,4 @@ This log is append-only. History is never rewritten.
 | Date | Edition | Changes |
 |---|---|---|
 | 2026-06-11 | 1 | First edition. Sections 0-7 drafted. Index rows F-001 through F-008, N-001 through N-006, E-001 through E-004. All numbers sourced from docs/benchmarks.md, CHANGELOG.md, and STATUS.md. |
+| 2026-06-11 | 1.1 | Added N-007 (gemma4:12b generator A/B, confirmed negative) with its index row. E-003 noted as still in flight after a judge-stage client-timeout crash on the harness side; a timeout-patched judge-only rerun is queued. |
