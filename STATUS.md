@@ -11,7 +11,7 @@ Last updated: 2026-06-11
 
 ## In flight
 
-- Three harness builds running via agents, branches due shortly: feat/ttl-filter-and-memscore (retrieval-time TTL + three-number bench output), bench/e1-surprisal (surprisal kill-shot probe, judge-free R@K, kill threshold +0.02), bench/e2-claim-verification (extraction-hallucination rate, cross-family verify). Review then stage the GPU chain: E1, E2, then the pylate projected-space probe.
+- Shipped since the last stamp: retrieval-time TTL filter + three-number bench summaries (PR #155). Harness branches ready for the GPU chain: bench/e2-claim-verification (pushed, 41 tests); bench/e1-surprisal finishing. Next: stage the chain E1, E2, then the pylate projected-space probe, behind the LoCoMo-Refined judge stage now running (all 1382 predictions matched).
 - Skill search out for a scientific-report-writing skill; the living research report (docs/research-report.md, IMRaD-ish with first-class negative results and pre-registered kill criteria) drafts after.
 
 - answerai-colbert-small full-1540 DONE: 0.716 gemma4:e2b / 0.388 llama3.1:8b / 0.656 qwen3:4b-instruct-2507 (see docs/benchmarks.md late-interaction section). qwen3:14b community-judge column DONE: dense 0.487 / MiniLM MaxSim 0.532 / answerai backbone 0.542 on the full-1540; numbers are judge-comparable to LoCoMo-Refined leaderboard but not set-comparable (original 1540-question set, not the refined 1382). Still queued on the GPU box: a gemma4:12b generator A/B and a full LoCoMo-Refined run (generation with the leader recipe on the 1,382 refined questions, then their official Qwen3-14B judge pointed at local Ollama).
