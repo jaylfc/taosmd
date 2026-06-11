@@ -2,16 +2,16 @@
 
 Working snapshot for whoever picks this repo up next. Updated whenever meaningful state changes. Shipped changes live in [CHANGELOG.md](CHANGELOG.md); measured results live in [docs/benchmarks.md](docs/benchmarks.md); the task list of record is GitHub issues.
 
-Last updated: 2026-06-10 (night)
+Last updated: 2026-06-11
 
 ## Current state
 
-- **master** is healthy: 702 tests passing. NEW: the dependency-aware task-graph component shipped (PR #150): `taosmd tasks` CLI, `/tasks` HTTP surface with a ready queue and a `prime` briefing endpoint, MCP tools, all mutations archive-backed and replayable. Beads concepts credited. `taosmd tasks ready` is now the canonical what-next query for incoming agents once deployed. The taOS user-memory unification surface (`POST /ingest/batch` with idempotent re-import, `mode=bm25` on search) shipped in PR #149 and is verified live by the downstream consumer. A post-merge review pass landed six hardening fixes (see CHANGELOG, Unreleased / Fixed).
+- **master** is healthy: 702 tests passing. NEW: project-scoped grants (taOS #744) shipped in PR #151 -- `project_id` is now a verified JWT claim; `GrantsVerifier.has_grant` accepts a `project_id` keyword; data endpoints (ingest, search, tasks) bind the verified project scope from the token so callers cannot spoof it. Global grants (no `project_id`) still match any project, preserving the no-lockout design. The dependency-aware task-graph component shipped in PR #150: `taosmd tasks` CLI, `/tasks` HTTP surface with a ready queue and a `prime` briefing endpoint, MCP tools, all mutations archive-backed and replayable. Beads concepts credited. `taosmd tasks ready` is now the canonical what-next query for incoming agents once deployed. The taOS user-memory unification surface (`POST /ingest/batch` with idempotent re-import, `mode=bm25` on search) shipped in PR #149 and is verified live by the downstream consumer. A post-merge review pass landed six hardening fixes (see CHANGELOG, Unreleased / Fixed).
 - **Benchmarks:** the late-interaction retrieval lever is confirmed at full-1540 scale (+0.037 lenient / +0.044 strict-instruct over the dense baseline, with no reranker in the loop). A retrieval-only CPU probe shows the lever is viable without a GPU: evidence recall 0.641 (dense) to 0.854 (answerai backbone) at ~110ms per query on a 16-core CPU box. Full tables and caveats in docs/benchmarks.md.
 
 ## In flight
 
-- answerai-colbert-small full-1540 DONE: 0.716 gemma4:e2b / 0.388 llama3.1:8b / 0.656 qwen3:4b-instruct-2507 (see docs/benchmarks.md late-interaction section). Still queued on the GPU box: (1) a qwen3:14b judge column over all full-1540 prediction files plus a gemma4:12b generator A/B; (2) a full LoCoMo-Refined run (generation with the leader recipe on the 1,382 refined questions, then their official Qwen3-14B judge pointed at local Ollama).
+- answerai-colbert-small full-1540 DONE: 0.716 gemma4:e2b / 0.388 llama3.1:8b / 0.656 qwen3:4b-instruct-2507 (see docs/benchmarks.md late-interaction section). qwen3:14b community-judge column DONE: dense 0.487 / MiniLM MaxSim 0.532 / answerai backbone 0.542 on the full-1540; numbers are judge-comparable to LoCoMo-Refined leaderboard but not set-comparable (original 1540-question set, not the refined 1382). Still queued on the GPU box: a gemma4:12b generator A/B and a full LoCoMo-Refined run (generation with the leader recipe on the 1,382 refined questions, then their official Qwen3-14B judge pointed at local Ollama).
 - Branch `feat/pylate-loader` (pushed): loads ColBERT models through pylate so projection heads actually apply; per-instance token dim; 221 tests green. Ready for a projected-space vs backbone comparison next GPU window.
 - Branch `bench/retrieval-latency-probe`: retrieval-only R@K + latency harness (no LLM dependency). Candidate for merge after the colbert branch lands.
 - Branch `feat/colbert-models-probe`: late-interaction and `--colbert-model` support, wrong-dimension guards added. Note: it was cut from a stale base, so rebase onto master before merging.
@@ -21,7 +21,7 @@ Last updated: 2026-06-10 (night)
 1. LoCoMo-Refined harness run. The dataset is CC BY-NC: run it and publish scores, never vendor the dataset into this repo.
 2. pylate loader for ColBERT projection heads. Today's sentence-transformers token path uses backbone embeddings only, so answerai numbers are backbone MaxSim, not the trained ColBERT space. LateOn and ColBERT-Zero probes follow once the loader exists.
 3. snowflake-arctic-embed-s/xs probe as a MiniLM ONNX drop-in for low-power tiers.
-4. Project-scoped grants (taOS #744): project_id as a verified JWT claim and per-grant rows; GrantsVerifier matches (canonical_id, project_id); append-only reattach. Contract agreed, taosmd implementation queued.
+4. Project/shelf registry (taOS #774): two-tier WORKSPACE+PROJECT shelf model, create-shelf and archive-shelf controller ops, carve-out mechanics. Design approved on taOS side; contract discussion in flight on A2A bus.
 
 ## Working agreements
 
