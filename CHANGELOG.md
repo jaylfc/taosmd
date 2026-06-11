@@ -121,6 +121,9 @@
   falls back to a dependency-free Okapi BM25 (same k1/b) when not.
 
 ### Fixed
+- The stdlib fallback inspector page escapes quote characters, closing an
+  attribute-context XSS path via A2A sender names rendered into the
+  dashboard (the bundled React dashboard was never affected).
 - Generation failures in the LoCoMo runner were stored as zero-scoring
   `[generation_error: ...]` predictions, letting a broken setup (for example
   a missing Ollama model) impersonate a catastrophically bad generator. They
