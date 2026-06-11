@@ -19,6 +19,10 @@ from . import _db
 
 logger = logging.getLogger(__name__)
 
+# Embedding dimension of the MiniLM ONNX model (all-MiniLM-L6-v2). Used by the
+# late-interaction path to recover token-matrix shapes from flat float16 blobs.
+_EMBED_DIM = 384
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS vector_memory (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,12 +113,21 @@ class VectorMemory:
         local_model: str = "all-MiniLM-L6-v2",
         onnx_path: str = "",
         binary_quant: bool = False,
+        late_interaction: bool = False,
+        colbert_model: str = "",
     ):
         self._db_path = str(db_path)
         self._qmd_url = qmd_url
+        self._onnx_path = onnx_path
+        # When a ColBERT model is specified, route through the local (sentence-
+        # transformers) embed path and enable late-interaction MaxSim scoring.
+        self._colbert_model = colbert_model
+        if colbert_model:
+            embed_mode = "local"
+            local_model = colbert_model
+            late_interaction = True
         self._embed_mode = embed_mode
         self._local_model_name = local_model
-        self._onnx_path = onnx_path
         # Score retrieval by sign-bit Hamming similarity instead of full-precision
         # cosine. Off by default; opt-in footprint/speed option for memory- or
         # CPU-constrained (SBC) deployments: vectors are stored as packed sign
@@ -123,6 +136,19 @@ class VectorMemory:
         # lifetime; a binary-quant store persists bit blobs, not float vectors,
         # so you cannot flip an existing DB between modes.
         self.binary_quant = binary_quant
+        # Score retrieval by token-level MaxSim (ColBERT-style late interaction)
+        # instead of full-precision pooled cosine. Off by default; opt-in
+        # benchmark lever: the MiniLM ONNX embedder already computes per-token
+        # vectors before mean-pooling, so this stores the full token matrix
+        # (seq_len x 384 float16) per memory and scores by
+        # mean_q(max_t(q_t . d_t)). Far larger footprint than pooled cosine (a
+        # whole matrix per row, not one vector). Mutually exclusive with
+        # binary_quant. Shipped on LoCoMo-1540 (see docs/benchmarks.md).
+        self.late_interaction = late_interaction
+        if self.binary_quant and self.late_interaction:
+            raise ValueError(
+                "binary_quant and late_interaction are mutually exclusive"
+            )
         self._conn: sqlite3.Connection | None = None
         self._http = None
         self._local_model = None
@@ -248,13 +274,108 @@ class VectorMemory:
             logger.debug("ONNX embedding failed: %s", e)
             return []
 
+    async def embed_tokens(self, text: str, task: str = "search_document") -> list[list[float]]:
+        """Return per-token L2-normalised embeddings (ColBERT-style).
+
+        Supports two backends:
+        - ONNX (MiniLM): extracts per-token hidden states before mean-pooling.
+        - sentence-transformers ColBERT models: uses output_value="token_embeddings"
+          which returns the model's per-token output (incl. any projection layer).
+        """
+        if self._embed_mode == "local" and self._colbert_model and self._local_model is not None:
+            return self._embed_tokens_st(text)
+        if not (self._embed_mode == "onnx" and self._onnx_session is not None):
+            raise RuntimeError("late_interaction requires embed_mode=onnx or a ColBERT model")
+
+        import numpy as np
+
+        # Add task prefix for models that use it (nomic-embed) — same convention
+        # as _embed_onnx.
+        embed_text = text[:512]
+        if self._onnx_path and "nomic" in str(self._onnx_path).lower():
+            embed_text = f"{task}: {embed_text}"
+
+        inputs = self._onnx_tokenizer(embed_text, return_tensors="np", padding=True, truncation=True)
+        feed = {
+            "input_ids": inputs["input_ids"].astype(np.int64),
+            "attention_mask": inputs["attention_mask"].astype(np.int64),
+        }
+        if any(inp.name == "token_type_ids" for inp in self._onnx_session.get_inputs()):
+            feed["token_type_ids"] = np.zeros_like(inputs["input_ids"], dtype=np.int64)
+
+        outputs = self._onnx_session.run(None, feed)
+
+        # outputs[0] is the per-token hidden states (1, seq, dim).
+        token_embeddings = np.asarray(outputs[0][0], dtype=np.float32)  # (seq, dim)
+        if token_embeddings.shape[-1] != _EMBED_DIM:
+            # The stored blobs are reshaped as (-1, _EMBED_DIM) at search
+            # time, so a wrong-dim model would silently write garbage and
+            # then fail every query (this is exactly how the colbertv2.0
+            # probe died: ST drops its 768->128 projection head). Fail at
+            # the first embed instead.
+            raise RuntimeError(
+                f"late_interaction expects {_EMBED_DIM}-dim token output, got "
+                f"{token_embeddings.shape[-1]} from {self._onnx_path or self._colbert_model!r}. "
+                "ColBERT checkpoints with a projection head (e.g. colbertv2.0) "
+                "need a pylate-style loader, not a bare transformer export."
+            )
+        mask = np.asarray(inputs["attention_mask"][0], dtype=bool)      # (seq,)
+        token_embeddings = token_embeddings[mask]                       # drop padding
+        # L2-normalise each token vector so dot product == cosine for MaxSim.
+        norms = np.linalg.norm(token_embeddings, axis=1, keepdims=True)
+        token_embeddings = token_embeddings / (norms + 1e-8)
+        return token_embeddings.tolist()
+
     def _embed_local(self, text: str) -> list[float]:
         """Embed using local sentence-transformers model (CPU)."""
         try:
             emb = self._local_model.encode(text[:512], convert_to_numpy=True)
-            return emb.tolist()
+            if hasattr(emb, "tolist"):
+                return emb.tolist()
+            import numpy as np
+            return np.mean(emb, axis=0).tolist() if emb.ndim == 2 else emb.tolist()
         except Exception as e:
             logger.debug("Local embedding failed: %s", e)
+            return []
+
+    def _embed_tokens_st(self, text: str) -> list[list[float]]:
+        """Per-token embeddings via a sentence-transformers model.
+
+        NOTE: ST's output_value="token_embeddings" returns the TRANSFORMER
+        module's token output, BEFORE any Pooling/Dense module — a ColBERT
+        projection head is NOT applied on this path. What you get is
+        backbone-token MaxSim, which is empirically strong but is not the
+        model's trained ColBERT space; loading via pylate is required for
+        the projected space. Vectors are L2-normalised before return.
+        """
+        import numpy as np
+        try:
+            token_embs = self._local_model.encode(
+                text[:512],
+                output_value="token_embeddings",
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+            if not isinstance(token_embs, np.ndarray):
+                token_embs = np.asarray([np.asarray(v) for v in token_embs])
+            if token_embs.ndim != 2 or token_embs.shape[-1] != _EMBED_DIM:
+                # Stored blobs are reshaped as (-1, _EMBED_DIM) at search
+                # time; a wrong-dim model writes garbage that fails every
+                # query later (how the colbertv2.0 probe died). Fail at the
+                # first embed with the actionable cause instead.
+                raise RuntimeError(
+                    f"late_interaction expects {_EMBED_DIM}-dim token output, got "
+                    f"shape {token_embs.shape} from {self._colbert_model!r}. "
+                    "Models whose backbone hidden size differs (or whose quality "
+                    "lives in a projection head, e.g. colbertv2.0) need a "
+                    "pylate-style loader."
+                )
+            return token_embs.tolist()
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.warning("ColBERT token embedding failed: %s", e)
             return []
 
     async def _embed_qmd(self, text: str) -> list[float]:
@@ -279,15 +400,27 @@ class VectorMemory:
         from .secret_filter import redact_secrets
         text, _ = redact_secrets(text)
 
-        embedding = await self.embed(text, task="search_document")
-        if not embedding:
-            return -1
+        if self.late_interaction:
+            # Late-interaction mode stores the full token matrix (seq_len x 384)
+            # as a base64 float16 blob — large (a matrix per memory, not one
+            # vector), but that's the point of the MaxSim probe. The shape is
+            # recovered on read as nbytes/(_EMBED_DIM*2) tokens x _EMBED_DIM.
+            import numpy as np
 
-        # In binary-quant mode store only the packed sign bits (1 bit/dim, 32x
-        # smaller; the full-precision floats are intentionally discarded, that
-        # footprint saving is the point of the mode. Cosine mode stores the
-        # float vector as JSON as before.
-        embedding_text = pack_sign_bits(embedding) if self.binary_quant else json.dumps(embedding)
+            token_mat = await self.embed_tokens(text, task="search_document")
+            if not token_mat:
+                return -1
+            blob = np.asarray(token_mat, dtype=np.float16).tobytes()
+            embedding_text = base64.b64encode(blob).decode("ascii")
+        else:
+            embedding = await self.embed(text, task="search_document")
+            if not embedding:
+                return -1
+            # In binary-quant mode store only the packed sign bits (1 bit/dim,
+            # 32x smaller) — the full-precision floats are intentionally
+            # discarded, that footprint saving is the point of the mode. Cosine
+            # mode stores the float vector as JSON as before.
+            embedding_text = pack_sign_bits(embedding) if self.binary_quant else json.dumps(embedding)
 
         now = time.time()
         cursor = self._conn.execute(
@@ -501,7 +634,9 @@ class VectorMemory:
             import numpy as np
 
             # Parse all stored embeddings. In binary-quant mode the column holds
-            # base64 packed sign bits; in cosine mode it holds a JSON float list.
+            # base64 packed sign bits; in late-interaction mode it holds a base64
+            # float16 token matrix (decoded to a seq_len x 384 float32 array); in
+            # cosine mode it holds a JSON float list.
             ids = []
             texts = []
             metas = []
@@ -510,8 +645,15 @@ class VectorMemory:
             for row in rows:
                 try:
                     raw = row["embedding"]
-                    emb = base64.b64decode(raw) if self.binary_quant else json.loads(raw)
-                    if emb:
+                    if self.late_interaction:
+                        blob = base64.b64decode(raw)
+                        emb = np.frombuffer(blob, dtype=np.float16).reshape(-1, _EMBED_DIM).astype(np.float32)
+                        emb = emb if emb.size else None
+                    elif self.binary_quant:
+                        emb = base64.b64decode(raw)
+                    else:
+                        emb = json.loads(raw)
+                    if emb is not None and len(emb):
                         ids.append(row["id"])
                         texts.append(row["text"])
                         metas.append(row["metadata_json"])
@@ -535,6 +677,21 @@ class VectorMemory:
                 xor = np.bitwise_xor(doc_bits, query_bits[None, :])
                 hamming = np.unpackbits(xor, axis=1).sum(axis=1).astype(np.float32)
                 similarities = 1.0 - hamming / dim
+            elif self.late_interaction:
+                # ColBERT-style MaxSim over MiniLM token vectors. The query is
+                # embedded once to its token matrix (Q x 384); each stored doc is
+                # a token matrix (M_d x 384). All vectors are L2-normalised so the
+                # dot product is cosine. Per doc:
+                #   MaxSim_d = mean_q( max_t( q_t . d_t ) )
+                # i.e. each query token matches its single best doc token, then
+                # average over query tokens. emb_list holds the doc matrices in
+                # the same order as ids/texts/metas, so similarities aligns 1:1.
+                qmat = np.asarray(await self.embed_tokens(query, task="search_query"), dtype=np.float32)
+                maxsims = np.empty(len(emb_list), dtype=np.float32)
+                for i, dmat in enumerate(emb_list):
+                    sim_matrix = qmat @ dmat.T  # (Q, M_d)
+                    maxsims[i] = sim_matrix.max(axis=1).mean()
+                similarities = maxsims
             else:
                 # Batch cosine similarity with numpy
                 query_vec = np.array(query_emb, dtype=np.float32)
@@ -665,6 +822,8 @@ class VectorMemory:
             # no meaningful pure-Python path.
             if self.binary_quant:
                 raise RuntimeError("binary_quant=True requires numpy for packed-bit search")
+            if self.late_interaction:
+                raise RuntimeError("late_interaction requires numpy")
             scored = []
             for row in rows:
                 try:
