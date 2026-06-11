@@ -3,6 +3,26 @@
 ## Unreleased
 
 ### Added
+- **Admin surface: shelf lifecycle and A2A channel admin (taOS#774).** New
+  `taosmd/admin.py` module and six HTTP endpoints gated behind the configured
+  server token (fail-closed: 403 when no token is set, 401 on wrong token).
+  Shelf lifecycle: `POST /shelves` creates or returns an existing shelf
+  (idempotent by `shelf_id`; shelf_id must match `^[a-z][a-z0-9_-]{0,62}$`);
+  `POST /shelves/{id}/archive` soft-hides the shelf's active vector rows by
+  stamping `valid_to` and embedding a `hidden_by: shelf-archive:<ts>` marker
+  in each row's metadata so `POST /shelves/{id}/unarchive` can restore exactly
+  those rows and nothing else (rows superseded for other reasons such as
+  corrections are not resurrected). `?expect_empty=true` returns 409 without
+  archiving when the shelf has active rows. Archive and unarchive events are
+  appended to the zero-loss archive. A2A channel admin: `POST
+  /a2a/admin/delete-channel` soft-deletes a channel so it is hidden from
+  `/a2a/channels` and `/a2a/messages` responses while messages remain in the
+  archive; `POST /a2a/admin/rename-channel` adds a channel alias so sends to
+  the old name are redirected and reads of the new name include history from
+  the old name (stored rows are not mutated); `POST
+  /a2a/admin/supersede-message` hides one message by id from feed responses.
+  The deleted-channels set, alias map, and superseded-message set are persisted
+  in `data/a2a-admin-state.json` via atomic tmp+os.replace writes.
 - **Late-interaction retrieval lever and `lateint-9b` recipe.** VectorMemory
   now supports ColBERT-style token-level MaxSim scoring (`late_interaction=True`,
   `colbert_model="answerdotai/answerai-colbert-small-v1"`) as an opt-in

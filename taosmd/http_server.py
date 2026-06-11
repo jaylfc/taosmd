@@ -71,6 +71,14 @@ Endpoints
 ``POST /tasks/{id}/edges`` ``{"to_id", "type", "created_by"}``     -> edge record
 ``POST /tasks/{id}/edges/remove`` ``{"to_id", "type"}``   -> edge record with removed_ts
 
+Admin endpoints (all require a configured server token; 403 if none is set)
+``POST /shelves``                              ``{"shelf_id", "project_id"?, "display_name"?}`` -> ``{"shelf": {...}, "created": bool}``
+``POST /shelves/{id}/archive``                 ``?expect_empty=true``  -> ``{"archived": true, "rows_hidden": int}``
+``POST /shelves/{id}/unarchive``               -> ``{"archived": false, "rows_restored": int}``
+``POST /a2a/admin/delete-channel``             ``{"channel": str}`` -> ``{"deleted": true, "channel": str}``
+``POST /a2a/admin/rename-channel``             ``{"from": str, "to": str}`` -> ``{"renamed": true, "from": str, "to": str}``
+``POST /a2a/admin/supersede-message``          ``{"id": int}`` -> ``{"superseded": true, "id": int}``
+
 Inspection UI
 -------------
 ``GET /`` (and ``GET /ui``) serves a single self-contained HTML page: one
@@ -615,6 +623,28 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return auth[len("Bearer "):].strip() == _server_token
             return False
 
+        def _check_admin_token(self) -> bool:
+            """Return True when the request carries the correct admin token.
+
+            Admin endpoints FAIL CLOSED: if no server token is configured, all
+            admin requests return 403. This is the inverse of ``_check_token``
+            which passes everything through when no token is configured.
+            If a token is configured the Bearer must match it exactly.
+            Returns False and writes the error response when auth fails; the
+            caller must return immediately in that case.
+            """
+            if not _server_token:
+                self._send_json(
+                    403,
+                    {"error": "admin surface requires a configured server token"},
+                )
+                return False
+            auth = self.headers.get("Authorization", "")
+            if auth.startswith("Bearer ") and auth[len("Bearer "):].strip() == _server_token:
+                return True
+            self._send_json(401, {"error": "Unauthorized"})
+            return False
+
         def _apply_token_binding(self, identity: str | None, project: str | None) -> tuple[str | None, bool]:
             """Apply optional registry-token project binding for data endpoints.
 
@@ -768,6 +798,32 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                             self._send_json(404, {"error": "task id required"})
                         else:
                             self._handle_task_update(task_id)
+                # ----- admin surface: shelf lifecycle ---------------------
+                elif method == "POST" and path == "/shelves":
+                    self._handle_admin_shelf_create()
+                elif method == "POST" and path.startswith("/shelves/"):
+                    rest = path[len("/shelves/"):]
+                    if rest.endswith("/archive"):
+                        shelf_id = rest[: -len("/archive")]
+                        if not shelf_id:
+                            self._send_json(404, {"error": "shelf id required"})
+                        else:
+                            self._handle_admin_shelf_archive(shelf_id, query)
+                    elif rest.endswith("/unarchive"):
+                        shelf_id = rest[: -len("/unarchive")]
+                        if not shelf_id:
+                            self._send_json(404, {"error": "shelf id required"})
+                        else:
+                            self._handle_admin_shelf_unarchive(shelf_id)
+                    else:
+                        self._send_json(404, {"error": f"unknown shelf action: {rest}"})
+                # ----- admin surface: A2A channel admin -------------------
+                elif method == "POST" and path == "/a2a/admin/delete-channel":
+                    self._handle_admin_a2a_delete_channel()
+                elif method == "POST" and path == "/a2a/admin/rename-channel":
+                    self._handle_admin_a2a_rename_channel()
+                elif method == "POST" and path == "/a2a/admin/supersede-message":
+                    self._handle_admin_a2a_supersede_message()
                 elif method == "GET" and _serve_dashboard and self._try_serve_static(parts.path):
                     return  # static asset served
                 elif method == "GET" and _serve_dashboard:
@@ -1204,6 +1260,123 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest(str(exc)) from exc
             self._send_json(200, result)
 
+        # ----- admin: shelf lifecycle ------------------------------------
+
+        def _handle_admin_shelf_create(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            shelf_id = body.get("shelf_id")
+            project_id = body.get("project_id")
+            display_name = body.get("display_name")
+            if not isinstance(shelf_id, str) or not shelf_id:
+                raise _BadRequest("'shelf_id' (non-empty string) is required")
+            if project_id is not None and not isinstance(project_id, str):
+                raise _BadRequest("'project_id' must be a string when provided")
+            if display_name is not None and not isinstance(display_name, str):
+                raise _BadRequest("'display_name' must be a string when provided")
+            from .admin import InvalidAgentNameError  # noqa: PLC0415
+            try:
+                result = runner.run(
+                    service.admin_shelf_create(
+                        shelf_id,
+                        project_id=project_id,
+                        display_name=display_name,
+                        data_dir=data_dir,
+                    )
+                )
+            except InvalidAgentNameError as exc:
+                raise _BadRequest(str(exc)) from exc
+            status = 200
+            self._send_json(status, result)
+
+        def _handle_admin_shelf_archive(self, shelf_id: str, query: dict) -> None:
+            if not self._check_admin_token():
+                return
+            expect_empty_raw = (query.get("expect_empty") or [None])[0]
+            expect_empty = (
+                expect_empty_raw is not None and expect_empty_raw.lower() == "true"
+            )
+            from .admin import ShelfNotFoundError, ShelfNotEmptyError  # noqa: PLC0415
+            try:
+                result = runner.run(
+                    service.admin_shelf_archive(
+                        shelf_id,
+                        expect_empty=expect_empty,
+                        data_dir=data_dir,
+                    )
+                )
+            except ShelfNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            except ShelfNotEmptyError as exc:
+                self._send_json(409, {"error": str(exc)})
+                return
+            self._send_json(200, result)
+
+        def _handle_admin_shelf_unarchive(self, shelf_id: str) -> None:
+            if not self._check_admin_token():
+                return
+            from .admin import ShelfNotFoundError  # noqa: PLC0415
+            try:
+                result = runner.run(
+                    service.admin_shelf_unarchive(shelf_id, data_dir=data_dir)
+                )
+            except ShelfNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            self._send_json(200, result)
+
+        # ----- admin: A2A channel admin ----------------------------------
+
+        def _handle_admin_a2a_delete_channel(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            channel = body.get("channel")
+            if not isinstance(channel, str) or not channel:
+                raise _BadRequest("'channel' (non-empty string) is required")
+            result = runner.run(
+                service.admin_a2a_delete_channel(channel, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+
+        def _handle_admin_a2a_rename_channel(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            from_channel = body.get("from")
+            to_channel = body.get("to")
+            if not isinstance(from_channel, str) or not from_channel:
+                raise _BadRequest("'from' (non-empty string) is required")
+            if not isinstance(to_channel, str) or not to_channel:
+                raise _BadRequest("'to' (non-empty string) is required")
+            try:
+                result = runner.run(
+                    service.admin_a2a_rename_channel(
+                        from_channel, to_channel, data_dir=data_dir
+                    )
+                )
+            except ValueError as exc:
+                raise _BadRequest(str(exc)) from exc
+            self._send_json(200, result)
+
+        def _handle_admin_a2a_supersede_message(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            msg_id = body.get("id")
+            if msg_id is None:
+                raise _BadRequest("'id' (integer) is required")
+            try:
+                msg_id = int(msg_id)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'id' must be an integer") from exc
+            result = runner.run(
+                service.admin_a2a_supersede_message(msg_id, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+
     return TaosmdHandler
 
 
@@ -1254,6 +1427,10 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
           "GET /a2a/channels, GET /a2a/members, "
           "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
           "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove")
+    print("Admin (token required): POST /shelves, POST /shelves/{id}/archive, "
+          "POST /shelves/{id}/unarchive, "
+          "POST /a2a/admin/delete-channel, POST /a2a/admin/rename-channel, "
+          "POST /a2a/admin/supersede-message")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
