@@ -118,6 +118,27 @@ trained ColBERT projection space — sentence-transformers does not apply
 projection heads on the token path; a pylate loader is queued to measure the
 true projected space.)
 
+**Community-standard judge column (qwen3:14b).** The same three full-1540
+prediction files rejudged with qwen3:14b, the official judge of the
+LoCoMo-Refined benchmark, to make our numbers comparable beyond our own judge
+panel (LoCoMo-Refined reports Mem0 at 48.91 and MemOS at 63.60 under this
+judge, on their revised question set):
+
+| Config (qwen3.5:9b, no reranker) | qwen3:14b |
+|---|---|
+| dense baseline | 0.487 |
+| + MiniLM MaxSim | 0.532 |
+| + answerai-colbert-small backbone | 0.542 |
+
+Two reads worth noting: the ordering matches every other judge (dense, then
+MiniLM MaxSim, then answerai), and the late-interaction levers gain more under
+this stricter judge (+0.045 and +0.055 over baseline) than under the lenient
+gemma judge (+0.037 and +0.042). The caveat: these scores are on the original
+1540-question set; the LoCoMo-Refined board uses a revised 1382-question set
+with a corrected answer key, so they are judge-comparable but not
+set-comparable. A full LoCoMo-Refined run (their questions, their judge) is in
+flight.
+
 ### Leaderboard (legacy external `qwen3:4b` judge, same dataset + same prompt)
 
 | System | Generator | Retrieval config | Ext Judge | Notes |
