@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Added
+- **Project-scoped grants (taOS#744).** Registry grant rows now carry an
+  optional `project_id` field; `GrantsVerifier.has_grant` accepts a matching
+  `project_id` keyword argument and a grant row with no `project_id` acts as
+  a global grant that matches any project. Data endpoints (ingest, search,
+  tasks) optionally bind the verified `project_id` claim from a Bearer token
+  to the request's `project` field, so a caller cannot supply a different
+  project than the one their token was minted for; the binding is
+  token-optional and introduces no lockout for token-free requests.
 - **Task graph component.** New `taosmd/tasks.py` module implements a
   dependency-aware task graph backed by SQLite (`tasks.db` under the data
   dir). Tasks have content-hash IDs (`t-<sha256[:12]>`) that are safe for
