@@ -543,3 +543,29 @@ def test_a2a_supersede_message_hides_it(live_server_with_token):
     status, body = _get(f"{base}/a2a/messages?thread=gen", token=_TOKEN)
     ids_after = [m["id"] for m in body.get("messages", [])]
     assert msg_id not in ids_after
+
+
+def test_rename_then_delete_old_name_keeps_history_under_new(live_server_with_token):
+    """The migrate-and-delete end state: after renaming old to new and then
+    deleting the old name, the old name reads empty (delisted) while the new
+    name still surfaces the old history. The zero-loss archive is never
+    mutated; only the alias plus deleted sets change."""
+    base = live_server_with_token
+
+    _post(f"{base}/a2a/send", {"from": "x", "body": "carried item", "thread": "oldc"}, token=_TOKEN)
+    _post(f"{base}/a2a/admin/rename-channel", {"from": "oldc", "to": "newc"}, token=_TOKEN)
+    _post(f"{base}/a2a/admin/delete-channel", {"channel": "oldc"}, token=_TOKEN)
+
+    # New name keeps the history.
+    status, body = _get(f"{base}/a2a/messages?thread=newc", token=_TOKEN)
+    assert status == 200
+    assert "carried item" in [m.get("body") for m in body.get("messages", [])]
+
+    # Old name is delisted: direct read returns nothing.
+    status, body = _get(f"{base}/a2a/messages?thread=oldc", token=_TOKEN)
+    assert status == 200
+    assert body.get("messages", []) == []
+
+    # Old name does not appear in the channel list.
+    status, body = _get(f"{base}/a2a/channels", token=_TOKEN)
+    assert "oldc" not in [c["channel"] for c in body.get("channels", [])]

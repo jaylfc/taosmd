@@ -389,7 +389,13 @@ async def a2a_feed(
         if row_id in _superseded:
             continue
         msg_thread = data.get("thread") or row.get("app_id") or "general"
-        if msg_thread in _deleted:
+        # A deleted channel is delisted and unreadable by its own name, but if
+        # it was renamed first its rows are still surfaced as alias-merged
+        # history under the (live) canonical thread. Only skip a deleted-thread
+        # row when it is NOT being merged in as alias history for this query,
+        # so "rename then delete the old name" keeps the history under the new
+        # name without mutating the zero-loss archive.
+        if msg_thread in _deleted and msg_thread not in alias_sources:
             continue
         # Skip admin-action rows (they have no "from" field)
         if data.get("admin_action"):
