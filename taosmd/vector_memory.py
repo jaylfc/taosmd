@@ -554,26 +554,58 @@ class VectorMemory:
         self._bm25_dirty = True  # corpus changed; invalidate BM25 cache
         return cursor.lastrowid
 
-    def _load_active_rows(self, project: str | None = None, search_agents: list[str] | None = None):
+    def _load_active_rows(
+        self,
+        project: str | None = None,
+        search_agents: list[str] | None = None,
+        now: float | None = None,
+    ):
         """Fetch active (non-superseded) rows, scoped by project/agent.
 
         Untagged rows are kept by both filters so pre-project / standalone
         memory is never hidden. Shared by the semantic and BM25-only paths so
         scoping rules cannot drift between them.
+
+        TTL filter: rows whose metadata ``forget_after`` is a number and is
+        less than ``now`` are excluded from retrieval exactly like superseded
+        rows. The raw row is never deleted (zero-loss); only recall hides it.
+        Non-numeric or missing ``forget_after`` values are silently ignored so
+        existing memories are never affected. ``now`` defaults to
+        ``time.time()``; pass an explicit float in tests to control the clock.
         """
+        if now is None:
+            now = time.time()
+
         rows = self._conn.execute(
             "SELECT id, text, embedding, metadata_json, created_at FROM vector_memory "
             "WHERE valid_to IS NULL"
         ).fetchall()
 
-        if project is not None or search_agents is not None:
-            filtered = []
-            agent_set = set(search_agents) if search_agents else None
-            for row in rows:
+        filtered = []
+        agent_set = set(search_agents) if search_agents else None
+        for row in rows:
+            try:
+                meta = json.loads(row["metadata_json"])
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+
+            # TTL filter: if forget_after is a valid number and has passed,
+            # exclude the row from active recall. Non-numeric values are
+            # ignored (row stays visible) with a debug log so bad metadata
+            # never silently hides memories.
+            fa = meta.get("forget_after")
+            if fa is not None:
                 try:
-                    meta = json.loads(row["metadata_json"])
-                except (json.JSONDecodeError, TypeError):
-                    meta = {}
+                    if float(fa) < now:
+                        continue
+                except (TypeError, ValueError):
+                    logger.debug(
+                        "ignore non-numeric forget_after=%r on row id=%s",
+                        fa,
+                        row["id"],
+                    )
+
+            if project is not None or search_agents is not None:
                 # Project filter: skip rows positively tagged with a different
                 # project. Untagged (pre-project) rows are kept so existing
                 # standalone memory is never hidden.
@@ -585,9 +617,9 @@ class VectorMemory:
                 row_agent = meta.get("agent")
                 if agent_set is not None and row_agent is not None and row_agent not in agent_set:
                     continue
-                filtered.append(row)
-            rows = filtered
-        return rows
+
+            filtered.append(row)
+        return filtered
 
     def existing_source_ids(self, agent: str | None = None) -> set[str]:
         """Return the user-metadata ``source_id`` values already stored.

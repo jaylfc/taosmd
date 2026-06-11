@@ -1090,6 +1090,7 @@ async def _process_qa(
         "judge": round(judge, 4),
         "retrieval_ms": round(retrieval_ms, 2),
         "gen_ms": round(gen_ms, 2),
+        "context_chars": len(context),
         "evidence_hits": _evidence_hits(hits, evidence),
         "evidence_total": len(evidence),
     }
@@ -1097,16 +1098,40 @@ async def _process_qa(
 
 def _summary(rows: list[dict]) -> dict:
     if not rows:
-        return {"count": 0, "f1": 0.0, "bleu1": 0.0, "judge": 0.0, "retrieval_recall": 0.0}
+        return {
+            "count": 0, "f1": 0.0, "bleu1": 0.0, "judge": 0.0, "retrieval_recall": 0.0,
+            "mean_latency_ms": 0.0, "p95_latency_ms": 0.0, "mean_context_tokens": 0.0,
+        }
     n = len(rows)
     hit_rows = [r for r in rows if r.get("evidence_total", 0) > 0]
     recall = (sum(1 for r in hit_rows if r["evidence_hits"] > 0) / len(hit_rows)) if hit_rows else 0.0
+
+    # Per-row total latency = retrieval + generation (ms). Both fields are
+    # present on every row emitted by _process_qa; default to 0.0 for rows
+    # loaded from older result files that predate context_chars.
+    latencies = sorted(
+        r.get("retrieval_ms", 0.0) + r.get("gen_ms", 0.0) for r in rows
+    )
+    mean_lat = sum(latencies) / n
+    # p95: index at floor(0.95 * n) — 0-based into the sorted list, clamped
+    # to the last element. With n=1 this is index 0, which is correct.
+    p95_idx = min(int(math.floor(0.95 * n)), n - 1)
+    p95_lat = latencies[p95_idx]
+
+    # Context token estimate: total context chars / 4 (rough GPT-2-era heuristic,
+    # good enough for magnitude comparisons in bench summaries).
+    mean_ctx_chars = sum(r.get("context_chars", 0) for r in rows) / n
+    mean_ctx_tokens = mean_ctx_chars / 4.0
+
     return {
         "count": n,
         "f1": round(sum(r["f1"] for r in rows) / n, 4),
         "bleu1": round(sum(r["bleu1"] for r in rows) / n, 4),
         "judge": round(sum(r["judge"] for r in rows) / n, 4),
         "retrieval_recall": round(recall, 4),
+        "mean_latency_ms": round(mean_lat, 1),
+        "p95_latency_ms": round(p95_lat, 1),
+        "mean_context_tokens": round(mean_ctx_tokens, 1),
     }
 
 
@@ -1169,6 +1194,14 @@ def _print_summary(meta: dict, by_category: dict, overall: dict) -> None:
     print(f"{'Overall':<16} {overall['count']:>5} {overall['f1']:>7.2f} "
           f"{overall['bleu1']:>8.2f} {overall['judge']:>8.2f} "
           f"{overall['retrieval_recall']:>8.2f}")
+    print(sep)
+    # Three-number performance summary (accuracy / latency / context size).
+    # Never collapsed to a single score \u2014 each dimension is independent signal.
+    print(
+        f"Latency  p50={overall.get('mean_latency_ms', 0.0):.0f} ms  "
+        f"p95={overall.get('p95_latency_ms', 0.0):.0f} ms  |  "
+        f"Context ~{overall.get('mean_context_tokens', 0.0):.0f} tok/query (mean)"
+    )
     print(sep)
 
 
