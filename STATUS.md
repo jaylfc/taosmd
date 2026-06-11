@@ -35,7 +35,7 @@ Last updated: 2026-06-11
 ## On arrival (incoming agent or contributor)
 
 1. Read this file top to bottom.
-2. ARM THE AUDIT CRON (project rule, every session, no exceptions): a 30-minute combined audit using the canonical prompt in `.claude/audit-cron-prompt.md` (schedule 7,37 * * * *). It covers rate-limit recovery, docs freshness, the research report, memory, and the bus. Also re-arm the live A2A bus watcher for the session.
+2. ARM THE SESSION INFRASTRUCTURE (project rule, every session, no exceptions): (a) the 30-minute audit cron using the canonical prompt in `.claude/audit-cron-prompt.md` (schedule 7,37 * * * *), covering rate-limit recovery, docs freshness, the research report, memory, and the bus; (b) the A2A connection per `.claude/a2a-session-setup.md`: live watcher, durable poll floor verified, history caught up, identity rules observed.
 2. `git fetch origin` and review recent commits on master plus any open branches.
 3. Check open GitHub issues and PRs.
 4. Tail the A2A bus: taOSmd-progress, general, integration channels.
