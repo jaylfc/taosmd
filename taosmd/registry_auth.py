@@ -202,7 +202,9 @@ def parse_grants_response(body: str) -> list[dict]:
     """Extract grant records from a registry grants-feed response body.
 
     Returns the raw list of grant dicts; callers filter by expires_at.
-    Each record is expected to carry at least ``canonical_id``.
+    Each record is expected to carry at least ``canonical_id``.  The
+    ``project_id`` field is preserved when present; rows that omit it are
+    treated as global grants (``project_id`` defaults to ``None``).
     """
     obj = json.loads(body)
     if isinstance(obj, dict):
@@ -250,11 +252,18 @@ class GrantsVerifier:
                 logger.warning("grants feed refresh failed, using last-good set: %s", exc)
         return self._grants
 
-    def has_grant(self, canonical_id: str, scope: str | None = None) -> bool:
+    def has_grant(self, canonical_id: str, scope: str | None = None,
+                  project_id: str | None = None) -> bool:
         """Return True if the agent has at least one active (unexpired) grant.
 
         When ``scope`` is given, at least one grant must match that scope.
         When ``scope`` is ``None``, any active grant for the agent suffices.
+
+        When ``project_id`` is given, at least one matching grant must either
+        carry the same ``project_id`` OR carry ``None`` for ``project_id``
+        (a global grant that matches any project).  When ``project_id`` is
+        ``None``, the project dimension is not checked (any grant passes).
+
         Raises :class:`AuthError` if the feed has never been loaded.
         """
         now = self._clock()
@@ -276,6 +285,14 @@ class GrantsVerifier:
                     continue
             if scope is not None and g.get("scope") != scope:
                 continue
+            # Project-scoped grant matching:
+            #   - project_id param is None  -> skip project check entirely
+            #   - row project_id is None    -> global grant, matches any project
+            #   - otherwise row must match the param exactly
+            if project_id is not None:
+                row_proj = g.get("project_id")
+                if row_proj is not None and row_proj != project_id:
+                    continue
             return True
         return False
 

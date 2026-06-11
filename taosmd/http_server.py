@@ -14,6 +14,18 @@ Design choices (matching the project's local-first, offline, additive vision):
   (e.g. ``0.0.0.0``) only to expose it on the LAN. There is **no auth**: on
   localhost that is fine (any local process already has the Python API); if
   you bind to a routable address, put it behind your own network controls.
+
+Security note
+-------------
+When a registry verifier is configured, ``POST /a2a/send`` requires a valid
+registry-minted EdDSA-JWT Bearer token and an active grant; the token's
+``sub`` is matched against the message ``from`` to prevent impersonation.
+Data endpoints (ingest, search, tasks) additionally support *optional* token
+binding: when a Bearer token is present and the registry verifier is
+configured, the token is verified and any ``project_id`` claim in it overrides
+the request-supplied ``project`` value so callers cannot spoof their project
+scope.  When no token is presented those endpoints behave exactly as today,
+preserving the no-lockout, token-optional design.
 * **additive + opt-in**: the server only runs when you start it; the
   Python API, CLI, and standalone use are untouched.
 * **per-agent scoping**: every endpoint takes an ``agent`` and forwards it
@@ -583,7 +595,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("JSON body must be an object")
             return parsed
 
-        # ----- auth helper -------------------------------------------------
+        # ----- auth helpers ------------------------------------------------
         def _check_token(self, path: str) -> bool:
             """Return True when the request is authorised to proceed.
 
@@ -599,6 +611,71 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             if auth.startswith("Bearer "):
                 return auth[len("Bearer "):].strip() == _server_token
             return False
+
+        def _apply_token_binding(self, identity: str | None, project: str | None) -> tuple[str | None, bool]:
+            """Apply optional registry-token project binding for data endpoints.
+
+            When a registry verifier is configured AND the request carries an
+            Authorization Bearer token, the token is verified (returning 403
+            and ``False`` on failure; callers must check the bool before
+            continuing).  On success the ``project_id`` claim from the
+            verified token, if present, OVERRIDES the request-supplied
+            ``project`` value (anti-spoof: request-supplied values are ignored
+            when a token is present).  A grants verifier, when present,
+            additionally requires an active grant for ``(sub, project_id)``
+            when a project binding is found; a missing grant yields 403.
+
+            When NO token is presented the call is a no-op: the original
+            ``project`` is returned unchanged and ``True`` is returned.
+
+            ``identity`` is the agent/actor string from the request body
+            (e.g. ``agent`` for ingest/search, ``created_by`` for tasks).
+            When the request has no such field, pass ``None`` and the token's
+            own ``sub`` will be used as the identity for the authorize check.
+
+            Returns ``(resolved_project, ok)`` where ``ok=False`` means the
+            response has already been written and the caller must return.
+            """
+            if _registry_verifier is None:
+                return project, True
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer "):
+                # No token presented: leave behaviour exactly as before.
+                return project, True
+            token = auth[len("Bearer "):].strip()
+            if not token:
+                return project, True
+            from . import registry_auth as _ra  # noqa: PLC0415
+            # Peek at sub without verifying signature (only to satisfy the
+            # authorize(token, claimed_from) API when the request has no
+            # identity field).  The real signature check happens inside
+            # authorize(); a bad token will still fail there.
+            raw_sub: str = ""
+            try:
+                import jwt as _jwt  # noqa: PLC0415
+                unverified = _jwt.decode(token, options={"verify_signature": False})
+                raw_sub = unverified.get("sub", "") or ""
+            except Exception:  # noqa: BLE001
+                pass
+            claimed_identity = identity if identity else raw_sub
+            try:
+                claims = _registry_verifier.authorize(token, claimed_identity)
+            except _ra.AuthError as exc:
+                self._send_json(403, {"error": f"registry auth: {exc}"})
+                return None, False
+            verified_project = claims.get("project_id")
+            if verified_project is not None:
+                project = verified_project
+            if _grants_verifier is not None and verified_project is not None:
+                sub = claims.get("sub", "")
+                try:
+                    if not _grants_verifier.has_grant(sub, project_id=verified_project):
+                        self._send_json(403, {"error": f"registry auth: no active grant for ({sub!r}, project {verified_project!r})"})
+                        return None, False
+                except _ra.AuthError as exc:
+                    self._send_json(403, {"error": f"registry auth: {exc}"})
+                    return None, False
+            return project, True
 
         # ----- routing -----------------------------------------------------
         def do_GET(self) -> None:  # noqa: N802 - stdlib signature
@@ -712,6 +789,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'agent' (non-empty string) is required")
             if project is not None and not isinstance(project, str):
                 raise _BadRequest("'project' must be a string when provided")
+            project, ok = self._apply_token_binding(agent, project)
+            if not ok:
+                return
             opts = {"project": project} if project else {}
             result = runner.run(service.ingest(text, agent=agent, data_dir=data_dir, **opts))
             self._send_json(200, result)
@@ -727,6 +807,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'agent' (non-empty string) is required")
             if project is not None and not isinstance(project, str):
                 raise _BadRequest("'project' must be a string when provided")
+            project, ok = self._apply_token_binding(agent, project)
+            if not ok:
+                return
             opts = {"project": project} if project else {}
             # Per-item shape validation lives in api.ingest_batch and runs
             # before any write; its ValueError surfaces as a 400 here.
@@ -743,6 +826,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             project = body.get("project")
             also_include = body.get("also_include")
             mode = body.get("mode")
+            project, ok = self._apply_token_binding(agent, project)
+            if not ok:
+                return
             self._do_search(query, agent, limit, project, also_include, mode)
 
         def _handle_search_get(self, qs: dict) -> None:
@@ -754,6 +840,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             ai_raw = (qs.get("also_include") or [None])[0]
             also_include = [s for s in ai_raw.split(",") if s] if ai_raw else None
             mode = (qs.get("mode") or [None])[0]
+            project, ok = self._apply_token_binding(agent, project)
+            if not ok:
+                return
             self._do_search(query, agent, limit, project, also_include, mode)
 
         def _do_search(self, query, agent, limit, project=None, also_include=None, mode=None) -> None:
@@ -958,6 +1047,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             assignee = body.get("assignee")
             priority = body.get("priority", 0)
             depends_on = body.get("depends_on")
+            project, ok = self._apply_token_binding(created_by, project)
+            if not ok:
+                return
             try:
                 priority = int(priority)
             except (TypeError, ValueError) as exc:
@@ -987,6 +1079,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            project, ok = self._apply_token_binding(assignee, project)
+            if not ok:
+                return
             tasks = runner.run(
                 service.task_list(
                     status=status,
@@ -1006,6 +1101,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            project, ok = self._apply_token_binding(assignee, project)
+            if not ok:
+                return
             tasks = runner.run(
                 service.task_ready(
                     project=project,
@@ -1019,6 +1117,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_task_prime(self, qs: dict) -> None:
             project = (qs.get("project") or [None])[0]
             assignee = (qs.get("assignee") or [None])[0]
+            project, ok = self._apply_token_binding(assignee, project)
+            if not ok:
+                return
             result = runner.run(
                 service.task_prime(
                     project=project,
@@ -1034,6 +1135,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             assignee = body.get("assignee")
             priority = body.get("priority")
             task_body = body.get("body")
+            _, ok = self._apply_token_binding(assignee, None)
+            if not ok:
+                return
             if priority is not None:
                 try:
                     priority = int(priority)
