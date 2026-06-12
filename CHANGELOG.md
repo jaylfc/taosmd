@@ -3,6 +3,30 @@
 ## Unreleased
 
 ### Added
+- **Temporal date-range lever (`retrieve(temporal={...})`), default off.** A
+  deterministic natural-language temporal parser (`taosmd/temporal.py`) that
+  turns expressions like "last week", "in May 2023", "Q1 2026", or "on 8 May,
+  2023" into date ranges and applies them as a retrieval post-stage, either
+  boosting in-range hits or filtering to the range (fail-open: hits without a
+  parseable timestamp are kept, and a filter that would leave zero hits
+  returns the original list). Handles epoch floats, ISO strings, and LoCoMo
+  conversation timestamps; an optional reference time resolves relative
+  expressions against a conversation rather than the wall clock. Complements
+  the keyword-signal `temporal_boost.py` (ordering anchors); this lever is
+  for explicit date ranges. Benchmark status is recorded honestly in
+  docs/research-report.md E-005: LoCoMo cannot measure this lever (only 9.3
+  percent of its temporal-category questions contain a parseable range
+  expression), so no LoCoMo claim is made; the lever targets live agent
+  queries ("what did we decide last week").
+- **Pause/resume checkpointing for the LoCoMo runner.** New `--ckpt`,
+  `--resume`, and `--pause-flag` flags with conversation-granularity sidecar
+  checkpointing (`benchmarks/bench_checkpoint.py`): after each conversation,
+  its rows are fsync-appended to `<out>.ckpt.jsonl`; resume verifies a config
+  hash (never silently mixes configs), pre-loads completed rows, and skips
+  finished conversations including their expensive ingest. Touching the pause
+  flag file stops the run cleanly between conversations (exit 3) with resume
+  instructions. Sidecar is removed on successful completion; final result
+  JSON shape is unchanged.
 - **Compact mode on `GET /a2a/messages` (`fields`, `format`).** Two optional
   query parameters for token-frugal bus consumers (LLM agents reading the
   A2A feed): `fields=<csv>` (e.g. `fields=id,from,body`) projects each
