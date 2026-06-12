@@ -2,29 +2,26 @@
 
 Working snapshot for whoever picks this repo up next. Updated whenever meaningful state changes. Shipped changes live in [CHANGELOG.md](CHANGELOG.md); measured results live in [docs/benchmarks.md](docs/benchmarks.md); the task list of record is GitHub issues.
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12 (weekly dark window; both agents down until the seven-day reset at 2026-06-14T02:00:00Z)
 
 ## Current state
 
-- **master** is healthy: 702 tests passing. NEW: project-scoped grants (taOS #744) shipped in PR #151 -- `project_id` is now a verified JWT claim; `GrantsVerifier.has_grant` accepts a `project_id` keyword; data endpoints (ingest, search, tasks) bind the verified project scope from the token so callers cannot spoof it. Global grants (no `project_id`) still match any project, preserving the no-lockout design. The dependency-aware task-graph component shipped in PR #150: `taosmd tasks` CLI, `/tasks` HTTP surface with a ready queue and a `prime` briefing endpoint, MCP tools, all mutations archive-backed and replayable. Beads concepts credited. `taosmd tasks ready` is now the canonical what-next query for incoming agents once deployed. The taOS user-memory unification surface (`POST /ingest/batch` with idempotent re-import, `mode=bm25` on search) shipped in PR #149 and is verified live by the downstream consumer. A post-merge review pass landed six hardening fixes (see CHANGELOG, Unreleased / Fixed).
-- **Benchmarks:** the late-interaction retrieval lever is confirmed at full-1540 scale (+0.037 lenient / +0.044 strict-instruct over the dense baseline, with no reranker in the loop). A retrieval-only CPU probe shows the lever is viable without a GPU: evidence recall 0.641 (dense) to 0.854 (answerai backbone) at ~110ms per query on a 16-core CPU box. Full tables and caveats in docs/benchmarks.md.
+- **master** is healthy: about 850 tests passing. Shipped today (Jun 12): the temporal date-range lever (`retrieve(temporal=...)`, default off, PR #157), pause/resume checkpointing for the LoCoMo runner (`--ckpt`/`--resume`/`--pause-flag`, PR #158), compact mode on `GET /a2a/messages` (`fields` projection + `ndjson`), and an auth fix (`faaaf3c`): the data-endpoint grants gate now fires for every verified token, not only project-bound ones, plus ISO-8601 grant-expiry parsing. Earlier this cycle: project-scoped grants (#151), task-graph (#150), batch ingest + bm25 mode (#149), TTL filter + three-number summaries (#155), admin surface (#153), research report first edition (#156).
+- **taOS #744 is CLOSED, e2e-verified 3/3** against the real registry feeds (live grant pass with claim-binding, expired-grant 403, revoked 403). The exercise found and fixed the gate-bypass bug above, the argument for e2e over unit coverage.
+- **Benchmarks: all pre-registered experiments resolved today, three negatives by their own written criteria** (docs/research-report.md rev 1.10): N-008 (projected ColBERT spaces, both 0.730, do not beat the answerai backbone 0.760 subset-200 gemma, no recipe upgrade), N-009 (surprise-boundary chunking was a coverage artifact: matched-turn-budget baseline at k=120 beats chunks at k=20 by 0.15), N-010 (write-skip floor is safe but fires on only 2.3 percent of LoCoMo turns, under the 5 percent shipping floor). Headlines unchanged: 97.0 percent LongMemEval-S, LoCoMo leader 0.748/0.394/0.659.
 
 ## In flight
 
-- Shipped since the last stamp: retrieval-time TTL filter + three-number bench summaries (PR #155). Harness branches ready for the GPU chain: bench/e2-claim-verification (pushed, 41 tests); bench/e1-surprisal finishing. Next: stage the chain E1, E2, then the pylate projected-space probe, behind the LoCoMo-Refined judge stage now running (all 1382 predictions matched).
-- Skill search out for a scientific-report-writing skill; the living research report (docs/research-report.md, IMRaD-ish with first-class negative results and pre-registered kill criteria) drafts after.
+- **Nothing running.** All experiments closed, Fedora drained and powered down (565 result files archived to `~/Development/taosmd-bench-archive/fedora-results-20260612/` on the Mac), the VPS is the only available bench target. Both agents dark for the weekly limit; the lead session wakes shortly after the 2026-06-14T02:00:00Z reset.
+- **Interim crew:** a low-risk job pack is live at `docs/agent-jobs/` (README of absolute rules + three jobs: benchmarks.md em-dash sweep, cross-encoder cwd-path fix, dead-import cleanup). Weaker agents PR these to master; they NEVER merge. The waking lead session reviews each PR against its job file's verification section.
+- **qmd fork exit path:** upstream PR tobi/qmd#728 open (tsc cleanup 51 to 3, zero behavior change); #663 (brettdavies, continues our #511 with credit, includes /search + /vsearch) has two ready branches linked from us (`dim-guard-on-663`, `fix-663-test-types`). When #663 merges and a release cuts, our fork can be dropped. Watch both for maintainer replies.
 
-- answerai-colbert-small full-1540 DONE: 0.716 gemma4:e2b / 0.388 llama3.1:8b / 0.656 qwen3:4b-instruct-2507 (see docs/benchmarks.md late-interaction section). qwen3:14b community-judge column DONE: dense 0.487 / MiniLM MaxSim 0.532 / answerai backbone 0.542 on the full-1540; numbers are judge-comparable to LoCoMo-Refined leaderboard but not set-comparable (original 1540-question set, not the refined 1382). Still queued on the GPU box: a gemma4:12b generator A/B and a full LoCoMo-Refined run (generation with the leader recipe on the 1,382 refined questions, then their official Qwen3-14B judge pointed at local Ollama).
-- Branch `feat/pylate-loader` (pushed): loads ColBERT models through pylate so projection heads actually apply; per-instance token dim; 221 tests green. Ready for a projected-space vs backbone comparison next GPU window.
-- Branch `bench/retrieval-latency-probe`: retrieval-only R@K + latency harness (no LLM dependency). Candidate for merge after the colbert branch lands.
-- Branch `feat/colbert-models-probe`: late-interaction and `--colbert-model` support, wrong-dimension guards added. Note: it was cut from a stale base, so rebase onto master before merging.
+## Queued next (for the post-reset wake)
 
-## Queued next
-
-1. LoCoMo-Refined harness run. The dataset is CC BY-NC: run it and publish scores, never vendor the dataset into this repo.
-2. pylate loader for ColBERT projection heads. Today's sentence-transformers token path uses backbone embeddings only, so answerai numbers are backbone MaxSim, not the trained ColBERT space. LateOn and ColBERT-Zero probes follow once the loader exists.
-3. snowflake-arctic-embed-s/xs probe as a MiniLM ONNX drop-in for low-power tiers.
-4. Project/shelf registry (taOS #774): two-tier WORKSPACE+PROJECT shelf model, create-shelf and archive-shelf controller ops, carve-out mechanics. Design approved on taOS side; contract discussion in flight on A2A bus.
+1. **v2 P1-vs-P2 fold decision (Jay's call).** Every retrieval-side use of surprisal is now dead (N-009, N-010, and the earlier flat prior), so the re-scoped P1 plan (`~/tinyagentos-private/plans/taosmd-v2-p1-surprisal-traces-plan.md`: provider stack + TraceStore + one-trace-per-turn encoder) rides entirely on the P2 bet that surprisal-seeded strength helps consolidation priority. Decide whether to execute the slim P1 now or fold it into the P2 plan.
+2. **Pausable benchmarks phases 2-3 (#25):** Fedora PAUSE-on-boot orchestration + the hermes rebootwin runbook. Phase 1 (runner checkpointing) is merged.
+3. **Review the interim crew's PRs** against docs/agent-jobs/, and the qmd upstream PRs (#728, #663).
+4. snowflake-arctic-embed-s/xs probe as a MiniLM ONNX drop-in for low-power tiers (long-standing backlog).
 
 ## Working agreements
 
