@@ -51,12 +51,13 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | N-007 | gemma4:12b generator A/B: 0.630/0.580 vs qwen3.5:9b 0.680 same config; not an upgrade | [4](#4-negative-results) | confirmed negative | bench host 20260611 gemma12b_redo verdicts |
 | N-008 | ColBERT projected spaces (answerai 96-dim, colbertv2 128-dim) both 0.730 vs backbone 0.760 subset-200 gemma; no upgrade, 4x footprint trade noted | [4](#4-negative-results) | confirmed negative | bench host 20260612_142049 rescored_gemma results |
 | N-009 | Surprise-boundary chunking is a coverage artifact: matched-turn-budget baseline (k=120, 0.9192) beats chunks at k=20 (0.7677); methods lesson, compare chunking levers at matched turn budget | [4](#4-negative-results) | confirmed negative | VPS e1_mb_k20/k120_20260612_083159.json |
+| N-010 | Write-skip floor safe (no recall harm, zero evidence skipped) but fires on 2.3 percent of LoCoMo turns, under the 5 percent floor; not shipped | [4](#4-negative-results) | confirmed negative (for shipping) | VPS e1_write_skip_20260612_143625.json |
 | E-001 | Surprisal retrieval: BOTH arms dead. Prior flat; chunking +0.1263 at equal k but baseline at matched turn budget wins by 0.15 | [6](#6-ongoing-work-pre-registered) | resolved -> N-009 | VPS e1_mb_k20/k120_20260612_083159.json |
 | E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | resolved -> F-009 | STATUS.md "bench/e2-claim-verification" |
 | E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | methods limitation (judge unreliable on Ollama) | STATUS.md "all 1382 predictions matched" |
 | E-004 | pylate projected-space vs backbone: both projected spaces 0.730 vs backbone 0.760 subset-200 gemma; no recipe upgrade | [6](#6-ongoing-work-pre-registered) | resolved -> N-008 | bench host 20260612_142049 rescored_gemma results |
 | E-005 | Temporal date-range lever: LoCoMo CANNOT measure it (temporal-cat applicability 9.3 percent, under the 10 percent gate); ships default-off | [6](#6-ongoing-work-pre-registered) | resolved (not measurable on LoCoMo) | benchmarks/temporal_applicability_scan.py, master 0535f86 |
-| E-006 | Write-skip floor: skip predictable short turns at ingest (z <= -1.0, under 12 tokens), measure R@K cost on subset-200 | [6](#6-ongoing-work-pre-registered) | pre-registered, queued on VPS | branch bench/e1-write-skip |
+| E-006 | Write-skip floor: SAFE (delta +0.0051, zero evidence skipped) but fires on only 2.3 percent of turns, under the 5 percent shipping floor | [6](#6-ongoing-work-pre-registered) | resolved -> N-010 | VPS e1_write_skip_20260612_143625.json |
 
 ---
 
@@ -289,6 +290,12 @@ The surprisal pillar's retrieval-side claims are both negative. The prior arm (w
 
 Source: VPS benchmarks/results/e1_mb_k20_20260612_083159.json and e1_mb_k120_20260612_083159.json, git 1427f54.
 
+**N-010. Write-skip floor: safe but fires too rarely to ship (E-006 resolved).**
+
+Skipping highly predictable short turns at ingest (surprisal z at or below -1.0 and under 12 tokens) left R@K within noise (+0.0051) and skipped zero evidence turns, so the classifier causes no measurable recall harm at these thresholds. But it only fired on 18 of 788 turns (2.3 percent), under the pre-registered 5 percent shipping floor: on LoCoMo there are simply not enough bare greetings and acknowledgements for the floor to save meaningful index weight. Not shipped. The thresholds were deliberately conservative; loosening them to hit 5 percent would change the safety result and would need a fresh pre-registration. Worth revisiting only on a corpus with denser conversational filler.
+
+Source: VPS benchmarks/results/e1_write_skip_20260612_143625.json, variant code on branch bench/e1-write-skip (46793e0).
+
 ## 5. Reproducibility
 
 **Install.**
@@ -414,7 +421,7 @@ Design: the surprisal probe (benchmarks/surprisal_probe.py, branch bench/e1-writ
 
 Kill criterion (verbatim): "write-skip is killed if R@K drops by more than 0.005; it ships only if R@K is within noise AND turns_skipped >= 5 percent of corpus (otherwise it saves nothing)."
 
-Status: queued on the VPS, runs when the E-001 re-run finishes.
+Resolved (2026-06-12), recorded as N-010. Verdict line: delta=+0.0051, turns_skipped=18/788 (2.3 percent), evidence_turns_skipped=0. Quoting the criterion: "write-skip is killed if R@K drops by more than 0.005; it ships only if R@K is within noise AND turns_skipped >= 5 percent of corpus (otherwise it saves nothing)." The first half passes (no harm: R@K within noise, marginally up, and none of the skipped turns carried evidence, so the classifier is safe at these thresholds). The second half fails: 2.3 percent skipped is under the 5 percent floor, so the floor saves nothing worth its complexity on this corpus and does not ship. Honest caveat for later: LoCoMo turns are long dialogue contributions with few bare acknowledgements; a real agent transcript corpus with denser greetings might clear the floor, and re-running this probe on such a corpus is the right precondition for revisiting. Provenance: VPS benchmarks/results/e1_write_skip_20260612_143625.json, branch bench/e1-write-skip (46793e0).
 
 ---
 
@@ -434,3 +441,4 @@ This log is append-only. History is never rewritten.
 | 2026-06-12 | 1.7 | E-004 root cause found: the pylate loader is exonerated (direct load test shows the trained 96-dim Stanford projection applied correctly); the 0.050 and 0.0 results came from the search gate bug plus a pre-fix checkout on the bench host. The earlier "96 vs 128" blocker note was a misdiagnosis. Full projected-space comparison re-running. Index status updated. |
 | 2026-06-12 | 1.8 | E-004 resolved to N-008: both ColBERT projected spaces 0.730 vs answerai backbone 0.760 on subset-200 gemma; decision rule quoted, no recipe upgrade; the 4x token-matrix footprint trade of the 96-dim space recorded. benchmarks.md late-interaction section updated with the projected-space table. |
 | 2026-06-12 | 1.9 | E-001 resolved to N-009: the matched-turn-budget control shows surprise-boundary chunking was a coverage artifact (baseline at k=120 beats chunks at k=20 by 0.15); kill criterion quoted; both surprisal retrieval arms now dead. Methods lesson recorded: compare chunking levers at matched turn budget, never matched k. |
+| 2026-06-12 | 1.10 | E-006 resolved to N-010: the write-skip floor is safe (R@K within noise, zero evidence turns skipped) but fires on only 2.3 percent of turns, under the pre-registered 5 percent shipping floor; not shipped, criterion quoted. With E-001, E-004, and E-006 all resolved today, no pre-registered experiment remains open. |
