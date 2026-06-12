@@ -154,6 +154,14 @@
   falls back to a dependency-free Okapi BM25 (same k1/b) when not.
 
 ### Fixed
+- The data-endpoint grants gate only fired when a Bearer token carried a
+  `project_id` claim, so a verified GLOBAL token whose holder had no active
+  grant could still write through `/ingest` and the other bound endpoints.
+  The gate now fires for every verified token (project-bound or global);
+  tokenless requests keep the no-lockout behaviour. Found by the taOS#744
+  end-to-end exercise against the real registry feeds. Grant `expires_at`
+  values in ISO-8601 (the registry's actual feed format) are now parsed
+  properly instead of being dropped as unparseable.
 - The stdlib fallback inspector page escapes quote characters, closing an
   attribute-context XSS path via A2A sender names rendered into the
   dashboard (the bundled React dashboard was never affected).
