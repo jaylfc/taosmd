@@ -1025,12 +1025,26 @@ async def run(args: argparse.Namespace) -> int:
     _print_verdict(summaries, baseline_r)
 
     # Step 5: compute mean chunk length for surprise_chunks.
+    # IMPORTANT: total_turns must only count conversations that were actually
+    # ingested by the surprise_chunks variant.  When --limit is active the
+    # variant loop breaks after processing a subset of conversations, so
+    # surprisal_data may contain more conversations than were chunked.
+    # Using all scored conversations in the numerator inflates the mean well
+    # beyond the 6-turn cap -- the original reported "22.54 turns/chunk" was
+    # caused by this mismatch (root cause: total_turns inflated relative to
+    # total_chunks_ingested).
     chunks_summary = next((s for s in summaries if s["variant"] == "surprise_chunks"), None)
     chunk_mean_len_info = ""
     if chunks_summary:
+        # Use only the conversations that the chunks variant actually ingested.
+        processed_conv_ids = {
+            s["conversation_id"]
+            for s in chunks_result.get("ingest_stats", [])
+        }
         total_turns = sum(
             len(sd.get("scored_turns", []))
-            for sd in surprisal_data.values()
+            for conv_id, sd in surprisal_data.items()
+            if conv_id in processed_conv_ids
         )
         total_chunks = chunks_summary.get("total_chunks_ingested", 0)
         if total_chunks > 0:

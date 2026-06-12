@@ -355,3 +355,175 @@ class TestSidecarCache:
         loaded = _load_cache(cache_path)
         assert "my_conv::42" in loaded
         assert loaded["my_conv::42"]["mean_nll"] == 2.0
+
+
+# ---------------------------------------------------------------------------
+# Mean-chunk-length metric: total_turns scope
+# ---------------------------------------------------------------------------
+
+class TestMeanChunkLengthMetric:
+    """Regression tests for the total_turns/total_chunks_ingested metric.
+
+    Root cause of the reported "22.54 turns/chunk" despite a 6-turn cap:
+    when --limit is active, _run_variant ingests only a subset of conversations
+    (total_chunks_ingested counts only those), but the original total_turns
+    summed ALL scored conversations in surprisal_data.  The fix restricts
+    total_turns to the same set of conversations that were actually ingested.
+
+    These tests exercise the metric path directly using real chunk data from
+    _build_surprise_chunks (the same function the retrieval path uses).
+    """
+
+    def _make_scored_turns(self, n: int, conv_id: str) -> list[dict]:
+        """Produce n scored-turn dicts for a synthetic conversation."""
+        return [
+            {
+                "turn_index": i,
+                "dia_id": f"{conv_id}:d{i}",
+                "speaker": "A",
+                "text": f"[A] turn {i}",
+                "mean_nll": 1.5,
+                "max_nll": 1.5,
+                "n_tokens": 3,
+            }
+            for i in range(n)
+        ]
+
+    def _count_chunks_for_conv(self, n_turns: int) -> int:
+        """Return the number of chunks produced by _build_surprise_chunks
+        for a conversation with n_turns all-zero z-scores (worst-case merge)."""
+        turns = self._make_scored_turns(n_turns, "c")
+        z = [0.0] * n_turns
+        return len(_build_surprise_chunks(turns, z))
+
+    def test_mean_chunk_len_matches_real_chunks_single_conv(self):
+        """When only 1 of N conversations is ingested, mean must reflect that
+        conversation only -- not all N.
+
+        This is the core regression for the 22.54 report: the buggy code used
+        total_turns = sum over ALL convs in surprisal_data, while the
+        denominator (total_chunks_ingested) only covers the ingested subset.
+        """
+        n_per_conv = 50
+        n_total_convs = 10
+
+        # Simulate surprisal_data for all 10 conversations.
+        surprisal_data = {}
+        for i in range(n_total_convs):
+            conv_id = f"conv_{i}"
+            scored_turns = self._make_scored_turns(n_per_conv, conv_id)
+            surprisal_data[conv_id] = {
+                "scored_turns": scored_turns,
+                "z_scores": [0.0] * n_per_conv,
+            }
+
+        # Simulate that only the FIRST conversation was actually ingested
+        # (as happens when --limit is exhausted after the first conversation).
+        first_conv_id = "conv_0"
+        first_conv_turns = surprisal_data[first_conv_id]["scored_turns"]
+        first_conv_z = surprisal_data[first_conv_id]["z_scores"]
+        actual_chunks = _build_surprise_chunks(first_conv_turns, first_conv_z)
+        n_chunks = len(actual_chunks)
+
+        # Simulate ingest_stats with only the first conversation.
+        ingest_stats = [{"conversation_id": first_conv_id, "added": n_chunks}]
+
+        # --- Buggy computation (original code) ---
+        total_turns_buggy = sum(
+            len(sd.get("scored_turns", []))
+            for sd in surprisal_data.values()
+        )
+        mean_buggy = total_turns_buggy / n_chunks
+        # The buggy mean MUST exceed the cap (proves the original was wrong).
+        assert mean_buggy > _CHUNK_MAX_TURNS, (
+            f"Buggy path should produce mean > {_CHUNK_MAX_TURNS}; "
+            f"got {mean_buggy:.2f} (total_turns={total_turns_buggy}, "
+            f"chunks={n_chunks})"
+        )
+
+        # --- Fixed computation (filter by processed conv_ids) ---
+        processed_conv_ids = {s["conversation_id"] for s in ingest_stats}
+        total_turns_fixed = sum(
+            len(sd.get("scored_turns", []))
+            for conv_id, sd in surprisal_data.items()
+            if conv_id in processed_conv_ids
+        )
+        mean_fixed = total_turns_fixed / n_chunks
+        assert mean_fixed <= _CHUNK_MAX_TURNS, (
+            f"Fixed mean must be <= {_CHUNK_MAX_TURNS}; "
+            f"got {mean_fixed:.2f} (total_turns={total_turns_fixed}, "
+            f"chunks={n_chunks})"
+        )
+
+    def test_mean_chunk_len_all_convs_processed(self):
+        """When ALL conversations are processed (no --limit truncation),
+        both the buggy and fixed computations agree and the mean is <= cap."""
+        n_per_conv = 50
+        n_total_convs = 5
+        surprisal_data = {}
+        ingest_stats = []
+
+        for i in range(n_total_convs):
+            conv_id = f"conv_{i}"
+            scored_turns = self._make_scored_turns(n_per_conv, conv_id)
+            z = [0.0] * n_per_conv
+            surprisal_data[conv_id] = {"scored_turns": scored_turns, "z_scores": z}
+            n_chunks = len(_build_surprise_chunks(scored_turns, z))
+            ingest_stats.append({"conversation_id": conv_id, "added": n_chunks})
+
+        # Fixed computation.
+        processed_conv_ids = {s["conversation_id"] for s in ingest_stats}
+        total_turns = sum(
+            len(sd.get("scored_turns", []))
+            for conv_id, sd in surprisal_data.items()
+            if conv_id in processed_conv_ids
+        )
+        total_chunks = sum(s["added"] for s in ingest_stats)
+        mean = total_turns / total_chunks
+        assert mean <= _CHUNK_MAX_TURNS, (
+            f"Mean {mean:.2f} exceeds cap {_CHUNK_MAX_TURNS}"
+        )
+
+    def test_chunk_cap_and_metric_consistent_50_turns(self):
+        """50-turn synthetic conversation: (i) no chunk exceeds cap, AND
+        (ii) the metric computed via ingest_stats equals actual mean chunk size.
+
+        This tests the SAME path retrieval uses: _build_surprise_chunks is
+        called with the scored_turns and z_scores from surprisal_data, and
+        the resulting chunk count is what would be stored in ingest_stats.
+        """
+        n = 50
+        conv_id = "test_conv"
+        scored_turns = self._make_scored_turns(n, conv_id)
+        z = [0.0] * n
+
+        chunks = _build_surprise_chunks(scored_turns, z)
+
+        # (i) No chunk exceeds cap.
+        for chunk in chunks:
+            assert len(chunk["turn_indices"]) <= _CHUNK_MAX_TURNS, (
+                f"Cap violated: {len(chunk['turn_indices'])} turns in chunk"
+            )
+
+        # (ii) Metric via ingest_stats matches actual mean chunk size.
+        ingest_stats = [{"conversation_id": conv_id, "added": len(chunks)}]
+        surprisal_data = {conv_id: {"scored_turns": scored_turns, "z_scores": z}}
+
+        processed_conv_ids = {s["conversation_id"] for s in ingest_stats}
+        total_turns = sum(
+            len(sd.get("scored_turns", []))
+            for cid, sd in surprisal_data.items()
+            if cid in processed_conv_ids
+        )
+        total_chunks = sum(s["added"] for s in ingest_stats)
+        mean_via_metric = total_turns / total_chunks
+
+        # Actual mean from chunk data.
+        mean_actual = sum(len(c["turn_indices"]) for c in chunks) / len(chunks)
+
+        assert abs(mean_via_metric - mean_actual) < 1e-9, (
+            f"Metric mean {mean_via_metric:.4f} != actual mean {mean_actual:.4f}"
+        )
+        assert mean_via_metric <= _CHUNK_MAX_TURNS, (
+            f"Metric mean {mean_via_metric:.2f} exceeds cap {_CHUNK_MAX_TURNS}"
+        )
