@@ -388,3 +388,51 @@ def test_http_a2a_sse_delivers_message(live_server):
     payloads = [json.loads(f) for f in frames_received]
     bodies = [p.get("body") for p in payloads]
     assert "sse smoke payload" in bodies
+
+
+def test_http_a2a_messages_fields_projection(live_server):
+    """GET /a2a/messages?fields= projects each message to the named keys."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "compact me", "thread": "fields-t"})
+
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=fields-t&fields=id,from,body"
+    )
+    assert status == 200
+    msgs = body["messages"]
+    assert len(msgs) == 1
+    assert set(msgs[0].keys()) == {"id", "from", "body"}
+    assert msgs[0]["body"] == "compact me"
+
+    # Unknown field names are ignored, never a 400.
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=fields-t&fields=body,nonexistent"
+    )
+    assert status == 200
+    assert set(body["messages"][0].keys()) == {"body"}
+
+
+def test_http_a2a_messages_ndjson_format(live_server):
+    """GET /a2a/messages?format=ndjson emits one JSON object per line."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "line one", "thread": "nd-t"})
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "line two", "thread": "nd-t"})
+
+    req = urllib.request.Request(
+        f"{live_server}/a2a/messages?thread=nd-t&format=ndjson&fields=body",
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("application/x-ndjson")
+        lines = resp.read().decode().strip().split("\n")
+    assert len(lines) == 2
+    parsed = [json.loads(line) for line in lines]
+    assert [p["body"] for p in parsed] == ["line one", "line two"]
+
+
+def test_http_a2a_messages_bad_format_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/messages?format=xml")
+    assert status == 400
+    assert "format" in body["error"]

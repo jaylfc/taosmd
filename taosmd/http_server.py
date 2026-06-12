@@ -65,7 +65,7 @@ Endpoints
 ``GET  /pending?agent=``                                   -> ``{"pending": [...]}``
 ``POST /pending/resolve``  ``{"id", "decision", "note"?}`` -> resolve result
 ``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?}`` -> send receipt
-``GET  /a2a/messages``     ``?thread=&since=&limit=``      -> ``{"messages": [...]}``
+``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line)
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
@@ -1044,6 +1044,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
+            fields_raw = (qs.get("fields") or [None])[0]
+            fmt = (qs.get("format") or ["json"])[0]
             try:
                 since = float(since_raw) if since_raw is not None else None
             except (TypeError, ValueError) as exc:
@@ -1052,9 +1054,31 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if fmt not in ("json", "ndjson"):
+                raise _BadRequest("'format' must be 'json' or 'ndjson'")
             messages = runner.run(
                 service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
             )
+            # Compact mode: ?fields=id,sender,body projects each message down
+            # to the named keys so token-frugal consumers (LLM agents) skip
+            # framing they never read. Unknown names are ignored, never a 400,
+            # so consumers stay forward-compatible across shape changes.
+            if fields_raw:
+                wanted = [f.strip() for f in fields_raw.split(",") if f.strip()]
+                if wanted:
+                    messages = [
+                        {k: m[k] for k in wanted if k in m} for m in messages
+                    ]
+            if fmt == "ndjson":
+                body = "".join(
+                    json.dumps(m, ensure_ascii=False) + "\n" for m in messages
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_stream(self, qs: dict) -> None:
