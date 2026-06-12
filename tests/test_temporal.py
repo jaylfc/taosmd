@@ -1,4 +1,4 @@
-"""Tests for taosmd.temporal — parser, extractor, hit-datetime, and stage."""
+"""Tests for taosmd.temporal: parser, extractor, hit-datetime, and stage."""
 
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ def test_parses_last_month():
 
 
 def test_returns_none_for_unparseable():
-    # "before the migration" — "before" requires a parseable inner expression
+    # "before the migration": "before" requires a parseable inner expression
     assert parse_temporal_expression("before the migration", REF) is None
     assert parse_temporal_expression("sometime", REF) is None
 
@@ -296,7 +296,7 @@ def test_extract_in_may_2023():
 
 
 def test_extract_bare_month_false_positive_guard():
-    # "did May approve the plan" — bare month name should NOT match
+    # "did May approve the plan": bare month name should NOT match
     result = extract_temporal_expression("did May approve the plan")
     assert result is None
 
@@ -321,7 +321,7 @@ def test_extract_returns_none_for_modal_may():
 
 
 # ---------------------------------------------------------------------------
-# apply_temporal_stage — boost mode
+# apply_temporal_stage: boost mode
 # ---------------------------------------------------------------------------
 
 
@@ -371,7 +371,7 @@ def test_boost_mode_no_timestamp_untouched():
 
 
 # ---------------------------------------------------------------------------
-# apply_temporal_stage — filter mode
+# apply_temporal_stage: filter mode
 # ---------------------------------------------------------------------------
 
 
@@ -408,7 +408,7 @@ def test_filter_mode_zero_survivors_returns_original():
 
 
 # ---------------------------------------------------------------------------
-# apply_temporal_stage — no-expression and unparseable-window cases
+# apply_temporal_stage: no-expression and unparseable-window cases
 # ---------------------------------------------------------------------------
 
 
@@ -427,7 +427,7 @@ def test_unparseable_window_returns_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# apply_temporal_stage — reference handling
+# apply_temporal_stage: reference handling
 # ---------------------------------------------------------------------------
 
 
@@ -515,3 +515,20 @@ def test_retrieve_temporal_filter_integration():
     assert "10" in source_ids   # May hit
     assert "11" in source_ids   # May hit
     assert "12" not in source_ids  # July hit filtered out
+
+
+def test_boost_mode_rrf_score_hits():
+    # Hits from an RRF merge carry "rrf_score" instead of "score"; boost
+    # must reorder those too.
+    hits = [
+        {"id": 2, "rrf_score": 0.8, "metadata": {"datetime": "2023-07-15T00:00:00"}},
+        {"id": 1, "rrf_score": 0.5, "metadata": {"datetime": "2023-05-10T00:00:00"}},
+    ]
+    result = apply_temporal_stage(
+        hits,
+        {"window": "in May 2023", "mode": "boost", "boost": 1.0},
+        "query",
+    )
+    assert result[0]["id"] == 1
+    assert result[0]["rrf_score"] == pytest.approx(1.0)
+    assert "score" not in result[0]

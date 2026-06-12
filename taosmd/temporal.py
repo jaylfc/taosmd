@@ -240,14 +240,14 @@ def parse_temporal_expression(
     if m:
         return _quarter_range(int(m.group(2)), int(m.group(1)))
 
-    # "before <expr>" — from datetime.min to inner.from
+    # "before <expr>": from datetime.min to inner.from
     m = re.fullmatch(r"before\s+(.+)", inp)
     if m:
         inner = parse_temporal_expression(m.group(1), ref)
         if inner:
             return datetime.min, inner[0]
 
-    # "after <expr>" — from inner.to to ref
+    # "after <expr>": from inner.to to ref
     m = re.fullmatch(r"after\s+(.+)", inp)
     if m:
         inner = parse_temporal_expression(m.group(1), ref)
@@ -530,17 +530,27 @@ def _apply_temporal_stage_inner(
             return hits
         return filtered
 
-    # Boost mode (default).
+    # Boost mode (default).  Hits carry "score" on most paths but only
+    # "rrf_score" after an RRF merge, so boost whichever is present.
+    def _score_key(hit: dict) -> str | None:
+        if "score" in hit:
+            return "score"
+        if "rrf_score" in hit:
+            return "rrf_score"
+        return None
+
     modified = list(hits)
     for hit in modified:
         dt = _resolve_hit_dt(hit)
         if dt is None:
             continue
         if from_dt <= dt <= to_dt:
-            current_score = hit.get("score", 0.0)
-            if "score" in hit:
-                hit["score"] = current_score * (1.0 + boost_factor)
+            key = _score_key(hit)
+            if key is not None:
+                hit[key] = hit[key] * (1.0 + boost_factor)
 
-    # Re-sort descending by score.
-    modified.sort(key=lambda h: h.get("score", 0.0), reverse=True)
+    # Re-sort descending by whichever score key each hit carries.
+    modified.sort(
+        key=lambda h: h.get("score", h.get("rrf_score", 0.0)), reverse=True
+    )
     return modified
