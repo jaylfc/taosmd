@@ -51,7 +51,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | N-007 | gemma4:12b generator A/B: 0.630/0.580 vs qwen3.5:9b 0.680 same config; not an upgrade | [4](#4-negative-results) | confirmed negative | bench host 20260611 gemma12b_redo verdicts |
 | E-001 | Surprisal: prior FLAT (dead); chunking +0.086 but CONFOUNDED (cap not enforced, per-chunk credit); corrected re-run in flight | [6](#6-ongoing-work-pre-registered) | unresolved | STATUS.md "bench/e1-surprisal finishing" |
 | E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | resolved -> F-009 | STATUS.md "bench/e2-claim-verification" |
-| E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | in flight | STATUS.md "all 1382 predictions matched" |
+| E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | methods limitation (judge unreliable on Ollama) | STATUS.md "all 1382 predictions matched" |
 | E-004 | pylate projected-space vs backbone comparison: answerai, colbertv2, LateOn, ColBERT-Zero | [6](#6-ongoing-work-pre-registered) | inconclusive (loader fault) | STATUS.md "feat/pylate-loader pushed, 221 tests green" |
 
 ---
@@ -90,7 +90,7 @@ For retrieval-only measurements the team uses **judge-free R@K**: the share of q
 
 - **LongMemEval-S.** 500 questions, standard test set. Single and multi-session. Benchmark for end-to-end answer quality with the full pipeline. Dataset: github.com/xiaowu0162/LongMemEval (ICLR 2025).
 - **LoCoMo-10.** 10 multi-session conversations, 1540 question-answer pairs across four categories: Single-hop, Temporal, Multi-hop, Open-domain. Conversations span 50+ sessions and 400-700 turns. A harder evaluation than LongMemEval-S: more categories, more QAs, and longer conversations. Benchmark harness: benchmarks/locomo_runner.py. Source: snap-research LoCoMo dataset.
-- **LoCoMo-Refined (subset-comparable).** The revised 1382-question set from the LoCoMo-Refined leaderboard, using the corrected answer key and the official qwen3:14b judge. A full run is in flight at time of writing (see E-003). Our current qwen3:14b column is on the original 1540-question set; it is judge-comparable to the Refined leaderboard but not set-comparable.
+- **LoCoMo-Refined (subset-comparable).** The revised 1382-question set from the LoCoMo-Refined leaderboard, using the corrected answer key and the official qwen3:14b judge. A full run was attempted but the official qwen3:14b judge proved unreliable under local Ollama (see E-003), so no refined-set number is reported. Our qwen3:14b column is on the original 1540-question set; it is judge-comparable to the Refined leaderboard but not set-comparable.
 
 ### 2.3 Metrics
 
@@ -167,7 +167,7 @@ Context for comparison: LoCoMo-Refined reports Mem0 at 48.91, EverMemOS at 58.25
 
 The late-interaction levers gain more under qwen3:14b (+0.045 and +0.055 over baseline) than under the lenient gemma judge (+0.037 and +0.042). The ordering matches every other judge: dense, then MiniLM MaxSim, then answerai.
 
-Caveat: these scores are on the original 1540-question set. The LoCoMo-Refined board uses the revised 1382-question set with a corrected answer key. These numbers are judge-comparable to competitors but not set-comparable. A full LoCoMo-Refined run is in flight (E-003).
+Caveat: these scores are on the original 1540-question set. The LoCoMo-Refined board uses the revised 1382-question set with a corrected answer key. These numbers are judge-comparable to competitors but not set-comparable. A full LoCoMo-Refined run was attempted; see E-003 for why no refined-set number is reported.
 
 ### 3.4 CPU-tier retrieval-only latency probe
 
@@ -358,11 +358,9 @@ Result (2026-06-11): RESOLVED, recorded as finding F-009. The PARTIAL plus UNSUP
 
 **E-003. LoCoMo-Refined full run.**
 
-In flight at time of writing. All 1382 predictions have been matched. The run uses the leader recipe with qwen3.5:9b on the revised 1382-question set and the official qwen3:14b judge pointed at local Ollama.
+ATTEMPTED, RESOLVED AS A METHODS LIMITATION (2026-06-11/12). We ran our leader recipe against the refined 1382-question set (all predictions generated and matched) and attempted to score them with the benchmark's official judge, qwen3:14b, on local Ollama. The judge stage could not be made reliable: across five mitigations (a configurable client timeout, the Qwen3 /no_think soft-switch since Ollama ignores the harness's vLLM-style enable_thinking flag, a max-token cap, terminal JSON-only output enforcement, and tolerant per-question scoring) qwen3:14b kept returning prose instead of the required JSON object on a large fraction of questions, and crucially those failures concentrated on TEMPORAL questions, the category the refined judge is strictest on. Tolerant scoring (count an unjudgeable response as wrong) would therefore deflate the score non-representatively, by judge mechanics rather than by our system's quality, so we do not report a number: a temporally-biased lower bound would mislead more than it informs.
 
-The result will be recorded verbatim whatever it is. For context, the LoCoMo-Refined published competitor board under qwen3:14b: Mem0 48.91, EverMemOS 58.25, MemPalace 58.68, MemOS 63.60, MemoraX 82.65.
-
-Note: the CC BY-NC license on the LoCoMo-Refined dataset means we publish scores but do not vendor the dataset into this repo.
+The honest takeaway is itself a finding: the official qwen3:14b judge is not reliably steerable to clean structured output under local Ollama for these reasoning-heavy prompts. The closest comparable we can stand behind is the qwen3:14b community-judge column on the ORIGINAL 1540-question set (F-005: dense 0.487, MiniLM MaxSim 0.532, answerai 0.542), which uses the same judge model but our original questions, not the revised refined set, so it is judge-comparable to the refined board's model choice but not set-comparable. The five harness fixes are a candidate upstream contribution to the LoCoMo-Refined project (configurable timeout/retries and an Ollama-compatible thinking-disable).
 
 **E-004. pylate projected-space vs backbone comparison.**
 
@@ -386,4 +384,5 @@ This log is append-only. History is never rewritten.
 |---|---|---|
 | 2026-06-11 | 1 | First edition. Sections 0-7 drafted. Index rows F-001 through F-008, N-001 through N-006, E-001 through E-004. All numbers sourced from docs/benchmarks.md, CHANGELOG.md, and STATUS.md. |
 | 2026-06-11 | 1.1 | Added N-007 (gemma4:12b generator A/B, confirmed negative) with its index row. E-003 noted as still in flight after a judge-stage client-timeout crash on the harness side; a timeout-patched judge-only rerun is queued. |
+| 2026-06-12 | 1.3 | E-003 (LoCoMo-Refined full run) resolved as a methods limitation: the official qwen3:14b judge could not be made to emit reliable JSON under local Ollama across five mitigations, with failures concentrated on temporal questions, so no number is reported (a temporally-biased lower bound would mislead). The qwen3:14b column on the original 1540 set (F-005) is the closest comparable. |
 | 2026-06-11 | 1.2 | E-002 resolved to finding F-009 (extraction-hallucination rate 18.8 percent, cross-family). E-001 recorded honestly: prior flat, chunking result confounded by an unenforced size cap and per-chunk evidence credit, corrected re-run in flight, unresolved. E-004 marked inconclusive after the pylate projected path scored 0.050 vs 0.760 backbone, read as a loader fault. |

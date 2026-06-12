@@ -148,6 +148,8 @@ Two pre-registered experiments toward the next-generation engine, recorded with 
 
 **Surprisal retrieval lever (E-001).** Judge-free R@K on subset-200. The surprisal PRIOR was flat (+0.0000 at weights 0.25 / 0.5 / 1.0 over a 0.641 baseline); that path is dead. The surprise-boundary CHUNKING variant reported +0.0859, but the result is confounded and not claimed: the chunker produced a 22.54-turn mean against a stated 6-turn cap (the cap was not enforced) and credited evidence per chunk rather than per turn. A corrected re-run (cap enforced, per-turn credit) is in flight on the CPU VPS; only its numbers will count.
 
+**LoCoMo-Refined full run (E-003).** Attempted, no number reported. The official qwen3:14b judge could not be steered to reliable JSON output under local Ollama across five mitigations (timeout config, /no_think since Ollama ignores the harness enable_thinking flag, token cap, JSON-only enforcement, tolerant scoring), and the failures concentrated on temporal questions, so any tolerant-scored result would be deflated by judge mechanics rather than system quality. The qwen3:14b column above (original 1540 set) is the closest comparable.
+
 **pylate projected space (E-004).** Inconclusive on the first attempt: answerai via the pylate projected path scored 0.050 on subset-200 against 0.760 for the same model's backbone, read as a loader fault rather than a real result. Held until root-caused.
 
 ### Leaderboard (legacy external `qwen3:4b` judge, same dataset + same prompt)
