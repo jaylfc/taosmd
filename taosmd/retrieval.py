@@ -677,6 +677,7 @@ async def retrieve(
     group_key: str | None = None,
     project: str | None = None,
     search_agents: list[str] | None = None,
+    temporal: dict | None = None,
 ) -> list[dict]:
     """Retrieve relevant results from available memory sources.
 
@@ -739,6 +740,37 @@ async def retrieve(
             same group as their host hit (e.g. ``"session"``). When ``None``
             (default), neighbours can cross group boundaries, matching the
             LoCoMo benchmark's behaviour where ``turn_idx`` is global.
+        temporal: Optional dict enabling natural-language date-range filtering
+            or score boosting as a retrieval post-stage.  Default ``None``
+            (off).
+
+            When supplied it must be a dict with the following keys:
+
+            * ``window`` (str, optional): explicit temporal expression, e.g.
+              ``"in May 2023"`` or ``"last week"``.  Takes precedence over
+              auto-scan.
+            * ``auto`` (bool, default False): when True and no ``window`` is
+              given, scan the query for an embedded expression automatically.
+            * ``mode`` (str, default ``"boost"``): ``"boost"`` multiplies
+              in-range hit scores by ``(1 + boost)`` and re-sorts; ``"filter"``
+              drops out-of-range hits.
+            * ``boost`` (float, default 0.25): boost multiplier (boost mode
+              only).
+            * ``reference``: reference "now" for relative expressions such as
+              ``"last month"``.  Accepts epoch float, ISO string, LoCoMo
+              conversation format (``"8:56 pm on 20 July, 2023"``), or a
+              datetime instance.  Defaults to the real clock.
+            * ``datetime_keys`` (list[str], default ``["datetime",
+              "created_at"]``): metadata keys checked in order per hit for
+              its timestamp.
+
+            Both modes are fail-open: hits with no parseable timestamp are
+            kept unchanged, and if filtering would leave zero hits the
+            original list is returned intact.
+
+            **Default is off**: full-scale validation on LoCoMo-1540 is
+            still pending.  Enabling this without benchmarking on your data
+            is discouraged.
 
     Returns:
         List of normalised result dicts, sorted by relevance, length <= limit.
@@ -789,6 +821,10 @@ async def retrieve(
         if verify and is_task_enabled(agent_name, "verification"):
             results = await _apply_verification(query, results, agent_name)
 
+        if temporal:
+            from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
+            results = apply_temporal_stage(results, temporal, query, logger=logger)
+
         results = results[:limit]
         if adjacent_neighbors > 0:
             results = await _attach_neighbors(
@@ -818,6 +854,10 @@ async def retrieve(
             merged = _rrf_merge([results, secondary_results])
             results = _deduplicate(merged)
 
+        if temporal:
+            from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
+            results = apply_temporal_stage(results, temporal, query, logger=logger)
+
         results = results[:limit]
         if adjacent_neighbors > 0:
             results = await _attach_neighbors(
@@ -838,6 +878,10 @@ async def retrieve(
             first_name, first_src = next(iter(sources.items()))
             results = await _query_source(first_name, first_src, query, fetch_limit,
                                           fusion=fusion, candidate_limit=candidate_top_k)
+
+        if temporal:
+            from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
+            results = apply_temporal_stage(results, temporal, query, logger=logger)
 
         results = results[:limit]
         if adjacent_neighbors > 0:
@@ -875,6 +919,10 @@ async def retrieve(
 
         if llm_reranker is not None:
             results = await _apply_llm_rerank(query, results, llm_reranker, limit)
+
+        if temporal:
+            from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
+            results = apply_temporal_stage(results, temporal, query, logger=logger)
 
         results = results[:limit]
         if adjacent_neighbors > 0:
