@@ -713,11 +713,21 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             verified_project = claims.get("project_id")
             if verified_project is not None:
                 project = verified_project
-            if _grants_verifier is not None and verified_project is not None:
+            # Token proves identity; a grant proves permission. Any verified
+            # token, project-bound or global, must hold an active grant when
+            # the grants verifier is configured. Tokenless requests stay
+            # unchanged (no-lockout). Caught by the #744 e2e: the previous
+            # gate only fired when the token carried a project_id claim, so
+            # a grant-less GLOBAL token could still write.
+            if _grants_verifier is not None:
                 sub = claims.get("sub", "")
                 try:
                     if not _grants_verifier.has_grant(sub, project_id=verified_project):
-                        self._send_json(403, {"error": f"registry auth: no active grant for ({sub!r}, project {verified_project!r})"})
+                        scope_desc = (
+                            f"({sub!r}, project {verified_project!r})"
+                            if verified_project is not None else repr(sub)
+                        )
+                        self._send_json(403, {"error": f"registry auth: no active grant for {scope_desc}"})
                         return None, False
                 except _ra.AuthError as exc:
                     self._send_json(403, {"error": f"registry auth: {exc}"})

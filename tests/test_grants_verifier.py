@@ -200,3 +200,26 @@ def test_parse_grants_response_tolerates_missing_project_id():
     body = '[{"canonical_id": "agent-b"}]'
     grants = parse_grants_response(body)
     assert grants[0].get("project_id") is None
+
+
+def test_has_grant_parses_iso_expires_at_past():
+    """ISO-8601 expiry strings (the registry's actual feed format) parse and
+    expire correctly instead of being dropped as unparseable."""
+    from taosmd.registry_auth import GrantsVerifier
+    grants = [{"canonical_id": "a", "expires_at": "2020-01-01T00:00:00+00:00"}]
+    gv = GrantsVerifier(grants_loader=lambda: grants)
+    assert gv.has_grant("a") is False
+
+
+def test_has_grant_parses_iso_expires_at_future():
+    from taosmd.registry_auth import GrantsVerifier
+    grants = [{"canonical_id": "a", "expires_at": "2099-01-01T00:00:00Z"}]
+    gv = GrantsVerifier(grants_loader=lambda: grants)
+    assert gv.has_grant("a") is True
+
+
+def test_parse_expires_at_naive_iso_read_as_utc():
+    from taosmd.registry_auth import _parse_expires_at
+    assert _parse_expires_at("2020-01-01T00:00:00") == 1577836800.0
+    assert _parse_expires_at(1234.5) == 1234.5
+    assert _parse_expires_at("not a date") is None

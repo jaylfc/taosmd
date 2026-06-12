@@ -356,3 +356,24 @@ def test_token_binding_allows_delegated_shelf_writes(project_server):
     )
     assert status == 200
     assert body["project"] == "proj-a"
+
+
+def test_tokened_ingest_without_project_claim_requires_grant(project_server):
+    """A verified GLOBAL token (no project_id claim) whose sub holds no grant
+    must be refused on data endpoints. Caught by the #744 e2e: the gate
+    previously only fired when the token carried a project_id claim."""
+    tok = _make_token("agent-ungranted", iss=registry_auth.REGISTRY_ISS)
+    status, body = _post_json(project_server, "/ingest",
+                              {"text": "global token, no grant", "agent": "agent-ungranted"},
+                              token=tok)
+    assert status == 403
+    assert "no active grant" in body["error"]
+
+
+def test_tokened_ingest_global_token_with_global_grant_passes(project_server):
+    """A global token whose sub holds a global grant still ingests fine."""
+    tok = _make_token("agent-global", iss=registry_auth.REGISTRY_ISS)
+    status, body = _post_json(project_server, "/ingest",
+                              {"text": "global token, global grant", "agent": "agent-global"},
+                              token=tok)
+    assert status == 200, body

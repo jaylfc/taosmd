@@ -198,6 +198,33 @@ def _http_get(url: str, timeout: float = 5.0, token: str | None = None) -> str:
         return resp.read().decode("utf-8")
 
 
+def _parse_expires_at(value) -> float | None:
+    """Normalise a grant ``expires_at`` to epoch seconds.
+
+    Accepts epoch ints/floats (and numeric strings) plus ISO-8601 strings,
+    which is what the taOS registry feed actually sends (e.g.
+    ``2026-06-12T00:00:00+00:00``). Naive ISO datetimes are read as UTC.
+    Returns None when the value cannot be parsed (caller fails closed).
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        from datetime import datetime, timezone  # noqa: PLC0415
+        s = value.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    return None
+
+
 def parse_grants_response(body: str) -> list[dict]:
     """Extract grant records from a registry grants-feed response body.
 
@@ -273,13 +300,11 @@ class GrantsVerifier:
                 continue
             exp = g.get("expires_at")
             if exp is not None:
-                try:
-                    exp = float(exp)
-                except (TypeError, ValueError):
-                    # Un-parseable expiry (e.g. an ISO-8601 string before we
-                    # support it): treat the grant as expired (fail closed)
-                    # rather than raising TypeError into a 500 on every send.
-                    logger.warning("grant for %r has unparseable expires_at %r; treating as expired", canonical_id, exp)
+                exp = _parse_expires_at(exp)
+                if exp is None:
+                    # Un-parseable expiry: treat the grant as expired (fail
+                    # closed) rather than raising TypeError into a 500.
+                    logger.warning("grant for %r has unparseable expires_at %r; treating as expired", canonical_id, g.get("expires_at"))
                     continue
                 if exp < now:
                     continue
