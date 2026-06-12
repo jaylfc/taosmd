@@ -53,6 +53,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | resolved -> F-009 | STATUS.md "bench/e2-claim-verification" |
 | E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | methods limitation (judge unreliable on Ollama) | STATUS.md "all 1382 predictions matched" |
 | E-004 | pylate projected-space vs backbone comparison: answerai, colbertv2, LateOn, ColBERT-Zero | [6](#6-ongoing-work-pre-registered) | inconclusive (loader fault) | STATUS.md "feat/pylate-loader pushed, 221 tests green" |
+| E-005 | Temporal date-range lever (query expression to date filter/boost): applicability scan then R@K on the applicable subset | [6](#6-ongoing-work-pre-registered) | pre-registered | branch feat/temporal-lever |
 
 ---
 
@@ -374,6 +375,18 @@ Models to compare: answerai-colbert-small-v1, colbertv2.0 (needs pylate-style lo
 
 Status: ready for the next GPU window.
 
+**E-005. Temporal date-range lever.**
+
+Hypothesis: when a query contains a natural-language temporal expression ("last week", "in May 2023", "on 8 May, 2023"), parsing it into a date range and filtering or boosting candidates whose stored timestamps fall inside that range improves temporal-category retrieval. The lever is a deterministic parser, no model in the loop, so it is nearly free at query time.
+
+Origin, stated honestly: this is a port of the temporal parser from an earlier internal project (engram), which scored 94.6 percent on LoCoMo temporal in one configuration. That number is single-conversation, small-n, and judged by a model protocol we do not use, so it is treated as motivation only, not evidence. Implementation is on branch feat/temporal-lever, default off.
+
+Design, two stages. Stage 1, applicability scan: run the expression extractor over all 1540 LoCoMo questions and count how many contain a parseable date-range expression, overall and within the temporal category. This is the honest first question, because most LoCoMo temporal questions ASK for a date ("When did X happen?") rather than constrain by one, and a lever that fires on too few questions cannot move the category no matter how good it is. Stage 2, only if applicability clears the floor: subset-200 judge-free R@K on the applicable questions, lever off (baseline) vs boost mode (0.25) vs filter mode, with the reference time set to each conversation's final session date so relative expressions resolve against the conversation, not the wall clock.
+
+Kill criterion (verbatim): "if applicability is at least 10 percent of temporal-category questions, the lever is killed for LoCoMo unless boost or filter beats baseline R@K on the applicable subset by more than 0.02; if applicability is under 10 percent, LoCoMo is recorded as unable to measure this lever, no LoCoMo claim is made in either direction, and the lever ships default-off as a product feature with its applicability number documented."
+
+Status: implementation complete on feat/temporal-lever (under review), applicability scan not yet run.
+
 ---
 
 ## 7. Revision Log
@@ -386,3 +399,4 @@ This log is append-only. History is never rewritten.
 | 2026-06-11 | 1.1 | Added N-007 (gemma4:12b generator A/B, confirmed negative) with its index row. E-003 noted as still in flight after a judge-stage client-timeout crash on the harness side; a timeout-patched judge-only rerun is queued. |
 | 2026-06-12 | 1.3 | E-003 (LoCoMo-Refined full run) resolved as a methods limitation: the official qwen3:14b judge could not be made to emit reliable JSON under local Ollama across five mitigations, with failures concentrated on temporal questions, so no number is reported (a temporally-biased lower bound would mislead). The qwen3:14b column on the original 1540 set (F-005) is the closest comparable. |
 | 2026-06-11 | 1.2 | E-002 resolved to finding F-009 (extraction-hallucination rate 18.8 percent, cross-family). E-001 recorded honestly: prior flat, chunking result confounded by an unenforced size cap and per-chunk evidence credit, corrected re-run in flight, unresolved. E-004 marked inconclusive after the pylate projected path scored 0.050 vs 0.760 backbone, read as a loader fault. |
+| 2026-06-12 | 1.4 | Pre-registered E-005 (temporal date-range lever, ported from the engram project) with a two-stage design: applicability scan first, then R@K on the applicable subset only if the lever can fire often enough to matter. Kill criterion written before any run. Index row added. |
