@@ -10,6 +10,32 @@ time; conversations themselves remain sequential so vmem instances do not
 fight over the tempdir / embedding model load. Concurrency requires the
 Ollama server to be configured with ``OLLAMA_NUM_PARALLEL`` at least as
 large as ``--concurrency`` or requests will serialise on the server side.
+
+Pause and resume
+----------------
+Three flags support checkpointing at conversation granularity:
+
+``--ckpt``
+    Enable sidecar checkpointing.  After each conversation's QAs are
+    gathered the runner appends a record to ``<out>.ckpt.jsonl`` (fsync'd
+    so a kill cannot lose an acknowledged conversation).  A stable config
+    hash in the header guards against resuming with different settings.
+
+``--resume``
+    Implies ``--ckpt``.  If the sidecar exists, load it, verify the
+    config hash (exit 2 on mismatch), and skip conversations already
+    recorded without re-ingesting them.  If no sidecar is present, run
+    fresh.
+
+``--pause-flag PATH``
+    Before each conversation the runner checks whether this file exists.
+    If it does it prints a resume hint and exits with code 3 (paused).
+    A pause waits for the current conversation's QAs to finish before
+    checking; it never interrupts mid-gather.  Default path:
+    ``/tmp/taosmd-bench-pause``.
+
+Exit codes: 3 = paused cleanly, 2 = checkpoint config mismatch or other
+startup error, 1 = all QAs failed, 0 = success.
 """
 
 from __future__ import annotations
@@ -30,10 +56,18 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from taosmd.vector_memory import VectorMemory  # noqa: E402
 from taosmd.retrieval import retrieve  # noqa: E402
 from taosmd.llm_rerank import llm_listwise_rerank  # noqa: E402
+from bench_checkpoint import (  # noqa: E402
+    append_conversation,
+    config_hash,
+    load_checkpoint,
+    pause_requested,
+    write_header,
+)
 
 CATEGORY_NAMES = {
     1: "Single-hop (1)",
@@ -1229,9 +1263,98 @@ async def run(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    # --resume implies --ckpt.
+    use_ckpt = args.ckpt or args.resume
+
+    # Resolve output path early so we can derive the sidecar path.
+    if args.out:
+        out_path = Path(args.out)
+    else:
+        _ts_placeholder = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        _tag = f"_{args.run_id}" if args.run_id else ""
+        out_path = (
+            Path(os.path.dirname(os.path.abspath(__file__)))
+            / "results"
+            / f"locomo_{_ts_placeholder}{_tag}.json"
+        )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sidecar_path = str(out_path) + ".ckpt.jsonl"
+
+    # Build the run-defining config dict up-front for hashing.
+    # Excludes timestamp, git_sha, run_id, failed_qa — those are volatile or
+    # unknown at start time.  The final meta dict is assembled later with the
+    # same keys plus these excluded fields.
+    meta_for_hash: dict = {
+        "model": args.model,
+        "top_k": args.top_k,
+        "retrieval_top_k": args.retrieval_top_k if args.retrieval_top_k is not None else args.top_k,
+        "llm_backend": args.llm_backend,
+        "llm_server_url": args.llm_server_url if args.llm_backend == "llama-server" else "",
+        "expansion_model": args.expansion_model,
+        "context_format": args.context_format,
+        "adjacent_turns": args.adjacent_turns,
+        "llm_query_expansion": args.llm_query_expansion,
+        "reranker": args.reranker,
+        "multihop_decompose": args.multihop_decompose,
+        "full_context": args.full_context,
+        "thinking_mode": args.thinking_mode,
+        "temporal_boost": args.temporal_boost,
+        "fusion": args.fusion,
+        "multi_level_retrieval": args.multi_level_retrieval,
+        "hyde": args.hyde,
+        "no_think_prefix": args.no_think_prefix,
+        "few_shot": args.few_shot,
+        "emem_edu": args.emem_edu,
+        "emem_edu_extract_model": args.emem_edu_extract_model if args.emem_edu else "",
+        "emem_edu_filter": (args.emem_edu and not args.emem_edu_no_filter),
+        "emem_edu_filter_model": (
+            (args.emem_edu_filter_model or args.emem_edu_extract_model)
+            if args.emem_edu and not args.emem_edu_no_filter else ""
+        ),
+        "strategy": args.strategy,
+        "categories_included": sorted(
+            {1, 2, 3, 4} | ({5} if args.include_adversarial else set())
+            if args.category == "all"
+            else {int(args.category)}
+        ),
+        "conversations": min(args.conversations, len(conversations)),
+        "dataset": str(dataset_path),
+        "concurrency": max(1, int(args.concurrency)),
+    }
+    cfg_hash = config_hash(meta_for_hash)
+
     results: list[dict] = []
     total_seen = 0
     failed_qa = 0
+    done_conv_ids: set[str] = set()
+
+    # On --resume, try to load the sidecar.
+    if args.resume:
+        if os.path.exists(sidecar_path):
+            try:
+                done_conv_ids, loaded_rows = load_checkpoint(sidecar_path, cfg_hash)
+            except ValueError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 2
+            results.extend(loaded_rows)
+            total_seen = len(loaded_rows)
+            print(
+                f"Resumed from {sidecar_path}: "
+                f"{len(done_conv_ids)} conversations, {total_seen} rows loaded.",
+                flush=True,
+            )
+        else:
+            print(
+                f"No sidecar found at {sidecar_path}: starting fresh run.",
+                flush=True,
+            )
+            # Fall through to write_header below.
+
+    # Write the sidecar header when starting fresh (--ckpt without a loaded
+    # sidecar, or --resume with no existing sidecar).
+    if use_ckpt and not done_conv_ids:
+        write_header(sidecar_path, cfg_hash, str(dataset_path))
+
     concurrency = max(1, int(args.concurrency))
     sem = asyncio.Semaphore(concurrency)
     progress_lock = asyncio.Lock()
@@ -1296,6 +1419,23 @@ async def run(args: argparse.Namespace) -> int:
     async with httpx.AsyncClient(timeout=args.timeout) as client:
         for conv in conversations:
             conv_id = conv.get("sample_id", "unknown")
+
+            # Skip conversations already recorded in the sidecar.
+            if conv_id in done_conv_ids:
+                print(f"[{conv_id}] skipped (already checkpointed)", flush=True)
+                continue
+
+            # Check pause flag before doing any expensive work for this conversation.
+            if use_ckpt and pause_requested(args.pause_flag):
+                n_convs = len(done_conv_ids)
+                n_rows = len(results)
+                print(
+                    f"PAUSED before {conv_id}: {n_convs} conversations / {n_rows} rows "
+                    f"checkpointed. Resume with --resume (same --out and config). "
+                    f"Remove {args.pause_flag} first."
+                )
+                return 3
+
             tmp = tempfile.mkdtemp(prefix=f"locomo_{conv_id}_")
             vmem = VectorMemory(
                 db_path=os.path.join(tmp, "vmem.db"),
@@ -1348,6 +1488,7 @@ async def run(args: argparse.Namespace) -> int:
                     break
                 eligible.append(qa)
 
+            conv_rows: list[dict] = []
             if eligible:
                 tasks = [_guarded(qa, conv_id, vmem, client, turn_index) for qa in eligible]
                 gathered = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1355,61 +1496,66 @@ async def run(args: argparse.Namespace) -> int:
                     if isinstance(outcome, Exception) or outcome is None:
                         continue
                     results.append(outcome)
+                    conv_rows.append(outcome)
             await vmem.close()
+
+            # Append this conversation to the sidecar after vmem is closed.
+            if use_ckpt:
+                append_conversation(sidecar_path, conv_id, conv_rows)
+                done_conv_ids.add(conv_id)
+
             if args.limit and total_seen >= args.limit:
                 break
 
     by_category, overall = _aggregate(results)
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    # Assemble final meta using the already-computed meta_for_hash base plus
+    # volatile fields (timestamp, git_sha) and run-time counts.  Shape is
+    # identical to before checkpointing was added.
     meta = {
         "run_id": args.run_id or "",
         "timestamp": timestamp,
-        "model": args.model,
-        "top_k": args.top_k,
-        "retrieval_top_k": retrieval_top_k,
-        "llm_backend": args.llm_backend,
-        "llm_server_url": args.llm_server_url if args.llm_backend == "llama-server" else "",
-        "expansion_model": args.expansion_model,
-        "context_format": args.context_format,
-        "adjacent_turns": args.adjacent_turns,
-        "llm_query_expansion": args.llm_query_expansion,
-        "reranker": args.reranker,
-        "multihop_decompose": args.multihop_decompose,
-        "full_context": args.full_context,
-        "thinking_mode": args.thinking_mode,
-        "temporal_boost": args.temporal_boost,
-        "fusion": args.fusion,
-        "multi_level_retrieval": args.multi_level_retrieval,
-        "hyde": args.hyde,
-        "no_think_prefix": args.no_think_prefix,
-        "few_shot": args.few_shot,
-        "emem_edu": args.emem_edu,
-        "emem_edu_extract_model": args.emem_edu_extract_model if args.emem_edu else "",
-        "emem_edu_filter": (args.emem_edu and not args.emem_edu_no_filter),
-        "emem_edu_filter_model": (
-            (args.emem_edu_filter_model or args.emem_edu_extract_model)
-            if args.emem_edu and not args.emem_edu_no_filter else ""
-        ),
-        "strategy": args.strategy,
+        "model": meta_for_hash["model"],
+        "top_k": meta_for_hash["top_k"],
+        "retrieval_top_k": meta_for_hash["retrieval_top_k"],
+        "llm_backend": meta_for_hash["llm_backend"],
+        "llm_server_url": meta_for_hash["llm_server_url"],
+        "expansion_model": meta_for_hash["expansion_model"],
+        "context_format": meta_for_hash["context_format"],
+        "adjacent_turns": meta_for_hash["adjacent_turns"],
+        "llm_query_expansion": meta_for_hash["llm_query_expansion"],
+        "reranker": meta_for_hash["reranker"],
+        "multihop_decompose": meta_for_hash["multihop_decompose"],
+        "full_context": meta_for_hash["full_context"],
+        "thinking_mode": meta_for_hash["thinking_mode"],
+        "temporal_boost": meta_for_hash["temporal_boost"],
+        "fusion": meta_for_hash["fusion"],
+        "multi_level_retrieval": meta_for_hash["multi_level_retrieval"],
+        "hyde": meta_for_hash["hyde"],
+        "no_think_prefix": meta_for_hash["no_think_prefix"],
+        "few_shot": meta_for_hash["few_shot"],
+        "emem_edu": meta_for_hash["emem_edu"],
+        "emem_edu_extract_model": meta_for_hash["emem_edu_extract_model"],
+        "emem_edu_filter": meta_for_hash["emem_edu_filter"],
+        "emem_edu_filter_model": meta_for_hash["emem_edu_filter_model"],
+        "strategy": meta_for_hash["strategy"],
         "total_qa": len(results),
-        "categories_included": sorted(include_cats),
-        "conversations": min(args.conversations, len(conversations)),
+        "categories_included": meta_for_hash["categories_included"],
+        "conversations": meta_for_hash["conversations"],
         "git_sha": _git_sha(),
-        "dataset": str(dataset_path),
-        "concurrency": concurrency,
+        "dataset": meta_for_hash["dataset"],
+        "concurrency": meta_for_hash["concurrency"],
         "failed_qa": failed_qa,
     }
 
-    if args.out:
-        out_path = Path(args.out)
-    else:
-        tag = f"_{args.run_id}" if args.run_id else ""
-        out_path = Path(os.path.dirname(os.path.abspath(__file__))) / "results" / f"locomo_{timestamp}{tag}.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(
         {"meta": meta, "by_category": by_category, "overall": overall, "results": results},
         indent=2,
     ))
+
+    # Sidecar served its purpose: remove it to avoid confusion on next run.
+    if use_ckpt and os.path.exists(sidecar_path):
+        os.unlink(sidecar_path)
 
     _print_summary(meta, by_category, overall)
     print(f"\nwrote {out_path}")
@@ -1444,7 +1590,8 @@ _DEFAULT_ONNX = os.environ.get(
 )
 
 
-def _parse_args() -> argparse.Namespace:
+def _build_parser() -> argparse.ArgumentParser:
+    """Return the argument parser (split out so tests can introspect flags)."""
     p = argparse.ArgumentParser(description="LoCoMo benchmark runner for taosmd")
     p.add_argument("--dataset", default=_DEFAULT_DATASET,
                    help=f"LoCoMo dataset JSON. Env: LOCOMO_DATASET (default: {_DEFAULT_DATASET})")
@@ -1693,7 +1840,37 @@ def _parse_args() -> argparse.Namespace:
             "--embed-mode local. Example: answerdotai/answerai-colbert-small-v1"
         ),
     )
-    return p.parse_args()
+    # Pause / resume checkpointing flags.
+    p.add_argument(
+        "--ckpt", action="store_true", default=False,
+        help=(
+            "Enable conversation-level sidecar checkpointing. After each "
+            "conversation's QAs are gathered the runner appends a record to "
+            "<out>.ckpt.jsonl (fsync'd). A config hash in the header prevents "
+            "silently resuming with different settings."
+        ),
+    )
+    p.add_argument(
+        "--resume", action="store_true", default=False,
+        help=(
+            "Implies --ckpt. Load the sidecar if present, verify the config "
+            "hash (exit 2 on mismatch), and skip already-completed conversations "
+            "without re-ingesting them. If no sidecar exists, runs fresh."
+        ),
+    )
+    p.add_argument(
+        "--pause-flag", default="/tmp/taosmd-bench-pause", dest="pause_flag",
+        help=(
+            "Path to a flag file that triggers a clean pause between conversations. "
+            "When this file exists the runner prints a resume hint and exits 3. "
+            "Default: /tmp/taosmd-bench-pause"
+        ),
+    )
+    return p
+
+
+def _parse_args() -> argparse.Namespace:
+    return _build_parser().parse_args()
 
 
 if __name__ == "__main__":
