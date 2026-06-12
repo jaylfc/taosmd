@@ -517,9 +517,18 @@ class VectorMemory:
 
         When hybrid=False, fusion mode is ignored and pure semantic is used.
         """
-        query_emb = await self.embed(query, task="search_query")
-        if not query_emb:
-            return []
+        # In late-interaction (ColBERT MaxSim) mode the query is embedded
+        # as a token matrix by embed_tokens() further below; calling embed()
+        # here is both wrong (it returns [] when only a pylate model is loaded
+        # because _local_model is None) and unnecessary (query_emb is only
+        # used for binary_quant and cosine paths, which are mutually exclusive
+        # with late_interaction). Skip the gate for that case.
+        if not self.late_interaction:
+            query_emb = await self.embed(query, task="search_query")
+            if not query_emb:
+                return []
+        else:
+            query_emb = []  # unused in late_interaction path; assigned for clarity
 
         # Extract meaningful keywords from query (3+ chars, not stop words)
         stop = {"the", "what", "how", "did", "does", "was", "were", "are", "is",

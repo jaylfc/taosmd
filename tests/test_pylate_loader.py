@@ -123,18 +123,23 @@ def test_pylate_path_stores_correct_blob_dim(tmp_path, monkeypatch):
 
 
 def test_pylate_path_search_returns_hits(tmp_path, monkeypatch):
-    """search() works end-to-end with pylate token vectors."""
+    """search() works end-to-end with pylate token vectors.
+
+    Regression: in the original pylate loader, search() called embed() first
+    and returned [] immediately because _local_model is None in pylate mode
+    (only _pylate_model is set). This test must NOT patch embed() so that
+    the fix -- bypassing the embed() gate when late_interaction=True -- is
+    actually exercised.
+    """
     vmem = _make_pylate_store(tmp_path, monkeypatch)
     try:
         asyncio.run(vmem.add("alpha beta gamma"))
         asyncio.run(vmem.add("delta epsilon zeta"))
-        # Also patch embed() so search() has a non-empty query vector.
-        async def _fake_embed(text: str, task: str = "search_document") -> list[float]:
-            return [0.1] * _FAKE_DIM
-
-        vmem.embed = _fake_embed  # type: ignore[assignment]
+        # No embed() patch: the gate bypass in search() must handle pylate mode.
         hits = asyncio.run(vmem.search("alpha", limit=2, hybrid=False, fusion="none"))
-        assert len(hits) == 2
+        assert len(hits) == 2, (
+            "search() returned no results in pylate mode — embed() gate bug present"
+        )
         for h in hits:
             assert "similarity" in h
             assert 0.0 <= h["similarity"] <= 1.0 + 1e-6
