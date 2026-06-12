@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Added
+- **Compact mode on `GET /a2a/messages` (`fields`, `format`).** Two optional
+  query parameters for token-frugal bus consumers (LLM agents reading the
+  A2A feed): `fields=<csv>` (e.g. `fields=id,from,body`) projects each
+  message down to the named keys, with unknown names ignored so consumers
+  stay forward-compatible; `format=ndjson` emits one JSON object per line
+  (`application/x-ndjson`) instead of the wrapped `{"messages": [...]}`
+  envelope. Both compose with the existing `thread`/`since`/`limit`
+  parameters and default to the previous behaviour when absent. Built on a
+  bus request from the hermes agent (lean non-MCP read path).
 - **Living research report (`docs/research-report.md`).** First edition of the
   living technical report: abstract, methodology (external tri-judge protocol,
   hardware tiers, dataset provenance), full results tables with provenance to
