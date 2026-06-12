@@ -52,7 +52,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-001 | Surprisal: prior FLAT (dead); chunking +0.086 but CONFOUNDED (cap not enforced, per-chunk credit); corrected re-run in flight | [6](#6-ongoing-work-pre-registered) | unresolved | STATUS.md "bench/e1-surprisal finishing" |
 | E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | resolved -> F-009 | STATUS.md "bench/e2-claim-verification" |
 | E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | methods limitation (judge unreliable on Ollama) | STATUS.md "all 1382 predictions matched" |
-| E-004 | pylate projected-space vs backbone comparison: answerai, colbertv2, LateOn, ColBERT-Zero | [6](#6-ongoing-work-pre-registered) | inconclusive (loader fault) | STATUS.md "feat/pylate-loader pushed, 221 tests green" |
+| E-004 | pylate projected-space vs backbone comparison: loader EXONERATED (gate bug was the fault, fixed b3b83e4); rerun in flight | [6](#6-ongoing-work-pre-registered) | rerun in flight | direct pylate load test on the bench host, 2026-06-12 |
 | E-005 | Temporal date-range lever: LoCoMo CANNOT measure it (temporal-cat applicability 9.3 percent, under the 10 percent gate); ships default-off | [6](#6-ongoing-work-pre-registered) | resolved (not measurable on LoCoMo) | benchmarks/temporal_applicability_scan.py on feat/temporal-lever |
 | E-006 | Write-skip floor: skip predictable short turns at ingest (z <= -1.0, under 12 tokens), measure R@K cost on subset-200 | [6](#6-ongoing-work-pre-registered) | pre-registered, queued on VPS | branch bench/e1-write-skip |
 
@@ -372,9 +372,11 @@ Decision rule (verbatim): "the recipe model upgrades only if projected beats bac
 
 First attempt (2026-06-11) was INCONCLUSIVE due to a probable loader fault: answerai loaded through the pylate projected path scored 0.050 on subset-200, against 0.760 for the same model's backbone. A trained projection head cannot make a model fifteen times worse than its own backbone, so this is read as a pylate-path bug, not a real projected-space result. The pylate probe is held until the loader is root-caused; no projected-space number is claimed.
 
-Models to compare: answerai-colbert-small-v1, colbertv2.0 (needs pylate-style loader; plain sentence-transformers drops its linear.weight projection head), LateOn, ColBERT-Zero.
+Root cause found (2026-06-12), and the pylate loader is exonerated: a direct test on the bench host (pylate 1.5.1) loads answerai-colbert-small-v1 with its trained Stanford-format projection applied correctly, Dense (96, 384) with real weights, 96-dim token output matching the checkpoint's artifact.metadata dim of 96. The 0.050 result (and a colbertv2.0 run that scored 0.0 retrieval recall across the board) came from the search gate bug: search() called embed(), which returns empty when only a pylate model is loaded, so every query exited before MaxSim ever ran. The bench host was also still running a pre-fix checkout. With the fix (commit b3b83e4) deployed, the full comparison (answerai projected 96-dim and colbertv2.0 projected 128-dim, each in a fresh store, subset-200 with the standard gemma rescore) is re-running. The earlier "96 vs 128" blocker note was a misdiagnosis.
 
-Status: ready for the next GPU window.
+Models to compare: answerai-colbert-small-v1, colbertv2.0 (both load via pylate's Stanford-format conversion), LateOn, ColBERT-Zero (later).
+
+Status: rerun in flight on the GPU host.
 
 **E-005. Temporal date-range lever.**
 
@@ -413,3 +415,4 @@ This log is append-only. History is never rewritten.
 | 2026-06-12 | 1.4 | Pre-registered E-005 (temporal date-range lever, ported from the engram project) with a two-stage design: applicability scan first, then R@K on the applicable subset only if the lever can fire often enough to matter. Kill criterion written before any run. Index row added. |
 | 2026-06-12 | 1.5 | E-005 Stage 1 resolved by its own gate: temporal-category applicability 9.3 percent, under the pre-registered 10 percent floor, so LoCoMo is recorded as unable to measure the lever and no LoCoMo claim is made. Scan script committed for reproducibility. Index status flipped. |
 | 2026-06-12 | 1.6 | Pre-registered E-006 (write-skip floor) with its kill criterion, before the queued VPS run produces any number. Index row added. |
+| 2026-06-12 | 1.7 | E-004 root cause found: the pylate loader is exonerated (direct load test shows the trained 96-dim Stanford projection applied correctly); the 0.050 and 0.0 results came from the search gate bug plus a pre-fix checkout on the bench host. The earlier "96 vs 128" blocker note was a misdiagnosis. Full projected-space comparison re-running. Index status updated. |
