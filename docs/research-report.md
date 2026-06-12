@@ -54,6 +54,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | methods limitation (judge unreliable on Ollama) | STATUS.md "all 1382 predictions matched" |
 | E-004 | pylate projected-space vs backbone comparison: answerai, colbertv2, LateOn, ColBERT-Zero | [6](#6-ongoing-work-pre-registered) | inconclusive (loader fault) | STATUS.md "feat/pylate-loader pushed, 221 tests green" |
 | E-005 | Temporal date-range lever: LoCoMo CANNOT measure it (temporal-cat applicability 9.3 percent, under the 10 percent gate); ships default-off | [6](#6-ongoing-work-pre-registered) | resolved (not measurable on LoCoMo) | benchmarks/temporal_applicability_scan.py on feat/temporal-lever |
+| E-006 | Write-skip floor: skip predictable short turns at ingest (z <= -1.0, under 12 tokens), measure R@K cost on subset-200 | [6](#6-ongoing-work-pre-registered) | pre-registered, queued on VPS | branch bench/e1-write-skip |
 
 ---
 
@@ -387,6 +388,16 @@ Kill criterion (verbatim): "if applicability is at least 10 percent of temporal-
 
 Stage 1 result (2026-06-12), RESOLVED BY THE PRE-REGISTERED GATE: temporal-category applicability is 30 of 321 questions, 9.3 percent, under the 10 percent floor. Quoting the criterion: "if applicability is under 10 percent, LoCoMo is recorded as unable to measure this lever, no LoCoMo claim is made in either direction, and the lever ships default-off as a product feature with its applicability number documented." So recorded: LoCoMo cannot measure the temporal date-range lever, because LoCoMo temporal questions overwhelmingly ask FOR a date rather than constrain BY one. Full scan: single-hop 2.1 percent, temporal 9.3 percent, multi-hop 2.1 percent, open-domain 15.8 percent, overall 171/1540 (11.1 percent). Provenance: benchmarks/temporal_applicability_scan.py on branch feat/temporal-lever against data/locomo/data/locomo10.json. An honest observation, not a criterion change: the open-domain category clears 15.8 percent, so a separately pre-registered experiment on the applicable 171-question subset remains possible if the lever ever needs a LoCoMo number. The lever ships default-off; its natural habitat is live agent queries ("what did we decide last week"), which LoCoMo does not contain.
 
+**E-006. Write-skip floor: do near-zero-surprise short turns earn their index entry?**
+
+Hypothesis: turns that are both highly predictable (surprisal z at or below -1.0 against the conversation) and short (under 12 whitespace tokens) are greetings and acknowledgements that add index weight without adding recall. Skipping them at ingest should leave R@K unchanged while shrinking the corpus. Nothing is lost either way: the archive keeps every turn; skipping only means no index entry.
+
+Design: the surprisal probe (benchmarks/surprisal_probe.py, branch bench/e1-write-skip) gains a write_skip variant, identical ingest to baseline except skippable turns are not added. Per-turn surprisal reuses the probe's cached scores, no re-scoring. Evidence credit stays per-turn: a skipped turn that was evidence for a question counts as a miss, which is exactly the cost being measured. Subset-200, judge-free R@K, queued on the CPU VPS behind the E-001 matched-budget re-run.
+
+Kill criterion (verbatim): "write-skip is killed if R@K drops by more than 0.005; it ships only if R@K is within noise AND turns_skipped >= 5 percent of corpus (otherwise it saves nothing)."
+
+Status: queued on the VPS, runs when the E-001 re-run finishes.
+
 ---
 
 ## 7. Revision Log
@@ -401,3 +412,4 @@ This log is append-only. History is never rewritten.
 | 2026-06-11 | 1.2 | E-002 resolved to finding F-009 (extraction-hallucination rate 18.8 percent, cross-family). E-001 recorded honestly: prior flat, chunking result confounded by an unenforced size cap and per-chunk evidence credit, corrected re-run in flight, unresolved. E-004 marked inconclusive after the pylate projected path scored 0.050 vs 0.760 backbone, read as a loader fault. |
 | 2026-06-12 | 1.4 | Pre-registered E-005 (temporal date-range lever, ported from the engram project) with a two-stage design: applicability scan first, then R@K on the applicable subset only if the lever can fire often enough to matter. Kill criterion written before any run. Index row added. |
 | 2026-06-12 | 1.5 | E-005 Stage 1 resolved by its own gate: temporal-category applicability 9.3 percent, under the pre-registered 10 percent floor, so LoCoMo is recorded as unable to measure the lever and no LoCoMo claim is made. Scan script committed for reproducibility. Index status flipped. |
+| 2026-06-12 | 1.6 | Pre-registered E-006 (write-skip floor) with its kill criterion, before the queued VPS run produces any number. Index row added. |
