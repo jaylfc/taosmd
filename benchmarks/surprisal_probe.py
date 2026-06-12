@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """E1 kill-shot harness: does per-turn token surprisal improve retrieval?
 
-Measures retrieval quality (R@K) for three variants with NO LLM generation
+Measures retrieval quality (R@K) for four variants with NO LLM generation
 and NO Ollama dependency -- judge-free, pure R@K measurement.
 
 Variants
@@ -25,6 +25,18 @@ surprise_chunks
     dia_ids it actually contains (intersection of retrieved chunk dia_ids
     with the QA evidence list).  This is identical to how the baseline
     scores per-turn evidence, making the comparison fair.
+
+write_skip
+    Identical ingest to baseline EXCEPT turns that are both highly
+    predictable (z <= _SKIP_Z_FLOOR) and short (< _SKIP_MAX_TOKENS words)
+    are not ingested at all -- they are archive-only candidates.  A skipped
+    turn that was QA evidence counts as a miss; that is the point of the
+    measurement.  Tracks turns_skipped, turns_total, and
+    evidence_turns_skipped for the verdict line.
+
+    Kill criterion: write-skip is killed if R@K drops by more than 0.005;
+    it ships only if R@K is within noise AND turns_skipped >= 5% of corpus
+    (otherwise it saves nothing).
 
 Surprisal model
 ---------------
@@ -97,6 +109,15 @@ INCLUDE_CATS = {1, 2, 3, 4}
 _CHUNK_MERGE_Z_LOW = 0.5   # continue merging while z < this
 _CHUNK_SPLIT_Z_HIGH = 1.5  # always start a new chunk at z >= this
 _CHUNK_MAX_TURNS = 6       # max turns per merged chunk
+
+# Write-skip floor thresholds (P1 plan Task 1).
+_SKIP_Z_FLOOR = -1.0    # only turns this predictable are skip candidates
+_SKIP_MAX_TOKENS = 12   # and only when also this short (greetings, acks)
+
+
+def _is_skippable(z: float, text: str) -> bool:
+    """A turn is archive-only when it is both highly predictable and short."""
+    return z <= _SKIP_Z_FLOOR and len(text.split()) < _SKIP_MAX_TOKENS
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +602,64 @@ def _recall_at_k(rows: list[dict]) -> tuple[float, int]:
 # Per-variant run
 # ---------------------------------------------------------------------------
 
+async def _ingest_write_skip_conversation(
+    vmem: VectorMemory,
+    conv: dict,
+    scored_turns: list[dict],
+    z_scores: list[float],
+) -> tuple[int, int, int, float]:
+    """Ingest a conversation like baseline but skip highly-predictable short turns.
+
+    Returns (added_count, turns_skipped, turns_total, elapsed_s).
+    The skipped turns are not ingested; they remain archive-only.
+    """
+    # Build a lookup: turn_index -> z_score for fast membership testing.
+    z_by_index: dict[int, float] = {}
+    if scored_turns and z_scores:
+        for st, z in zip(scored_turns, z_scores):
+            z_by_index[st["turn_index"]] = z
+
+    t0 = time.time()
+    added = 0
+    turns_skipped = 0
+    turns_total = 0
+    global_idx = 0
+
+    conversation = conv.get("conversation", conv)
+    for session_key, dt in _session_keys(conversation):
+        for turn in conversation.get(session_key) or []:
+            text = (turn.get("text") or "").strip()
+            if not text:
+                global_idx += 1
+                continue
+            speaker = turn.get("speaker", "")
+            dia_id = turn.get("dia_id", "")
+            turn_text = f"[{speaker}] {text}"
+
+            turns_total += 1
+            z = z_by_index.get(global_idx, 0.0)
+
+            if _is_skippable(z, turn_text):
+                turns_skipped += 1
+                global_idx += 1
+                continue
+
+            await vmem.add(
+                turn_text,
+                metadata={
+                    "dia_id": dia_id,
+                    "turn_idx": str(global_idx),
+                    "speaker": speaker,
+                    "datetime": str(dt) if dt else "",
+                    "level": "turn",
+                },
+            )
+            added += 1
+            global_idx += 1
+
+    return added, turns_skipped, turns_total, time.time() - t0
+
+
 async def _run_variant(
     variant_name: str,
     conversations: list[dict],
@@ -597,6 +676,11 @@ async def _run_variant(
     ingest_stats: list[dict] = []
     attempted = 0
     retrieval_top_k = args.retrieval_top_k
+
+    # write_skip aggregates across all conversations.
+    ws_turns_skipped_total = 0
+    ws_turns_total_total = 0
+    ws_evidence_turns_skipped = 0
 
     async with httpx.AsyncClient(timeout=args.timeout) as client:
         for conv in conversations:
@@ -639,21 +723,55 @@ async def _run_variant(
                 chunks = _build_surprise_chunks(scored_turns, z_scores)
                 added, ingest_s = await _ingest_chunked_conversation(vmem, chunks)
                 turn_index: dict[str, dict] = {}
+                ws_skipped_conv = 0
+                ws_total_conv = 0
+            elif variant_name == "write_skip":
+                added, ws_skipped_conv, ws_total_conv, ingest_s = (
+                    await _ingest_write_skip_conversation(
+                        vmem, conv, scored_turns, z_scores,
+                    )
+                )
+                ws_turns_skipped_total += ws_skipped_conv
+                ws_turns_total_total += ws_total_conv
+                turn_index = {}
+                chunks = []
             else:
                 added, ingest_s, turn_index = await _ingest_conversation(vmem, conv)
                 chunks = []
+                ws_skipped_conv = 0
+                ws_total_conv = 0
 
             ingest_stats.append({
                 "conversation_id": conv_id,
                 "added": added,
                 "ingest_s": round(ingest_s, 2),
             })
-            print(
-                f"[{variant_name}:{conv_id}] ingested {added} "
-                f"{'chunks' if variant_name == 'surprise_chunks' else 'turns'} "
-                f"in {ingest_s:.1f}s",
-                flush=True,
-            )
+            if variant_name == "write_skip":
+                print(
+                    f"[{variant_name}:{conv_id}] ingested {added} turns "
+                    f"(skipped {ws_skipped_conv}/{ws_total_conv}) "
+                    f"in {ingest_s:.1f}s",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[{variant_name}:{conv_id}] ingested {added} "
+                    f"{'chunks' if variant_name == 'surprise_chunks' else 'turns'} "
+                    f"in {ingest_s:.1f}s",
+                    flush=True,
+                )
+
+            # For write_skip: build a set of skipped dia_ids for evidence counting.
+            ws_skipped_dia_ids: set[str] = set()
+            if variant_name == "write_skip" and scored_turns and z_scores:
+                z_by_idx: dict[int, float] = {
+                    st["turn_index"]: z for st, z in zip(scored_turns, z_scores)
+                }
+                for st in scored_turns:
+                    z_val = z_by_idx.get(st["turn_index"], 0.0)
+                    if _is_skippable(z_val, st["text"]):
+                        if st.get("dia_id"):
+                            ws_skipped_dia_ids.add(st["dia_id"])
 
             for qa in conv.get("qa", []) or []:
                 if "answer" not in qa:
@@ -666,6 +784,12 @@ async def _run_variant(
                 attempted += 1
                 question = qa["question"]
                 evidence = qa.get("evidence", []) or []
+
+                # Count evidence turns that were skipped (write_skip only).
+                if variant_name == "write_skip" and ws_skipped_dia_ids and evidence:
+                    ws_evidence_turns_skipped += len(
+                        set(evidence) & ws_skipped_dia_ids
+                    )
 
                 try:
                     t0 = time.time()
@@ -731,13 +855,18 @@ async def _run_variant(
             if args.limit and attempted >= args.limit:
                 break
 
-    return {
+    result: dict = {
         "rows": rows,
         "errors": errors,
         "ingest_stats": ingest_stats,
         "variant": variant_name,
         "alpha": alpha,
     }
+    if variant_name == "write_skip":
+        result["turns_skipped"] = ws_turns_skipped_total
+        result["turns_total"] = ws_turns_total_total
+        result["evidence_turns_skipped"] = ws_evidence_turns_skipped
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -824,6 +953,10 @@ def _summarize_variant(result: dict) -> dict:
         # We store this in ingest_stats for the chunks path, so use it directly.
         # Mean chunk length: total_turns / total_chunks (approximate).
         extra["total_chunks_ingested"] = total_chunks
+    if variant == "write_skip":
+        extra["turns_skipped"] = result.get("turns_skipped", 0)
+        extra["turns_total"] = result.get("turns_total", 0)
+        extra["evidence_turns_skipped"] = result.get("evidence_turns_skipped", 0)
 
     return {
         "variant": variant,
@@ -859,6 +992,14 @@ def _print_table(summaries: list[dict], baseline_r: float) -> None:
         )
         if s.get("total_chunks_ingested"):
             print(f"  -> chunks ingested: {s['total_chunks_ingested']}")
+        if s["variant"] == "write_skip" and s.get("turns_total", 0) > 0:
+            skipped = s.get("turns_skipped", 0)
+            total = s.get("turns_total", 0)
+            ev_skipped = s.get("evidence_turns_skipped", 0)
+            print(
+                f"  -> skipped {skipped}/{total} turns "
+                f"({100*skipped/total:.1f}%), evidence_skipped={ev_skipped}"
+            )
     print(dash)
 
 
@@ -881,27 +1022,41 @@ def _print_category_table(summaries: list[dict]) -> None:
 
 def _print_verdict(summaries: list[dict], baseline_r: float,
                    kill_threshold: float = 0.02) -> None:
-    non_baseline = [s for s in summaries if s["variant"] != "baseline"]
-    if not non_baseline:
+    # write_skip has its own verdict line; exclude it from the main E1 verdict.
+    e1_variants = [
+        s for s in summaries
+        if s["variant"] not in ("baseline", "write_skip")
+    ]
+    if not e1_variants:
         print(
             f"\nE1 VERDICT: no variants ran; "
             f"kill threshold {kill_threshold}"
         )
-        return
-    best = max(non_baseline, key=lambda s: s["r_at_k"])
-    best_delta = best["r_at_k"] - baseline_r
-    alpha_tag = (
-        f" (alpha={best['alpha']:.2f})"
-        if best["variant"] != "surprise_chunks" else ""
-    )
-    print(
-        f"\nE1 VERDICT: {best['variant']}{alpha_tag} best delta vs baseline = "
-        f"{best_delta:+.4f}; kill threshold {kill_threshold}"
-    )
-    if best_delta <= kill_threshold:
-        print("  => PILLAR KILLED: surprisal does not improve retrieval by >=0.02 R@K")
     else:
-        print("  => PILLAR LIVES: surprisal shows meaningful improvement")
+        best = max(e1_variants, key=lambda s: s["r_at_k"])
+        best_delta = best["r_at_k"] - baseline_r
+        alpha_tag = (
+            f" (alpha={best['alpha']:.2f})"
+            if best["variant"] != "surprise_chunks" else ""
+        )
+        print(
+            f"\nE1 VERDICT: {best['variant']}{alpha_tag} best delta vs baseline = "
+            f"{best_delta:+.4f}; kill threshold {kill_threshold}"
+        )
+        if best_delta <= kill_threshold:
+            print("  => PILLAR KILLED: surprisal does not improve retrieval by >=0.02 R@K")
+        else:
+            print("  => PILLAR LIVES: surprisal shows meaningful improvement")
+
+    # write_skip verdict.
+    ws = next((s for s in summaries if s["variant"] == "write_skip"), None)
+    if ws is not None:
+        delta = ws["r_at_k"] - baseline_r
+        skipped = ws.get("turns_skipped", 0)
+        total = ws.get("turns_total", 0)
+        ev_skipped = ws.get("evidence_turns_skipped", 0)
+        print(f"WRITE-SKIP VERDICT: delta={delta:+.4f} skipped={skipped}/{total} "
+              f"evidence_skipped={ev_skipped}; kill if delta < -0.005")
 
 
 # ---------------------------------------------------------------------------
@@ -1012,6 +1167,19 @@ async def run(args: argparse.Namespace) -> int:
     if not chunks_result["rows"]:
         print(
             "ERROR: variant surprise_chunks produced zero results.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # write_skip: in default set alongside baseline and surprise_chunks.
+    print("\n[variant] running write_skip ...", flush=True)
+    ws_result = await _run_variant(
+        "write_skip", conversations, args, reranker, scorer, surprisal_data,
+    )
+    variant_results.append(ws_result)
+    if not ws_result["rows"]:
+        print(
+            "ERROR: variant write_skip produced zero results.",
             file=sys.stderr,
         )
         return 1
