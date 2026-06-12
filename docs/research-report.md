@@ -49,10 +49,11 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | N-005 | answerai + bge-v2-m3 reranker stacked: 0.720 vs 0.760 answerai alone (subset-200 gemma) | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md "Late-interaction retrieval", confirmed negative sentence |
 | N-006 | gemma4:12b first A/B: generation errors stored as zero-scoring predictions; methods lesson, run was invalid | [4](#4-negative-results) | retracted (methods failure, not result) | CHANGELOG.md Unreleased Fixed, "Generation failures in the LoCoMo runner were stored as zero-scoring [generation_error: ...]" |
 | N-007 | gemma4:12b generator A/B: 0.630/0.580 vs qwen3.5:9b 0.680 same config; not an upgrade | [4](#4-negative-results) | confirmed negative | bench host 20260611 gemma12b_redo verdicts |
+| N-008 | ColBERT projected spaces (answerai 96-dim, colbertv2 128-dim) both 0.730 vs backbone 0.760 subset-200 gemma; no upgrade, 4x footprint trade noted | [4](#4-negative-results) | confirmed negative | bench host 20260612_142049 rescored_gemma results |
 | E-001 | Surprisal: prior FLAT (dead); chunking +0.086 but CONFOUNDED (cap not enforced, per-chunk credit); corrected re-run in flight | [6](#6-ongoing-work-pre-registered) | unresolved | STATUS.md "bench/e1-surprisal finishing" |
 | E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | resolved -> F-009 | STATUS.md "bench/e2-claim-verification" |
 | E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | methods limitation (judge unreliable on Ollama) | STATUS.md "all 1382 predictions matched" |
-| E-004 | pylate projected-space vs backbone comparison: loader EXONERATED (gate bug was the fault, fixed b3b83e4); rerun in flight | [6](#6-ongoing-work-pre-registered) | rerun in flight | direct pylate load test on the bench host, 2026-06-12 |
+| E-004 | pylate projected-space vs backbone: both projected spaces 0.730 vs backbone 0.760 subset-200 gemma; no recipe upgrade | [6](#6-ongoing-work-pre-registered) | resolved -> N-008 | bench host 20260612_142049 rescored_gemma results |
 | E-005 | Temporal date-range lever: LoCoMo CANNOT measure it (temporal-cat applicability 9.3 percent, under the 10 percent gate); ships default-off | [6](#6-ongoing-work-pre-registered) | resolved (not measurable on LoCoMo) | benchmarks/temporal_applicability_scan.py, master 0535f86 |
 | E-006 | Write-skip floor: skip predictable short turns at ingest (z <= -1.0, under 12 tokens), measure R@K cost on subset-200 | [6](#6-ongoing-work-pre-registered) | pre-registered, queued on VPS | branch bench/e1-write-skip |
 
@@ -275,6 +276,12 @@ The newest in-budget generator candidate (released one week before testing, mark
 
 Source: bench host results 20260611 gemma12b_redo verdicts; docs/benchmarks.md, the generator reading list.
 
+**N-008. ColBERT projected spaces do not beat the backbone at our tier (E-004 resolved).**
+
+Loading the trained projection heads through pylate, both proper ColBERT spaces score 0.730 on subset-200 gemma vs 0.760 for the answerai backbone token space the lateint-9b recipe ships with: answerai-colbert-small-v1 projected (96-dim) 0.730, colbert-ir/colbertv2.0 projected (128-dim) 0.730. The pre-registered rule ("upgrades only if projected beats backbone outside noise") resolves this as no upgrade. Two honest notes. First, the projected spaces are real and working: an earlier 0.050 reading was a search-path bug (the pylate-mode query gate returned empty before MaxSim ever ran), not a property of the models, and the trained heads were verified loading correctly. Second, the answerai projected space stores 96-dim token vectors against the backbone's 384, a 4x token-matrix footprint reduction for -0.030 quality; that is a defensible swap on storage-constrained tiers, recorded here so the option is not forgotten, but it is not the default.
+
+Source: bench host benchmarks/results/20260612_142049_{answerai_small,colbertv2}.rescored_gemma.json, run log colbert_models_20260612_142049.log; cross-referenced in docs/benchmarks.md late-interaction section.
+
 ## 5. Reproducibility
 
 **Install.**
@@ -376,7 +383,7 @@ Root cause found (2026-06-12), and the pylate loader is exonerated: a direct tes
 
 Models to compare: answerai-colbert-small-v1, colbertv2.0 (both load via pylate's Stanford-format conversion), LateOn, ColBERT-Zero (later).
 
-Status: rerun in flight on the GPU host.
+Resolved (2026-06-12), recorded as negative result N-008. Quoting the decision rule: "the recipe model upgrades only if projected beats backbone outside noise on subset-200." Both projected spaces landed at 0.730 subset-200 gemma against the answerai backbone's 0.760: answerai projected (96-dim) 0.730, colbertv2.0 projected (128-dim) 0.730. Neither beats backbone; the recipe stays on the backbone path. The pylate path was confirmed in the run logs (no fallback warnings; the loader was separately proven to apply the trained 96-dim Stanford head). LateOn and ColBERT-Zero are not worth a GPU window unless something changes the prior. See N-008 for the full reading including the footprint trade.
 
 **E-005. Temporal date-range lever.**
 
@@ -416,3 +423,4 @@ This log is append-only. History is never rewritten.
 | 2026-06-12 | 1.5 | E-005 Stage 1 resolved by its own gate: temporal-category applicability 9.3 percent, under the pre-registered 10 percent floor, so LoCoMo is recorded as unable to measure the lever and no LoCoMo claim is made. Scan script committed for reproducibility. Index status flipped. |
 | 2026-06-12 | 1.6 | Pre-registered E-006 (write-skip floor) with its kill criterion, before the queued VPS run produces any number. Index row added. |
 | 2026-06-12 | 1.7 | E-004 root cause found: the pylate loader is exonerated (direct load test shows the trained 96-dim Stanford projection applied correctly); the 0.050 and 0.0 results came from the search gate bug plus a pre-fix checkout on the bench host. The earlier "96 vs 128" blocker note was a misdiagnosis. Full projected-space comparison re-running. Index status updated. |
+| 2026-06-12 | 1.8 | E-004 resolved to N-008: both ColBERT projected spaces 0.730 vs answerai backbone 0.760 on subset-200 gemma; decision rule quoted, no recipe upgrade; the 4x token-matrix footprint trade of the 96-dim space recorded. benchmarks.md late-interaction section updated with the projected-space table. |

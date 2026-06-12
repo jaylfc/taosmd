@@ -98,7 +98,14 @@ answerai-colbert-small-v1 (33M) is confirmed at full-1540: 0.716 lenient gemma4:
 
 Stacking the bge-v2-m3 cross-encoder reranker on top of answerai retrieval is a confirmed negative: subset-200 gemma 0.720 vs 0.760 for answerai alone. The reranker reorders an already token-level-matched pool and hurts. Recorded so nobody retries it blind.
 
-Known issue: `colbert-ir/colbertv2.0` cannot be loaded via plain sentence-transformers — ST drops its `linear.weight` projection head and every query errors on a dimension mismatch (the run produced zero results); it needs a pylate-style loader before its number means anything. The pylate loader now exists on branch `feat/pylate-loader`; a projected-space vs backbone comparison is queued for the next GPU window.
+Projected-space comparison (E-004, resolved 2026-06-12): loading the trained ColBERT projection heads through pylate (the backbone rows above use raw token output; sentence-transformers drops projection heads), both proper ColBERT spaces land at 0.730 subset-200 gemma:
+
+| Model via pylate (projected space) | Dim | Subset-200 gemma | vs answerai backbone 0.760 |
+|---|---|---|---|
+| answerai-colbert-small-v1 (33M) | 96 | 0.730 | -0.030 |
+| colbert-ir/colbertv2.0 (110M) | 128 | 0.730 | -0.030 |
+
+The pre-registered decision rule was "the recipe model upgrades only if projected beats backbone outside noise on subset-200": neither does, so the lateint-9b recipe stays on the backbone path. The honest trade worth knowing: the answerai projected space stores 96-dim token vectors against the backbone's 384, a 4x token-matrix footprint cut for -0.030 quality, a defensible swap on storage-constrained tiers but not the default. An earlier projected run that scored 0.050 (and a colbertv2 run scoring 0.0) was a search-path bug, not a property of the models: in pylate mode the query gate called an embed path that returned empty, so MaxSim never ran; fixed and re-measured. Provenance: bench host benchmarks/results/20260612_142049_{answerai_small,colbertv2}.rescored_gemma.json and colbert_models_20260612_142049.log.
 
 **CPU-tier viability (retrieval-only, judge-free).** Measured with the
 retrieval-latency probe (`benchmarks/retrieval_latency_probe.py`, branch
