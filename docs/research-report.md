@@ -58,7 +58,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-004 | pylate projected-space vs backbone: both projected spaces 0.730 vs backbone 0.760 subset-200 gemma; no recipe upgrade | [6](#6-ongoing-work-pre-registered) | resolved -> N-008 | bench host 20260612_142049 rescored_gemma results |
 | E-005 | Temporal date-range lever: LoCoMo CANNOT measure it (temporal-cat applicability 9.3 percent, under the 10 percent gate); ships default-off | [6](#6-ongoing-work-pre-registered) | resolved (not measurable on LoCoMo) | benchmarks/temporal_applicability_scan.py, master 0535f86 |
 | E-006 | Write-skip floor: SAFE (delta +0.0051, zero evidence skipped) but fires on only 2.3 percent of turns, under the 5 percent shipping floor | [6](#6-ongoing-work-pre-registered) | resolved -> N-010 | VPS e1_write_skip_20260612_143625.json |
-| E-007 | Arctic-embed (s/xs) vs all-MiniLM as the low-tier dense embedder: judge-free R@K probe, query-prefix + CLS-pooling enabler shipped first | [6](#6-ongoing-work-pre-registered) | pre-registered, running on Fedora | branch feat/arctic-embed-onnx |
+| E-007 | Arctic-embed vs MiniLM low-tier dense: Stage-1 R@K PASSED (arctic-s 0.8333 vs MiniLM 0.6768, +0.157; arctic-xs 0.7374); judged confirm in flight | [6](#6-ongoing-work-pre-registered) | stage 1 passed, judged confirm in flight | bench host e007_*_20260613_122113.json |
 
 ---
 
@@ -434,7 +434,9 @@ Design: the judge-free retrieval probe (benchmarks/retrieval_latency_probe.py), 
 
 Kill criterion (verbatim): "arctic-embed replaces all-MiniLM as the low-tier dense default only if it beats MiniLM R@K by more than 0.02 on subset-200 at the matched harness; a tie or loss keeps MiniLM (smaller, proven). A winner is then confirmed with a judged LoCoMo run before any recipe or default changes."
 
-Status: enabler merged-pending (PR open), run launching on the Fedora host.
+Stage 1 result (2026-06-13), R@K gate PASSED decisively: judge-free evidence recall on subset-200 at matched harness (dense, reranker off, adj=2, identical flags, only the embedder swapped), MiniLM 0.6768, arctic-embed-s 0.8333 (+0.1565), arctic-embed-xs 0.7374 (+0.0606). Both clear the 0.02 gate; per-query latency is identical (~705ms p50, same harness, the embedding cost difference is dwarfed by the rest of the pipeline). This is judge-free recall, so no judge inflation to discount; the gain is consistent with MiniLM-L6 being an old, weak retriever against a modern small one. Per the criterion a judged LoCoMo confirm is required before any default change: that run (arctic-s vs MiniLM, dense, qwen3.5:9b generator, gemma4:e2b rescore) is in flight on the GPU host. The enabler (arctic-embed ONNX support) merged in PR #160; the MiniLM default is unchanged pending the judged confirm. Provenance: bench host benchmarks/results/e007_{minilm_baseline,arctic_s,arctic_xs}_20260613_122113.json.
+
+Status: Stage 1 passed; judged confirm in flight on the GPU host before any default change.
 
 ---
 
