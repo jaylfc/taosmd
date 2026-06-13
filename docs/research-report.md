@@ -54,6 +54,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | N-008 | ColBERT projected spaces (answerai 96-dim, colbertv2 128-dim) both 0.730 vs backbone 0.760 subset-200 gemma; no upgrade, 4x footprint trade noted | [4](#4-negative-results) | confirmed negative | bench host 20260612_142049 rescored_gemma results |
 | N-009 | Surprise-boundary chunking is a coverage artifact: matched-turn-budget baseline (k=120, 0.9192) beats chunks at k=20 (0.7677); methods lesson, compare chunking levers at matched turn budget | [4](#4-negative-results) | confirmed negative | VPS e1_mb_k20/k120_20260612_083159.json |
 | N-010 | Write-skip floor safe (no recall harm, zero evidence skipped) but fires on 2.3 percent of LoCoMo turns, under the 5 percent floor; not shipped | [4](#4-negative-results) | confirmed negative (for shipping) | VPS e1_write_skip_20260612_143625.json |
+| N-011 | Surprisal is the WORST retention-priority signal (below random) at every budget; keeping high-surprisal turns is bad for retention. Length wins. Kills the v2 surprisal pillar, triggers the provenance/claims pivot | [4](#4-negative-results) | confirmed negative | VPS e008_retention_20260613_115258.json |
 | E-001 | Surprisal retrieval: BOTH arms dead. Prior flat; chunking +0.1263 at equal k but baseline at matched turn budget wins by 0.15 | [6](#6-ongoing-work-pre-registered) | resolved -> N-009 | VPS e1_mb_k20/k120_20260612_083159.json |
 | E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | resolved -> F-009 | STATUS.md "bench/e2-claim-verification" |
 | E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | methods limitation (judge unreliable on Ollama) | STATUS.md "all 1382 predictions matched" |
@@ -61,7 +62,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-005 | Temporal date-range lever: LoCoMo CANNOT measure it (temporal-cat applicability 9.3 percent, under the 10 percent gate); ships default-off | [6](#6-ongoing-work-pre-registered) | resolved (not measurable on LoCoMo) | benchmarks/temporal_applicability_scan.py, master 0535f86 |
 | E-006 | Write-skip floor: SAFE (delta +0.0051, zero evidence skipped) but fires on only 2.3 percent of turns, under the 5 percent shipping floor | [6](#6-ongoing-work-pre-registered) | resolved -> N-010 | VPS e1_write_skip_20260612_143625.json |
 | E-007 | Arctic-embed vs MiniLM low-tier dense: BOTH stages passed (R@K +0.157, judged +0.040 subset-200); full-1540 in flight before default flip | [6](#6-ongoing-work-pre-registered) | resolved -> F-010 (subset-200); full-1540 in flight | bench host e007c_*_20260613 rescored_gemma |
-| E-008 | Surprisal as a forgetting/retention-priority signal under a memory budget (the v2 consolidation kill-shot): keep-by-surprisal vs recency/length/random, judge-free R@K | [6](#6-ongoing-work-pre-registered) | pre-registered, building | bench branch (retention probe) |
+| E-008 | Surprisal as retention-priority signal: KILLED, worst of all policies at every budget (below random); length wins. Surprisal pillar dead, v2 pivots to provenance/claims | [6](#6-ongoing-work-pre-registered) | resolved -> N-011 | VPS e008_retention_20260613_115258.json |
 
 ---
 
@@ -312,6 +313,12 @@ Skipping highly predictable short turns at ingest (surprisal z at or below -1.0 
 
 Source: VPS benchmarks/results/e1_write_skip_20260612_143625.json, variant code on branch bench/e1-write-skip (46793e0).
 
+**N-011. Surprisal is a bad retention-priority signal (the v2 consolidation kill-shot fails).**
+
+The last surviving role for the v2 surprisal pillar was consolidation priority: when an agent must forget down to a budget, is surprisal a good "keep" signal? It is the worst one tested. Under retention budgets of 25/50/75 percent on subset-200 (judge-free R@K, evidence on a dropped turn counts as a miss), keeping the highest-surprisal turns scored 0.313/0.444/0.591, below random (0.258/0.424/0.571) at every budget, and far below the winner. The winner is length: keep the longest turns, 0.525/0.641/0.702. Recency was weakest. The reading: high token-surprisal marks unpredictable content, not evidence-bearing content, and short surprising turns (the ones the write-skip floor also targeted) carry little retrievable evidence, so prioritising them throws away the longer, denser turns that answers actually need. With its retrieval role already dead (N-009, N-010), the surprisal pillar of v2 is conclusively killed; the spine pivots to the provenance and claims layer (F-009). The length result is a genuine positive side-finding, a cheap, model-free retention heuristic, recorded for its own future pre-registration rather than claimed here.
+
+Source: VPS benchmarks/results/e008_retention_20260613_115258.json, branch bench/e1-retention.
+
 ## 5. Reproducibility
 
 **Install.**
@@ -463,7 +470,17 @@ Design: per conversation, score per-turn surprisal (reuse the E1 probe's cached 
 
 Kill criterion (verbatim): "surprisal-priority retention must beat the best non-random baseline (recency or length) by more than 0.02 R@K at one or more matched budgets and must not trail it at any budget, for the consolidation-strength bet to survive. If surprisal does not clearly beat recency, the surprisal pillar of v2 is dead and the spine pivots to the provenance and claims layer."
 
-Status: pre-registered; retention-budget probe being built, to run on the VPS.
+Result (2026-06-13), KILLED, recorded as N-011. Judge-free R@K under retention budgets on subset-200, keep-by-policy vs the baselines:
+
+| Budget | surprisal | recency | length | random | surprisal vs best non-random |
+|---|---|---|---|---|---|
+| 25 percent | 0.313 | 0.232 | 0.525 | 0.258 | -0.212 |
+| 50 percent | 0.444 | 0.348 | 0.641 | 0.424 | -0.197 |
+| 75 percent | 0.591 | 0.450 | 0.702 | 0.571 | -0.111 |
+
+Quoting the criterion: "surprisal-priority retention must beat the best non-random baseline by more than 0.02 at >=1 budget and must not trail it at any budget. If surprisal does not clearly beat recency, the surprisal pillar of v2 is dead and the spine pivots to the provenance and claims layer." Surprisal not only misses, it is the WORST signal at every budget, below random: keeping the highest-surprisal turns is actively bad for what to retain. The surprisal pillar is dead across both its retrieval role (N-009, N-010) and now its consolidation role. Two findings come out of this: (1) the v2 spine pivots to the provenance and claims layer (anchored by F-009, the 18.8 percent extraction-hallucination rate, which no competitor measures); (2) length is a strong retention signal (best at every budget, +0.11 to +0.18 over random), worth its own pre-registration as a cheap forgetting heuristic for memory-budgeted agents. Provenance: VPS benchmarks/results/e008_retention_20260613_115258.json, branch bench/e1-retention.
+
+Status: resolved to N-011 (surprisal retention killed); v2 spine pivots to provenance/claims.
 
 ---
 
@@ -483,6 +500,7 @@ This log is append-only. History is never rewritten.
 | 2026-06-12 | 1.7 | E-004 root cause found: the pylate loader is exonerated (direct load test shows the trained 96-dim Stanford projection applied correctly); the 0.050 and 0.0 results came from the search gate bug plus a pre-fix checkout on the bench host. The earlier "96 vs 128" blocker note was a misdiagnosis. Full projected-space comparison re-running. Index status updated. |
 | 2026-06-12 | 1.8 | E-004 resolved to N-008: both ColBERT projected spaces 0.730 vs answerai backbone 0.760 on subset-200 gemma; decision rule quoted, no recipe upgrade; the 4x token-matrix footprint trade of the 96-dim space recorded. benchmarks.md late-interaction section updated with the projected-space table. |
 | 2026-06-12 | 1.9 | E-001 resolved to N-009: the matched-turn-budget control shows surprise-boundary chunking was a coverage artifact (baseline at k=120 beats chunks at k=20 by 0.15); kill criterion quoted; both surprisal retrieval arms now dead. Methods lesson recorded: compare chunking levers at matched turn budget, never matched k. |
+| 2026-06-13 | 1.14 | E-008 resolved to N-011: surprisal is the worst retention-priority signal (below random at every budget); length wins. The v2 surprisal pillar is conclusively dead across retrieval (N-009/N-010) and consolidation, so the spine pivots to the provenance/claims layer (F-009) per the pre-registered criterion. Length flagged as a positive side-finding for future pre-registration. |
 | 2026-06-13 | 1.13 | E-007 resolved to F-010 on subset-200: arctic-embed-s beats MiniLM as the low-tier dense embedder, +0.157 R@K and +0.040 judged at the same dimension and latency, both stages passed. Added results subsection 3.7. Full-1540 judged confirm in flight before the user-facing default is switched. First positive finding after N-008/N-009/N-010. |
 | 2026-06-13 | 1.12 | Pre-registered E-008, the v2 consolidation kill-shot: surprisal as a forgetting/retention-priority signal under a memory budget, judge-free R@K vs recency/length/random across budgets. Designed explicitly to test the consolidation claim that N-009/N-010 (retrieval-time) do not, with a kill criterion that pivots v2 to the provenance/claims layer if surprisal does not beat recency. |
 | 2026-06-13 | 1.11 | Pre-registered E-007 (arctic-embed s/xs vs all-MiniLM as the low-tier dense embedder) with its kill criterion before any run. Recorded the validity gate: arctic-embed needs a query-only prefix and CLS pooling, implemented in feat/arctic-embed-onnx first, or the comparison is a false negative. |
