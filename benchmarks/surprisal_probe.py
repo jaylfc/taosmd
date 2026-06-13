@@ -73,6 +73,7 @@ import asyncio
 import json
 import math
 import os
+import random
 import sys
 import tempfile
 import time
@@ -118,6 +119,61 @@ _SKIP_MAX_TOKENS = 12   # and only when also this short (greetings, acks)
 def _is_skippable(z: float, text: str) -> bool:
     """A turn is archive-only when it is both highly predictable and short."""
     return z <= _SKIP_Z_FLOOR and len(text.split()) < _SKIP_MAX_TOKENS
+
+
+# ---------------------------------------------------------------------------
+# Retention-budget helpers (E-008)
+# ---------------------------------------------------------------------------
+
+def _retained_turn_indices(
+    scored_turns: list[dict],
+    z_by_index: dict[int, float],
+    policy: str,
+    budget: float,
+    conversation_id: str = "",
+) -> set[int]:
+    """Return the set of global turn_index values to KEEP for one conversation.
+
+    N = number of scored (non-empty) turns. keep_n = ceil(budget * N).
+    Always keeps at least 1 turn.
+
+    policy "surprisal": keep the keep_n turns with the HIGHEST z-score.
+        Ties broken by turn_index ascending.
+    policy "recency":   keep the keep_n turns with the HIGHEST turn_index
+        (most recent). Ties broken by turn_index ascending (deterministic).
+    policy "length":    keep the keep_n turns with the most whitespace tokens
+        in their text. Ties broken by turn_index ascending.
+    policy "random":    deterministic seeded selection.
+        Uses random.Random(f"{conversation_id}:{budget}"); never unseeded.
+    """
+    if not scored_turns:
+        return set()
+
+    n = len(scored_turns)
+    keep_n = max(1, math.ceil(budget * n))
+
+    indices = [st["turn_index"] for st in scored_turns]
+
+    if policy == "surprisal":
+        # Sort by z-score descending, then turn_index ascending for ties.
+        ranked = sorted(indices, key=lambda i: (-z_by_index.get(i, 0.0), i))
+        return set(ranked[:keep_n])
+
+    if policy == "recency":
+        # Highest turn_index = most recent.
+        ranked = sorted(indices, key=lambda i: -i)
+        return set(ranked[:keep_n])
+
+    if policy == "length":
+        text_by_index: dict[int, str] = {st["turn_index"]: st["text"] for st in scored_turns}
+        ranked = sorted(indices, key=lambda i: (-len(text_by_index.get(i, "").split()), i))
+        return set(ranked[:keep_n])
+
+    if policy == "random":
+        rng = random.Random(f"{conversation_id}:{budget}")
+        return set(rng.sample(indices, keep_n))
+
+    raise ValueError(f"Unknown retention policy: {policy!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -660,6 +716,61 @@ async def _ingest_write_skip_conversation(
     return added, turns_skipped, turns_total, time.time() - t0
 
 
+
+async def _ingest_retention_conversation(
+    vmem: VectorMemory,
+    conv: dict,
+    scored_turns: list[dict],
+    z_scores: list[float],
+    retained_set: set[int],
+) -> tuple[int, int, int, float]:
+    """Ingest a conversation keeping only turns whose global_idx is in retained_set.
+
+    Mirrors _ingest_write_skip_conversation exactly: same global_idx walk,
+    same metadata dict. The skip test is turn_index not in retained_set.
+
+    Returns (added_count, turns_kept, turns_total, elapsed_s).
+    """
+    t0 = time.time()
+    added = 0
+    turns_kept = 0
+    turns_total = 0
+    global_idx = 0
+
+    conversation = conv.get("conversation", conv)
+    for session_key, dt in _session_keys(conversation):
+        for turn in conversation.get(session_key) or []:
+            text = (turn.get("text") or "").strip()
+            if not text:
+                global_idx += 1
+                continue
+            speaker = turn.get("speaker", "")
+            dia_id = turn.get("dia_id", "")
+            turn_text = f"[{speaker}] {text}"
+
+            turns_total += 1
+
+            if global_idx not in retained_set:
+                global_idx += 1
+                continue
+
+            await vmem.add(
+                turn_text,
+                metadata={
+                    "dia_id": dia_id,
+                    "turn_idx": str(global_idx),
+                    "speaker": speaker,
+                    "datetime": str(dt) if dt else "",
+                    "level": "turn",
+                },
+            )
+            added += 1
+            turns_kept += 1
+            global_idx += 1
+
+    return added, turns_kept, turns_total, time.time() - t0
+
+
 async def _run_variant(
     variant_name: str,
     conversations: list[dict],
@@ -681,6 +792,9 @@ async def _run_variant(
     ws_turns_skipped_total = 0
     ws_turns_total_total = 0
     ws_evidence_turns_skipped = 0
+
+    # retention aggregates: {variant_name: [turns_kept, turns_total]}
+    ret_turns_kept_by_variant: dict[str, list[int]] = {}
 
     async with httpx.AsyncClient(timeout=args.timeout) as client:
         for conv in conversations:
@@ -735,6 +849,31 @@ async def _run_variant(
                 ws_turns_total_total += ws_total_conv
                 turn_index = {}
                 chunks = []
+            elif variant_name.startswith("retention_"):
+                # Parse policy and budget from variant name: retention_<policy>_<bpct>
+                _parts = variant_name.split("_")
+                _ret_policy = _parts[1]
+                _ret_budget = int(_parts[2]) / 100.0
+                _z_by_idx: dict[int, float] = {}
+                if scored_turns and z_scores:
+                    for _st, _z in zip(scored_turns, z_scores):
+                        _z_by_idx[_st["turn_index"]] = _z
+                retained_set = _retained_turn_indices(
+                    scored_turns, _z_by_idx, _ret_policy, _ret_budget, conv_id,
+                )
+                added, _ret_kept, _ret_total, ingest_s = (
+                    await _ingest_retention_conversation(
+                        vmem, conv, scored_turns, z_scores, retained_set,
+                    )
+                )
+                if variant_name not in ret_turns_kept_by_variant:
+                    ret_turns_kept_by_variant[variant_name] = [0, 0]
+                ret_turns_kept_by_variant[variant_name][0] += _ret_kept
+                ret_turns_kept_by_variant[variant_name][1] += _ret_total
+                turn_index = {}
+                chunks = []
+                ws_skipped_conv = 0
+                ws_total_conv = 0
             else:
                 added, ingest_s, turn_index = await _ingest_conversation(vmem, conv)
                 chunks = []
@@ -750,6 +889,14 @@ async def _run_variant(
                 print(
                     f"[{variant_name}:{conv_id}] ingested {added} turns "
                     f"(skipped {ws_skipped_conv}/{ws_total_conv}) "
+                    f"in {ingest_s:.1f}s",
+                    flush=True,
+                )
+            elif variant_name.startswith("retention_"):
+                _rstat = ret_turns_kept_by_variant.get(variant_name, [0, 0])
+                print(
+                    f"[{variant_name}:{conv_id}] ingested {added} turns "
+                    f"(kept {_rstat[0]}/{_rstat[1]}) "
                     f"in {ingest_s:.1f}s",
                     flush=True,
                 )
@@ -772,6 +919,10 @@ async def _run_variant(
                     if _is_skippable(z_val, st["text"]):
                         if st.get("dia_id"):
                             ws_skipped_dia_ids.add(st["dia_id"])
+
+            # For retention variants, dropped turns are not ingested into vmem,
+            # so evidence_hits returns 0 structurally. No separate dia_id set
+            # is needed: the miss is enforced at ingest time.
 
             for qa in conv.get("qa", []) or []:
                 if "answer" not in qa:
@@ -866,6 +1017,10 @@ async def _run_variant(
         result["turns_skipped"] = ws_turns_skipped_total
         result["turns_total"] = ws_turns_total_total
         result["evidence_turns_skipped"] = ws_evidence_turns_skipped
+    if variant_name.startswith("retention_"):
+        _totals = ret_turns_kept_by_variant.get(variant_name, [0, 0])
+        result["turns_kept"] = _totals[0]
+        result["turns_total"] = _totals[1]
     return result
 
 
@@ -1063,6 +1218,94 @@ def _print_verdict(summaries: list[dict], baseline_r: float,
 # Main async run
 # ---------------------------------------------------------------------------
 
+
+def _retention_sanity_check(variant_results: list[dict]) -> None:
+    """Sanity-check: for random B=50, turns_kept should be near round(0.5*turns_total).
+
+    Prints a WARNING if the per-conversation aggregate deviates by more than
+    +/-1 per conversation (slack = n_convs).
+    """
+    for r in variant_results:
+        if not r["variant"].endswith("_random_50"):
+            continue
+        kept = r.get("turns_kept", 0)
+        total = r.get("turns_total", 0)
+        if total == 0:
+            continue
+        expected = round(0.5 * total)
+        n_convs = max(1, len(r.get("ingest_stats", [1])))
+        if abs(kept - expected) > n_convs:
+            print(
+                f"WARNING: retention_random_50 sanity: kept={kept} "
+                f"expected~{expected} total={total} deviation={abs(kept-expected)} "
+                f"exceeds slack={n_convs}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[sanity] retention_random_50: kept={kept}/{total} "
+                f"(expected~{expected}, within slack={n_convs})",
+                flush=True,
+            )
+
+
+def _print_retention_verdict(summaries: list[dict]) -> None:
+    """Print per-budget comparison table and E-008 overall verdict."""
+    budgets = [25, 50, 75]
+    policies = ["surprisal", "recency", "length", "random"]
+
+    r_by_variant: dict[str, float] = {s["variant"]: s["r_at_k"] for s in summaries}
+
+    for bpct in budgets:
+        vals: dict[str, float] = {}
+        for p in policies:
+            vname = f"retention_{p}_{bpct}"
+            vals[p] = r_by_variant.get(vname, float("nan"))
+        best_nonrandom = max(vals.get("recency", 0.0), vals.get("length", 0.0))
+        surp = vals.get("surprisal", float("nan"))
+        if surp == surp:  # not nan
+            delta = surp - best_nonrandom
+            delta_str = f"{delta:+.4f}"
+        else:
+            delta_str = "nan"
+        rec = vals.get("recency", float("nan"))
+        lng = vals.get("length", float("nan"))
+        rnd = vals.get("random", float("nan"))
+        print(
+            f"RETENTION VERDICT B={bpct}%: "
+            f"surprisal={surp:.4f} "
+            f"recency={rec:.4f} "
+            f"length={lng:.4f} "
+            f"random={rnd:.4f} "
+            f"| surprisal_vs_best_nonrandom={delta_str}"
+        )
+
+    # E-008 overall verdict.
+    # PASS requires:
+    #   1. at every budget, surprisal >= max(recency,length) - 0.0001 (never trails)
+    #   2. at >=1 budget, surprisal - max(recency,length) > 0.02
+    never_trails = True
+    strong_win_count = 0
+    for bpct in budgets:
+        surp = r_by_variant.get(f"retention_surprisal_{bpct}", float("nan"))
+        rec = r_by_variant.get(f"retention_recency_{bpct}", 0.0)
+        lng = r_by_variant.get(f"retention_length_{bpct}", 0.0)
+        best_nr = max(rec, lng)
+        if surp != surp:  # nan
+            never_trails = False
+            continue
+        if surp < best_nr - 0.0001:
+            never_trails = False
+        if surp - best_nr > 0.02:
+            strong_win_count += 1
+
+    verdict = "PASS" if (never_trails and strong_win_count >= 1) else "FAIL"
+    print(
+        f"E-008 VERDICT: surprisal beats best-non-random by >0.02 at >=1 budget "
+        f"AND never trails it = {verdict}"
+    )
+
+
 async def run(args: argparse.Namespace) -> int:
     dataset_path = Path(args.dataset).expanduser()
     if not dataset_path.exists():
@@ -1158,31 +1401,50 @@ async def run(args: argparse.Namespace) -> int:
                 )
                 return 1
 
-    # surprise_chunks.
-    print("\n[variant] running surprise_chunks ...", flush=True)
-    chunks_result = await _run_variant(
-        "surprise_chunks", conversations, args, reranker, scorer, surprisal_data,
-    )
-    variant_results.append(chunks_result)
-    if not chunks_result["rows"]:
-        print(
-            "ERROR: variant surprise_chunks produced zero results.",
-            file=sys.stderr,
+    # surprise_chunks and write_skip: gated behind --include-existing so that
+    # the default run for this branch (bench/e1-retention) focuses on E-008.
+    if args.include_existing:
+        print("\n[variant] running surprise_chunks ...", flush=True)
+        chunks_result = await _run_variant(
+            "surprise_chunks", conversations, args, reranker, scorer, surprisal_data,
         )
-        return 1
+        variant_results.append(chunks_result)
+        if not chunks_result["rows"]:
+            print(
+                "ERROR: variant surprise_chunks produced zero results.",
+                file=sys.stderr,
+            )
+            return 1
 
-    # write_skip: in default set alongside baseline and surprise_chunks.
-    print("\n[variant] running write_skip ...", flush=True)
-    ws_result = await _run_variant(
-        "write_skip", conversations, args, reranker, scorer, surprisal_data,
-    )
-    variant_results.append(ws_result)
-    if not ws_result["rows"]:
-        print(
-            "ERROR: variant write_skip produced zero results.",
-            file=sys.stderr,
+        print("\n[variant] running write_skip ...", flush=True)
+        ws_result = await _run_variant(
+            "write_skip", conversations, args, reranker, scorer, surprisal_data,
         )
-        return 1
+        variant_results.append(ws_result)
+        if not ws_result["rows"]:
+            print(
+                "ERROR: variant write_skip produced zero results.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # 12 retention variants for E-008: 4 policies x 3 budgets.
+    _ret_policies = ["surprisal", "recency", "length", "random"]
+    _ret_budgets = [25, 50, 75]
+    for _bpct in _ret_budgets:
+        for _pol in _ret_policies:
+            _vname = f"retention_{_pol}_{_bpct}"
+            print(f"\n[variant] running {_vname} ...", flush=True)
+            _ret_result = await _run_variant(
+                _vname, conversations, args, reranker, scorer, surprisal_data,
+            )
+            variant_results.append(_ret_result)
+            if not _ret_result["rows"]:
+                print(
+                    f"ERROR: variant {_vname} produced zero results.",
+                    file=sys.stderr,
+                )
+                return 1
 
     # Step 4: summarise and print.
     summaries = [_summarize_variant(r) for r in variant_results]
@@ -1191,6 +1453,8 @@ async def run(args: argparse.Namespace) -> int:
     _print_table(summaries, baseline_r)
     _print_category_table(summaries)
     _print_verdict(summaries, baseline_r)
+    _retention_sanity_check(variant_results)
+    _print_retention_verdict(summaries)
 
     # Step 5: compute mean chunk length for surprise_chunks.
     # IMPORTANT: total_turns must only count conversations that were actually
@@ -1312,6 +1576,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--include-prior", action="store_true",
                    help="Re-enable the surprise_prior variants (disabled by default; "
                         "scored flat +0.0000 at all alphas in prior runs).")
+    p.add_argument("--include-existing", action="store_true",
+                   help="Also run surprise_chunks and write_skip variants "
+                        "(gated by default on bench/e1-retention; this branch "
+                        "focuses on the 12 retention-budget variants for E-008).")
     return p.parse_args()
 
 
