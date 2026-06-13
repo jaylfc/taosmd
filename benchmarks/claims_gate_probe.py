@@ -71,14 +71,39 @@ from taosmd.claims.verify_pass import verify_pass  # noqa: E402
 # the standard runner's measurement exactly.
 from locomo_runner import (  # noqa: E402
     ANSWER_PROMPT,
+    JUDGE_PROMPT,
     _build_context,
     _evidence_hits,
     _generate,
-    _judge,
     _load_reranker,
     _retrieve,
     _session_keys,
 )
+
+
+async def _judge_answer(client, args, question: str, reference: str,
+                        predicted: str) -> float:
+    """External YES/NO judge, with the same think-suppression as the generator
+    (both qwen3 judges/generators emit chain-of-thought otherwise, which the
+    runner's bare _judge does not strip). Returns 1.0 for a YES verdict."""
+    try:
+        reply = await _generate(
+            args.llm_backend, client, args.ollama_url, args.judge_model,
+            JUDGE_PROMPT.format(question=question, reference=reference,
+                                predicted=predicted),
+            temperature=0.0,
+            no_think_prefix=args.no_think_prefix,
+        )
+    except Exception:  # noqa: BLE001
+        return 0.0
+    # Robust parse: first real token after any (possibly empty) think block.
+    cleaned = reply.strip().upper()
+    for tok in cleaned.replace("<", " ").replace(">", " ").split():
+        if tok.startswith("YES"):
+            return 1.0
+        if tok.startswith("NO"):
+            return 0.0
+    return 0.0
 
 MODES = ("off", "prefer_verified", "strict")
 _HALLUCINATED = ("unsupported", "contradicted")
@@ -211,15 +236,13 @@ async def _process_qa(
                 args.llm_backend, client, args.ollama_url, args.model,
                 ANSWER_PROMPT.format(context=context, question=question),
                 temperature=0.2,
+                no_think_prefix=args.no_think_prefix,
             )
         except Exception as exc:  # noqa: BLE001 - record, never crash the sweep
             print(f"[e009] generate failed ({mode}): {type(exc).__name__}: {exc}",
                   file=sys.stderr)
             predicted = ""
-        judged = await _judge(
-            client, args.ollama_url, args.judge_model,
-            question, reference, predicted, backend=args.llm_backend,
-        )
+        judged = await _judge_answer(client, args, question, reference, predicted)
         per_mode[mode] = {
             "predicted": predicted,
             "judge": judged,
@@ -486,7 +509,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--llm-backend", choices=["ollama", "llama-server"], default="ollama")
     p.add_argument("--qmd-url", default="http://localhost:7832")
     p.add_argument("--embed-mode", choices=["qmd", "local", "onnx"], default="onnx")
-    p.add_argument("--onnx-path", default="models/all-MiniLM-L6-v2.onnx")
+    p.add_argument("--onnx-path", default="models/minilm-onnx",
+                   help="ONNX model DIRECTORY (loader appends model.onnx)")
+    p.add_argument("--no-think-prefix", dest="no_think_prefix",
+                   action="store_true", default=True,
+                   help="prepend /no_think (REQUIRED for qwen3:4b/14b; default on)")
+    p.add_argument("--thinking", dest="no_think_prefix", action="store_false",
+                   help="let the model emit chain-of-thought (disables /no_think)")
     p.add_argument("--top-k", type=int, default=10, help="final context size")
     p.add_argument("--retrieval-top-k", type=int, default=None,
                    help="candidate pool fetched before rerank/gate "
