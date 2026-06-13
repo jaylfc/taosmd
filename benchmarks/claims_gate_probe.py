@@ -178,8 +178,14 @@ async def _process_qa(
     evidence = qa.get("evidence", []) or []
 
     # One retrieval; the gate operates post-retrieval, the same place
-    # production applies it. Each mode re-derives its own gated view from a
-    # fresh copy of the raw hits (the gate mutates score/claim_status).
+    # production applies it. ``_retrieve`` fetches a candidate pool of
+    # ``retrieval_top_k`` (the reranker, when present, narrows it to
+    # ``top_k``); we then narrow to ``top_k`` BEFORE gating so every mode --
+    # including the off baseline -- gates exactly the production-shaped input
+    # that ``search(limit=top_k)`` hands to ``_attach_and_gate_claims``. The
+    # gate may then drop hits, so gate-on contexts can be smaller; that is the
+    # real behavior under test, and there is no post-gate slice (production
+    # does not re-slice after gating).
     raw = await _retrieve(
         args.strategy,
         question,
@@ -189,6 +195,7 @@ async def _process_qa(
         fusion=args.fusion,
         rerank_top_k=args.top_k,
     )
+    raw = raw[: args.top_k]
 
     per_mode: dict[str, dict] = {}
     for mode in MODES:
@@ -197,8 +204,7 @@ async def _process_qa(
              "score": h.get("score", 0.0)}
             for h in raw
         ]
-        gated = await _gate(hits, store, mode)
-        context_hits = gated[: args.top_k]
+        context_hits = await _gate(hits, store, mode)
         context = _build_context(context_hits, context_format=args.context_format)
         try:
             predicted = await _generate(
@@ -244,10 +250,11 @@ def _aggregate(rows: list[dict]) -> dict:
             continue
         ms = [r["modes"][mode] for r in rows]
         judge = sum(m["judge"] for m in ms) / n
-        # R@K as a recall rate: retrieved-evidence / total-evidence, over QAs
-        # that have evidence (matches the runner's recall framing).
-        ev = [(m["recall_at_k"], m["evidence_total"]) for m in ms if m["evidence_total"]]
-        recall = (sum(h for h, _ in ev) / sum(t for _, t in ev)) if ev else 0.0
+        # R@K exactly as the LoCoMo runner defines it (_summary): over QAs that
+        # carry evidence, the fraction that retrieved at least one evidence
+        # span. Same number the kill criterion is registered against.
+        hit_rows = [m for m in ms if m["evidence_total"] > 0]
+        recall = (sum(1 for m in hit_rows if m["recall_at_k"] > 0) / len(hit_rows)) if hit_rows else 0.0
         sh = sum(1 for m in ms if m["served_hallucination"]) / n
         out[mode] = {
             "n": n,
@@ -259,7 +266,13 @@ def _aggregate(rows: list[dict]) -> dict:
 
 
 def _verdict(agg: dict) -> dict:
-    """Apply the pre-registered kill criterion to the aggregate."""
+    """Score each gated mode against the off baseline by the pre-registered
+    criterion. ``meets_necessary_conditions`` encodes the two HARD, measurable
+    bounds (judged accuracy and R@K each drop by <= 0.02) plus a non-zero
+    served-hallucination reduction. The registered "meaningful margin" on that
+    reduction is a qualitative human call applied at review against the raw
+    ``served_hallucination_drop`` printed below -- the gate is never flipped
+    silently, so the harness reports the numbers and does not self-authorize."""
     base = agg["off"]
     out = {}
     for mode in ("prefer_verified", "strict"):
@@ -267,7 +280,7 @@ def _verdict(agg: dict) -> dict:
         sh_drop = base["served_hallucination_rate"] - m["served_hallucination_rate"]
         judge_drop = base["judge"] - m["judge"]
         recall_drop = base["recall_rate"] - m["recall_rate"]
-        ships_default_on = (
+        meets_necessary_conditions = (
             sh_drop > 0.0
             and judge_drop <= 0.02
             and recall_drop <= 0.02
@@ -276,7 +289,7 @@ def _verdict(agg: dict) -> dict:
             "served_hallucination_drop": round(sh_drop, 4),
             "judge_drop": round(judge_drop, 4),
             "recall_drop": round(recall_drop, 4),
-            "ships_default_on": ships_default_on,
+            "meets_necessary_conditions": meets_necessary_conditions,
         }
     return out
 
@@ -389,11 +402,11 @@ async def run(args: argparse.Namespace) -> int:
         a = agg[mode]
         print(f"{mode:<16}{a['judge']:>8.3f}{a['recall_rate']:>8.3f}"
               f"{a['served_hallucination_rate']:>13.3f}")
-    print("\nverdict vs gate-off (kill criterion):")
+    print("\nverdict vs gate-off (necessary conditions; 'meaningful margin' is a human call):")
     for mode, v in verdict.items():
         print(f"  {mode}: served_hall_drop={v['served_hallucination_drop']:+.3f}  "
               f"judge_drop={v['judge_drop']:+.3f}  recall_drop={v['recall_drop']:+.3f}  "
-              f"=> ships_default_on={v['ships_default_on']}")
+              f"=> meets_necessary_conditions={v['meets_necessary_conditions']}")
 
     if args.out:
         out_path = Path(args.out)
@@ -475,8 +488,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--embed-mode", choices=["qmd", "local", "onnx"], default="onnx")
     p.add_argument("--onnx-path", default="models/all-MiniLM-L6-v2.onnx")
     p.add_argument("--top-k", type=int, default=10, help="final context size")
-    p.add_argument("--retrieval-top-k", type=int, default=20,
-                   help="candidate pool fetched before gating/reranking")
+    p.add_argument("--retrieval-top-k", type=int, default=None,
+                   help="candidate pool fetched before rerank/gate "
+                        "(default: = top-k; only differs with a reranker)")
     p.add_argument("--reranker", choices=["ms-marco", "bge-v2-m3", "off"], default="off")
     p.add_argument("--fusion", default="boost")
     p.add_argument("--strategy", default="vector-only")
@@ -492,6 +506,8 @@ def main() -> int:
     args = _build_parser().parse_args()
     if args.self_test:
         return asyncio.run(self_test())
+    if args.retrieval_top_k is None:
+        args.retrieval_top_k = args.top_k
     return asyncio.run(run(args))
 
 
