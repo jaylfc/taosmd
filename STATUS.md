@@ -2,7 +2,7 @@
 
 Working snapshot for whoever picks this repo up next. Updated whenever meaningful state changes. Shipped changes live in [CHANGELOG.md](CHANGELOG.md); measured results live in [docs/benchmarks.md](docs/benchmarks.md); the task list of record is GitHub issues.
 
-Last updated: 2026-06-12 (weekly dark window; both agents down until the seven-day reset at 2026-06-14T02:00:00Z)
+Last updated: 2026-06-13 (back online, limits lifted; two experiments running in parallel)
 
 ## Current state
 
@@ -12,16 +12,16 @@ Last updated: 2026-06-12 (weekly dark window; both agents down until the seven-d
 
 ## In flight
 
-- **Nothing running.** All experiments closed, Fedora drained and powered down (565 result files archived to `~/Development/taosmd-bench-archive/fedora-results-20260612/` on the Mac), the VPS is the only available bench target. Both agents dark for the weekly limit; the lead session wakes shortly after the 2026-06-14T02:00:00Z reset.
-- **Interim crew:** a low-risk job pack is live at `docs/agent-jobs/` (README of absolute rules + three jobs: benchmarks.md em-dash sweep, cross-encoder cwd-path fix, dead-import cleanup). Weaker agents PR these to master; they NEVER merge. The waking lead session reviews each PR against its job file's verification section.
+- **E-007 arctic-embed (low-tier dense embedder), judged confirm running on Fedora.** Stage-1 judge-free R@K passed decisively: arctic-embed-s 0.8333 vs MiniLM 0.6768 (+0.157), arctic-xs 0.7374, matched harness, identical latency (report rev 1.11). Arctic ONNX support (query-only prefix + CLS pooling) merged PR #160, default-off. The judged LoCoMo confirm (arctic-s vs MiniLM, dense, qwen3.5:9b gen, gemma4:e2b rescore) is finishing on the GPU before any default change. If it confirms: full-1540 accuracy on Fedora/VPS (NOT the Pi), then a small arctic-embed speed sample on the Pi (PSU lesson, see memory feedback_pi_speed_only).
+- **E-008 surprisal-as-retention-priority (the v2 consolidation kill-shot), running on the VPS.** Tests surprisal as the offline retention signal (forget down to a budget by surprisal vs recency/length/random, judge-free R@K), distinct from the dead retrieval-time signal (report rev 1.12, branch bench/e1-retention). Kill criterion: surprisal must beat the best non-random baseline by >0.02 at >=1 budget and never trail, else the surprisal pillar is dead and v2 pivots to the provenance/claims layer.
 - **qmd fork exit path:** upstream PR tobi/qmd#728 open (tsc cleanup 51 to 3, zero behavior change); #663 (brettdavies, continues our #511 with credit, includes /search + /vsearch) has two ready branches linked from us (`dim-guard-on-663`, `fix-663-test-types`). When #663 merges and a release cuts, our fork can be dropped. Watch both for maintainer replies.
 
-## Queued next (for the post-reset wake)
+## Queued next
 
-1. **v2 P1-vs-P2 fold decision (Jay's call).** Every retrieval-side use of surprisal is now dead (N-009, N-010, and the earlier flat prior), so the re-scoped P1 plan (`~/tinyagentos-private/plans/taosmd-v2-p1-surprisal-traces-plan.md`: provider stack + TraceStore + one-trace-per-turn encoder) rides entirely on the P2 bet that surprisal-seeded strength helps consolidation priority. Decide whether to execute the slim P1 now or fold it into the P2 plan.
-2. **Pausable benchmarks phases 2-3 (#25):** Fedora PAUSE-on-boot orchestration + the hermes rebootwin runbook. Phase 1 (runner checkpointing) is merged.
-3. **Review the interim crew's PRs** against docs/agent-jobs/, and the qmd upstream PRs (#728, #663).
-4. snowflake-arctic-embed-s/xs probe as a MiniLM ONNX drop-in for low-power tiers (long-standing backlog).
+1. **v2 spine direction (Jay confirmed the plan):** give surprisal the one E-008 consolidation shot (running), then pivot to the provenance/claims layer regardless. F-009 (18.8 percent extraction-hallucination rate, cross-family verified) is the strongest v2-relevant result and is unmatched by competitors; it anchors that layer.
+2. **E-007 follow-ups if the confirm holds:** full-1540 judged accuracy (Fedora/VPS) and a small Pi-CPU speed sample, then a default-switch proposal for the low tier.
+3. **Interim job pack** at `docs/agent-jobs/` (three low-risk jobs) remains for weaker agents; review any PRs against each job's verification section, never auto-merge.
+4. snowflake-arctic-embed result feeds the hardware-tier defaults matrix once the confirm lands.
 
 ## Working agreements
 
