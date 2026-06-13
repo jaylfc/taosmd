@@ -59,6 +59,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-005 | Temporal date-range lever: LoCoMo CANNOT measure it (temporal-cat applicability 9.3 percent, under the 10 percent gate); ships default-off | [6](#6-ongoing-work-pre-registered) | resolved (not measurable on LoCoMo) | benchmarks/temporal_applicability_scan.py, master 0535f86 |
 | E-006 | Write-skip floor: SAFE (delta +0.0051, zero evidence skipped) but fires on only 2.3 percent of turns, under the 5 percent shipping floor | [6](#6-ongoing-work-pre-registered) | resolved -> N-010 | VPS e1_write_skip_20260612_143625.json |
 | E-007 | Arctic-embed vs MiniLM low-tier dense: Stage-1 R@K PASSED (arctic-s 0.8333 vs MiniLM 0.6768, +0.157; arctic-xs 0.7374); judged confirm in flight | [6](#6-ongoing-work-pre-registered) | stage 1 passed, judged confirm in flight | bench host e007_*_20260613_122113.json |
+| E-008 | Surprisal as a forgetting/retention-priority signal under a memory budget (the v2 consolidation kill-shot): keep-by-surprisal vs recency/length/random, judge-free R@K | [6](#6-ongoing-work-pre-registered) | pre-registered, building | bench branch (retention probe) |
 
 ---
 
@@ -438,6 +439,16 @@ Stage 1 result (2026-06-13), R@K gate PASSED decisively: judge-free evidence rec
 
 Status: Stage 1 passed; judged confirm in flight on the GPU host before any default change.
 
+**E-008. Surprisal as a forgetting/retention-priority signal under a memory budget.**
+
+The consolidation kill-shot for the v2 surprisal pillar, designed to test a claim today's negatives do NOT touch. N-009 and N-010 tested surprisal at retrieval time over the full corpus (which turns to chunk, skip, or boost when answering). E-008 tests it as the offline retention signal, the core sleep-consolidation decision: when an agent must forget down to a working-set budget B (the archive keeps everything; this is only what stays in the live compilation), is surprisal a better "keep" signal than the cheap baselines?
+
+Design: per conversation, score per-turn surprisal (reuse the E1 probe's cached scores). Apply a retention budget B in {25, 50, 75} percent, keeping only that fraction of turns under four policies: keep-highest-surprisal, keep-most-recent (recency), keep-longest (length, a content proxy), and keep-random (uniform, deterministic by conversation id, the floor). Re-index only the retained turns and measure judge-free R@K: evidence in a dropped turn counts as a miss. Judge-free and CPU-only, so it runs on the VPS while the GPU host stays free. This is distinct from write-skip (N-010): that was a fixed low-surprisal-short threshold firing on 2.3 percent of turns; this is a retention curve where surprisal selects across all turns at several budgets against recency, the baseline it must beat to justify the scorer's cost.
+
+Kill criterion (verbatim): "surprisal-priority retention must beat the best non-random baseline (recency or length) by more than 0.02 R@K at one or more matched budgets and must not trail it at any budget, for the consolidation-strength bet to survive. If surprisal does not clearly beat recency, the surprisal pillar of v2 is dead and the spine pivots to the provenance and claims layer."
+
+Status: pre-registered; retention-budget probe being built, to run on the VPS.
+
 ---
 
 ## 7. Revision Log
@@ -456,5 +467,6 @@ This log is append-only. History is never rewritten.
 | 2026-06-12 | 1.7 | E-004 root cause found: the pylate loader is exonerated (direct load test shows the trained 96-dim Stanford projection applied correctly); the 0.050 and 0.0 results came from the search gate bug plus a pre-fix checkout on the bench host. The earlier "96 vs 128" blocker note was a misdiagnosis. Full projected-space comparison re-running. Index status updated. |
 | 2026-06-12 | 1.8 | E-004 resolved to N-008: both ColBERT projected spaces 0.730 vs answerai backbone 0.760 on subset-200 gemma; decision rule quoted, no recipe upgrade; the 4x token-matrix footprint trade of the 96-dim space recorded. benchmarks.md late-interaction section updated with the projected-space table. |
 | 2026-06-12 | 1.9 | E-001 resolved to N-009: the matched-turn-budget control shows surprise-boundary chunking was a coverage artifact (baseline at k=120 beats chunks at k=20 by 0.15); kill criterion quoted; both surprisal retrieval arms now dead. Methods lesson recorded: compare chunking levers at matched turn budget, never matched k. |
+| 2026-06-13 | 1.12 | Pre-registered E-008, the v2 consolidation kill-shot: surprisal as a forgetting/retention-priority signal under a memory budget, judge-free R@K vs recency/length/random across budgets. Designed explicitly to test the consolidation claim that N-009/N-010 (retrieval-time) do not, with a kill criterion that pivots v2 to the provenance/claims layer if surprisal does not beat recency. |
 | 2026-06-13 | 1.11 | Pre-registered E-007 (arctic-embed s/xs vs all-MiniLM as the low-tier dense embedder) with its kill criterion before any run. Recorded the validity gate: arctic-embed needs a query-only prefix and CLS pooling, implemented in feat/arctic-embed-onnx first, or the comparison is a false negative. |
 | 2026-06-12 | 1.10 | E-006 resolved to N-010: the write-skip floor is safe (R@K within noise, zero evidence turns skipped) but fires on only 2.3 percent of turns, under the pre-registered 5 percent shipping floor; not shipped, criterion quoted. With E-001, E-004, and E-006 all resolved today, no pre-registered experiment remains open. |
