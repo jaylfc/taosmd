@@ -58,6 +58,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-004 | pylate projected-space vs backbone: both projected spaces 0.730 vs backbone 0.760 subset-200 gemma; no recipe upgrade | [6](#6-ongoing-work-pre-registered) | resolved -> N-008 | bench host 20260612_142049 rescored_gemma results |
 | E-005 | Temporal date-range lever: LoCoMo CANNOT measure it (temporal-cat applicability 9.3 percent, under the 10 percent gate); ships default-off | [6](#6-ongoing-work-pre-registered) | resolved (not measurable on LoCoMo) | benchmarks/temporal_applicability_scan.py, master 0535f86 |
 | E-006 | Write-skip floor: SAFE (delta +0.0051, zero evidence skipped) but fires on only 2.3 percent of turns, under the 5 percent shipping floor | [6](#6-ongoing-work-pre-registered) | resolved -> N-010 | VPS e1_write_skip_20260612_143625.json |
+| E-007 | Arctic-embed (s/xs) vs all-MiniLM as the low-tier dense embedder: judge-free R@K probe, query-prefix + CLS-pooling enabler shipped first | [6](#6-ongoing-work-pre-registered) | pre-registered, running on Fedora | branch feat/arctic-embed-onnx |
 
 ---
 
@@ -423,6 +424,18 @@ Kill criterion (verbatim): "write-skip is killed if R@K drops by more than 0.005
 
 Resolved (2026-06-12), recorded as N-010. Verdict line: delta=+0.0051, turns_skipped=18/788 (2.3 percent), evidence_turns_skipped=0. Quoting the criterion: "write-skip is killed if R@K drops by more than 0.005; it ships only if R@K is within noise AND turns_skipped >= 5 percent of corpus (otherwise it saves nothing)." The first half passes (no harm: R@K within noise, marginally up, and none of the skipped turns carried evidence, so the classifier is safe at these thresholds). The second half fails: 2.3 percent skipped is under the 5 percent floor, so the floor saves nothing worth its complexity on this corpus and does not ship. Honest caveat for later: LoCoMo turns are long dialogue contributions with few bare acknowledgements; a real agent transcript corpus with denser greetings might clear the floor, and re-running this probe on such a corpus is the right precondition for revisiting. Provenance: VPS benchmarks/results/e1_write_skip_20260612_143625.json, branch bench/e1-write-skip (46793e0).
 
+**E-007. Arctic-embed as the low-power-tier dense embedder.**
+
+Hypothesis: Snowflake arctic-embed-s (33M) and arctic-embed-xs (22M), strong small MTEB retrieval models, beat the current all-MiniLM ONNX dense baseline (subset-200 R@K 0.641 on the CPU probe) as the dense retriever at comparable size and latency, which would make one of them a better default for the low-end and offline tier this project targets. Both are 384-dim, a clean MiniLM drop-in.
+
+Methodology note that gates validity: arctic-embed is asymmetric and CLS-pooled. It needs the query-only prefix "Represent this sentence for searching relevant passages: " (no document prefix) and CLS-token pooling, not mean pooling. Pointing the existing ONNX path at it without those silently cripples it and would produce a false negative. Support added in feat/arctic-embed-onnx (query-only prefix + CLS pooling, selected by model name, with tests) before any run; the experiment is invalid without it.
+
+Design: the judge-free retrieval probe (benchmarks/retrieval_latency_probe.py), subset-200, --embed-mode onnx, --reranker off, dense only (no late interaction), R@K and per-query latency. Three arms at matched harness: all-MiniLM baseline, arctic-embed-s, arctic-embed-xs, plus the int8 ONNX of the winner if one emerges (the low-power tier cares about size). On the Fedora GPU host for throughput; the retrieval logic is identical to the CPU probe, only embedding is accelerated.
+
+Kill criterion (verbatim): "arctic-embed replaces all-MiniLM as the low-tier dense default only if it beats MiniLM R@K by more than 0.02 on subset-200 at the matched harness; a tie or loss keeps MiniLM (smaller, proven). A winner is then confirmed with a judged LoCoMo run before any recipe or default changes."
+
+Status: enabler merged-pending (PR open), run launching on the Fedora host.
+
 ---
 
 ## 7. Revision Log
@@ -441,4 +454,5 @@ This log is append-only. History is never rewritten.
 | 2026-06-12 | 1.7 | E-004 root cause found: the pylate loader is exonerated (direct load test shows the trained 96-dim Stanford projection applied correctly); the 0.050 and 0.0 results came from the search gate bug plus a pre-fix checkout on the bench host. The earlier "96 vs 128" blocker note was a misdiagnosis. Full projected-space comparison re-running. Index status updated. |
 | 2026-06-12 | 1.8 | E-004 resolved to N-008: both ColBERT projected spaces 0.730 vs answerai backbone 0.760 on subset-200 gemma; decision rule quoted, no recipe upgrade; the 4x token-matrix footprint trade of the 96-dim space recorded. benchmarks.md late-interaction section updated with the projected-space table. |
 | 2026-06-12 | 1.9 | E-001 resolved to N-009: the matched-turn-budget control shows surprise-boundary chunking was a coverage artifact (baseline at k=120 beats chunks at k=20 by 0.15); kill criterion quoted; both surprisal retrieval arms now dead. Methods lesson recorded: compare chunking levers at matched turn budget, never matched k. |
+| 2026-06-13 | 1.11 | Pre-registered E-007 (arctic-embed s/xs vs all-MiniLM as the low-tier dense embedder) with its kill criterion before any run. Recorded the validity gate: arctic-embed needs a query-only prefix and CLS pooling, implemented in feat/arctic-embed-onnx first, or the comparison is a false negative. |
 | 2026-06-12 | 1.10 | E-006 resolved to N-010: the write-skip floor is safe (R@K within noise, zero evidence turns skipped) but fires on only 2.3 percent of turns, under the pre-registered 5 percent shipping floor; not shipped, criterion quoted. With E-001, E-004, and E-006 all resolved today, no pre-registered experiment remains open. |
