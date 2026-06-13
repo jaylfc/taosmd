@@ -55,23 +55,30 @@ def _load_config(data_dir: str) -> dict:
         return {}
 
 
-def _resolve_onnx_path(data_dir: str) -> str | None:
-    """Find the MiniLM ONNX model directory.
+def _has_onnx_model(d: Path) -> bool:
+    """True if ``d`` holds an ONNX model at the root or under ``onnx/``."""
+    return (d / "model.onnx").exists() or (d / "onnx" / "model.onnx").exists()
 
-    Search order: ``$TAOSMD_ONNX_PATH``, ``<data_dir>/models/minilm-onnx``,
-    ``$TAOSMD_DIR/models/minilm-onnx`` (set by ``scripts/setup.sh``),
-    ``~/taosmd/models/minilm-onnx`` (default install root). Returns None
-    when no candidate has a ``model.onnx`` file.
+
+def _resolve_onnx_path(data_dir: str, model_name: str = "minilm-onnx") -> str | None:
+    """Find the ONNX embedding model directory for ``model_name``.
+
+    Search order: ``$TAOSMD_ONNX_PATH`` (honoured only for the MiniLM default,
+    to preserve existing installs), ``<data_dir>/models/<model_name>``,
+    ``$TAOSMD_DIR/models/<model_name>`` (set by ``scripts/setup.sh``). Returns
+    None when no candidate holds a ``model.onnx`` (root or ``onnx/`` subdir).
+    The directory name is the embedder identity, so the dense default can move
+    (e.g. MiniLM to arctic-embed-s) by changing one config value.
     """
     env = os.environ.get("TAOSMD_ONNX_PATH")
-    if env and (Path(env) / "model.onnx").exists():
+    if model_name == "minilm-onnx" and env and _has_onnx_model(Path(env)):
         return env
     candidates = [
-        Path(data_dir) / "models" / "minilm-onnx",
-        Path(os.environ.get("TAOSMD_DIR", os.path.expanduser("~/taosmd"))) / "models" / "minilm-onnx",
+        Path(data_dir) / "models" / model_name,
+        Path(os.environ.get("TAOSMD_DIR", os.path.expanduser("~/taosmd"))) / "models" / model_name,
     ]
     for candidate in candidates:
-        if (candidate / "model.onnx").exists():
+        if _has_onnx_model(candidate):
             return str(candidate)
     return None
 
@@ -100,7 +107,10 @@ async def _ensure_stores(data_dir=None) -> dict:
         path.mkdir(parents=True, exist_ok=True)
         config = _load_config(resolved)
         embed_mode = config.get("vector_memory", {}).get("embed_mode", "onnx")
-        onnx_path = _resolve_onnx_path(resolved) if embed_mode == "onnx" else ""
+        # The dense embedder is configurable (seeded from the recommended recipe
+        # at setup): the low tiers default to arctic-embed-s, others to MiniLM.
+        embed_model = config.get("vector_memory", {}).get("embed_model", "minilm-onnx")
+        onnx_path = _resolve_onnx_path(resolved, embed_model) if embed_mode == "onnx" else ""
         if embed_mode == "onnx" and onnx_path is None:
             logger.warning(
                 "taosmd: ONNX model not found under %s/models or $TAOSMD_DIR; "
