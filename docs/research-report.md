@@ -22,6 +22,7 @@
   - [3.4 CPU-tier retrieval-only latency probe](#34-cpu-tier-retrieval-only-latency-probe)
   - [3.5 LongMemEval-S end-to-end](#35-longmemeval-s-end-to-end)
   - [3.6 Shipped recipe: lateint-9b](#36-shipped-recipe-lateint-9b)
+  - [3.7 Low-tier dense embedder: arctic-embed vs MiniLM](#37-low-tier-dense-embedder-arctic-embed-vs-minilm)
 - [4. Negative Results](#4-negative-results)
 - [5. Reproducibility](#5-reproducibility)
 - [6. Ongoing Work (Pre-registered)](#6-ongoing-work-pre-registered)
@@ -42,6 +43,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | F-007 | lateint-9b shipped recipe: answerai + mem0_additive + k=10, retrieval_k=20, adj=2, no reranker | [3.6](#36-shipped-recipe-lateint-9b) | confirmed | CHANGELOG.md Unreleased, "Late-interaction retrieval lever and lateint-9b recipe" |
 | F-008 | Same-model judging inflates scores 15-22 pp vs external judge (quantified on qwen3.5:9b self-judge: +0.10 on this stack) | [2.1](#21-external-multi-judge-protocol) | confirmed | docs/benchmarks.md section "Judge sensitivity what we are really measuring" |
 | F-009 | Extraction-hallucination rate 18.8 percent (PARTIAL+UNSUPPORTED) over 526 claims, cross-family verified | [3.5](#35-extraction-hallucination-rate-f-009) | confirmed | bench host 20260611 e2 verifier summary |
+| F-010 | Arctic-embed-s beats MiniLM as low-tier dense embedder: +0.157 R@K and +0.040 judged (subset-200, same harness, same 384 dim, same latency); full-1540 in flight | [3.7](#37-low-tier-dense-embedder-arctic-embed-vs-minilm) | confirmed (subset-200) | bench host e007_*/e007c_* 20260613 |
 | N-001 | CLAG cluster pre-filter: worst variant -0.285 gemma, best variant -0.085 gemma; not shipped | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md section "CLAG cluster pre-filter negative at our tier, not shipped" |
 | N-002 | Chain-of-Memory: -0.16 single-hop for +0.02 overall at 1.8x latency (frontier-tuned, lossy at our tier) | [4](#4-negative-results) | confirmed negative | project memory (reference_memory_landscape_may2026.md), Chain-of-Memory TESTED May 31 |
 | N-003 | Few-shot prompting: -0.017 vs leader (full-stack + 5 exemplars = 0.540 vs 0.557 leader) | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md section "Negative results levers we tested that regressed at 9B + adj=2" |
@@ -58,7 +60,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-004 | pylate projected-space vs backbone: both projected spaces 0.730 vs backbone 0.760 subset-200 gemma; no recipe upgrade | [6](#6-ongoing-work-pre-registered) | resolved -> N-008 | bench host 20260612_142049 rescored_gemma results |
 | E-005 | Temporal date-range lever: LoCoMo CANNOT measure it (temporal-cat applicability 9.3 percent, under the 10 percent gate); ships default-off | [6](#6-ongoing-work-pre-registered) | resolved (not measurable on LoCoMo) | benchmarks/temporal_applicability_scan.py, master 0535f86 |
 | E-006 | Write-skip floor: SAFE (delta +0.0051, zero evidence skipped) but fires on only 2.3 percent of turns, under the 5 percent shipping floor | [6](#6-ongoing-work-pre-registered) | resolved -> N-010 | VPS e1_write_skip_20260612_143625.json |
-| E-007 | Arctic-embed vs MiniLM low-tier dense: Stage-1 R@K PASSED (arctic-s 0.8333 vs MiniLM 0.6768, +0.157; arctic-xs 0.7374); judged confirm in flight | [6](#6-ongoing-work-pre-registered) | stage 1 passed, judged confirm in flight | bench host e007_*_20260613_122113.json |
+| E-007 | Arctic-embed vs MiniLM low-tier dense: BOTH stages passed (R@K +0.157, judged +0.040 subset-200); full-1540 in flight before default flip | [6](#6-ongoing-work-pre-registered) | resolved -> F-010 (subset-200); full-1540 in flight | bench host e007c_*_20260613 rescored_gemma |
 | E-008 | Surprisal as a forgetting/retention-priority signal under a memory budget (the v2 consolidation kill-shot): keep-by-surprisal vs recency/length/random, judge-free R@K | [6](#6-ongoing-work-pre-registered) | pre-registered, building | bench branch (retention probe) |
 
 ---
@@ -229,6 +231,18 @@ A cross-family claim-verification pass measured how often the extraction step st
 Across 526 claims from three conversations, the PARTIAL plus UNSUPPORTED rate was 18.8 percent (verifier error rate 0.2 percent, one claim). Per conversation: conv-26 22.0 percent (168 claims), conv-30 12.6 percent (103 claims), conv-41 19.2 percent (255 claims). In plain terms, close to one in five extracted facts is not fully supported by the turn it was drawn from. This is a measurement nobody else in this space reports, and it is the quantitative case for the provenance-and-verification direction: a memory layer that keeps the source can measure and re-verify its own claims, while an extraction-only layer cannot.
 
 Source: bench host results 20260611 e2 claim-verifier pairs and summary.
+
+### 3.7 Low-tier dense embedder: arctic-embed vs MiniLM
+
+The low-end and offline tier this project targets uses a dense ONNX embedder (all-MiniLM-L6-v2) rather than the leader's late-interaction path. E-007 asked whether a modern small retriever beats it. Snowflake arctic-embed-s (33M, 384 dim, a clean MiniLM drop-in) does, decisively, at the same dimension and latency.
+
+| Embedder (dense, subset-200, same harness) | R@K (judge-free) | Judged (qwen3.5:9b gen, gemma4:e2b) |
+|---|---|---|
+| all-MiniLM-L6-v2 (baseline) | 0.6768 | 0.6750 |
+| arctic-embed-s (33M) | 0.8333 (+0.1565) | 0.7150 (+0.0400) |
+| arctic-embed-xs (22M) | 0.7374 (+0.0606) | not yet judged |
+
+Both stages are on subset-200, so expect plus or minus 0.02 judge noise; the +0.040 judged delta is twice that and consistent with the much larger retrieval signal. A methodology note that mattered: arctic-embed is asymmetric (a query-only prefix) and CLS-pooled; the ONNX path had to be taught both or arctic would have mean-pooled with no prefix and posted a false negative (enabler PR #160, default-off). A full-1540 judged run is in flight before the low-tier default is changed. Provenance: bench host benchmarks/results/e007_{minilm_baseline,arctic_s,arctic_xs}_20260613_122113.json (R@K) and e007c_{minilm,arctic_s}_20260613_122948.rescored_gemma.json (judged).
 
 ## 4. Negative Results
 
@@ -437,7 +451,9 @@ Kill criterion (verbatim): "arctic-embed replaces all-MiniLM as the low-tier den
 
 Stage 1 result (2026-06-13), R@K gate PASSED decisively: judge-free evidence recall on subset-200 at matched harness (dense, reranker off, adj=2, identical flags, only the embedder swapped), MiniLM 0.6768, arctic-embed-s 0.8333 (+0.1565), arctic-embed-xs 0.7374 (+0.0606). Both clear the 0.02 gate; per-query latency is identical (~705ms p50, same harness, the embedding cost difference is dwarfed by the rest of the pipeline). This is judge-free recall, so no judge inflation to discount; the gain is consistent with MiniLM-L6 being an old, weak retriever against a modern small one. Per the criterion a judged LoCoMo confirm is required before any default change: that run (arctic-s vs MiniLM, dense, qwen3.5:9b generator, gemma4:e2b rescore) is in flight on the GPU host. The enabler (arctic-embed ONNX support) merged in PR #160; the MiniLM default is unchanged pending the judged confirm. Provenance: bench host benchmarks/results/e007_{minilm_baseline,arctic_s,arctic_xs}_20260613_122113.json.
 
-Status: Stage 1 passed; judged confirm in flight on the GPU host before any default change.
+Stage 2 result (2026-06-13), judged confirm PASSED: subset-200 with qwen3.5:9b generation and gemma4:e2b rescore, MiniLM 0.6750 vs arctic-embed-s 0.7150, +0.0400 judged. The large retrieval gain (+0.157 R@K) compresses to +0.040 at the answer level, the expected pattern (generation recovers from some retrieval misses, and the lenient judge has a ceiling), but it is real and directionally consistent across both stages. Recorded as F-010. A full-1540 judged run (both arms, same recipe, checkpointed) is in flight on the GPU host to firm the magnitude before any user-facing default change; the published number and the default flip wait on it (and ideally the tri-judge). Provenance: bench host benchmarks/results/e007c_{minilm,arctic_s}_20260613_122948.rescored_gemma.json.
+
+Status: resolved to F-010 on subset-200 (both stages passed); full-1540 confirm in flight before the low-tier default is switched.
 
 **E-008. Surprisal as a forgetting/retention-priority signal under a memory budget.**
 
@@ -467,6 +483,7 @@ This log is append-only. History is never rewritten.
 | 2026-06-12 | 1.7 | E-004 root cause found: the pylate loader is exonerated (direct load test shows the trained 96-dim Stanford projection applied correctly); the 0.050 and 0.0 results came from the search gate bug plus a pre-fix checkout on the bench host. The earlier "96 vs 128" blocker note was a misdiagnosis. Full projected-space comparison re-running. Index status updated. |
 | 2026-06-12 | 1.8 | E-004 resolved to N-008: both ColBERT projected spaces 0.730 vs answerai backbone 0.760 on subset-200 gemma; decision rule quoted, no recipe upgrade; the 4x token-matrix footprint trade of the 96-dim space recorded. benchmarks.md late-interaction section updated with the projected-space table. |
 | 2026-06-12 | 1.9 | E-001 resolved to N-009: the matched-turn-budget control shows surprise-boundary chunking was a coverage artifact (baseline at k=120 beats chunks at k=20 by 0.15); kill criterion quoted; both surprisal retrieval arms now dead. Methods lesson recorded: compare chunking levers at matched turn budget, never matched k. |
+| 2026-06-13 | 1.13 | E-007 resolved to F-010 on subset-200: arctic-embed-s beats MiniLM as the low-tier dense embedder, +0.157 R@K and +0.040 judged at the same dimension and latency, both stages passed. Added results subsection 3.7. Full-1540 judged confirm in flight before the user-facing default is switched. First positive finding after N-008/N-009/N-010. |
 | 2026-06-13 | 1.12 | Pre-registered E-008, the v2 consolidation kill-shot: surprisal as a forgetting/retention-priority signal under a memory budget, judge-free R@K vs recency/length/random across budgets. Designed explicitly to test the consolidation claim that N-009/N-010 (retrieval-time) do not, with a kill criterion that pivots v2 to the provenance/claims layer if surprisal does not beat recency. |
 | 2026-06-13 | 1.11 | Pre-registered E-007 (arctic-embed s/xs vs all-MiniLM as the low-tier dense embedder) with its kill criterion before any run. Recorded the validity gate: arctic-embed needs a query-only prefix and CLS pooling, implemented in feat/arctic-embed-onnx first, or the comparison is a false negative. |
 | 2026-06-12 | 1.10 | E-006 resolved to N-010: the write-skip floor is safe (R@K within noise, zero evidence turns skipped) but fires on only 2.3 percent of turns, under the pre-registered 5 percent shipping floor; not shipped, criterion quoted. With E-001, E-004, and E-006 all resolved today, no pre-registered experiment remains open. |
