@@ -131,11 +131,15 @@ async def _ensure_stores(data_dir=None) -> dict:
         await vmem.init()
         kg = TemporalKnowledgeGraph(db_path=str(path / "knowledge-graph.db"))
         await kg.init()
+        from taosmd.claims.store import ClaimStore  # noqa: PLC0415
+        claims = ClaimStore(db_path=str(path / "claims.db"))
+        await claims.init()
 
         stores = {
             "archive": archive,
             "vector": vmem,
             "kg": kg,
+            "claims": claims,
             "data_dir": str(path),
         }
         _stores_cache[resolved] = stores
@@ -205,7 +209,7 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
         text = str(item.get("content", "")).strip()
         if not text:
             continue
-        await stores["archive"].record(
+        span_id = await stores["archive"].record(
             "conversation",
             item,
             agent_name=agent,
@@ -219,7 +223,18 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
             meta["role"] = item["role"]
         if "timestamp" in item:
             meta["timestamp"] = item["timestamp"]
+        # Provenance: tag the vector row with its archive span so the recall
+        # gate can look up the verification status of the claims it backs.
+        if isinstance(span_id, int) and span_id >= 0:
+            meta["archive_span_id"] = span_id
         await stores["vector"].add(text, metadata=meta)
+        # Claims layer (additive): extract facts as claims tagged with the same
+        # archive span. Stored unverified; the verify-pass checks them async.
+        if "claims" in stores and isinstance(span_id, int) and span_id >= 0:
+            from taosmd.claims.extract import claims_from_text  # noqa: PLC0415
+            for c in claims_from_text(text, span_id):
+                await stores["claims"].add_claim(
+                    c["text"], c["archive_span_ids"], c["source_extractor"])
         archived += 1
 
     update_stats(agent, last_ingest_at=int(time.time()))
@@ -318,6 +333,30 @@ async def ingest_batch(
     }
 
 
+async def _attach_and_gate_claims(hits: list[dict], claim_store, mode: str) -> list[dict]:
+    """Attach each hit's backing-claim status (looked up by its source archive
+    span) and apply the recall gate. ``mode`` "off" is a no-op passthrough.
+
+    Operates on formatted hits (which carry ``confidence``); the pure gate sorts
+    by ``score``, so a transient ``score`` mirror of ``confidence`` is set for
+    the gate and stripped afterward, leaving the hit contract clean. The store
+    lookup runs only when the gate is on.
+    """
+    if mode == "off" or not hits:
+        return hits
+    from taosmd.claims.gate import apply_claims_gate  # noqa: PLC0415
+    for h in hits:
+        span = (h.get("metadata") or {}).get("archive_span_id")
+        spans = [span] if isinstance(span, int) else []
+        h["claim_status"] = await claim_store.status_for_spans(spans)
+        h["score"] = h.get("confidence", 0.0)
+    gated = apply_claims_gate(hits, mode=mode)
+    for h in gated:
+        h.pop("score", None)
+        h.pop("claim_status", None)
+    return gated
+
+
 def _format_hit(hit: dict) -> dict:
     """Reshape a retrieve() hit into the agent-rules contract shape.
 
@@ -361,6 +400,7 @@ async def search(
     also_include: list[str] | None = None,
     limit: int = 5,
     mode: str | None = None,
+    prefer_verified: str = "off",
     data_dir=None,
 ) -> list[dict]:
     """Search the librarian's shelves for passages relevant to ``query``.
@@ -428,7 +468,7 @@ async def search(
                 "source_score": h.get("similarity", 0.0),
                 "metadata": md,
             }))
-        return hits
+        return await _attach_and_gate_claims(hits, stores.get("claims"), prefer_verified)
 
     # Resolve the active recipe (per-agent -> global default -> recommend()[0])
     # and map its retrieval knobs onto the retrieve() call below.
@@ -473,7 +513,7 @@ async def search(
     hits = [_format_hit(hit) for hit in raw]
     if degraded and hits:
         hits[0].setdefault("metadata", {})["recipe_degraded"] = degraded
-    return hits
+    return await _attach_and_gate_claims(hits, stores.get("claims"), prefer_verified)
 
 
 async def list_projects(*, data_dir=None) -> list[dict]:

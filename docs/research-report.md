@@ -63,6 +63,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-006 | Write-skip floor: SAFE (delta +0.0051, zero evidence skipped) but fires on only 2.3 percent of turns, under the 5 percent shipping floor | [6](#6-ongoing-work-pre-registered) | resolved -> N-010 | VPS e1_write_skip_20260612_143625.json |
 | E-007 | Arctic-embed vs MiniLM low-tier dense: CONFIRMED full-1540 (judged +0.0565, 0.7305 vs 0.6740) + R@K +0.157; clear default-change-worthy win | [6](#6-ongoing-work-pre-registered) | resolved -> F-010 (full-1540) | bench host e007full_*_20260613_131837 |
 | E-008 | Surprisal as retention-priority signal: KILLED, worst of all policies at every budget (below random); length wins. Surprisal pillar dead, v2 pivots to provenance/claims | [6](#6-ongoing-work-pre-registered) | resolved -> N-011 | VPS e008_retention_20260613_115258.json |
+| E-009 | Claims gate (Provable Memory): does verified-preferred recall cut the served-hallucination rate without dropping judged accuracy/R@K? gate off vs prefer_verified vs strict | [6](#6-ongoing-work-pre-registered) | pre-registered | branch feat/claims-layer |
 
 ---
 
@@ -482,6 +483,16 @@ Quoting the criterion: "surprisal-priority retention must beat the best non-rand
 
 Status: resolved to N-011 (surprisal retention killed); v2 spine pivots to provenance/claims.
 
+**E-009. Does the claims gate improve answers without tanking recall?**
+
+The validation gate for the v2 claims layer (Provable Memory), the additive default-off layer that verifies extracted claims against their archive spans (cross-family local entailment, async) and demotes unverified/unsupported claims from recall. This experiment decides whether the gate ships default-on.
+
+Design: on a LoCoMo slice, ingest with claims extracted and a verify-pass run (real cross-family local judge), then answer the QAs three ways, gate off (baseline), prefer_verified (demote unsupported, prefer supported), and strict (also exclude unverified), judged externally. Report, per mode: judged accuracy, R@K (to confirm demotion does not discard needed evidence), and the served-hallucination rate (share of answers citing an unsupported claim). Harness: benchmarks/claims_gate_probe.py (to build), checkpointable.
+
+Kill criterion (verbatim): "the claims gate ships default-on only if it reduces the served-hallucination rate by a meaningful margin AND does not drop judged accuracy or R@K by more than 0.02. If it trades accuracy for purity, it ships default-OFF as an opt-in integrity mode with its measured trade documented; it is never silently enabled."
+
+Status: pre-registered before any run. The claims layer code (taosmd/claims/, default-off) is on branch feat/claims-layer; this experiment runs before the flag is flipped.
+
 ---
 
 ## 7. Revision Log
@@ -500,6 +511,7 @@ This log is append-only. History is never rewritten.
 | 2026-06-12 | 1.7 | E-004 root cause found: the pylate loader is exonerated (direct load test shows the trained 96-dim Stanford projection applied correctly); the 0.050 and 0.0 results came from the search gate bug plus a pre-fix checkout on the bench host. The earlier "96 vs 128" blocker note was a misdiagnosis. Full projected-space comparison re-running. Index status updated. |
 | 2026-06-12 | 1.8 | E-004 resolved to N-008: both ColBERT projected spaces 0.730 vs answerai backbone 0.760 on subset-200 gemma; decision rule quoted, no recipe upgrade; the 4x token-matrix footprint trade of the 96-dim space recorded. benchmarks.md late-interaction section updated with the projected-space table. |
 | 2026-06-12 | 1.9 | E-001 resolved to N-009: the matched-turn-budget control shows surprise-boundary chunking was a coverage artifact (baseline at k=120 beats chunks at k=20 by 0.15); kill criterion quoted; both surprisal retrieval arms now dead. Methods lesson recorded: compare chunking levers at matched turn budget, never matched k. |
+| 2026-06-13 | 1.16 | Pre-registered E-009, the validation gate for the v2 claims layer (Provable Memory): does verified-preferred recall cut the served-hallucination rate without dropping judged accuracy or R@K? Kill criterion written before any run; the default-off claims layer code is on branch feat/claims-layer. |
 | 2026-06-13 | 1.15 | E-007 (F-010) confirmed at full-1540: arctic-embed-s 0.7305 vs MiniLM 0.6740 judged, +0.0565, larger than the subset-200 delta. Default-change-worthy; ship-the-win PR is the next action. |
 | 2026-06-13 | 1.14 | E-008 resolved to N-011: surprisal is the worst retention-priority signal (below random at every budget); length wins. The v2 surprisal pillar is conclusively dead across retrieval (N-009/N-010) and consolidation, so the spine pivots to the provenance/claims layer (F-009) per the pre-registered criterion. Length flagged as a positive side-finding for future pre-registration. |
 | 2026-06-13 | 1.13 | E-007 resolved to F-010 on subset-200: arctic-embed-s beats MiniLM as the low-tier dense embedder, +0.157 R@K and +0.040 judged at the same dimension and latency, both stages passed. Added results subsection 3.7. Full-1540 judged confirm in flight before the user-facing default is switched. First positive finding after N-008/N-009/N-010. |
