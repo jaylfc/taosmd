@@ -126,6 +126,20 @@ trained ColBERT projection space — sentence-transformers does not apply
 projection heads on the token path; a pylate loader is queued to measure the
 true projected space.)
 
+**Low-tier dense default: arctic-embed-s (F-010, E-007).** The dense embedder
+itself was the next lever. On a matched harness (subset-200, dense, reranker
+off, adjacent-turns 2, only the embedder swapped), Snowflake arctic-embed-s
+beats all-MiniLM-L6-v2 by +0.157 judge-free R@K (0.833 vs 0.677) at the same
+384 dim and latency class, and the win carries to answers: judged +0.040
+subset-200 and **+0.0565 at full-1540 (0.7305 vs 0.6740**, qwen3.5:9b
+generator, gemma4:e2b). MiniLM-L6 is a 2021 retriever; arctic-embed-s is a
+modern small one, so the gap is unsurprising. The low-tier recipes (`lite-pi`,
+`fast-8b`) now select arctic-embed-s as the dense embedder; `scripts/setup.sh`
+fetches it and it is registered in the taOS model store. The asymmetric
+handling that makes it work (query-only prefix, CLS pooling) is in the ONNX
+embed path. Higher GPU tiers keep MiniLM pending their own recipe-level
+tri-judge re-run. Provenance: bench host e007_*/e007full_* 20260613.
+
 **Community-standard judge column (qwen3:14b).** The same three full-1540
 prediction files rejudged with qwen3:14b, the official judge of the
 LoCoMo-Refined benchmark, to make our numbers comparable beyond our own judge

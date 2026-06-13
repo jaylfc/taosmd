@@ -299,12 +299,17 @@ class VectorMemory:
                 import onnxruntime as ort
                 from transformers import AutoTokenizer
                 model_dir = self._onnx_path or "models/minilm-onnx"
+                # Find model.onnx at the dir root or under an onnx/ subdir
+                # (the layout arctic-embed and most HF ONNX exports ship).
+                model_file = f"{model_dir}/model.onnx"
+                if not Path(model_file).exists() and Path(f"{model_dir}/onnx/model.onnx").exists():
+                    model_file = f"{model_dir}/onnx/model.onnx"
                 self._onnx_session = ort.InferenceSession(
-                    f"{model_dir}/model.onnx",
+                    model_file,
                     providers=["CPUExecutionProvider"],
                 )
                 self._onnx_tokenizer = AutoTokenizer.from_pretrained(model_dir)
-                logger.info("Loaded ONNX embedding model from %s", model_dir)
+                logger.info("Loaded ONNX embedding model from %s", model_file)
             except Exception as e:
                 logger.warning("ONNX model failed to load: %s, falling back to QMD", e)
                 self._embed_mode = "qmd"
@@ -327,53 +332,99 @@ class VectorMemory:
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_vm_valid ON vector_memory(valid_to)")
 
     def _store_mode_signature(self) -> str:
-        """The storage-format-determining mode of this instance.
+        """The storage-format and vector-space mode of this instance.
 
-        Only the dimensions that change the on-disk vector format belong here:
-        late_interaction (per-token matrix vs single pooled vector) and
-        binary_quant (packed sign bits vs float vector). embed_mode and the
-        model name do not: qmd, local, and onnx all write pooled float vectors
-        at the same dim, so they interoperate.
+        Two kinds of dimension belong here. Format: late_interaction (per-token
+        matrix vs single pooled vector) and binary_quant (packed bits vs float).
+        Space: the embedder identity, because two embedders (e.g. MiniLM vs
+        arctic-embed) produce vectors in incompatible spaces even at the same
+        dim, so a stored MiniLM vector is meaningless to an arctic query and the
+        store must be re-embedded on a switch. embed_mode (qmd/local/onnx) is
+        NOT included: those are transports for the same model, interoperable.
         """
-        return f"late_interaction={int(self.late_interaction)};binary_quant={int(self.binary_quant)}"
+        return (
+            f"late_interaction={int(self.late_interaction)};"
+            f"binary_quant={int(self.binary_quant)};"
+            f"embedder={self._embedder_identity()}"
+        )
+
+    def _embedder_identity(self) -> str:
+        """A stable name for the embedding model, machine-path independent.
+
+        Uses the onnx model directory's basename (e.g. arctic-embed-s,
+        minilm-onnx) in onnx mode, else the local model name, else the qmd
+        default. Absolute paths are reduced to the dir name so the same model
+        compares equal across machines.
+        """
+        if self._colbert_model:
+            return self._colbert_model
+        if self._embed_mode == "onnx" and self._onnx_path:
+            return Path(self._onnx_path).name
+        if self._embed_mode == "local":
+            return self._local_model_name
+        return f"qmd:{self._embed_mode}"
+
+    @staticmethod
+    def _parse_mode(sig: str) -> dict:
+        """Parse a mode signature string into a key->value dict."""
+        out = {}
+        for part in sig.split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                out[k] = v
+        return out
 
     def _check_store_mode(self) -> None:
-        """Refuse to open a store in a different storage format than it holds.
+        """Refuse to open a store in a different format or vector space than it
+        holds.
 
-        Writes the mode marker on a fresh store. On reopen, a recorded marker
-        that differs from this instance's mode raises StoreModeMismatch. A
-        legacy store predating the marker is assumed dense (no serve store was
-        ever built in late-interaction mode, which is the gap this closes): if
-        it has rows and this instance is non-dense, that is refused too, since
-        its pooled vectors cannot be scored in the new format.
+        Writes the mode marker on a fresh store. On reopen, the comparison is
+        component-wise over only the keys the recorded marker actually carries,
+        so an older marker (e.g. one written before the embedder component was
+        added) is honoured for what it knew and then upgraded to the full
+        current signature, never spuriously rejected. A legacy store with rows
+        and no marker is assumed dense MiniLM (the historical default).
         """
         current = self._store_mode_signature()
+        cur = self._parse_mode(current)
         row = self._conn.execute(
             "SELECT value FROM store_meta WHERE key = 'mode'"
         ).fetchone()
         recorded = row["value"] if row else None
 
         if recorded is not None:
-            if recorded != current:
+            rec = self._parse_mode(recorded)
+            conflict = {k: v for k, v in rec.items() if cur.get(k) != v}
+            if conflict:
                 raise StoreModeMismatch(
                     f"vector store at {self._db_path} was built with {recorded} "
-                    f"but is being opened with {current}. These storage formats "
-                    f"are incompatible. Re-embed from the archive in the new mode "
-                    f"(the archive is zero-loss) rather than mixing formats."
+                    f"but is being opened with {current} (conflict on {conflict}). "
+                    f"The storage format or embedding space is incompatible. "
+                    f"Re-embed from the archive in the new mode (the archive is "
+                    f"zero-loss) rather than mixing them."
+                )
+            if recorded != current:  # compatible but stale (e.g. legacy marker), upgrade
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO store_meta (key, value) VALUES ('mode', ?)",
+                    (current,),
                 )
             return
 
-        # No marker: fresh store, or a legacy store predating the marker.
+        # No marker: fresh store, or a legacy store predating the marker. Only
+        # the FORMAT is enforceable here (no serve store was ever built in
+        # late-interaction or binary-quant mode, so existing rows are dense);
+        # the legacy store's embedder is unknowable, so it is not enforced, the
+        # marker we write now protects future embedder switches.
         has_rows = self._conn.execute(
             "SELECT 1 FROM vector_memory LIMIT 1"
         ).fetchone() is not None
-        legacy_dense = "late_interaction=0;binary_quant=0"
-        if has_rows and current != legacy_dense:
+        legacy_format = {"late_interaction": "0", "binary_quant": "0"}
+        if has_rows and any(cur.get(k) != v for k, v in legacy_format.items()):
             raise StoreModeMismatch(
                 f"vector store at {self._db_path} has existing rows and no mode "
-                f"marker, so it is assumed dense (late_interaction=0;binary_quant=0), "
-                f"but is being opened with {current}. Re-embed from the archive in "
-                f"the new mode rather than mixing formats."
+                f"marker, so its format is assumed dense, but is being opened with "
+                f"{current}. Re-embed from the archive in the new mode rather than "
+                f"mixing storage formats."
             )
         self._conn.execute(
             "INSERT OR REPLACE INTO store_meta (key, value) VALUES ('mode', ?)",

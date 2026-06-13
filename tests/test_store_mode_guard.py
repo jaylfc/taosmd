@@ -21,8 +21,36 @@ def _build(path, **kwargs):
 def test_fresh_store_records_mode(tmp_path):
     vm = _build(tmp_path / "vm.db")
     row = vm._conn.execute("SELECT value FROM store_meta WHERE key='mode'").fetchone()
-    assert row["value"] == "late_interaction=0;binary_quant=0"
+    assert row["value"] == "late_interaction=0;binary_quant=0;embedder=qmd:qmd"
     asyncio.run(vm.close())
+
+
+def test_switching_embedder_on_existing_store_raises(tmp_path):
+    # A store built with one embedder must refuse to open under another
+    # (different vector space, stored vectors are meaningless to the new model).
+    vm = VectorMemory(db_path=str(tmp_path / "vm.db"), embed_mode="onnx",
+                      onnx_path="models/minilm-onnx")
+    asyncio.run(vm.init())
+    asyncio.run(vm.close())
+    with pytest.raises(StoreModeMismatch, match="embedder|incompatible|embedding space"):
+        vm2 = VectorMemory(db_path=str(tmp_path / "vm.db"), embed_mode="onnx",
+                           onnx_path="models/arctic-embed-s")
+        asyncio.run(vm2.init())
+
+
+def test_legacy_marker_without_embedder_upgrades(tmp_path):
+    # A marker written before the embedder component existed must not be
+    # rejected; honoured for format and upgraded to the full signature.
+    vm = _build(tmp_path / "vm.db")
+    vm._conn.execute(
+        "INSERT OR REPLACE INTO store_meta (key, value) VALUES ('mode', 'late_interaction=0;binary_quant=0')"
+    )
+    vm._conn.commit()
+    asyncio.run(vm.close())
+    vm2 = _build(tmp_path / "vm.db")  # same dense qmd mode, legacy marker present
+    row = vm2._conn.execute("SELECT value FROM store_meta WHERE key='mode'").fetchone()
+    assert row["value"] == "late_interaction=0;binary_quant=0;embedder=qmd:qmd"
+    asyncio.run(vm2.close())
 
 
 def test_reopen_same_mode_ok(tmp_path):

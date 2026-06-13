@@ -69,6 +69,20 @@ else
     "$HF_DL" download onnx-models/all-MiniLM-L6-v2-onnx --local-dir "$MODEL_DIR"
 fi
 
+# arctic-embed-s ONNX: the low-tier dense default (F-010, +0.157 R@K and
+# +0.0565 judged over MiniLM at the same 384 dim and latency). Same drop-in
+# size class; the lite-pi and fast-8b recipes select it. ONNX ships under an
+# onnx/ subdir in the HF repo; the loader finds it there.
+ARCTIC_DIR="$INSTALL_DIR/models/arctic-embed-s"
+if [ -f "$ARCTIC_DIR/onnx/model.onnx" ] || [ -f "$ARCTIC_DIR/model.onnx" ]; then
+    echo "✓ arctic-embed-s model already downloaded"
+else
+    echo "→ Downloading snowflake-arctic-embed-s ONNX (130MB)..."
+    "$HF_DL" download Snowflake/snowflake-arctic-embed-s \
+        --include "onnx/model.onnx" "*.json" "tokenizer*" "vocab*" "special_tokens*" \
+        --local-dir "$ARCTIC_DIR"
+fi
+
 # ================================================
 # 2. LLM for fact extraction (platform-specific)
 # ================================================

@@ -24,8 +24,9 @@ def _recommended_store_mode() -> dict:
     """Storage-format fields for the recipe recommended on this hardware.
 
     Returns the subset of ``config['vector_memory']`` that determines the
-    store's on-disk format (late_interaction, colbert_model). Falls back to a
-    plain dense store on any error so setup never fails on the probe.
+    store's format and embedding space (late_interaction, colbert_model,
+    embed_model). Falls back to a plain dense MiniLM store on any error so
+    setup never fails on the probe.
     """
     try:
         from taosmd import recipes as _recipes
@@ -34,9 +35,10 @@ def _recommended_store_mode() -> dict:
         return {
             "late_interaction": bool(rc.get("late_interaction", False)),
             "colbert_model": rc.get("colbert_model", "") or "",
+            "embed_model": rc.get("embed_model", "minilm-onnx") or "minilm-onnx",
         }
     except Exception:  # noqa: BLE001 - never let setup crash on the probe
-        return {"late_interaction": False, "colbert_model": ""}
+        return {"late_interaction": False, "colbert_model": "", "embed_model": "minilm-onnx"}
 
 
 async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
