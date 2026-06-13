@@ -154,6 +154,17 @@
   falls back to a dependency-free Okapi BM25 (same k1/b) when not.
 
 ### Fixed
+- The live serve path now builds the vector store in the storage mode its
+  recipe asks for. `late_interaction`/`colbert_model` lived only in
+  `recipes.py` and were never read at store construction, so an 8 GB GPU
+  install that `recommend()` pointed at the `lateint-9b` recipe silently ran
+  plain dense retrieval. `config.vector_memory` now carries the storage-format
+  mode, `_ensure_stores` honours it, and `auto_setup` seeds it from the
+  recommended recipe. A `store_meta` marker records the mode a store was built
+  in; reopening it in a conflicting mode (dense vs late-interaction vs
+  binary-quant) raises `StoreModeMismatch` with a re-embed-from-archive
+  instruction rather than silently serving wrong-mode results. The archive is
+  zero-loss, so a re-embed is always possible.
 - The data-endpoint grants gate only fired when a Bearer token carried a
   `project_id` claim, so a verified GLOBAL token whose holder had no active
   grant could still write through `/ingest` and the other bound endpoints.

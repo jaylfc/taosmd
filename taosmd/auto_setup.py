@@ -20,6 +20,25 @@ from pathlib import Path
 DEFAULT_DATA_DIR = os.path.expanduser("~/.taosmd")
 
 
+def _recommended_store_mode() -> dict:
+    """Storage-format fields for the recipe recommended on this hardware.
+
+    Returns the subset of ``config['vector_memory']`` that determines the
+    store's on-disk format (late_interaction, colbert_model). Falls back to a
+    plain dense store on any error so setup never fails on the probe.
+    """
+    try:
+        from taosmd import recipes as _recipes
+        rec = _recipes.recommend(None)[0]
+        rc = rec.retrieval
+        return {
+            "late_interaction": bool(rc.get("late_interaction", False)),
+            "colbert_model": rc.get("colbert_model", "") or "",
+        }
+    except Exception:  # noqa: BLE001 - never let setup crash on the probe
+        return {"late_interaction": False, "colbert_model": ""}
+
+
 async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
     """Full taOSmd setup: creates all stores and verifies they work."""
     data_path = Path(data_dir)
@@ -35,10 +54,17 @@ async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
     await kg.close()
     print(" ✓")
 
-    # 2. Vector Memory
+    # 2. Vector Memory. Build it in the recommended storage mode so the store
+    # marker matches the mode written to config below; otherwise the first
+    # serve open would mode-mismatch a freshly dense-stamped store.
     print("  Setting up Vector Memory...", end="", flush=True)
     from taosmd.vector_memory import VectorMemory
-    vmem = VectorMemory(db_path=data_path / "vector-memory.db")
+    _mode = _recommended_store_mode()
+    vmem = VectorMemory(
+        db_path=data_path / "vector-memory.db",
+        late_interaction=_mode["late_interaction"],
+        colbert_model=_mode["colbert_model"],
+    )
     await vmem.init()
     await vmem.close()
     print(" ✓")
@@ -136,6 +162,12 @@ async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
         "vector_memory": {
             "embed_mode": "onnx",
             "hybrid_search": True,
+            # Seed the store's storage-format mode from the recipe recommended
+            # for this hardware, so a fresh install actually builds the store
+            # in the mode it will be told to use (e.g. an 8 GB GPU box gets the
+            # late-interaction store the lateint recipe asks for, not a dense
+            # store the recipe cannot retrofit).
+            **_recommended_store_mode(),
         },
         "extraction": {
             "regex_enabled": True,

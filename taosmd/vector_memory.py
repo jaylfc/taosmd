@@ -34,7 +34,23 @@ CREATE TABLE IF NOT EXISTS vector_memory (
     valid_to REAL
 );
 CREATE INDEX IF NOT EXISTS idx_vm_created ON vector_memory(created_at DESC);
+CREATE TABLE IF NOT EXISTS store_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+
+class StoreModeMismatch(Exception):
+    """Raised when a store is reopened in a different storage format than it
+    was built in (dense vs late-interaction vs binary-quant).
+
+    The storage formats are mutually incompatible (a single pooled vector, a
+    per-token matrix, and packed sign bits cannot be scored against each
+    other), so the fix is never to silently serve wrong-mode results. The
+    archive is the zero-loss source, so the resolution is always to re-embed
+    the store from the archive in the new mode.
+    """
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -208,6 +224,7 @@ class VectorMemory:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._migrate()
+        self._check_store_mode()
         self._conn.commit()
         self._http = http_client
 
@@ -308,6 +325,60 @@ class VectorMemory:
         # column via the ALTER above, and CREATE INDEX in SCHEMA would fire
         # before that on the no-op CREATE TABLE IF NOT EXISTS path.
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_vm_valid ON vector_memory(valid_to)")
+
+    def _store_mode_signature(self) -> str:
+        """The storage-format-determining mode of this instance.
+
+        Only the dimensions that change the on-disk vector format belong here:
+        late_interaction (per-token matrix vs single pooled vector) and
+        binary_quant (packed sign bits vs float vector). embed_mode and the
+        model name do not: qmd, local, and onnx all write pooled float vectors
+        at the same dim, so they interoperate.
+        """
+        return f"late_interaction={int(self.late_interaction)};binary_quant={int(self.binary_quant)}"
+
+    def _check_store_mode(self) -> None:
+        """Refuse to open a store in a different storage format than it holds.
+
+        Writes the mode marker on a fresh store. On reopen, a recorded marker
+        that differs from this instance's mode raises StoreModeMismatch. A
+        legacy store predating the marker is assumed dense (no serve store was
+        ever built in late-interaction mode, which is the gap this closes): if
+        it has rows and this instance is non-dense, that is refused too, since
+        its pooled vectors cannot be scored in the new format.
+        """
+        current = self._store_mode_signature()
+        row = self._conn.execute(
+            "SELECT value FROM store_meta WHERE key = 'mode'"
+        ).fetchone()
+        recorded = row["value"] if row else None
+
+        if recorded is not None:
+            if recorded != current:
+                raise StoreModeMismatch(
+                    f"vector store at {self._db_path} was built with {recorded} "
+                    f"but is being opened with {current}. These storage formats "
+                    f"are incompatible. Re-embed from the archive in the new mode "
+                    f"(the archive is zero-loss) rather than mixing formats."
+                )
+            return
+
+        # No marker: fresh store, or a legacy store predating the marker.
+        has_rows = self._conn.execute(
+            "SELECT 1 FROM vector_memory LIMIT 1"
+        ).fetchone() is not None
+        legacy_dense = "late_interaction=0;binary_quant=0"
+        if has_rows and current != legacy_dense:
+            raise StoreModeMismatch(
+                f"vector store at {self._db_path} has existing rows and no mode "
+                f"marker, so it is assumed dense (late_interaction=0;binary_quant=0), "
+                f"but is being opened with {current}. Re-embed from the archive in "
+                f"the new mode rather than mixing formats."
+            )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO store_meta (key, value) VALUES ('mode', ?)",
+            (current,),
+        )
 
     async def close(self) -> None:
         if self._conn:

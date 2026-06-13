@@ -114,10 +114,19 @@ async def _ensure_stores(data_dir=None) -> dict:
             index_path=str(path / "archive-index.db"),
         )
         await archive.init()
+        # Storage-format mode is a per-store (per-data-dir) property, not a
+        # per-agent query knob: late-interaction stores per-token matrices and
+        # cannot coexist with pooled vectors in one store. It is read from
+        # config (seeded from the recommended recipe at setup) so the live
+        # store is actually built in the mode the recipe asks for, closing the
+        # gap where the lateint recipe was recommended but silently ignored.
+        vm_cfg = config.get("vector_memory", {})
         vmem = VectorMemory(
             db_path=str(path / "vector-memory.db"),
             embed_mode=embed_mode,
             onnx_path=onnx_path or "",
+            late_interaction=bool(vm_cfg.get("late_interaction", False)),
+            colbert_model=vm_cfg.get("colbert_model", "") or "",
         )
         await vmem.init()
         kg = TemporalKnowledgeGraph(db_path=str(path / "knowledge-graph.db"))
