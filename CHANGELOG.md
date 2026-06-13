@@ -3,6 +3,18 @@
 ## Unreleased
 
 ### Added
+- **Claims layer (Provable Memory), default-off.** A new additive `taosmd/claims/`
+  package that extracts facts as claims carrying their archive-span provenance,
+  verifies them asynchronously against only those source spans with a
+  cross-family local-LLM entailment judge (fail-closed: an unparseable or failed
+  verdict stays unverified, never promoted), and demotes (never deletes)
+  unverified/unsupported claims from recall behind a `prefer_verified` flag on
+  `search()` (default `off`, so existing behaviour is unchanged). New
+  `ClaimStore` (zero-loss sqlite, rebuildable from the archive, exposes the live
+  hallucination rate), `taosmd verify` and `taosmd claims status` CLI, and a
+  store-mode gate that is a pure function. This turns F-009 (the measured 18.8
+  percent extraction-hallucination rate) into a live always-on quality signal.
+  The default flip is gated on the pre-registered E-009 experiment.
 - **Temporal date-range lever (`retrieve(temporal={...})`), default off.** A
   deterministic natural-language temporal parser (`taosmd/temporal.py`) that
   turns expressions like "last week", "in May 2023", "Q1 2026", or "on 8 May,

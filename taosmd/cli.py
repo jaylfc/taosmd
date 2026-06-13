@@ -954,7 +954,113 @@ def _reconcile_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _claims_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd claims`` subcommand group."""
+    import asyncio  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from .claims.store import ClaimStore  # noqa: PLC0415
+
+    if args.claims_cmd == "status":
+        store = ClaimStore(db_path=Path(args.data_dir) / "claims.db")
+        rate = asyncio.run(_claims_rate(store))
+        checked = sum(
+            rate.get(s, 0) for s in ("supported", "partial", "unsupported", "contradicted")
+        )
+        hall_rate = rate.get("hallucination_rate", 0.0)
+        print(
+            f"claims: unverified={rate.get('unverified', 0)}"
+            f"  supported={rate.get('supported', 0)}"
+            f"  partial={rate.get('partial', 0)}"
+            f"  unsupported={rate.get('unsupported', 0)}"
+            f"  contradicted={rate.get('contradicted', 0)}"
+            f"  checked={checked}"
+            f"  hallucination_rate={hall_rate:.3f}"
+        )
+        return 0
+
+    return 1
+
+
+async def _claims_rate(store) -> dict:
+    await store.init()
+    try:
+        return await store.rate()
+    finally:
+        await store.close()
+
+
+def _verify_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd verify``: run a verification pass over unverified claims."""
+    import asyncio  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+
+    from .archive import ArchiveStore  # noqa: PLC0415
+    from .claims.store import ClaimStore  # noqa: PLC0415
+    from .claims.verifier import LocalEntailmentVerifier  # noqa: PLC0415
+    from .claims.verify_pass import verify_pass  # noqa: PLC0415
+
+    data_dir = Path(args.data_dir)
+
+    async def _run() -> int:
+        store = ClaimStore(db_path=data_dir / "claims.db")
+        await store.init()
+        archive = ArchiveStore(
+            archive_dir=data_dir / "archive",
+            index_path=data_dir / "archive-index.db",
+        )
+        await archive.init()
+        try:
+            fetch_spans = await _fetch_spans(archive)
+            with httpx.Client() as client:
+                verifier = LocalEntailmentVerifier(
+                    client=client,
+                    ollama_url=args.ollama_url,
+                    model=args.model,
+                )
+                n = await verify_pass(store, verifier, fetch_spans, batch=args.batch)
+            rate = await store.rate()
+        finally:
+            await store.close()
+            await archive.close()
+        hall_rate = rate.get("hallucination_rate", 0.0)
+        print(
+            f"verified {n} claims;"
+            f" rate: hallucination_rate={hall_rate:.3f}"
+            f"  supported={rate.get('supported', 0)}"
+            f"  partial={rate.get('partial', 0)}"
+            f"  unsupported={rate.get('unsupported', 0)}"
+            f"  contradicted={rate.get('contradicted', 0)}"
+            f"  unverified={rate.get('unverified', 0)}"
+        )
+        return 0
+
+    return asyncio.run(_run())
+
+
+async def _fetch_spans(archive):
+    async def fetch(span_ids: list[int]) -> list[str]:
+        out = []
+        for sid in span_ids:
+            ev = await archive.get_event(sid)
+            if not ev:
+                continue
+            data = ev.get("data") or {}
+            txt = (data.get("content") if isinstance(data, dict) else None) or ev.get("summary") or ""
+            if txt:
+                out.append(txt)
+        return out
+    return fetch
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the top-level argument parser.
+
+    Extracted from ``main()`` so tests can parse args without executing handlers.
+    ``main()`` calls this then dispatches based on the parsed result.
+    """
     parser = argparse.ArgumentParser(prog="taosmd")
     parser.add_argument(
         "--data-dir",
@@ -1357,6 +1463,38 @@ def main(argv: list[str] | None = None) -> int:
         help="Data dir for served memory (default: $TAOSMD_DATA_DIR or ~/.taosmd)",
     )
 
+    # ----- claims subcommand group -------------------------------------
+    claims_p = sub.add_parser(
+        "claims",
+        help="Inspect and manage verifiable claims (hallucination tracking)",
+    )
+    claims_sub = claims_p.add_subparsers(dest="claims_cmd", required=True)
+
+    claims_sub.add_parser("status", help="Print the live claim rate (hallucination_rate and counts)")
+
+    # ----- verify subcommand ------------------------------------------
+    verify_p = sub.add_parser(
+        "verify",
+        help="Run a verification pass over unverified claims via a local Ollama model",
+    )
+    verify_p.add_argument(
+        "--model", default="qwen3:4b-instruct-2507",
+        help="Ollama model to use as verifier (default: qwen3:4b-instruct-2507)",
+    )
+    verify_p.add_argument(
+        "--ollama-url", dest="ollama_url", default="http://localhost:11434",
+        help="Ollama base URL (default: http://localhost:11434)",
+    )
+    verify_p.add_argument(
+        "--batch", type=int, default=100,
+        help="Claims to pull per batch (default: 100)",
+    )
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.cmd == "config":
@@ -1419,6 +1557,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd in ("projects", "shelves"):
         return _projects_cmd(args)
+
+    if args.cmd == "claims":
+        return _claims_cmd(args)
+
+    if args.cmd == "verify":
+        return _verify_cmd(args)
 
     registry = AgentRegistry(args.data_dir)
 
