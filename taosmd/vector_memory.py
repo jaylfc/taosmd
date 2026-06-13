@@ -98,6 +98,39 @@ def pack_sign_bits(embedding: list[float]) -> str:
     return base64.b64encode(bits.tobytes()).decode("ascii")
 
 
+# Query-time prefix for arctic-embed (asymmetric: queries only, no doc prefix).
+_ARCTIC_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+
+def _onnx_apply_prefix(onnx_path, text: str, task: str) -> str:
+    """Apply a model-specific input prefix to ONNX embed text.
+
+    Asymmetric embedders need the right prefix or retrieval silently
+    degrades. nomic-embed prefixes both queries and documents with the
+    task name; arctic-embed prefixes only the query. MiniLM and anything
+    else gets no prefix. Detection is by model directory name.
+    """
+    path = str(onnx_path).lower() if onnx_path else ""
+    if "nomic" in path:
+        return f"{task}: {text}"
+    if "arctic" in path and task == "search_query":
+        return f"{_ARCTIC_QUERY_PREFIX}{text}"
+    return text
+
+
+def _onnx_pooling_mode(onnx_path) -> str:
+    """Pooling mode for an ONNX embedder: "cls" or "mean".
+
+    arctic-embed pools the CLS token (its 1_Pooling config sets
+    pooling_mode_cls_token true, mean false); the MiniLM default and
+    everything else mean-pool over the attention mask.
+    """
+    path = str(onnx_path).lower() if onnx_path else ""
+    if "arctic" in path:
+        return "cls"
+    return "mean"
+
+
 class VectorMemory:
     """SQLite-backed vector store with pluggable embeddings.
 
@@ -300,11 +333,8 @@ class VectorMemory:
         """Embed using ONNX Runtime (fast CPU inference, no PyTorch)."""
         import numpy as np
         try:
-            # Add task prefix for models that use it (nomic-embed)
-            # Detected by checking if the model config mentions "nomic" or has task_type support
-            embed_text = text[:512]
-            if self._onnx_path and "nomic" in str(self._onnx_path).lower():
-                embed_text = f"{task}: {embed_text}"
+            # Apply any model-specific input prefix (asymmetric embedders).
+            embed_text = _onnx_apply_prefix(self._onnx_path, text[:512], task)
 
             inputs = self._onnx_tokenizer(embed_text, return_tensors="np", padding=True, truncation=True)
             feed = {
@@ -317,13 +347,19 @@ class VectorMemory:
 
             outputs = self._onnx_session.run(None, feed)
 
-            # Check if model provides sentence_embedding directly
+            # Pool. A model that exposes a ready sentence_embedding wins; else
+            # pool per the model's documented mode (CLS for arctic-embed, mean
+            # otherwise). Getting this wrong silently degrades a model, so it
+            # is selected explicitly, not guessed.
             output_names = [o.name for o in self._onnx_session.get_outputs()]
             if "sentence_embedding" in output_names:
                 idx = output_names.index("sentence_embedding")
-                emb = outputs[idx][0]  # (384,)
+                emb = outputs[idx][0]
+            elif _onnx_pooling_mode(self._onnx_path) == "cls":
+                # CLS-token pooling: the first token of the last hidden state.
+                emb = outputs[0][0, 0]
             else:
-                # Manual mean pooling
+                # Mean pooling over the attention mask.
                 token_embeddings = outputs[0]
                 mask = inputs["attention_mask"][..., np.newaxis].astype(np.float32)
                 pooled = (token_embeddings * mask).sum(axis=1) / mask.sum(axis=1)
