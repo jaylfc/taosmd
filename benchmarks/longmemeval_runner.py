@@ -52,6 +52,15 @@ FTS_LIMIT = int(os.environ.get("TAOSMD_FTS_LIMIT", "5"))
 RERANK = os.environ.get("TAOSMD_RERANK", "0") == "1"
 RERANK_PATH = os.environ.get("TAOSMD_RERANK_PATH", "models/bge-reranker-v2-m3-onnx")
 RERANK_TOP_K = int(os.environ.get("TAOSMD_RERANK_TOP_K", "8"))
+# E-012 lever 2: query decomposition with iterative retrieval. Split the
+# question into 2-3 sub-queries, retrieve for each, union deduplicated. Ported
+# from locomo_runner._decompose_query. Default off.
+DECOMPOSE = os.environ.get("TAOSMD_DECOMPOSE", "0") == "1"
+DECOMPOSE_MODEL = os.environ.get("TAOSMD_DECOMPOSE_MODEL", "gemma4:e2b")
+# E-012 lever 3: CoVe-style answer self-verification. After the first answer,
+# one extra generator pass keeps the draft if it is fully supported by the
+# context, else rewrites it from the context. Default off.
+SELF_VERIFY = os.environ.get("TAOSMD_SELF_VERIFY", "0") == "1"
 _reranker = None
 
 
@@ -141,6 +150,84 @@ async def llm_answer(client, context: str, question: str) -> str:
     except Exception:
         pass
     return ""
+
+
+MULTIHOP_PROMPT = """Split this question into 2 or 3 shorter, focused sub-queries that together cover everything needed to answer it. Respond with one sub-query per line. No numbering, no explanation.
+
+Question: {question}"""
+
+
+async def decompose_query(client, question: str) -> list:
+    """Split a question into 2-3 sub-queries via a small utility model.
+
+    Returns a list of >=2 stripped lines, or [question] on failure or if fewer
+    than two lines come back (so callers can iterate uniformly).
+    """
+    try:
+        resp = await client.post(
+            f"{REMOTE_LLM_URL}/api/chat",
+            json={
+                "model": DECOMPOSE_MODEL,
+                "messages": [{"role": "user", "content": MULTIHOP_PROMPT.format(question=question) + " /no_think"}],
+                "stream": False,
+                "think": False,
+                "options": {"temperature": 0, "num_predict": 80},
+            },
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            raw = resp.json().get("message", {}).get("content", "")
+            lines = [l.strip() for l in raw.splitlines() if l.strip()]
+            if len(lines) >= 2:
+                return lines
+    except Exception:
+        pass
+    return [question]
+
+
+VERIFY_PROMPT = """You are checking a draft answer against the context.
+If every part of the draft answer is supported by the context, repeat the draft answer exactly.
+If any part is unsupported or contradicted by the context, write a corrected answer using ONLY the context.
+Answer concisely in 1-2 sentences, no explanation. /no_think
+
+Context:
+{context}
+
+Question: {question}
+
+Draft answer: {answer}
+
+Final answer:"""
+
+
+async def self_verify_answer(client, context: str, question: str, answer: str) -> str:
+    """One CoVe-style verification pass.
+
+    Keeps the draft if it is supported by the context, otherwise returns a
+    corrected answer. Falls back to the original draft on empty draft, empty
+    revision, or any failure, so it can never make an answer worse by erroring.
+    """
+    if not answer:
+        return answer
+    try:
+        resp = await client.post(
+            f"{REMOTE_LLM_URL}/api/chat",
+            json={
+                "model": REMOTE_LLM_MODEL,
+                "messages": [{"role": "user", "content": VERIFY_PROMPT.format(context=context[:CONTEXT_CHARS], question=question, answer=answer)}],
+                "stream": False,
+                "think": False,
+                "options": {"temperature": 0, "num_predict": 100},
+            },
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            revised = resp.json().get("message", {}).get("content", "").strip()
+            if revised:
+                return revised
+    except Exception:
+        pass
+    return answer
 
 
 async def run_benchmark(limit: int = 50, question_type: str | None = None, use_llm: bool = False):
