@@ -52,3 +52,27 @@ def test_decompose_falls_back_on_error():
     mod = _load_runner()
     out = asyncio.run(mod.decompose_query(_BoomClient(), "original question"))
     assert out == ["original question"]
+
+
+def test_self_verify_returns_revised_when_nonempty():
+    mod = _load_runner()
+    out = asyncio.run(mod.self_verify_answer(_FakeClient("corrected answer"), "ctx", "Q", "draft answer"))
+    assert out == "corrected answer"
+
+
+def test_self_verify_keeps_draft_on_error():
+    mod = _load_runner()
+    out = asyncio.run(mod.self_verify_answer(_BoomClient(), "ctx", "Q", "draft answer"))
+    assert out == "draft answer"
+
+
+def test_self_verify_keeps_draft_when_revision_empty():
+    mod = _load_runner()
+    out = asyncio.run(mod.self_verify_answer(_FakeClient("   "), "ctx", "Q", "draft answer"))
+    assert out == "draft answer"
+
+
+def test_self_verify_noops_on_empty_draft():
+    mod = _load_runner()
+    out = asyncio.run(mod.self_verify_answer(_FakeClient("anything"), "ctx", "Q", ""))
+    assert out == ""
