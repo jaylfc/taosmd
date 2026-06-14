@@ -19,9 +19,19 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 SUMMARY="$OUTDIR/e010_bakeoff_${STAMP}.txt"
 ARCTIC_PREFIX="Represent this sentence for searching relevant passages: "
 
-# Ensure huggingface_hub CLI is available in the venv (isolated, no system touch).
+# Ensure huggingface_hub is available in the venv (isolated, no system touch).
 "$PY" -c "import huggingface_hub" 2>/dev/null || "$PY" -m pip install -q huggingface_hub 2>/dev/null
-HF="$PY -m huggingface_hub.commands.huggingface_cli"
+
+fetch_model() {  # $1=repo  $2=dir
+  "$PY" - "$1" "$2" <<'PYEOF'
+import sys
+from huggingface_hub import snapshot_download
+repo, dir = sys.argv[1], sys.argv[2]
+snapshot_download(repo, local_dir=dir, allow_patterns=[
+    "onnx/model.onnx", "model.onnx", "*.json", "tokenizer*", "vocab*", "1_Pooling/*"])
+print("fetched", repo)
+PYEOF
+}
 
 # name | hf_repo | pooling | query_prefix | doc_prefix
 CANDIDATES=(
@@ -40,8 +50,7 @@ for entry in "${CANDIDATES[@]}"; do
   dir="models/e010-$name"
   if [ ! -f "$dir/onnx/model.onnx" ] && [ ! -f "$dir/model.onnx" ]; then
     echo "[fetch] $name <- $repo" | tee -a "$SUMMARY"
-    $HF download "$repo" --include "onnx/model.onnx" "model.onnx" "*.json" "tokenizer*" "vocab*" "1_Pooling/*" \
-      --local-dir "$dir" >/dev/null 2>&1
+    fetch_model "$repo" "$dir" >>"$OUTDIR/e010_${name}_fetch.err" 2>&1
   fi
   if [ ! -f "$dir/onnx/model.onnx" ] && [ ! -f "$dir/model.onnx" ]; then
     echo "$(printf '%-20s' "$name") FETCH_FAILED (no model.onnx)" | tee -a "$SUMMARY"; continue
