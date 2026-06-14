@@ -96,5 +96,10 @@ of the host it runs on.
 - 2026-04-13: original run, `enhanced_20260413_133215.json` (query_expand
   485/500 = 97.0%). This file is the committed provenance above.
 - 2026-06-14: independent re-run from the pinned recipe on the project bench
-  host (CPU, MiniLM ONNX) to verify the repo reproduces its own headline.
-  Result recorded below once the run completes.
+  host (CPU, MiniLM ONNX), file `enhanced_20260614_175453.json`. It reproduces
+  the committed proof exactly: `query_expand` = 485/500 = 97.0% Recall@5, with
+  the same five-config table (baseline 96.6, query_expand 97.0, temporal_boost
+  96.6, combined_v2 97.0, wider_retrieval 96.2) and the same per-category counts
+  (knowledge-update 78/78, multi-session 131/133, temporal-reasoning 127/133,
+  single-session-user 68/70, single-session-assistant 54/56,
+  single-session-preference 27/30). The repo now reproduces its own headline.
