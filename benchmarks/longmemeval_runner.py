@@ -45,6 +45,23 @@ CONTEXT_CHARS = int(os.environ.get("TAOSMD_CONTEXT_CHARS", "16000"))
 ASSEMBLE_TOKENS = int(os.environ.get("TAOSMD_ASSEMBLE_TOKENS", "4000"))
 RETRIEVE_LIMIT = int(os.environ.get("TAOSMD_RETRIEVE_LIMIT", "12"))
 FTS_LIMIT = int(os.environ.get("TAOSMD_FTS_LIMIT", "5"))
+# Intelligent context release (Jay's idea): retrieve MORE, then RERANK and keep
+# only the clean top-K before generation, so the generator reasons over the
+# relevant subset, not a noisy pile. Drops REDUNDANT context (the claims layer
+# already drops INCORRECT). bge-v2-m3 cross-encoder, already in the stack.
+RERANK = os.environ.get("TAOSMD_RERANK", "0") == "1"
+RERANK_PATH = os.environ.get("TAOSMD_RERANK_PATH", "models/bge-reranker-v2-m3-onnx")
+RERANK_TOP_K = int(os.environ.get("TAOSMD_RERANK_TOP_K", "8"))
+_reranker = None
+
+
+def _get_reranker():
+    """Lazy-load the cross-encoder reranker once; None if disabled/unavailable."""
+    global _reranker
+    if _reranker is None and RERANK:
+        from taosmd.cross_encoder import CrossEncoderReranker  # noqa: PLC0415
+        _reranker = CrossEncoderReranker(onnx_path=RERANK_PATH)
+    return _reranker
 
 ANSWER_PROMPT = """Based on the following context from past conversations, answer the question.
 If the answer is not in the context, say "I don't know."
@@ -238,8 +255,13 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
                 except Exception:
                     pass
 
-        # Also do semantic vector search (the MemPalace approach)
+        # Also do semantic vector search (the MemPalace approach). Retrieve a
+        # wider pool, then rerank/prune to the clean top-K (intelligent context
+        # release) so the generator is not buried in redundant chunks.
         vector_results = await vmem.search(question, limit=RETRIEVE_LIMIT)
+        rr = _get_reranker()
+        if rr is not None and getattr(rr, "available", False) and vector_results:
+            vector_results = rr.rerank(question, vector_results, RERANK_TOP_K)
         vector_text = " ".join(r["text"] for r in vector_results)
 
         query_time = time.time() - t1
