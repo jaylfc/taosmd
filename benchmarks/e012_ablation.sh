@@ -31,15 +31,22 @@ run_arm () {
   echo "" | tee -a "$OUT"
 }
 
-# Arms. Lever 1 = TAOSMD_RERANK=1, lever 2 = TAOSMD_DECOMPOSE=1, lever 3 = TAOSMD_SELF_VERIFY=1.
-run_arm "baseline"
-run_arm "L1_context_release"  TAOSMD_RERANK=1
+# Arms. Lever 1a = depth (the tuned defaults), lever 1b = TAOSMD_RERANK=1,
+# lever 2 = TAOSMD_DECOMPOSE=1, lever 3 = TAOSMD_SELF_VERIFY=1.
+# Per-arm env after "$@" overrides run_arm's defaults (env: last assignment wins).
+# F-012 anchor: starved depth reproduces the published 47.2% control, tying the
+# screen back to the headline.
+run_arm "F012_anchor_starved" TAOSMD_ASSEMBLE_TOKENS=2000 TAOSMD_RETRIEVE_LIMIT=5 TAOSMD_FTS_LIMIT=3 TAOSMD_CONTEXT_CHARS=3000
+# Baseline = tuned depth (lever 1a, the shipped default). Its delta over the
+# anchor is the depth-tuning gain; the levers below build on this substrate.
+run_arm "baseline_tuned_depth"
+run_arm "L1b_rerank"          TAOSMD_RERANK=1
 run_arm "L2_decompose"        TAOSMD_DECOMPOSE=1
 run_arm "L3_self_verify"      TAOSMD_SELF_VERIFY=1
-run_arm "L1+L2"               TAOSMD_RERANK=1 TAOSMD_DECOMPOSE=1
-run_arm "L1+L3"               TAOSMD_RERANK=1 TAOSMD_SELF_VERIFY=1
+run_arm "L1b+L2"              TAOSMD_RERANK=1 TAOSMD_DECOMPOSE=1
+run_arm "L1b+L3"              TAOSMD_RERANK=1 TAOSMD_SELF_VERIFY=1
 run_arm "L2+L3"               TAOSMD_DECOMPOSE=1 TAOSMD_SELF_VERIFY=1
-run_arm "L1+L2+L3"            TAOSMD_RERANK=1 TAOSMD_DECOMPOSE=1 TAOSMD_SELF_VERIFY=1
+run_arm "all_L1b+L2+L3"       TAOSMD_RERANK=1 TAOSMD_DECOMPOSE=1 TAOSMD_SELF_VERIFY=1
 
 echo "Ablation complete. Full log: $OUT" | tee -a "$OUT"
 echo "Per-arm overall accuracy:" | tee -a "$OUT"
