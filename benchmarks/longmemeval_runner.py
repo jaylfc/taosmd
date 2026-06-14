@@ -61,7 +61,27 @@ DECOMPOSE_MODEL = os.environ.get("TAOSMD_DECOMPOSE_MODEL", "gemma4:e2b")
 # one extra generator pass keeps the draft if it is fully supported by the
 # context, else rewrites it from the context. Default off.
 SELF_VERIFY = os.environ.get("TAOSMD_SELF_VERIFY", "0") == "1"
+# Representative sampling. The oracle set is ordered by question type, so a head
+# slice dataset[:limit] is single-type (the first ~133 questions are all
+# temporal). Set TAOSMD_SAMPLE_SEED to shuffle deterministically before slicing
+# so a screen at limit<500 covers all six types. Unset = head slice (back-compat).
+SAMPLE_SEED = os.environ.get("TAOSMD_SAMPLE_SEED")
 _reranker = None
+
+
+def sample_dataset(dataset, limit, seed=None):
+    """Return `limit` items from the dataset.
+
+    With a seed, shuffle representatively first (the oracle set is type-ordered,
+    so a head slice would be a single question type); without a seed, take the
+    head slice for back-compat.
+    """
+    if seed is not None:
+        import random  # noqa: PLC0415
+        ds = list(dataset)
+        random.Random(int(seed)).shuffle(ds)
+        return ds[:limit]
+    return dataset[:limit]
 
 
 def _get_reranker():
@@ -243,8 +263,8 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
         dataset = [q for q in dataset if q["question_type"] == question_type]
         print(f"Filtered to type: {question_type} ({len(dataset)} questions)")
 
-    dataset = dataset[:limit]
-    print(f"Running {len(dataset)} questions")
+    dataset = sample_dataset(dataset, limit, SAMPLE_SEED)
+    print(f"Running {len(dataset)} questions" + (f" (sampled, seed={SAMPLE_SEED})" if SAMPLE_SEED else ""))
 
     results_by_type = {}
     total_correct = 0
