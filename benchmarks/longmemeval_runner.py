@@ -32,10 +32,18 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.
 # Remote LLM for answer generation (override via TAOSMD_OLLAMA_URL env var)
 REMOTE_LLM_URL = os.environ.get("TAOSMD_OLLAMA_URL", "http://localhost:11434")
 REMOTE_LLM_MODEL = os.environ.get("TAOSMD_OLLAMA_MODEL", "qwen2.5:3b")
+# E-012: the judge MUST be external to the generator (same-model judging
+# inflates, and a same-model thinking judge emits CoT and never cleanly says
+# CORRECT, which zeroed the qwen3.5:9b run). Defaults to the generator for
+# back-compat; set TAOSMD_JUDGE_MODEL to a different, non-thinking model.
+JUDGE_MODEL = os.environ.get("TAOSMD_JUDGE_MODEL", REMOTE_LLM_MODEL)
+# Context fed to the generator. 3000 chars truncated multi-session evidence;
+# default higher and make it tunable.
+CONTEXT_CHARS = int(os.environ.get("TAOSMD_CONTEXT_CHARS", "8000"))
 
 ANSWER_PROMPT = """Based on the following context from past conversations, answer the question.
 If the answer is not in the context, say "I don't know."
-Answer concisely in 1-2 sentences. /nothink
+Answer concisely in 1-2 sentences. /no_think
 
 Context:
 {context}
@@ -66,17 +74,18 @@ Question: {question}
 Reference answer: {gold}
 Predicted answer: {predicted}
 
-Verdict:"""
+Verdict: /no_think"""
     try:
         resp = await client.post(
             f"{REMOTE_LLM_URL}/api/chat",
             json={
-                "model": REMOTE_LLM_MODEL,
+                "model": JUDGE_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"temperature": 0, "num_predict": 10},
+                "think": False,
+                "options": {"temperature": 0, "num_predict": 16},
             },
-            timeout=15,
+            timeout=30,
         )
         if resp.status_code == 200:
             judgment = resp.json().get("message", {}).get("content", "").strip().upper()
@@ -98,7 +107,7 @@ async def llm_answer(client, context: str, question: str) -> str:
             f"{REMOTE_LLM_URL}/api/chat",
             json={
                 "model": REMOTE_LLM_MODEL,
-                "messages": [{"role": "user", "content": ANSWER_PROMPT.format(context=context[:3000], question=question)}],
+                "messages": [{"role": "user", "content": ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)}],
                 "stream": False,
                 "think": False,
                 "options": {"temperature": 0, "num_predict": 100},
