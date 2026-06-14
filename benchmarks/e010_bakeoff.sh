@@ -65,7 +65,7 @@ for entry in "${CANDIDATES[@]}"; do
         --embed-mode onnx --onnx-path "$dir" --reranker off \
         --out "$out" 2>>"$OUTDIR/e010_${name}_${STAMP}.err" \
       | grep -E "^Overall|R@K" | head -1)
-  rk=$("$PY" -c "import json,sys; d=json.load(open('$out')); print(d.get('r_at_k', d.get('overall',{}).get('r_at_k','?')))" 2>/dev/null || echo "?")
+  rk=$("$PY" -c "import json; d=json.load(open('$out')); print((d.get('summary') or {}).get('r_at_k','?'))" 2>/dev/null || echo "?")
   echo "$(printf '%-20s' "$name") $(printf '%-7s' "$rk")" | tee -a "$SUMMARY"
 done
 
