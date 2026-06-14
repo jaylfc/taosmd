@@ -11,6 +11,7 @@ import base64
 import json
 import logging
 import math
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -126,6 +127,13 @@ def _onnx_apply_prefix(onnx_path, text: str, task: str) -> str:
     task name; arctic-embed prefixes only the query. MiniLM and anything
     else gets no prefix. Detection is by model directory name.
     """
+    # Env override (E-010 bake-off: let any model set its prefixes explicitly,
+    # independent of pooling and of directory-name detection). Active when
+    # either var is present; empty string means "no prefix on that side".
+    if "TAOSMD_ONNX_QUERY_PREFIX" in os.environ or "TAOSMD_ONNX_DOC_PREFIX" in os.environ:
+        if task == "search_query":
+            return f"{os.environ.get('TAOSMD_ONNX_QUERY_PREFIX', '')}{text}"
+        return f"{os.environ.get('TAOSMD_ONNX_DOC_PREFIX', '')}{text}"
     path = str(onnx_path).lower() if onnx_path else ""
     if "nomic" in path:
         return f"{task}: {text}"
@@ -141,6 +149,9 @@ def _onnx_pooling_mode(onnx_path) -> str:
     pooling_mode_cls_token true, mean false); the MiniLM default and
     everything else mean-pool over the attention mask.
     """
+    pm = os.environ.get("TAOSMD_ONNX_POOLING")
+    if pm in ("cls", "mean"):
+        return pm
     path = str(onnx_path).lower() if onnx_path else ""
     if "arctic" in path:
         return "cls"
