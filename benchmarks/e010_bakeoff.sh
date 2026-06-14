@@ -28,7 +28,7 @@ import sys
 from huggingface_hub import snapshot_download
 repo, dir = sys.argv[1], sys.argv[2]
 snapshot_download(repo, local_dir=dir, allow_patterns=[
-    "onnx/model.onnx", "model.onnx", "*.json", "tokenizer*", "vocab*", "1_Pooling/*"])
+    "onnx/model.onnx", "onnx/model.onnx_data", "onnx/*.onnx_data", "model.onnx", "model.onnx_data", "*.json", "tokenizer*", "vocab*", "1_Pooling/*"])
 print("fetched", repo)
 PYEOF
 }
