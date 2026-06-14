@@ -19,10 +19,11 @@ Last updated: 2026-06-13 (arctic + claims layer both merged to master; E-009 cla
 
 ## Queued next
 
-1. **E-009 full LoCoMo sweep + verdict** (the live in-flight item): run the 10-conv probe on Fedora, record the result in the research report under pre-registered E-009, and either propose the `prefer_verified` default flip or document the trade and keep it default-off.
-2. **@taOS arctic store-registration** (owed to us): register Snowflake/snowflake-arctic-embed-s with a verified OS-store download path so store-managed installs surface it; plus the taOSmd-section README refresh for the new features (arctic default + claims layer).
-3. **Interim job pack** at `docs/agent-jobs/` (three low-risk jobs) remains for weaker agents; review any PRs against each job's verification section, never auto-merge.
-4. arctic-embed feeds the hardware-tier defaults matrix; the qwen3.6-MoE row is still pending.
+1. **E-009 full LoCoMo sweep + verdict** (the live in-flight item): the 10-conv probe is RUNNING on Fedora (nohup, benchmarks/results/e009.json, log e009_run.log); record the result in the research report under pre-registered E-009 and either propose the `prefer_verified` default flip or document the trade and keep it default-off. Uncheckpointed: relaunch only if the proc is dead AND e009.json is absent.
+2. **E-010 embedding-model bake-off** (pre-registered rev 1.17, queued): judge-free subset-200 R@K screen of the small/fast/ONNX embedding field against arctic-embed-s, per-model pooling+prefix validity gate, license + ONNX-<=384dim gates, footprint tiebreak; judged full-1540 confirm for any winner. Shortlist + integration notes in [[reference_embedding_bakeoff_candidates]]. CPU-bound (no GPU), can run concurrently with GPU work or on the VPS.
+3. **E-011 arctic on LongMemEval-S** (pre-registered rev 1.17, queued): does MiniLM->arctic move the 97.0% headline? MiniLM vs arctic arms on the full 500-Q LongMemEval-S, same generator/judge. Needs the GPU host; runs after E-009 frees it.
+4. **@taOS arctic store-registration** (owed to us): register Snowflake/snowflake-arctic-embed-s with a verified OS-store download path; plus the taOSmd-section README/website refresh (ready-to-drop copy sent on integration; @taOS acked msg 420, in progress).
+5. **Interim job pack** at `docs/agent-jobs/` (three low-risk jobs) remains for weaker agents; review any PRs against each job's verification section, never auto-merge.
 
 ## Working agreements
 
