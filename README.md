@@ -342,6 +342,19 @@ await vmem.init()
 
 Use it when the vector-store footprint or CPU distance cost is your binding constraint rather than recall, e.g. an Orange Pi / Rock 5 holding a large memory. Keep it off on a GPU box where full-precision cosine is effectively free.
 
+### Provable Memory (opt-in claims layer)
+
+Extraction turns conversations into facts, and extraction makes mistakes. Most memory systems discard the source after extracting, so a wrong fact is indistinguishable from a right one and the error rate is unmeasurable. taOSmd keeps a zero-loss archive, so every extracted claim stays linked to the source spans it came from. The claims layer uses that link to verify claims and to refuse to serve the ones that do not hold up.
+
+How it works: at ingest, each extracted fact is stored as a claim tagged with its archive span ids. A background verify-pass (idle or manual, `taosmd verify`) shows a small cross-family local model only the cited spans and records `supported` / `partial` / `unsupported`, fail-closed (any model or network error leaves the claim unverified, never promoted). At recall, an opt-in `prefer_verified` gate demotes unsupported claims out of the default results while keeping them queryable and in the archive, so a noisy verifier can never destroy a real memory.
+
+This makes the extraction-hallucination rate a standing metric rather than a one-off: on LoCoMo, **18.8% of regex-extracted facts were not fully supported by their source** (cross-family verified, `taosmd claims status` prints the live rate). The gate is **off by default**: whether preferring verified claims improves end-to-end answers, and at what cost to recall, is being measured before it is ever enabled by default, the same pre-registered discipline as every other lever ([research report](docs/research-report.md)).
+
+```bash
+taosmd verify          # run a verify-pass over unverified claims
+taosmd claims status   # print the live supported / unsupported rate
+```
+
 ## Recipes (tier-aware config profiles)
 
 A **recipe** is a named, declared config bundle (retrieval + ingest + generator + librarian settings) that carries its own benchmark scores, target hardware tier, and pros/cons. Instead of leaving the retrieval levers at their defaults, taOSmd ships a small registry of recipes we have actually measured (for example the `maxsim-rerank-9b` leader for a 12 GB GPU and a `lite-pi` no-LLM-ingest profile for an Orange Pi / CPU), and a **fresh install auto-detects your hardware and applies the best affordable recipe on first use**, so you run a benchmarked configuration rather than unconfigured defaults. No taOS or network is required: the hardware probe is local, and the reranker model (when a recipe asks for one) downloads on first use with progress and degrades gracefully if it is not yet present.
@@ -495,12 +508,14 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 - **Framework-agnostic**, Python API, CLI, [MCP server](#mcp-server), and local HTTP/REST API work with any agent framework
 - **Hybrid search**, semantic similarity + keyword overlap boosting
 - **Late-interaction retrieval (opt-in)**, token-level MaxSim scoring lifts evidence recall from 0.64 to 0.85 on LoCoMo and runs in about 110ms per query on a 16-core CPU, no GPU or reranker needed ([numbers](docs/benchmarks.md))
+- **Upgraded low-tier embedding default**, fresh low-end installs now use `snowflake-arctic-embed-s` for dense retrieval: +0.057 judged retrieval quality on the full 1540-QA LoCoMo set (0.730 vs 0.674 for MiniLM) at the same 384 dimensions and the same latency, about 13ms per embed on an Orange Pi. MiniLM is still supported and is the model the 97.0% headline was measured on ([numbers](docs/benchmarks.md))
 - **Bulk ingest with safe re-import**, `POST /ingest/batch` dedupes on your content hashes, plus a BM25-only search mode for instant keyword lookups
 - **Built-in agent-to-agent bus**, `taosmd serve` ships a message bus with named channels, realtime SSE wake, and a poll cursor, so several agents on one project coordinate over the same server that holds their memory. Every message is an append-only archive event, so the whole conversation is auditable and replayable, not a separate mutable log.
 - **Dependency-aware task graph**, `taosmd tasks` gives multi-agent teams a ready queue (open tasks with no open blockers) and a `prime` briefing endpoint for session handoffs; every mutation is an append-only archive event, so the task tables are replayable history (concept credit: [beads](https://github.com/gastownhall/beads))
 - **Coordination is part of the memory, not bolted on**, we are not aware of another local-first memory system that ships an auditable comms bus and a dependency-aware task graph inside the memory server itself. Both are projections of the same zero-loss archive, so who said what and who did what are reconstructable from the source of truth.
 - **Temporal facts**, validity windows, point-in-time queries
 - **Contradiction detection**, corrected facts supersede across both the typed knowledge graph (via `valid_to` invalidation) and the vector recall layer (matching chunks soft-hidden, not deleted); recall returns only the active fact
+- **Provable Memory (opt-in)**, because the archive keeps every source span, taOSmd can verify each extracted fact against the spans it came from, mark it supported or unsupported, and demote (never delete) the unsupported ones at recall. That makes the extraction-hallucination rate a measurable, standing number: 18.8% of regex-extracted facts on LoCoMo were not fully supported by their source, cross-family verified. Extraction-based systems that discard the source cannot measure this; we can ([methodology](docs/research-report.md))
 - **Zero-loss archive**, append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
 - **Intent-aware retrieval**, routes queries to optimal memory layer
 - **0.3ms embeddings**, ONNX Runtime on CPU (ARM or x86)
@@ -508,7 +523,15 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 
 ## Embedding Model
 
-The ONNX model (`models/minilm-onnx/model.onnx`) is not included in this repo due to size (90MB). Download it:
+Two ONNX embedders are supported, both 384-dimensional and CPU-fast. Neither is bundled (size); each is fetched on setup.
+
+**`snowflake-arctic-embed-s`** is the dense default for fresh low-tier installs. It scores +0.057 judged retrieval quality on the full 1540-QA LoCoMo set (0.730 vs 0.674 for MiniLM) at the same dimensions and latency, so it is a free upgrade for the low-end tier. It uses an asymmetric query prefix and CLS pooling, both handled automatically. Fetch it:
+
+```bash
+hf download Snowflake/snowflake-arctic-embed-s --include "onnx/model.onnx" "*.json" "tokenizer*" --local-dir models/arctic-embed-s
+```
+
+**`all-MiniLM-L6-v2`** remains fully supported and is the model the 97.0% LongMemEval-S headline was measured on. Existing installs keep MiniLM unless you re-run setup; only fresh low-tier setups default to arctic. Download it:
 
 ```bash
 pip install sentence-transformers
