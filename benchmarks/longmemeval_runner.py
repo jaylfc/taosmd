@@ -372,6 +372,8 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
             t_llm = time.time()
             # Step 1: LLM generates answer from recalled context
             answer = await llm_answer(llm_client, full_context, question)
+            if SELF_VERIFY:
+                answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
             if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
                 correct = await score_answer_llm(llm_client, answer, gold_answer, question)
