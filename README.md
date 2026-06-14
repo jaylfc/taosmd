@@ -4,7 +4,11 @@
 
 # taOSmd
 
-**Framework-agnostic AI memory system. 97.0% Recall@5 on LongMemEval-S.**
+**Framework-agnostic AI memory system. Provable, auditable memory. 97.0% Recall@5 on LongMemEval-S.**
+
+Provable Memory: a zero-loss archive that is never overwritten, plus a verifier that checks every extracted fact against its source and leaves out what it can't support.
+
+Most memory systems pull facts out of your conversations and throw the source away. So when a fact is wrong, nothing flags it, and when it gets overwritten, the old version is gone without a trace. taOSmd works the other way around. Everything lands first in an append-only archive that is never edited or deleted, and the memory you search is derived from that archive, never written over it. Because the source stays, taOSmd checks each extracted fact against the exact text it came from, tells you the share it cannot support, and keeps the unsupported ones out of recall. On our own data that unsupported-fact rate was 18.8 percent, a number systems that discard the source cannot even measure.
 
 Recall@5 means the correct evidence session lands in the top-5 retrieved, the same retrieval metric MemPalace (96.6%) and agentmemory (95.2%) publish, measured the same way for a like-for-like comparison. An end-to-end Judge measurement (retrieve, generate, then grade the answer with an LLM) is in progress and will be published with its own provenance. Runs offline on anything with 8 GB+ RAM and Python 3.10+: a Pi 4B, an old laptop, an Intel mini PC, a Mac mini, or a 16 GB Orange Pi 5 Plus (our reference low-end). Zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
 
