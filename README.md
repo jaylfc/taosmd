@@ -4,9 +4,9 @@
 
 # taOSmd
 
-**Framework-agnostic AI memory system. 97.0% end-to-end Judge accuracy on LongMemEval-S.**
+**Framework-agnostic AI memory system. 97.0% Recall@5 on LongMemEval-S.**
 
-End-to-end Judge accuracy means retrieve → generate → LLM-grade against the reference answer. Runs offline on anything with 8 GB+ RAM and Python 3.10+: a Pi 4B, an old laptop, an Intel mini PC, a Mac mini, or a 16 GB Orange Pi 5 Plus (our reference low-end). Zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
+Recall@5 means the correct evidence session lands in the top-5 retrieved, the same retrieval metric MemPalace (96.6%) and agentmemory (95.2%) publish, measured the same way for a like-for-like comparison. An end-to-end Judge measurement (retrieve, generate, then grade the answer with an LLM) is in progress and will be published with its own provenance. Runs offline on anything with 8 GB+ RAM and Python 3.10+: a Pi 4B, an old laptop, an Intel mini PC, a Mac mini, or a 16 GB Orange Pi 5 Plus (our reference low-end). Zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
 
 ---
 
@@ -162,9 +162,9 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 ## Benchmark Results
 
-**97.0% end-to-end Judge accuracy on LongMemEval-S** (500 questions, standard test set). Harness: `benchmarks/longmemeval_runner.py`.
+**97.0% Recall@5 on LongMemEval-S** (500 questions, standard test set). Recall@5 is a retrieval metric: did the correct evidence session land in the top-5 retrieved. Harness: `benchmarks/longmemeval_recall.py`. This is the same metric MemPalace (96.6%) and agentmemory (95.2%) publish, so it is a like-for-like comparison. An end-to-end Judge number (retrieve, generate, grade the answer) is in progress.
 
-> These are our own reproducible measurements, not a third-party-audited landscape ranking. Every number pins its generator, judge, dataset, and commit so you can re-run it on your own hardware, and we deliberately report under a strict local judge (`qwen3:4b`) alongside the lenient frontier-judge number that other systems publish, so the comparison is honest about what's being measured. See the [judge-sensitivity analysis](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring).
+> These are our own reproducible measurements, not a third-party-audited landscape ranking. Every number pins its metric, models, dataset, and commit so you can re-run it on your own hardware. The LongMemEval-S 97.0% above is Recall@5 (retrieval only, no generation or grading step). The LoCoMo numbers below are judged end-to-end, and there we deliberately report under a strict local judge (`qwen3:4b`) alongside the lenient frontier-judge number other systems publish, so the comparison is honest about what is being measured. See the [judge-sensitivity analysis](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring).
 
 See [docs/benchmarks.md](docs/benchmarks.md) for the full LongMemEval-S breakdown, the LoCoMo (1540-QA multi-session) measurements with retrieval-architecture ablations, methodology, and per-hardware-tier configuration recommendations (12 / 8 / 4 GB GPU, Orange Pi NPU, RPi 4). The full living research report, methodology and negative results included, lives in [docs/research-report.md](docs/research-report.md).
 
@@ -182,7 +182,7 @@ See [docs/benchmarks.md](docs/benchmarks.md) for the full LongMemEval-S breakdow
 
 ### Fusion Strategy Comparison
 
-| Strategy | Judge accuracy | Delta |
+| Strategy | Recall@5 | Delta |
 |----------|---------------|-------|
 | Raw cosine (same algorithm as MemPalace) | 95.0% | baseline |
 | Additive keyword boost | 96.6% | +1.6 |
@@ -503,7 +503,7 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 
 ## Key Features
 
-- **97.0% end-to-end Judge accuracy** on LongMemEval-S, measured on our low-end reference stack under a strict local judge ([methodology](docs/benchmarks.md))
+- **97.0% Recall@5** on LongMemEval-S (retrieval metric, like-for-like with MemPalace 96.6% and agentmemory 95.2%), measured on our low-end reference stack; an end-to-end Judge number is in progress ([methodology](docs/benchmarks.md))
 - **Zero cloud dependencies**, runs entirely on local hardware
 - **Framework-agnostic**, Python API, CLI, [MCP server](#mcp-server), and local HTTP/REST API work with any agent framework
 - **Hybrid search**, semantic similarity + keyword overlap boosting

@@ -20,7 +20,7 @@
   - [3.2 Late-interaction retrieval (reranker-free, tri-judge)](#32-late-interaction-retrieval-reranker-free-tri-judge)
   - [3.3 Community-standard judge column (qwen3:14b)](#33-community-standard-judge-column-qwen314b)
   - [3.4 CPU-tier retrieval-only latency probe](#34-cpu-tier-retrieval-only-latency-probe)
-  - [3.5 LongMemEval-S end-to-end](#35-longmemeval-s-end-to-end)
+  - [3.5 LongMemEval-S Recall@5](#35-longmemeval-s-recall5)
   - [3.6 Shipped recipe: lateint-9b](#36-shipped-recipe-lateint-9b)
   - [3.7 Low-tier dense embedder: arctic-embed vs MiniLM](#37-low-tier-dense-embedder-arctic-embed-vs-minilm)
 - [4. Negative Results](#4-negative-results)
@@ -34,7 +34,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 
 | ID | One-line summary | Section | Status | Provenance |
 |---|---|---|---|---|
-| F-001 | LongMemEval-S: 97.0% end-to-end Judge on full 500-question test set | [3.5](#35-longmemeval-s-end-to-end) | confirmed | docs/benchmarks.md section "LongMemEval-S 97.0% end-to-end Judge" |
+| F-001 | LongMemEval-S: 97.0% Recall@5 on full 500-question test set (was mislabelled "end-to-end Judge", corrected 2026-06-14) | [3.5](#35-longmemeval-s-recall5) | confirmed (Recall@5) | benchmarks/results/enhanced_20260413_133215.json (query_expand, top_k=5) |
 | F-002 | LoCoMo full-1540 leader (MaxSim + rerank): 0.748 lenient / 0.394 strict-llama / 0.659 strict-instruct | [3.1](#31-locomo-leader-table-full-1540-tri-judge) | confirmed | docs/benchmarks.md "Full-1540 leader (tri-judge, Jun 2026)" |
 | F-003 | Late-interaction (answerai backbone, no reranker): 0.716 / 0.388 / 0.656 full-1540 tri-judge | [3.2](#32-late-interaction-retrieval-reranker-free-tri-judge) | confirmed | docs/benchmarks.md "Late-interaction retrieval (token-level MaxSim at retrieval time, tri-judge)" |
 | F-004 | CPU-tier R@K: dense 0.641 at 72ms p50 to answerai 0.854 at 110ms p50 on 16-core CPU VPS | [3.4](#34-cpu-tier-retrieval-only-latency-probe) | confirmed | docs/benchmarks.md "CPU-tier viability (retrieval-only, judge-free)" |
@@ -72,7 +72,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 
 taOSmd is a local-first memory system for AI agents. It stores conversation turns in a zero-loss append-only archive, layers hybrid retrieval on top, and runs offline on modest hardware without cloud dependencies.
 
-The current headline result is 97.0% end-to-end Judge accuracy on LongMemEval-S (500 questions, full test set), measured on a 16 GB Orange Pi 5 Plus under a strict local judge. End-to-end Judge means retrieve, generate an answer, and grade it against the reference with an LLM; it is a harder bar than retrieval-only Recall@5.
+The current LongMemEval-S headline is 97.0% Recall@5 (500 questions, full test set), a retrieval metric: the correct evidence session appears in the top-5 retrieved. This is the same metric MemPalace (96.6%) and agentmemory (95.2%) publish, so it is a like-for-like comparison taOSmd leads. An earlier edition of this report and the public docs labelled this number "end-to-end Judge accuracy"; that was a mislabel, corrected 2026-06-14 (see F-001 and the revision log). A genuine end-to-end Judge measurement (retrieve, generate, grade) with the current stack is pre-registered as E-012.
 
 On LoCoMo (1540 QAs, 10 multi-session conversations), the current leader recipe is MaxSim + reranking: qwen3.5:9b with retrieval-top-k 50, adjacent-turns 2, bge-v2-m3 reranker, and mem0_additive fusion. Full-1540 tri-judge scores: 0.748 lenient (gemma4:e2b), 0.394 strict (llama3.1:8b), 0.659 strict (qwen3:4b-instruct-2507). All judges are external to the generator family.
 
@@ -116,7 +116,7 @@ Per the three-number reporting rule: every accuracy claim in this report is acco
 
 ### 2.4 Hardware tiers
 
-- **Orange Pi 5 Plus, 16 GB RAM (RK3588 NPU).** Reference low-end tier. LongMemEval-S 97.0% was measured here. Generator: qwen3-4B via rkllama on the NPU. Embedder: all-MiniLM-L6-v2 ONNX on CPU. Source: docs/benchmarks.md hardware tiers section.
+- **Orange Pi 5 Plus, 16 GB RAM (RK3588 NPU).** Reference low-end tier. The LongMemEval-S 97.0% Recall@5 retrieval stack was measured here (embedder: all-MiniLM-L6-v2 ONNX on CPU; Recall@5 is retrieval-only so no generator is involved in that number). The tier's generator for judged LoCoMo work is qwen3-4B via rkllama on the NPU. Source: docs/benchmarks.md hardware tiers section.
 - **16-core x86 CPU VPS (no GPU).** Used for the retrieval-latency probe only. No LLM inference; embedder runs on CPU with ONNX Runtime. Source: docs/benchmarks.md "CPU-tier viability" subsection.
 - **Fedora host, RTX 3060 12 GB.** Primary LoCoMo benchmark host. All full-1540 tri-judge numbers were measured here. Generator: qwen3.5:9b Q4_K_M via Ollama. Source: docs/benchmarks.md LoCoMo section.
 - **GTX 1050 Ti LXC, 4 GB VRAM.** Measured at 0.530 ext judge (qwen3:4b, LXC container with CUDA). Source: docs/benchmarks.md "4 GB GPU" hardware tier.
@@ -197,13 +197,15 @@ Late interaction costs 13 to 38 ms per query on CPU and buys +0.17 to +0.21 evid
 
 The answerai row caveat carries over from section 3.2: backbone token output only; pylate projected-space comparison is queued as E-004.
 
-### 3.5 LongMemEval-S end-to-end
+### 3.5 LongMemEval-S Recall@5
 
-**F-001.** 97.0% end-to-end Judge accuracy on LongMemEval-S, 500 questions, standard test set. Harness: benchmarks/longmemeval_runner.py. Measured on the Orange Pi 5 Plus reference stack (generator: qwen3-4B via rkllama on RK3588 NPU; embedder: all-MiniLM-L6-v2 ONNX on CPU). Strategy: hybrid + query expansion.
+**F-001 (CORRECTED 2026-06-14).** 97.0% Recall@5 on LongMemEval-S, 500 questions, standard test set. Recall@5 is a retrieval metric: the correct evidence session appears in the top-5 retrieved (no generation, no answer grading). This is the same metric MemPalace (96.6%) and agentmemory (95.2%) publish, so it is a like-for-like comparison and taOSmd leads it. Harness: benchmarks/longmemeval_recall.py. Strategy: hybrid + query expansion. Measured on the all-MiniLM-L6-v2 ONNX embedder.
 
-Source: docs/benchmarks.md, LongMemEval-S 97.0% end-to-end Judge section.
+Provenance: benchmarks/results/enhanced_20260413_133215.json, the query_expand variant at top_k=5 (the source of the per-category table below).
 
-| Category | hybrid + expand | raw semantic |
+Correction note: earlier editions of this finding, the README, and docs/benchmarks.md labelled this number "end-to-end Judge accuracy." That was a mislabel introduced when the public docs were reframed in April; the underlying result file is and always was Recall@5 (top_k=5). No end-to-end Judge run ever produced 97.0%. The basic Judge harness (benchmarks/longmemeval_runner.py) reproduces about 22.6% with its default small generator, with a completely different per-category shape (temporal 3.8% vs the 94.0% Recall@5 below), which is what surfaced the mislabel. A genuine end-to-end Judge measurement with the current stack is pre-registered as E-012 and will be reported with its own provenance; it is a separate number.
+
+| Category | hybrid + expand (Recall@5) | raw semantic (Recall@5) |
 |---|---|---|
 | knowledge-update | 100.0% (78/78) | 100.0% |
 | multi-session | 98.5% (131/133) | 95.5% |
@@ -530,7 +532,17 @@ Design: benchmarks/longmemeval_runner.py on the full 500-question LongMemEval-S,
 
 Kill criterion (verbatim): "if arctic-embed-s improves LongMemEval-S end-to-end judge accuracy outside noise (delta > +0.005), the 97.0 percent headline is re-measured and the README/headline updated to the arctic stack with provenance. If it is within noise (delta in -0.005..+0.005), arctic is recorded as neutral on LongMemEval-S and MiniLM stays the documented LongMemEval default, with the honest note that arctic's win is LoCoMo-retrieval-specific. If it regresses (delta < -0.005), MiniLM stays the LongMemEval default and the regression is documented; the LoCoMo-vs-LongMemEval divergence is itself a finding. The number is recorded verbatim whatever it is."
 
-Status: pre-registered, queued. Needs the GPU host (LongMemEval-S is generation-heavy); runs after E-009 frees the host, or on the VPS if CPU-tractable.
+Status: pre-registered, queued. REFRAMED 2026-06-14: the "97.0% headline" E-011 targeted is Recall@5, not Judge (see F-001 correction, rev 1.19). E-011 is therefore now "does arctic-embed-s improve LongMemEval-S Recall@5" (a judge-free retrieval question, cheap, CPU-tractable), and the separate end-to-end Judge question moves to E-012.
+
+**E-012. A genuine end-to-end Judge number on LongMemEval-S with the current stack.**
+
+Motivation: the 97.0% headline is Recall@5 (retrieval); the report has never had a real end-to-end Judge number on LongMemEval-S (retrieve, generate an answer, grade it against the reference). The April Judge harness is weak (a 3B generator used as both generator and its own judge, no thinking-suppression) and reproduces about 22.6% with a different per-category shape, which is not a fair test of the system. This experiment establishes an honest Judge number.
+
+Design: a corrected Judge harness (separate EXTERNAL judge, not the generator; thinking-suppression for thinking generators; a real generator, qwen3.5:9b, with the arctic-embed-s embedder and the hybrid + query-expansion retrieval that produces the 97.0% Recall@5). Run the full 500 on the oracle set (headline-comparable, evidence sessions present) and, separately, on the full-distractor set (the harder real test). Validate the harness on a 50-question slice before the full run. Report per-category and overall Judge accuracy, with provenance.
+
+Kill criterion / reporting rule (verbatim): "the end-to-end Judge number is recorded verbatim whatever it is, on both the oracle and full sets, with its generator, judge, retrieval config, dataset, and commit pinned. It is published as a SEPARATE number from the Recall@5 headline and is never conflated with it. A public end-to-end-Judge claim is made only if it is backed by this measurement."
+
+Status: pre-registered. Unblocks the constructive resolution of the F-001 mislabel: replace nothing dishonestly, measure the real thing.
 
 ---
 
@@ -550,6 +562,7 @@ This log is append-only. History is never rewritten.
 | 2026-06-12 | 1.7 | E-004 root cause found: the pylate loader is exonerated (direct load test shows the trained 96-dim Stanford projection applied correctly); the 0.050 and 0.0 results came from the search gate bug plus a pre-fix checkout on the bench host. The earlier "96 vs 128" blocker note was a misdiagnosis. Full projected-space comparison re-running. Index status updated. |
 | 2026-06-12 | 1.8 | E-004 resolved to N-008: both ColBERT projected spaces 0.730 vs answerai backbone 0.760 on subset-200 gemma; decision rule quoted, no recipe upgrade; the 4x token-matrix footprint trade of the 96-dim space recorded. benchmarks.md late-interaction section updated with the projected-space table. |
 | 2026-06-12 | 1.9 | E-001 resolved to N-009: the matched-turn-budget control shows surprise-boundary chunking was a coverage artifact (baseline at k=120 beats chunks at k=20 by 0.15); kill criterion quoted; both surprisal retrieval arms now dead. Methods lesson recorded: compare chunking levers at matched turn budget, never matched k. |
+| 2026-06-14 | 1.19 | INTEGRITY CORRECTION. F-001 (the LongMemEval-S 97.0% headline) was mislabelled "end-to-end Judge accuracy" across the report, README, benchmarks.md, AGENTS.md, and CHANGELOG. The source result file (benchmarks/results/enhanced_20260413_133215.json, query_expand, top_k=5) shows it is and always was Recall@5. The mislabel was introduced when the public docs were reframed in April; no end-to-end Judge run ever produced 97.0% (the Judge harness reproduces about 22.6% with its default generator, with a different per-category shape, which surfaced the error). Corrected every surface to "97.0% Recall@5" with provenance. Pre-registered E-012 to measure a genuine end-to-end Judge number with the current stack. Recall@5 still leads MemPalace 96.6% head-to-head, so the corrected claim remains strong. |
 | 2026-06-14 | 1.18 | E-009 RESOLVED to F-011: the prefer_verified claims gate PASSES its kill criterion (served-hallucination 0.040 to 0.000 eliminated, judged accuracy +0.020 i.e. no drop, R@K -0.005 within the 0.02 bound) on 200 LoCoMo QAs / 1853 claims under a single llama3.1:8b judge; strict fails (judge -0.065, R@K -0.065, the trades-accuracy-for-purity case) and stays opt-in. Honest read: the robust claim is "eliminates served-hallucination at no accuracy cost," the +0.02 is within noise at n=200. Per "never silently enabled" + ship-the-win, the default flip waits on Jay sign-off + a tri-judge larger-n confirm. First launch with qwen3:14b judge hung on a 12GB VRAM model-swap deadlock; relaunched with llama3.1:8b co-resident (efficiency fix, comparison internally consistent). |
 | 2026-06-14 | 1.17 | Claims layer MERGED (PR #163) and arctic-embed-s SHIPPED as the low-tier dense default (PR #162, F-010). E-009 status updated: harness built, code-reviewed, smoke-validated, full LoCoMo sweep running on the Fedora host. Pre-registered two new experiments with kill criteria before any run: E-010 (embedding-model bake-off, judge-free R@K screen of the small/fast/ONNX field against arctic-embed-s, footprint tiebreak, license + ONNX gates) and E-011 (does arctic-embed-s move the 97.0 percent LongMemEval-S headline, the honest LoCoMo-to-flagship follow-up). Both queued. |
 | 2026-06-13 | 1.16 | Pre-registered E-009, the validation gate for the v2 claims layer (Provable Memory): does verified-preferred recall cut the served-hallucination rate without dropping judged accuracy or R@K? Kill criterion written before any run; the default-off claims layer code is on branch feat/claims-layer. |

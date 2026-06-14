@@ -24,7 +24,7 @@ taOSmd is a persistent memory system. It gives you structured, searchable memory
 - **Session Catalogue** — LLM-derived timeline directory over the archive, organised by topic
 - **Crystal Store** — compact session digests with lessons learned
 
-97.0% end-to-end Judge accuracy on LongMemEval-S, measured locally on a low-end reference stack under a strict local judge. Runs entirely locally, no cloud dependencies.
+97.0% Recall@5 on LongMemEval-S (a retrieval metric, like-for-like with MemPalace 96.6% and agentmemory 95.2%), measured locally on a low-end reference stack. An end-to-end Judge number is in progress. Runs entirely locally, no cloud dependencies.
 
 ---
 

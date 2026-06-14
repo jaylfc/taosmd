@@ -1,12 +1,14 @@
 # Benchmarks
 
-## LongMemEval-S — 97.0% end-to-end Judge
+## LongMemEval-S — 97.0% Recall@5
 
-500 questions, standard test set, same embedding model (all-MiniLM-L6-v2, 384-dim). End-to-end Judge means the full pipeline runs: retrieve → generate an answer with an LLM → judge the generated answer against the reference answer with an LLM grader.
+500 questions, standard test set, same embedding model (all-MiniLM-L6-v2, 384-dim). Recall@5 is a retrieval metric: for each question, did the correct evidence session appear in the top-5 retrieved? No generation, no answer grading. This is the same metric MemPalace (96.6%) and agentmemory (95.2%) publish, so the comparison below is like-for-like.
 
-Harness: [`benchmarks/longmemeval_runner.py`](../benchmarks/longmemeval_runner.py).
+Harness: [`benchmarks/longmemeval_recall.py`](../benchmarks/longmemeval_recall.py). Provenance: `benchmarks/results/enhanced_20260413_133215.json` (the `query_expand` variant, `top_k=5`).
 
-### Per-category breakdown
+Honesty note (corrected 2026-06-14): an earlier edition of this section labelled the 97.0% as "end-to-end Judge accuracy." That was a mislabel. The number is and always was Recall@5 (top_k=5), as the source result file shows. A genuine end-to-end Judge measurement (retrieve, generate an answer, grade it against the reference) is being run with the current stack and will be published with its own provenance; it is not this number.
+
+### Per-category breakdown (Recall@5)
 
 | Category | hybrid + expand | raw semantic |
 |----------|----------------|--------------|
@@ -18,9 +20,9 @@ Harness: [`benchmarks/longmemeval_runner.py`](../benchmarks/longmemeval_runner.p
 | single-session-preference | 90.0% (27/30) | 93.3% |
 | **Overall** | **97.0%** (485/500) | 95.0% (475/500) |
 
-### Fusion strategy comparison
+### Fusion strategy comparison (Recall@5)
 
-| Strategy | Judge accuracy | Delta |
+| Strategy | Recall@5 | Delta |
 |----------|---------------|-------|
 | Raw cosine | 95.0% | — |
 | Additive keyword boost | 96.6% | +1.6 |
@@ -31,17 +33,12 @@ Harness: [`benchmarks/longmemeval_runner.py`](../benchmarks/longmemeval_runner.p
 
 | System | Score | Metric | Notes |
 |--------|-------|--------|-------|
-| **taOSmd** | **97.0%** | end-to-end Judge | this repo |
+| **taOSmd** | **97.0%** | Recall@5 | this repo |
 | MemPalace | 96.6% | Recall@5 | retrieval-only |
 | agentmemory | 95.2% | Recall@5 | retrieval-only |
 | SuperMemory | 81.6% | Recall@5 | retrieval-only, cloud embeddings |
 
-The two metrics measure different things:
-
-- **End-to-end Judge** (ours): retrieve → generate an answer → LLM grades the answer against the reference. Scores how often the final answer is correct.
-- **Recall@5**: did the correct session appear in the top-5 retrieved? No generation, no grading of the answer. Scores only whether retrieval surfaced the right chunk.
-
-A system can have excellent Recall@5 and still fail end-to-end Judge if the generator can't compose a correct answer from the retrieved evidence. Both reproductions are in this repo — [`benchmarks/longmemeval_runner.py`](../benchmarks/longmemeval_runner.py) for Judge, [`benchmarks/longmemeval_recall.py`](../benchmarks/longmemeval_recall.py) for Recall@5.
+All four rows are Recall@5, so this is a direct comparison: taOSmd leads on the same retrieval metric. Recall@5 measures only whether retrieval surfaced the right session, not whether a generator then composed a correct answer from it. The end-to-end Judge metric (retrieve, generate, grade) is the stricter test; our Judge harness is [`benchmarks/longmemeval_runner.py`](../benchmarks/longmemeval_runner.py) and a properly-configured Judge run is in progress.
 
 ## LoCoMo — multi-session conversational memory (1540 QAs)
 
@@ -718,7 +715,7 @@ A native 8 GB measurement would replace the "extrapolated" label in the next pas
 
 ### 16 GB Orange Pi 5 Plus (RK3588 NPU) — measured
 
-Both LongMemEval-S 97.0% reference stack AND LoCoMo measurements now exist on this tier. Same external `qwen3:4b` judge as the 12 GB benchmarks → directly comparable.
+Both the LongMemEval-S 97.0% Recall@5 reference stack AND LoCoMo measurements now exist on this tier. The LongMemEval-S 97.0% is Recall@5 (retrieval only, no judge); the LoCoMo numbers below are judged with the same external `qwen3:4b` judge as the 12 GB benchmarks, so the LoCoMo numbers are directly comparable across tiers.
 
 LoCoMo measurements (qwen3-4b-chat via rkllama on the NPU, all with `--adjacent-turns 2`):
 
@@ -742,7 +739,7 @@ This is also the LongMemEval-S 97.0% reference stack — same configuration as t
 - **Embedder**: `all-MiniLM-L6-v2` ONNX on CPU (0.3 ms — NPU is slower for small models).
 - **Reranker**: `Qwen3-Reranker-0.6B` on NPU.
 - **Query expansion**: `qmd-query-expansion 1.7B` on NPU.
-- **Expected best LoCoMo config**: `--adjacent-turns 2` (architecturally consistent with the 12 GB measurements; not yet validated on the NPU stack). LongMemEval 97.0% measurement on master used the cross-encoder + query expansion path without an explicit adj flag — that path's per-section scores are in the LongMemEval table above.
+- **Expected best LoCoMo config**: `--adjacent-turns 2` (architecturally consistent with the 12 GB measurements; not yet validated on the NPU stack). The LongMemEval 97.0% Recall@5 measurement used the cross-encoder + query expansion retrieval path without an explicit adj flag — that path's per-section Recall@5 scores are in the LongMemEval table above.
 - **Don't run the judge on the same Pi.** Offload to a peer (Fedora or another Pi) to avoid dual-loading.
 
 ### 4 GB GPU (GTX 1050 Ti, LXC) — measured

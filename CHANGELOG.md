@@ -245,7 +245,7 @@ source-install only).
 
 ## 0.2.0
 
-End-to-end memory system: 97.0% Judge accuracy on LongMemEval-S. MCP stdio
+End-to-end memory system: 97.0% Recall@5 on LongMemEval-S (corrected 2026-06-14; this was mislabelled "Judge accuracy" in earlier editions, the measurement is Recall@5). MCP stdio
 server, local HTTP/REST API (`taosmd serve`), reconcile, and remote client mode.
 
 ## 0.1.0
