@@ -345,7 +345,19 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
         # Also do semantic vector search (the MemPalace approach). Retrieve a
         # wider pool, then rerank/prune to the clean top-K (intelligent context
         # release) so the generator is not buried in redundant chunks.
-        vector_results = await vmem.search(question, limit=RETRIEVE_LIMIT)
+        if DECOMPOSE and llm_client is not None:
+            sub_queries = await decompose_query(llm_client, question)
+            seen_texts = set()
+            vector_results = []
+            for sq in sub_queries:
+                for r in await vmem.search(sq, limit=RETRIEVE_LIMIT):
+                    t = r.get("text", "")
+                    if t and t not in seen_texts:
+                        seen_texts.add(t)
+                        vector_results.append(r)
+            vector_results = vector_results[:RETRIEVE_LIMIT]
+        else:
+            vector_results = await vmem.search(question, limit=RETRIEVE_LIMIT)
         rr = _get_reranker()
         if rr is not None and getattr(rr, "available", False) and vector_results:
             vector_results = rr.rerank(question, vector_results, RERANK_TOP_K)
