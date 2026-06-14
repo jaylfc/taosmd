@@ -37,9 +37,14 @@ REMOTE_LLM_MODEL = os.environ.get("TAOSMD_OLLAMA_MODEL", "qwen2.5:3b")
 # CORRECT, which zeroed the qwen3.5:9b run). Defaults to the generator for
 # back-compat; set TAOSMD_JUDGE_MODEL to a different, non-thinking model.
 JUDGE_MODEL = os.environ.get("TAOSMD_JUDGE_MODEL", REMOTE_LLM_MODEL)
-# Context fed to the generator. 3000 chars truncated multi-session evidence;
-# default higher and make it tunable.
-CONTEXT_CHARS = int(os.environ.get("TAOSMD_CONTEXT_CHARS", "8000"))
+# Evidence pipeline depth. E-012 diagnosis: the generator was STARVED of
+# evidence (assembler capped at 2000 tok, 5 vector chunks, 3 FTS hits), which
+# craters multi-session/temporal questions that need several sessions in view.
+# All tunable so we can sweep "get the scores up" configs.
+CONTEXT_CHARS = int(os.environ.get("TAOSMD_CONTEXT_CHARS", "16000"))
+ASSEMBLE_TOKENS = int(os.environ.get("TAOSMD_ASSEMBLE_TOKENS", "4000"))
+RETRIEVE_LIMIT = int(os.environ.get("TAOSMD_RETRIEVE_LIMIT", "12"))
+FTS_LIMIT = int(os.environ.get("TAOSMD_FTS_LIMIT", "5"))
 
 ANSWER_PROMPT = """Based on the following context from past conversations, answer the question.
 If the answer is not in the context, say "I don't know."
@@ -217,7 +222,7 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
         ctx = await assembler.assemble(
             query=question,
             depth="auto",
-            max_total_tokens=2000,
+            max_total_tokens=ASSEMBLE_TOKENS,
         )
 
         # Also do FTS search over raw archive (the MemPalace approach — verbatim recall)
@@ -227,14 +232,14 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
         for term in search_terms:
             if len(term) > 3:  # Skip short words
                 try:
-                    fts_results = await archive.search_fts(term, limit=3)
+                    fts_results = await archive.search_fts(term, limit=FTS_LIMIT)
                     for r in fts_results:
                         archive_text += " " + r.get("data_json", "") + " " + r.get("summary", "")
                 except Exception:
                     pass
 
         # Also do semantic vector search (the MemPalace approach)
-        vector_results = await vmem.search(question, limit=5)
+        vector_results = await vmem.search(question, limit=RETRIEVE_LIMIT)
         vector_text = " ".join(r["text"] for r in vector_results)
 
         query_time = time.time() - t1
