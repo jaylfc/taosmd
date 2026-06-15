@@ -6,7 +6,7 @@
 
 Harness: [`benchmarks/longmemeval_recall.py`](../benchmarks/longmemeval_recall.py). Provenance: `benchmarks/results/enhanced_20260413_133215.json` (the `query_expand` variant, `top_k=5`).
 
-Honesty note (corrected 2026-06-14): an earlier edition of this section labelled the 97.0% as "end-to-end Judge accuracy." That was a mislabel. The number is and always was Recall@5 (top_k=5), as the source result file shows. A genuine end-to-end Judge measurement (retrieve, generate an answer, grade it against the reference) is being run with the current stack and will be published with its own provenance; it is not this number.
+Honesty note (corrected 2026-06-14): an earlier edition of this section labelled the 97.0% as "end-to-end Judge accuracy." That was a mislabel. The number is and always was Recall@5 (top_k=5), as the source result file shows. A genuine end-to-end Judge measurement (retrieve, generate an answer, grade it against the reference) is published separately below as 74.6% (F-013, oracle set); it is a different and stricter metric, and it is not this number.
 
 ### Per-category breakdown (Recall@5)
 
@@ -38,7 +38,19 @@ Honesty note (corrected 2026-06-14): an earlier edition of this section labelled
 | agentmemory | 95.2% | Recall@5 | retrieval-only |
 | SuperMemory | 81.6% | Recall@5 | retrieval-only, cloud embeddings |
 
-All four rows are Recall@5, so this is a direct comparison: taOSmd leads on the same retrieval metric. Recall@5 measures only whether retrieval surfaced the right session, not whether a generator then composed a correct answer from it. The end-to-end Judge metric (retrieve, generate, grade) is the stricter test; our Judge harness is [`benchmarks/longmemeval_runner.py`](../benchmarks/longmemeval_runner.py) and a properly-configured Judge run is in progress.
+All four rows are Recall@5, so this is a direct comparison: taOSmd leads on the same retrieval metric. Recall@5 measures only whether retrieval surfaced the right session, not whether a generator then composed a correct answer from it. The end-to-end Judge metric (retrieve, generate, grade) is the stricter test; our Judge harness is [`benchmarks/longmemeval_runner.py`](../benchmarks/longmemeval_runner.py).
+
+### End-to-end Judge on LongMemEval-S (the generation-side number)
+
+This is a SEPARATE number from the Recall@5 retrieval headline above and is never conflated with it. Measured honestly with a local 9B generator and an external strict judge on the oracle 500-question set. The F-012 baseline was 47.2% (236/500), starved of evidence; a pre-registered ablation (F-013) lifted it to **74.6%** (373/500) without changing the model, only the evidence pipeline plus a self-check.
+
+| config | Judge (oracle) |
+|--------|------|
+| F-012 baseline (starved) | 47.2% (236/500) |
+| + evidence-depth tuning | 56.8% (284/500) |
+| **+ reranking + answer self-verification** | **74.6% (373/500)** |
+
+Generator qwen3.5:9b with `/no_think`, external strict judge Qwen3-4B-Instruct-2507, MiniLM embedder. Answer self-verification (a CoVe-style pass that checks the draft against the retrieved context) is the dominant lever and fixes the reasoning bottlenecks: temporal-reasoning 30 to 56%, multi-session 40 to 67%. Query decomposition was tested and dropped (it lowered every combination). Confirmed judge-robust: a cross-family second judge (llama3.1:8b) reproduced both numbers exactly. Full detail in the research report (F-013) and [`benchmarks/results/e012_ablation_results.md`](../benchmarks/results/e012_ablation_results.md).
 
 ## LoCoMo — multi-session conversational memory (1540 QAs)
 
