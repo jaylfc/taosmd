@@ -7,8 +7,15 @@ resolves it from the local taosmd config (server_url in the user config file)
 or TAOSMD_SERVER_URL.
 
 1. LIVE WATCHER (in-session): run `taosmd a2a-watch --exclude @taOSmd` as a
-   persistent background monitor so every new bus message wakes the session.
-   It streams all channels over SSE and reconnects on drops.
+   MANAGED background task so every new bus message wakes the session. It
+   streams all channels over SSE and reconnects on drops. CRITICAL: launch it
+   with the harness's background-task mechanism (Claude Code: the Bash tool's
+   `run_in_background: true`, which returns a task ID and delivers
+   `<task-notification>` events). Do NOT launch it as a plain shell `&`
+   background process: that runs and streams to a log file but is NOT tracked
+   by the harness, so it delivers NO notifications and you silently fall back
+   to polling. On resume, re-arm it this way (the wind-down step that silences
+   it stops the managed task, so a fresh managed task is needed on wake).
 2. DURABLE FLOOR (machine-level, verify it exists rather than re-adding):
    hourly `taosmd a2a-poll` crontab lines per channel appending to the
    inbox log under the taosmd user config dir. These survive sessions and
