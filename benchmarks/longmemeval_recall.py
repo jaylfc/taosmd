@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""LongMemEval Recall@k Benchmark — Same metric as MemPalace.
+"""LongMemEval Recall@k Benchmark (DEPRECATED).
+
+DEPRECATED: superseded by longmemeval_enhanced.py, the canonical Recall@k
+runner for the published 97.0% number (see benchmarks/REPRODUCE-longmemeval.md).
+This file predates the taosmd package rename: it still imports the old
+`tinyagentos` package and targets a qmd server, so it will not import as-is.
+Kept for history only. Do not use it.
 
 Measures: Does at least one correct answer session appear in top-k
 retrieved results? This is a RETRIEVAL metric, not QA accuracy.

@@ -1,0 +1,167 @@
+{
+  "benchmark": "enhanced",
+  "top_k": 5,
+  "results": {
+    "hybrid_baseline": {
+      "overall": 96.6,
+      "total": 483,
+      "questions": 500,
+      "time": 216.27127718925476,
+      "by_type": {
+        "single-session-user": {
+          "hits": 68,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 131,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 27,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 125,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 78,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 54,
+          "total": 56
+        }
+      }
+    },
+    "query_expand": {
+      "overall": 97.0,
+      "total": 485,
+      "questions": 500,
+      "time": 217.47671508789062,
+      "by_type": {
+        "single-session-user": {
+          "hits": 68,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 131,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 27,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 127,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 78,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 54,
+          "total": 56
+        }
+      }
+    },
+    "temporal_boost": {
+      "overall": 96.6,
+      "total": 483,
+      "questions": 500,
+      "time": 220.1477472782135,
+      "by_type": {
+        "single-session-user": {
+          "hits": 68,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 131,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 27,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 125,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 78,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 54,
+          "total": 56
+        }
+      }
+    },
+    "combined_v2": {
+      "overall": 97.0,
+      "total": 485,
+      "questions": 500,
+      "time": 218.23385667800903,
+      "by_type": {
+        "single-session-user": {
+          "hits": 68,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 131,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 27,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 127,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 78,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 54,
+          "total": 56
+        }
+      }
+    },
+    "wider_retrieval": {
+      "overall": 96.2,
+      "total": 481,
+      "questions": 500,
+      "time": 217.95791816711426,
+      "by_type": {
+        "single-session-user": {
+          "hits": 68,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 130,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 27,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 124,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 78,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 54,
+          "total": 56
+        }
+      }
+    }
+  },
+  "timestamp": "2026-06-14 17:54:53"
+}

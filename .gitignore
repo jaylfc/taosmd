@@ -4,6 +4,10 @@ __pycache__/
 dist/
 build/
 data/
+# dataset files stay ignored for size, but keep the tracked pointer/checksum
+!benchmarks/data/
+benchmarks/data/*
+!benchmarks/data/README.md
 *.rknn
 *.rkllm
 models/minilm-onnx/model.onnx
