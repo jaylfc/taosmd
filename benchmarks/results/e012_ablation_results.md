@@ -46,7 +46,10 @@ preference 53.3 to 76.7%; the already-strong categories stay near ceiling.
 
 ## Firm-up
 
-Cross-family llama3.1:8b judge re-run of baseline + winner is in progress to
-confirm the delta is not specific to the Qwen judge. The lenient gemma4:e2b judge
-does not fit co-resident with the 9B generator (12 GB budget), so it is deferred
-to a prediction-cache re-judge.
+Cross-family llama3.1:8b judge re-run of baseline + winner CONFIRMED the result:
+baseline 284/500 (56.8%) and winner 373/500 (74.6%), identical to the Qwen judge
+down to the per-category counts. Temperature-0 generation gives byte-identical
+answers across runs, and the two cross-family strict judges agree on every grade,
+so the +17.8pp delta is not an artifact of the Qwen judge. The lenient gemma4:e2b
+judge does not fit co-resident with the 9B generator (12 GB budget), so a lenient
+cross-check is deferred to a prediction-cache re-judge.
