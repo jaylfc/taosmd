@@ -183,6 +183,59 @@ def test_self_verify_keeps_draft_on_error_and_empty():
     assert asyncio.run(mod.self_verify_answer(_FakeClient("anything"), ["m"], "Q", "")) == ""
 
 
+# ── ingest chunking (the sweepable score lever) ──────────────────────
+
+
+def test_chunk_text_defaults_match_old_hardcoded_behaviour():
+    mod = _load_runner()
+    # The old code: chunk_size=100, overlap=20 -> step 80, windows of <=100 words.
+    words = [f"w{i}" for i in range(250)]
+    text = " ".join(words)
+    chunks = mod.chunk_text(text)  # defaults = 100 words / 20 overlap
+    # Reproduce the exact original loop and compare verbatim.
+    expected = []
+    for start in range(0, len(words), 100 - 20):
+        c = " ".join(words[start:start + 100])
+        if c.strip():
+            expected.append(c)
+    assert chunks == expected
+    # 250 words, step 80 -> starts at 0,80,160,240 -> 4 chunks.
+    assert len(chunks) == 4
+
+
+def test_chunk_text_count_and_size_bound():
+    mod = _load_runner()
+    text = " ".join(f"w{i}" for i in range(20))
+    chunks = mod.chunk_text(text, words=5, overlap=1)  # step 4
+    # starts: 0,4,8,12,16 -> 5 chunks
+    assert len(chunks) == 5
+    # no chunk exceeds the configured word size
+    assert all(len(c.split()) <= 5 for c in chunks)
+    # overlap is real: chunk[1] starts at word index 4, chunk[0] ends at 4
+    assert chunks[0].split()[-1] == "w4"
+    assert chunks[1].split()[0] == "w4"
+
+
+def test_chunk_text_empty_and_overlap_floor():
+    mod = _load_runner()
+    assert mod.chunk_text("") == []
+    assert mod.chunk_text("   ") == []
+    # overlap >= words must not deadlock (step floored at 1); still bounded.
+    chunks = mod.chunk_text(" ".join(f"w{i}" for i in range(5)), words=3, overlap=5)
+    assert chunks and all(len(c.split()) <= 3 for c in chunks)
+
+
+def test_chunk_text_sentences_never_splits_mid_sentence():
+    mod = _load_runner()
+    text = "Alpha beta gamma. Delta epsilon zeta. Eta theta iota kappa lambda mu nu."
+    chunks = mod.chunk_text_sentences(text, words=6)
+    # every chunk is composed of whole sentences (ends with terminal punctuation)
+    assert all(c.rstrip().endswith((".", "!", "?")) for c in chunks)
+    # the two 3-word sentences pack together (<=6); the 7-word one is its own chunk
+    assert chunks[0] == "Alpha beta gamma. Delta epsilon zeta."
+    assert chunks[1] == "Eta theta iota kappa lambda mu nu."
+
+
 # ── metrics aggregation ──────────────────────────────────────────────
 
 

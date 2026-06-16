@@ -23,6 +23,11 @@ longmemeval_runner.py, with the same E-012 env levers so a winning config
 carries over (TAOSMD_OLLAMA_MODEL, TAOSMD_JUDGE_MODEL, TAOSMD_ONNX_PATH,
 TAOSMD_ONNX_POOLING, TAOSMD_ONNX_QUERY_PREFIX, TAOSMD_RERANK, TAOSMD_SELF_VERIFY).
 
+Ingest chunking is also sweepable without code edits (untested score lever):
+TAOSMD_CHUNK_WORDS (default 100), TAOSMD_CHUNK_OVERLAP (default 20), and
+TAOSMD_CHUNK_MODE ("words" default | "sentences" = pack whole sentences, no
+mid-sentence splits). Defaults reproduce the original 100/20-word windows.
+
 GPU NOTE: --llm needs a live Ollama (a GPU host). Without it the runner does a
 --dry wiring check: ingest + retrieve + print what it WOULD judge. Build/wire/
 test it GPU-free now; run --llm on a GPU window later.
@@ -77,6 +82,13 @@ ONNX_PATH = os.environ.get(
 # TAOSMD_ONNX_POOLING / TAOSMD_ONNX_QUERY_PREFIX / TAOSMD_ONNX_DOC_PREFIX are
 # read directly by VectorMemory's embedder from the environment, so they apply
 # automatically — nothing to thread through here.
+
+# Ingest chunking levers (untested score knob: how we window 100K-1M-token
+# conversations decides whether the exact-fact chunk gets retrieved). Defaults
+# preserve the original hardcoded 100-word / 20-word-overlap behaviour.
+CHUNK_WORDS = int(os.environ.get("TAOSMD_CHUNK_WORDS", "100"))
+CHUNK_OVERLAP = int(os.environ.get("TAOSMD_CHUNK_OVERLAP", "20"))
+CHUNK_MODE = os.environ.get("TAOSMD_CHUNK_MODE", "words")  # "words" (default) | "sentences"
 
 HF_DATASET = "Mohammadta/BEAM"
 HF_DATASET_10M = "Mohammadta/BEAM-10M"
@@ -273,6 +285,63 @@ def parse_beam_chat(chat_data) -> list[tuple[str, str]]:
 
     _walk(chat_data or [])
     return turns
+
+
+# ─────────────────────────── ingest chunking ───────────────────────────
+
+import re  # noqa: E402  (kept beside the chunker that uses it)
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def chunk_text(text: str, words: int = CHUNK_WORDS, overlap: int = CHUNK_OVERLAP) -> list[str]:
+    """Split ``text`` into overlapping word windows of ``words`` words each.
+
+    Pure helper (testable, no I/O). Slides a fixed window with ``overlap`` words
+    of carry-over, exactly reproducing the original hardcoded ``chunk_size=100,
+    overlap=20`` behaviour at its defaults. Empty/whitespace chunks are dropped;
+    no chunk ever exceeds ``words`` words.
+    """
+    toks = text.split()
+    if not toks:
+        return []
+    step = max(1, words - overlap)
+    chunks: list[str] = []
+    for start in range(0, len(toks), step):
+        chunk = " ".join(toks[start:start + words])
+        if chunk.strip():
+            chunks.append(chunk)
+    return chunks
+
+
+def chunk_text_sentences(text: str, words: int = CHUNK_WORDS) -> list[str]:
+    """Pack whole sentences into chunks of up to ~``words`` words each.
+
+    Sentence-aware mode: never splits mid-sentence. A single sentence longer than
+    ``words`` becomes its own (over-length) chunk rather than being cut. No word
+    overlap (sentence boundaries already give natural context edges).
+    """
+    sentences = [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+    chunks: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for sent in sentences:
+        slen = len(sent.split())
+        if cur and cur_len + slen > words:
+            chunks.append(" ".join(cur))
+            cur, cur_len = [], 0
+        cur.append(sent)
+        cur_len += slen
+    if cur:
+        chunks.append(" ".join(cur))
+    return chunks
+
+
+def chunk_chat_text(text: str) -> list[str]:
+    """Chunk assembled chat text per the configured TAOSMD_CHUNK_* levers."""
+    if CHUNK_MODE == "sentences":
+        return chunk_text_sentences(text, CHUNK_WORDS)
+    return chunk_text(text, CHUNK_WORDS, CHUNK_OVERLAP)
 
 
 # ─────────────────────────── mem0 prompts (ported verbatim) ───────────────────────────
@@ -573,7 +642,8 @@ async def ingest_conversation(turns: list[tuple[str, str]], kg, archive, vmem) -
     """Ingest a BEAM conversation: KG facts + archive + chunked vector embeds.
 
     Mirrors longmemeval_runner's ingest (process_conversation_turn + archive +
-    ~100-word overlapping chunks). Returns the number of vector chunks embedded.
+    word/sentence chunks per the TAOSMD_CHUNK_* levers; defaults to the original
+    ~100-word / 20-overlap windows). Returns the number of vector chunks embedded.
     """
     full_text = ""
     for role, content in turns:
@@ -586,14 +656,9 @@ async def ingest_conversation(turns: list[tuple[str, str]], kg, archive, vmem) -
         full_text += f"\n[{role}]: {content}"
 
     nchunks = 0
-    if full_text:
-        words = full_text.split()
-        chunk_size, overlap = 100, 20
-        for start in range(0, len(words), chunk_size - overlap):
-            chunk = " ".join(words[start:start + chunk_size])
-            if chunk.strip():
-                await vmem.add(chunk, metadata={})
-                nchunks += 1
+    for chunk in chunk_chat_text(full_text):
+        await vmem.add(chunk, metadata={})
+        nchunks += 1
     return nchunks
 
 
