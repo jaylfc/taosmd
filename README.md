@@ -33,6 +33,14 @@ Zero cloud dependencies. Zero API keys. NPU if you have one, CPU if you don't, c
 
 ### Let your agent install it
 
+**Recommended: let an agent set it up for your machine.** Run `taosmd setup-prompt`
+to print an install prompt already tailored to your detected hardware, then paste
+it into a tool-capable agent (Claude Code, Cowork, or similar). It picks the right
+model for your silicon, recommends a feature profile, and asks before enabling
+anything that changes latency or behaviour. If you have not cloned the repo yet,
+use the static prompt in [docs/INSTALL-AGENT-PROMPT.md](docs/INSTALL-AGENT-PROMPT.md).
+The manual steps below still work for anyone who prefers them.
+
 The cleanest way to install taOSmd is to ask your agent to do it. Paste this message into Claude Code, Cursor, your OpenClaw shell, whatever:
 
 > Please install taOSmd as my memory system. The repo is github.com/jaylfc/taosmd.
