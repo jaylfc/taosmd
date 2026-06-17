@@ -32,6 +32,15 @@ GPU NOTE: --llm needs a live Ollama (a GPU host). Without it the runner does a
 --dry wiring check: ingest + retrieve + print what it WOULD judge. Build/wire/
 test it GPU-free now; run --llm on a GPU window later.
 
+TWO-PHASE MODE (--phase): on a 12GB GPU a big generator (qwen3:14b, 9.3GB) and
+the judge cannot stay co-resident. ``--phase generate`` ingests + retrieves +
+generates and writes predictions to ``--predictions`` WITHOUT judging (so only
+the generator is loaded). ``--phase judge`` reads that file and judges WITHOUT
+ingesting/retrieving/generating (so only the judge is loaded), then prints the
+same metrics ``both`` does. Unload the generator between phases (ollama stop) so
+its VRAM frees before the judge loads. ``--phase both`` (default) is the
+original interleaved path, unchanged. See benchmarks/beam_twophase.sh.
+
 Usage:
     # dry wiring check (no LLM, no GPU) — what the default smoke run does:
     python3 benchmarks/beam_runner.py --split 100K --limit 5
@@ -40,6 +49,12 @@ Usage:
     TAOSMD_OLLAMA_MODEL=qwen3.5:9b TAOSMD_JUDGE_MODEL=qwen3-4b-instruct \\
     TAOSMD_ONNX_PATH=models/arctic-embed-s-onnx TAOSMD_RERANK=1 \\
     python3 benchmarks/beam_runner.py --split 100K --limit 100 --llm
+
+    # two-phase (big generator, then judge separately): see beam_twophase.sh
+    python3 benchmarks/beam_runner.py --split 100K --limit 100 --llm \\
+        --phase generate --predictions benchmarks/results/beam_pred.json
+    python3 benchmarks/beam_runner.py --split 100K --limit 100 --llm \\
+        --phase judge --predictions benchmarks/results/beam_pred.json
 """
 
 from __future__ import annotations
@@ -665,12 +680,40 @@ async def ingest_conversation(turns: list[tuple[str, str]], kg, archive, vmem) -
 # ─────────────────────────── per-conversation driver ───────────────────────────
 
 
-async def process_conversation(row: dict, idx: int, use_llm: bool, llm_client) -> list[dict]:
-    """Ingest one conversation, then retrieve+generate+judge each question.
+async def judge_prediction(llm_client, rec: dict) -> dict:
+    """Judge one prediction dict in place: run judge_nugget per nugget + score.
+
+    Takes a rec that already carries question/rubric/generated_answer (either the
+    generate phase's prediction shape or a freshly retrieved+generated rec in the
+    `both` path) and folds in the scored fields (generated_answer/score/judgment/
+    nugget_scores), exactly the shape the original interleaved judge path produced.
+    Returns the same rec for convenience.
+    """
+    question = rec["question"]
+    answer = rec.get("generated_answer", "")
+    if not rec.get("rubric"):
+        rec.update({"judgment": "ERROR", "score": 0.0, "generated_answer": answer,
+                    "nugget_scores": [], "error": "No rubric nuggets"})
+    else:
+        nugget_scores = [await judge_nugget(llm_client, question, n, answer) for n in rec["rubric"]]
+        rec.update({"generated_answer": answer, **score_question(nugget_scores)})
+    return rec
+
+
+async def process_conversation(row: dict, idx: int, use_llm: bool, llm_client,
+                               phase: str = "both") -> list[dict]:
+    """Ingest one conversation, then retrieve+generate(+judge) each question.
 
     In --dry mode (use_llm False) it stops after retrieval and records what it
     WOULD judge (question, rubric nuggets, retrieved memory count), so wiring is
     verifiable without an LLM/GPU.
+
+    ``phase`` controls the LLM stage:
+      * "both"     -> retrieve + generate + judge inline (original behaviour).
+      * "generate" -> retrieve + generate only; emit a prediction dict per
+                      question, NO judge call (the judge model stays unloaded).
+    The "judge" phase never reaches here (it reads predictions from a file and
+    does not ingest/retrieve/generate or create stores at all).
     """
     turns = parse_beam_chat(row.get("chat", []))
     questions = parse_probing_questions(row)
@@ -718,13 +761,16 @@ async def process_conversation(row: dict, idx: int, use_llm: bool, llm_client) -
         answer = await llm_answer(llm_client, memories, q["question"])
         if SELF_VERIFY:
             answer = await self_verify_answer(llm_client, memories, q["question"], answer)
+        rec["generated_answer"] = answer
 
-        if not q["rubric"]:
-            rec.update({"judgment": "ERROR", "score": 0.0, "generated_answer": answer,
-                        "nugget_scores": [], "error": "No rubric nuggets"})
-        else:
-            nugget_scores = [await judge_nugget(llm_client, q["question"], n, answer) for n in q["rubric"]]
-            rec.update({"generated_answer": answer, **score_question(nugget_scores)})
+        if phase == "generate":
+            # Prediction only; the judge runs in a separate phase/process.
+            print(f"    [GEN] {q['question_type']:24s} ans_len={len(answer):4d} "
+                  f"nuggets={len(q['rubric'])} {q['question'][:44]}")
+            results.append(rec)
+            continue
+
+        await judge_prediction(llm_client, rec)
         print(f"    {q['question_type']:24s} score={rec.get('score', 0.0):.2f} "
               f"[{rec.get('judgment', '?')}] {q['question'][:44]}")
         results.append(rec)
@@ -791,6 +837,107 @@ def display_results(metrics: dict) -> None:
 # ─────────────────────────── main ───────────────────────────
 
 
+def write_predictions(predictions: list[dict], path: str, split: str, limit: int) -> None:
+    """Serialise the generate phase's prediction dicts to JSON at ``path``."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    payload = {
+        "split": split,
+        "limit": limit,
+        "generator": REMOTE_LLM_MODEL,
+        "self_verify": SELF_VERIFY,
+        "predictions": predictions,
+    }
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+
+def read_predictions(path: str) -> list[dict]:
+    """Read prediction dicts written by the generate phase.
+
+    Tolerates both the wrapped shape ``{"predictions": [...]}`` and a bare list,
+    so a hand-built or re-saved predictions file still loads.
+    """
+    with open(path) as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        return list(data.get("predictions", []))
+    if isinstance(data, list):
+        return data
+    raise ValueError(f"Unrecognised predictions file shape in {path!r}")
+
+
+async def run_generate(split: str, limit: int, predictions_path: str) -> None:
+    """GENERATE phase: ingest + retrieve + generate, write predictions, no judge."""
+    print("=" * 70)
+    print(f"BEAM Benchmark (taOSmd)   split={split}  limit={limit}  mode=GENERATE (no judge)")
+    print("=" * 70)
+    print(f"  generator={REMOTE_LLM_MODEL}  embedder={os.path.basename(ONNX_PATH)}  "
+          f"rerank={RERANK}  self_verify={SELF_VERIFY}")
+
+    rows = load_beam_split(split, limit)
+    if not rows:
+        print("  ERROR: no conversations loaded")
+        return
+    print(f"  loaded {len(rows)} conversation(s)")
+
+    import httpx as _httpx  # noqa: PLC0415
+    llm_client = _httpx.AsyncClient(timeout=60)
+
+    predictions: list[dict] = []
+    for idx, row in enumerate(rows):
+        predictions.extend(
+            await process_conversation(row, idx, use_llm=True, llm_client=llm_client, phase="generate")
+        )
+    await llm_client.aclose()
+
+    write_predictions(predictions, predictions_path, split, limit)
+    print(f"\n{'=' * 70}")
+    print(f"GENERATE phase complete: {len(predictions)} predictions -> {predictions_path}")
+    print(f"  (now unload {REMOTE_LLM_MODEL} and run --phase judge on the same file)")
+    print(f"{'=' * 70}")
+
+
+async def run_judge(predictions_path: str) -> dict | None:
+    """JUDGE phase: read predictions, judge each, print the same metrics as `both`.
+
+    Does NOT ingest/retrieve/generate and creates NO taOSmd stores; the generator
+    stays unloaded so the judge has the GPU to itself.
+    """
+    print("=" * 70)
+    print(f"BEAM Benchmark (taOSmd)   mode=JUDGE   predictions={predictions_path}")
+    print("=" * 70)
+    print(f"  judge={JUDGE_MODEL}")
+
+    predictions = read_predictions(predictions_path)
+    if not predictions:
+        print("  ERROR: no predictions to judge")
+        return None
+    print(f"  loaded {len(predictions)} prediction(s)")
+
+    import httpx as _httpx  # noqa: PLC0415
+    llm_client = _httpx.AsyncClient(timeout=60)
+
+    all_results: list[dict] = []
+    for rec in predictions:
+        scored = await judge_prediction(llm_client, dict(rec))
+        print(f"    {scored.get('question_type', '?'):24s} score={scored.get('score', 0.0):.2f} "
+              f"[{scored.get('judgment', '?')}] {str(scored.get('question', ''))[:44]}")
+        all_results.append(scored)
+    await llm_client.aclose()
+
+    metrics = compute_metrics(all_results)
+    display_results(metrics)
+
+    out_dir = os.path.join(os.path.dirname(__file__), "results")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"beam_judge_{int(time.time())}.json")
+    with open(out_path, "w") as f:
+        json.dump({"predictions_file": predictions_path, "generator": REMOTE_LLM_MODEL,
+                   "judge": JUDGE_MODEL, "metrics": metrics, "results": all_results}, f, indent=2)
+    print(f"\n  results -> {out_path}")
+    return metrics
+
+
 async def run_benchmark(split: str, limit: int, use_llm: bool) -> dict | None:
     print("=" * 70)
     print(f"BEAM Benchmark — taOSmd   split={split}  limit={limit}  "
@@ -854,8 +1001,25 @@ def main() -> None:
     parser.add_argument("--llm", action="store_true",
                         help="Enable generate+judge via Ollama (needs a GPU host). "
                              "Omit for a GPU-free dry wiring check.")
+    parser.add_argument("--phase", choices=["both", "generate", "judge"], default="both",
+                        help="LLM phase split (default both = original interleaved path). "
+                             "generate = ingest+retrieve+generate, write --predictions, NO judge. "
+                             "judge = read --predictions and judge only (no stores, generator "
+                             "stays unloaded). Lets a big generator and the judge not co-reside "
+                             "on a 12GB GPU. Only meaningful with --llm.")
+    parser.add_argument("--predictions", default="benchmarks/results/beam_predictions.json",
+                        help="Generate-phase output / judge-phase input JSON path.")
     args = parser.parse_args()
-    asyncio.run(run_benchmark(args.split, args.limit, args.llm))
+
+    if args.phase != "both" and not args.llm:
+        parser.error("--phase generate/judge require --llm (they call Ollama)")
+
+    if args.phase == "generate":
+        asyncio.run(run_generate(args.split, args.limit, args.predictions))
+    elif args.phase == "judge":
+        asyncio.run(run_judge(args.predictions))
+    else:
+        asyncio.run(run_benchmark(args.split, args.limit, args.llm))
 
 
 if __name__ == "__main__":
