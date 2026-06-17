@@ -571,6 +571,25 @@ def _install_skill_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _setup_prompt_cmd(args: argparse.Namespace) -> int:
+    import json  # noqa: PLC0415
+    from . import recipes  # noqa: PLC0415
+    from . import setup_prompt  # noqa: PLC0415
+
+    if getattr(args, "device_info", None):
+        try:
+            with open(args.device_info, "r", encoding="utf-8") as fh:
+                device_info = json.load(fh)
+        except Exception as exc:
+            print(f"error: could not read --device-info {args.device_info}: {exc}")
+            return 1
+    else:
+        device_info = recipes.local_probe()
+
+    print(setup_prompt.render_setup_prompt(device_info, getattr(args, "needs", None)))
+    return 0
+
+
 def _agent_rm(registry: AgentRegistry, name: str, drop_data: bool) -> int:
     try:
         registry.delete_agent(name, drop_data=drop_data)
@@ -1243,6 +1262,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Overwrite an existing installation",
     )
 
+    # ----- setup-prompt subcommand ------------------------------------
+    setup_prompt_p = sub.add_parser(
+        "setup-prompt",
+        help="Print a hardware-tailored agent prompt for installing taOSmd",
+    )
+    setup_prompt_p.add_argument(
+        "--device-info", metavar="FILE", default=None,
+        help="Read device_info JSON from FILE instead of probing (for tests / "
+             "generating a prompt for a different machine)",
+    )
+    setup_prompt_p.add_argument(
+        "--needs", default=None,
+        help="A short note on the user's stated needs (e.g. 'audit trail'); "
+             "leans the recommended profile",
+    )
+
     # ----- a2a-poll subcommand ----------------------------------------
     a2a_poll_p = sub.add_parser(
         "a2a-poll",
@@ -1507,6 +1542,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "install-skill":
         return _install_skill_cmd(args)
+
+    if args.cmd == "setup-prompt":
+        return _setup_prompt_cmd(args)
 
     if args.cmd == "a2a-poll":
         return _a2a_poll_cmd(args)

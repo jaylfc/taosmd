@@ -43,3 +43,29 @@ def test_probe_miss_degrades_to_cpu_minimal():
     text = setup_prompt.render_setup_prompt({})
     assert "cpu" in text
     assert "Minimal" in text
+
+
+import json
+from taosmd import cli
+
+
+def test_cli_setup_prompt_with_injected_device_info(tmp_path, capsys):
+    di = tmp_path / "device.json"
+    di.write_text(json.dumps(
+        {"host": {"cpu": {"arch": "x86_64", "cores": 16}, "ram_mb": 64000,
+                  "npu": {"type": "none"},
+                  "gpu": {"type": "cuda", "name": "RTX 3060", "vram_mb": 12288}}}))
+    rc = cli.main(["setup-prompt", "--device-info", str(di)])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "gpu-12gb" in out
+    assert "Quality" in out
+
+
+def test_cli_setup_prompt_needs_flag(tmp_path, capsys):
+    di = tmp_path / "device.json"
+    di.write_text(json.dumps({"host": {}}))
+    rc = cli.main(["setup-prompt", "--device-info", str(di), "--needs", "audit trail"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Integrity" in out
