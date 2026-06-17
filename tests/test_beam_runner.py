@@ -7,6 +7,7 @@ Ollama client (mirrors tests/test_e012_levers.py). No live LLM / GPU needed.
 
 import asyncio
 import importlib.util
+import json
 import pathlib
 
 _RUNNER = pathlib.Path(__file__).resolve().parent.parent / "benchmarks" / "beam_runner.py"
@@ -252,3 +253,96 @@ def test_compute_metrics_overall_and_per_type():
     assert m["overall"]["correct"] == 2  # 1.0 and 0.5 pass >= 0.5
     assert m["by_question_type"]["information_extraction"]["accuracy"] == 50.0
     assert m["by_question_type"]["abstention"]["correct"] == 1
+
+
+# ── two-phase (generate -> judge) wiring ─────────────────────────────
+
+# Two fake generate-phase predictions in the exact shape the generate phase
+# writes (no judge fields yet). These exercise the predictions round-trip and the
+# judge-from-prediction path with a mocked Ollama client (no live LLM).
+_FAKE_PREDICTIONS = [
+    {
+        "conversation_id": "1",
+        "question_type": "information_extraction",
+        "question": "When does my first sprint end?",
+        "rubric": ["LLM response should state: March 29"],
+        "gold": "March 29",
+        "generated_answer": "Your first sprint ends March 29.",
+        "retrieved_count": 7,
+    },
+    {
+        "conversation_id": "1",
+        "question_type": "abstention",
+        "question": "What is my favourite colour?",
+        "rubric": [],  # no rubric -> judge marks ERROR, score 0.0
+        "gold": "No information is provided.",
+        "generated_answer": "I don't have enough information to answer this question.",
+        "retrieved_count": 4,
+    },
+]
+
+
+def test_predictions_round_trip_through_writer_and_reader(tmp_path):
+    mod = _load_runner()
+    path = str(tmp_path / "preds.json")
+    mod.write_predictions(_FAKE_PREDICTIONS, path, split="100K", limit=1)
+
+    # File is valid JSON with the wrapped shape + the predictions payload.
+    on_disk = json.loads(pathlib.Path(path).read_text())
+    assert on_disk["split"] == "100K" and on_disk["limit"] == 1
+    assert len(on_disk["predictions"]) == 2
+
+    # read_predictions returns the list back, field-for-field.
+    back = mod.read_predictions(path)
+    assert back == _FAKE_PREDICTIONS
+
+
+def test_read_predictions_tolerates_bare_list(tmp_path):
+    mod = _load_runner()
+    path = tmp_path / "bare.json"
+    path.write_text(json.dumps(_FAKE_PREDICTIONS))
+    assert mod.read_predictions(str(path)) == _FAKE_PREDICTIONS
+
+
+def test_judge_prediction_scores_a_prediction_dict():
+    mod = _load_runner()
+    # Mocked judge always returns score 1.0; the rubric'd prediction should PASS
+    # and carry the scored shape the original interleaved judge path produced.
+    client = _FakeClient('{"score": 1.0, "reason": "states March 29"}')
+    rec = asyncio.run(mod.judge_prediction(client, dict(_FAKE_PREDICTIONS[0])))
+    assert rec["score"] == 1.0 and rec["judgment"] == "PASS"
+    assert rec["generated_answer"] == "Your first sprint ends March 29."
+    assert rec["question_type"] == "information_extraction"
+    assert len(rec["nugget_scores"]) == 1
+
+
+def test_judge_prediction_marks_error_when_no_rubric():
+    mod = _load_runner()
+    client = _FakeClient('{"score": 1.0, "reason": "ignored"}')
+    rec = asyncio.run(mod.judge_prediction(client, dict(_FAKE_PREDICTIONS[1])))
+    assert rec["judgment"] == "ERROR" and rec["score"] == 0.0
+    assert rec["error"] == "No rubric nuggets"
+    # the generated answer is preserved through the judge step
+    assert rec["generated_answer"].startswith("I don't have enough")
+
+
+def test_judge_phase_iterates_predictions_and_computes_metrics(tmp_path):
+    """The judge phase reads predictions, judges each, and feeds compute_metrics.
+
+    Done without a live LLM by judging each prediction with the mocked client and
+    asserting compute_metrics aggregates exactly the rows the judge phase would.
+    """
+    mod = _load_runner()
+    path = str(tmp_path / "preds.json")
+    mod.write_predictions(_FAKE_PREDICTIONS, path, split="100K", limit=1)
+
+    client = _FakeClient('{"score": 1.0, "reason": "ok"}')
+    scored = [asyncio.run(mod.judge_prediction(client, dict(p)))
+              for p in mod.read_predictions(path)]
+
+    m = mod.compute_metrics(scored)
+    # both rows carry a score (the no-rubric one scores 0.0, not skipped)
+    assert m["overall"]["total"] == 2
+    assert m["overall"]["correct"] == 1  # only the rubric'd row passes
+    assert m["overall"]["errors"] == 1   # the no-rubric row is flagged
+    assert m["by_question_type"]["information_extraction"]["correct"] == 1
