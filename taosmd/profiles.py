@@ -112,3 +112,67 @@ def list_profiles() -> list[Profile]:
 
 def get_profile(profile_id: str) -> Profile | None:
     return PROFILES.get(profile_id)
+
+
+# Keywords in a stated need that lean the recommendation to Integrity.
+_INTEGRITY_NEED_HINTS = ("audit", "compliance", "complian", "provenance",
+                         "integrity", "regulat", "gdpr", "hipaa")
+
+
+def recommend_profile(tier: str, needs: str | None = None) -> str:
+    """Recommend a profile id from the hardware tier and any stated needs.
+
+    A stated audit/compliance need wins (-> integrity). Otherwise capable GPU
+    hardware leans quality and weak hardware leans minimal. The user always
+    confirms or changes the recommendation.
+    """
+    if needs:
+        low = needs.lower()
+        if any(h in low for h in _INTEGRITY_NEED_HINTS):
+            return "integrity"
+    if tier in ("gpu-4gb", "gpu-8gb", "gpu-12gb"):
+        return "quality"
+    return "minimal"
+
+
+def resolve_config(profile_id: str, consented_switches: list[str] | None = None) -> dict:
+    """Return the final config dict for a profile plus the consented switches.
+
+    Non-consent switches follow the profile (or their default). Consent-required
+    switches are written ONLY when explicitly present in consented_switches, even
+    if the profile wants them. This is the "never silently enabled" rule.
+    """
+    prof = PROFILES.get(profile_id)
+    if prof is None:
+        raise ValueError(f"unknown profile: {profile_id}")
+    consented = set(consented_switches or [])
+    out: dict = {}
+    for sid, sw in SWITCHES.items():
+        wants = prof.overrides.get(sid, sw.default)
+        if sw.requires_consent:
+            enabled = sid in consented and wants
+        else:
+            enabled = wants
+        if enabled:
+            out[sw.config_key] = sw.on_value
+    return out
+
+
+def profiles_schema() -> dict:
+    """Renderable description of the registry for the dashboard / prompt."""
+    return {
+        "switches": [
+            {
+                "id": s.id, "label": s.label, "category": s.category,
+                "config_key": s.config_key, "default": s.default,
+                "requires_consent": s.requires_consent, "cost": s.cost,
+                "description": s.description, "help": s.help,
+            }
+            for s in SWITCHES.values()
+        ],
+        "profiles": [
+            {"id": p.id, "label": p.label, "description": p.description,
+             "overrides": dict(p.overrides)}
+            for p in PROFILES.values()
+        ],
+    }
