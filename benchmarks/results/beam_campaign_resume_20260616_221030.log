@@ -1,0 +1,77 @@
+==================== ARM: chunk200_sv (split=100K limit=5) ====================
+  Overall: 49/100 pass (>= 0.5)  accuracy=49.0%  avg_score=0.425  errors=0
+    abstention                  10/10  (100.0%)  avg=1.000
+    contradiction_resolution    10/10  (100.0%)  avg=0.575
+    event_ordering               2/10  ( 20.0%)  avg=0.279
+    information_extraction       5/10  ( 50.0%)  avg=0.425
+    instruction_following        6/10  ( 60.0%)  avg=0.575
+    knowledge_update             3/10  ( 30.0%)  avg=0.300
+    multi_session_reasoning      2/10  ( 20.0%)  avg=0.200
+    preference_following         9/10  ( 90.0%)  avg=0.675
+    summarization                2/10  ( 20.0%)  avg=0.218
+    temporal_reasoning           0/10  (  0.0%)  avg=0.000
+
+==================== ARM: chunk300_sv (split=100K limit=5) ====================
+  Overall: 44/100 pass (>= 0.5)  accuracy=44.0%  avg_score=0.394  errors=0
+    abstention                   9/10  ( 90.0%)  avg=0.900
+    contradiction_resolution     7/10  ( 70.0%)  avg=0.475
+    event_ordering               1/10  ( 10.0%)  avg=0.196
+    information_extraction       5/10  ( 50.0%)  avg=0.375
+    instruction_following        5/10  ( 50.0%)  avg=0.550
+    knowledge_update             3/10  ( 30.0%)  avg=0.300
+    multi_session_reasoning      2/10  ( 20.0%)  avg=0.200
+    preference_following         9/10  ( 90.0%)  avg=0.625
+    summarization                2/10  ( 20.0%)  avg=0.220
+    temporal_reasoning           1/10  ( 10.0%)  avg=0.100
+
+==================== ARM: sentences_sv (split=100K limit=5) ====================
+  Overall: 47/100 pass (>= 0.5)  accuracy=47.0%  avg_score=0.425  errors=0
+    abstention                  10/10  (100.0%)  avg=1.000
+    contradiction_resolution     7/10  ( 70.0%)  avg=0.450
+    event_ordering               2/10  ( 20.0%)  avg=0.257
+    information_extraction       6/10  ( 60.0%)  avg=0.525
+    instruction_following        6/10  ( 60.0%)  avg=0.575
+    knowledge_update             2/10  ( 20.0%)  avg=0.200
+    multi_session_reasoning      2/10  ( 20.0%)  avg=0.200
+    preference_following         9/10  ( 90.0%)  avg=0.725
+    summarization                2/10  ( 20.0%)  avg=0.218
+    temporal_reasoning           1/10  ( 10.0%)  avg=0.100
+
+==================== ARM: chunk100_nosv (split=100K limit=5) ====================
+  Overall: 49/100 pass (>= 0.5)  accuracy=49.0%  avg_score=0.455  errors=0
+    abstention                  10/10  (100.0%)  avg=1.000
+    contradiction_resolution     6/10  ( 60.0%)  avg=0.375
+    event_ordering               3/10  ( 30.0%)  avg=0.397
+    information_extraction       6/10  ( 60.0%)  avg=0.575
+    instruction_following        6/10  ( 60.0%)  avg=0.575
+    knowledge_update             3/10  ( 30.0%)  avg=0.300
+    multi_session_reasoning      2/10  ( 20.0%)  avg=0.175
+    preference_following         9/10  ( 90.0%)  avg=0.675
+    summarization                2/10  ( 20.0%)  avg=0.276
+    temporal_reasoning           2/10  ( 20.0%)  avg=0.200
+
+==================== ARM: chunk100_sv_decomp (split=100K limit=5) ====================
+  Overall: 47/100 pass (>= 0.5)  accuracy=47.0%  avg_score=0.436  errors=0
+    abstention                  10/10  (100.0%)  avg=1.000
+    contradiction_resolution     7/10  ( 70.0%)  avg=0.450
+    event_ordering               2/10  ( 20.0%)  avg=0.307
+    information_extraction       6/10  ( 60.0%)  avg=0.525
+    instruction_following        6/10  ( 60.0%)  avg=0.575
+    knowledge_update             2/10  ( 20.0%)  avg=0.200
+    multi_session_reasoning      2/10  ( 20.0%)  avg=0.200
+    preference_following         9/10  ( 90.0%)  avg=0.725
+    summarization                2/10  ( 20.0%)  avg=0.276
+    temporal_reasoning           1/10  ( 10.0%)  avg=0.100
+
+Resume campaign complete -> benchmarks/results/beam_campaign_resume_20260616_221030.log
+Per-arm overall:
+==================== ARM: chunk200_sv (split=100K limit=5) ====================
+  Overall: 49/100 pass (>= 0.5)  accuracy=49.0%  avg_score=0.425  errors=0
+==================== ARM: chunk300_sv (split=100K limit=5) ====================
+  Overall: 44/100 pass (>= 0.5)  accuracy=44.0%  avg_score=0.394  errors=0
+==================== ARM: sentences_sv (split=100K limit=5) ====================
+  Overall: 47/100 pass (>= 0.5)  accuracy=47.0%  avg_score=0.425  errors=0
+==================== ARM: chunk100_nosv (split=100K limit=5) ====================
+  Overall: 49/100 pass (>= 0.5)  accuracy=49.0%  avg_score=0.455  errors=0
+==================== ARM: chunk100_sv_decomp (split=100K limit=5) ====================
+  Overall: 47/100 pass (>= 0.5)  accuracy=47.0%  avg_score=0.436  errors=0

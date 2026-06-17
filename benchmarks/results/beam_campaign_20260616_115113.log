@@ -1,0 +1,27 @@
+==================== ARM: base_chunk100_sv (split=100K limit=5) ====================
+  Overall: 47/100 pass (>= 0.5)  accuracy=47.0%  avg_score=0.436  errors=0
+    abstention                  10/10  (100.0%)  avg=1.000
+    contradiction_resolution     7/10  ( 70.0%)  avg=0.450
+    event_ordering               2/10  ( 20.0%)  avg=0.307
+    information_extraction       6/10  ( 60.0%)  avg=0.525
+    instruction_following        6/10  ( 60.0%)  avg=0.575
+    knowledge_update             2/10  ( 20.0%)  avg=0.200
+    multi_session_reasoning      2/10  ( 20.0%)  avg=0.200
+    preference_following         9/10  ( 90.0%)  avg=0.725
+    summarization                2/10  ( 20.0%)  avg=0.276
+    temporal_reasoning           1/10  ( 10.0%)  avg=0.100
+
+==================== ARM: chunk50_sv (split=100K limit=5) ====================
+  Overall: 47/100 pass (>= 0.5)  accuracy=47.0%  avg_score=0.417  errors=0
+    abstention                   9/10  ( 90.0%)  avg=0.900
+    contradiction_resolution     8/10  ( 80.0%)  avg=0.525
+    event_ordering               1/10  ( 10.0%)  avg=0.207
+    information_extraction       5/10  ( 50.0%)  avg=0.400
+    instruction_following        6/10  ( 60.0%)  avg=0.575
+    knowledge_update             2/10  ( 20.0%)  avg=0.200
+    multi_session_reasoning      2/10  ( 20.0%)  avg=0.200
+    preference_following         9/10  ( 90.0%)  avg=0.725
+    summarization                3/10  ( 30.0%)  avg=0.238
+    temporal_reasoning           2/10  ( 20.0%)  avg=0.200
+
+==================== ARM: chunk200_sv (split=100K limit=5) ====================
