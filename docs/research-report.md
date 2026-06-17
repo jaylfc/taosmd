@@ -23,6 +23,7 @@
   - [3.5 LongMemEval-S Recall@5](#35-longmemeval-s-recall5)
   - [3.6 Shipped recipe: lateint-9b](#36-shipped-recipe-lateint-9b)
   - [3.7 Low-tier dense embedder: arctic-embed vs MiniLM](#37-low-tier-dense-embedder-arctic-embed-vs-minilm)
+  - [3.8 BEAM long-context (mem0 nugget judge)](#38-beam-long-context-mem0-nugget-rubric-judge)
 - [4. Negative Results](#4-negative-results)
 - [5. Reproducibility](#5-reproducibility)
 - [6. Ongoing Work (Pre-registered)](#6-ongoing-work-pre-registered)
@@ -47,6 +48,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | F-011 | Claims gate (prefer_verified) eliminates served-hallucination (0.040 to 0.000) at no accuracy cost (judge +0.020 within noise, R@K -0.005) on 200 LoCoMo QAs; strict trades too much (judge/R@K -0.065), stays opt-in. Default flip pending Jay sign-off + tri-judge confirm | [6](#6-ongoing-work-pre-registered) | resolved (default-flip pending confirm) | bench host benchmarks/results/e009.json |
 | F-012 | LongMemEval-S end-to-end Judge BASELINE 47.2% on oracle (qwen3.5:9b gen + Qwen3-4B-Instruct strict judge + MiniLM); retrieval solved, REASONING is the bottleneck (temporal 17.3%, multi-session 28.6%); improvement phase in progress | [6](#6-ongoing-work-pre-registered) | baseline recorded | benchmarks/results/e012_full500.log |
 | F-013 | LongMemEval-S end-to-end Judge SCORE-UP to 74.6% (373/500 oracle, same strict judge), +27.4pp over F-012, via depth tuning (+9.6) + reranking (+6) + CoVe-style answer self-verification (dominant, ~+18); self-verify fixes the bottlenecks (temporal 30->56%, multi-session 40->67%); query decomposition is a NULL-to-NEGATIVE arm (not shipped). Confirmed judge-robust (llama3.1 firm-up reproduced both numbers exactly) | [6](#6-ongoing-work-pre-registered) | confirmed | benchmarks/results/e012_ablation_results.md |
+| F-014 | BEAM long-context (mem0 nugget judge, local stack): 100K 47.0% (n=100), 1M 37.5% (75/200); local-9B honestly behind mem0 frontier 64-70% at 1M, the provenanced local-tier number | [3.8](#38-beam-long-context-mem0-nugget-rubric-judge) | measured | benchmarks/results/beam_campaign_resume_20260616_221030.log + beam_1M result JSON |
 | N-001 | CLAG cluster pre-filter: worst variant -0.285 gemma, best variant -0.085 gemma; not shipped | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md section "CLAG cluster pre-filter negative at our tier, not shipped" |
 | N-002 | Chain-of-Memory: -0.16 single-hop for +0.02 overall at 1.8x latency (frontier-tuned, lossy at our tier) | [4](#4-negative-results) | confirmed negative | project memory (reference_memory_landscape_may2026.md), Chain-of-Memory TESTED May 31 |
 | N-003 | Few-shot prompting: -0.017 vs leader (full-stack + 5 exemplars = 0.540 vs 0.557 leader) | [4](#4-negative-results) | confirmed negative | docs/benchmarks.md section "Negative results levers we tested that regressed at 9B + adj=2" |
@@ -59,6 +61,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | N-010 | Write-skip floor safe (no recall harm, zero evidence skipped) but fires on 2.3 percent of LoCoMo turns, under the 5 percent floor; not shipped | [4](#4-negative-results) | confirmed negative (for shipping) | VPS e1_write_skip_20260612_143625.json |
 | N-011 | Surprisal is the WORST retention-priority signal (below random) at every budget; keeping high-surprisal turns is bad for retention. Length wins. Kills the v2 surprisal pillar, triggers the provenance/claims pivot | [4](#4-negative-results) | confirmed negative | VPS e008_retention_20260613_115258.json |
 | N-012 | Embedding bake-off: no small ONNX embedder beats arctic-embed-s on LoCoMo R@K (arctic 0.823; e5-small 0.808, bge-small 0.773, granite-r2 0.742, gte-small 0.727); arctic retained, F-010 reaffirmed | [6](#6-ongoing-work-pre-registered) | confirmed negative | VPS e010_*_20260614_154450.json |
+| N-013 | BEAM-100K config sweep: no lever beats the 47% plateau (all 7 arms 44-49%, n=100); self-verify is BEAM-neutral (off ties top pass-rate, leads avg_score 0.455), unlike LongMemEval F-013 | [4](#4-negative-results) | confirmed negative | benchmarks/results/beam_campaign_resume_20260616_221030.log |
 | E-001 | Surprisal retrieval: BOTH arms dead. Prior flat; chunking +0.1263 at equal k but baseline at matched turn budget wins by 0.15 | [6](#6-ongoing-work-pre-registered) | resolved -> N-009 | VPS e1_mb_k20/k120_20260612_083159.json |
 | E-002 | Extraction-hallucination rate: gemma extracts, qwen judges; reporting threshold 3-5% PARTIAL+UNSUPPORTED | [6](#6-ongoing-work-pre-registered) | resolved -> F-009 | STATUS.md "bench/e2-claim-verification" |
 | E-003 | LoCoMo-Refined full run: 1382 revised questions, official qwen3:14b judge, leader recipe | [6](#6-ongoing-work-pre-registered) | methods limitation (judge unreliable on Ollama) | STATUS.md "all 1382 predictions matched" |
@@ -80,6 +83,8 @@ The current LongMemEval-S headline is 97.0% Recall@5 (500 questions, full test s
 On LoCoMo (1540 QAs, 10 multi-session conversations), the current leader recipe is MaxSim + reranking: qwen3.5:9b with retrieval-top-k 50, adjacent-turns 2, bge-v2-m3 reranker, and mem0_additive fusion. Full-1540 tri-judge scores: 0.748 lenient (gemma4:e2b), 0.394 strict (llama3.1:8b), 0.659 strict (qwen3:4b-instruct-2507). All judges are external to the generator family.
 
 A reranker-free late-interaction lever (token-level MaxSim via answerai-colbert-small-v1, backbone path) scores 0.716 / 0.388 / 0.656 on the same full-1540 tri-judge and runs in under 110ms per query on a CPU-only 16-core VPS, making it the recommended recipe for tiers where a cross-encoder download is not affordable. All numbers are under external judges with no same-family inflation.
+
+On BEAM (mem0's long-context memory benchmark, ICLR 2026), graded by a port of mem0's own nugget-rubric judge, the full local stack scores 47.0% at the 100K tier (n=100) and 37.5% at 1M (75/200). mem0's frontier numbers are 64 to 70% at 1M, so local-9B lands honestly behind: BEAM rewards frontier generation, and the value here is an early, fully-provenanced local-tier number rather than a leaderboard win (F-014). A seven-arm config sweep found no setting that beats the 47% plateau beyond sampling noise, and showed that the CoVe self-verification that dominated on LongMemEval-S does not transfer to BEAM (N-013).
 
 ---
 
@@ -106,6 +111,7 @@ For retrieval-only measurements the team uses **judge-free R@K**: the share of q
 - **LongMemEval-S.** 500 questions, standard test set. Single and multi-session. Benchmark for end-to-end answer quality with the full pipeline. Dataset: github.com/xiaowu0162/LongMemEval (ICLR 2025).
 - **LoCoMo-10.** 10 multi-session conversations, 1540 question-answer pairs across four categories: Single-hop, Temporal, Multi-hop, Open-domain. Conversations span 50+ sessions and 400-700 turns. A harder evaluation than LongMemEval-S: more categories, more QAs, and longer conversations. Benchmark harness: benchmarks/locomo_runner.py. Source: snap-research LoCoMo dataset.
 - **LoCoMo-Refined (subset-comparable).** The revised 1382-question set from the LoCoMo-Refined leaderboard, using the corrected answer key and the official qwen3:14b judge. A full run was attempted but the official qwen3:14b judge proved unreliable under local Ollama (see E-003), so no refined-set number is reported. Our qwen3:14b column is on the original 1540-question set; it is judge-comparable to the Refined leaderboard but not set-comparable.
+- **BEAM (100K / 1M / 10M).** mem0's long-context memory benchmark (ICLR 2026): conversations of 100K to 10M tokens with 2000+ nugget-graded questions across ten ability categories. Graded by mem0's own nugget-rubric judge (an answer passes at score at or above 0.5), ported in benchmarks/beam_runner.py so the grading matches mem0's published methodology. The dataset is public and ungated on HuggingFace (Mohammadta/BEAM for the 100K-1M tiers, Mohammadta/BEAM-10M). Used for an honest local-tier head-to-head against mem0's frontier numbers (1M 70.1% at top-200, 10M 50.5%).
 
 ### 2.3 Metrics
 
@@ -252,6 +258,26 @@ The low-end and offline tier this project targets uses a dense ONNX embedder (al
 
 Both stages are on subset-200, so expect plus or minus 0.02 judge noise; the +0.040 judged delta is twice that and consistent with the much larger retrieval signal. A methodology note that mattered: arctic-embed is asymmetric (a query-only prefix) and CLS-pooled; the ONNX path had to be taught both or arctic would have mean-pooled with no prefix and posted a false negative (enabler PR #160, default-off). The full-1540 judged confirm landed and strengthened the result: arctic-embed-s 0.7305 vs MiniLM 0.6740, +0.0565, larger than the subset-200 +0.040 and well clear of noise at 1540 questions. The win is confirmed at scale and is default-change-worthy; the low-tier dense default should move MiniLM to arctic-embed-s (shipped via a sign-off PR across recipes, config, README, and the tier tables, plus a small Pi-CPU speed sample). Provenance: bench host benchmarks/results/e007_{minilm_baseline,arctic_s,arctic_xs}_20260613_122113.json (R@K) and e007c_{minilm,arctic_s}_20260613_122948.rescored_gemma.json (judged).
 
+### 3.8 BEAM long-context (mem0 nugget-rubric judge)
+
+BEAM (mem0, ICLR 2026) is a long-context memory benchmark at the 100K, 1M, and 10M token scales, graded by a nugget-rubric judge where an answer passes at score 0.5 or above. It is the head-to-head where mem0 publishes frontier numbers (1M 70.1% at top-200, 10M 50.5%), so it is the cleanest place to state an honest local-tier number against a public frontier baseline. taOSmd runs its own port of the BEAM nugget judge (benchmarks/beam_runner.py) so the grading matches mem0's methodology, over the full local stack: arctic-embed-s, tight retrieval (6 chunks, FTS 3, bge-v2-m3 rerank to top 4, 2000 assemble tokens, 6000 context chars), qwen3.5:9b generator, Qwen3-4B-Instruct judge.
+
+Measured (F-014): BEAM-100K 47.0% pass (n=100), BEAM-1M 37.5% (75/200). Against mem0's 64 to 70% at 1M, local-9B lands honestly behind, exactly as the thesis predicts. BEAM rewards frontier generation, so the value is the early, fully-provenanced local-tier number, not a leaderboard win. The intelligent-context-release lever from the earlier context-amount sweep is already in this configuration: tight 6-chunk context beats a rich 40-chunk context by +16pp on the 9B, because more context buries a small model.
+
+A seven-arm config sweep on BEAM-100K (chunk size, chunking mode, self-verify, decomposition; n=100 per arm) found no lever that beats the 47% plateau beyond sampling noise (N-013):
+
+| Arm (BEAM-100K, n=100) | pass% | avg_score |
+|---|---|---|
+| base (chunk 100, self-verify) | 47.0 | 0.436 |
+| chunk 50 | 47.0 | 0.417 |
+| chunk 200 | 49.0 | 0.425 |
+| chunk 300 | 44.0 | 0.394 |
+| sentence-mode (120 words) | 47.0 | 0.425 |
+| chunk 100, self-verify OFF | 49.0 | 0.455 |
+| chunk 100, decompose ON | 47.0 | 0.436 |
+
+At n=100 the pass-rate standard error is about 5 points, so the 44 to 49 spread is one band around 47. The one signal worth carrying forward is that self-verify gives no BEAM benefit: the self-verify-off arm ties the top pass-rate and leads on avg_score (0.455). On LongMemEval-S the same CoVe self-verification was the dominant +17.8pp lever (F-013); it does not transfer to BEAM because BEAM failures are wrong answers, not abstentions, and a verify-or-abstain pass can only recover the latter. Provenance: benchmarks/results/beam_campaign_resume_20260616_221030.log (arms 3 to 7) and beam_campaign_20260616_115113.log (arms 1 to 2), branch feat/beam-runner.
+
 ## 4. Negative Results
 
 Negative results are recorded with the same rigor as wins. A lever that failed is a finding.
@@ -325,6 +351,12 @@ Source: VPS benchmarks/results/e1_write_skip_20260612_143625.json, variant code 
 The last surviving role for the v2 surprisal pillar was consolidation priority: when an agent must forget down to a budget, is surprisal a good "keep" signal? It is the worst one tested. Under retention budgets of 25/50/75 percent on subset-200 (judge-free R@K, evidence on a dropped turn counts as a miss), keeping the highest-surprisal turns scored 0.313/0.444/0.591, below random (0.258/0.424/0.571) at every budget, and far below the winner. The winner is length: keep the longest turns, 0.525/0.641/0.702. Recency was weakest. The reading: high token-surprisal marks unpredictable content, not evidence-bearing content, and short surprising turns (the ones the write-skip floor also targeted) carry little retrievable evidence, so prioritising them throws away the longer, denser turns that answers actually need. With its retrieval role already dead (N-009, N-010), the surprisal pillar of v2 is conclusively killed; the spine pivots to the provenance and claims layer (F-009). The length result is a genuine positive side-finding, a cheap, model-free retention heuristic, recorded for its own future pre-registration rather than claimed here.
 
 Source: VPS benchmarks/results/e008_retention_20260613_115258.json, branch bench/e1-retention.
+
+**N-013. BEAM-100K config sweep: no lever beats the 47% plateau; self-verify is BEAM-neutral.**
+
+Seven arms (chunk size 50/100/200/300, sentence-mode, self-verify on and off, decomposition on) on BEAM-100K at n=100 each, over the full local stack (arctic-embed-s, tight retrieval, qwen3.5:9b generator, Qwen3-4B-Instruct judge). Every arm landed in the 44 to 49% band, one standard error around the 47% tight-retrieval baseline. chunk200 and self-verify-off are nominally highest at 49% but within noise, so no configuration lever moves the local-9B BEAM-100K number. The transferable sub-finding: CoVe answer self-verification, the dominant +17.8pp lever on LongMemEval-S (F-013), gives no BEAM benefit; the self-verify-off arm ties the top pass-rate and leads avg_score (0.455), because BEAM failures are wrong answers rather than abstentions and a verify-or-abstain pass can only recover abstentions. The 47% plateau confirms local-9B sits structurally behind frontier generation on BEAM (mem0 64 to 70% at 1M); the product story is the provenanced local-tier number, not a tuned score. The full per-arm table is in section 3.8.
+
+Source: benchmarks/results/beam_campaign_resume_20260616_221030.log and beam_campaign_20260616_115113.log, branch feat/beam-runner.
 
 ## 5. Reproducibility
 
@@ -577,6 +609,7 @@ This log is append-only. History is never rewritten.
 
 | Date | Edition | Changes |
 |---|---|---|
+| 2026-06-17 | 1.23 | Recorded the BEAM long-context results: new section 3.8, a BEAM dataset entry in 2.2, and index rows F-014 plus N-013. F-014: local-stack numbers under a port of mem0's own nugget judge, BEAM-100K 47.0% (n=100) and BEAM-1M 37.5% (75/200), honestly behind mem0's frontier 64 to 70% at 1M. N-013: a seven-arm BEAM-100K config sweep (chunk size, chunking mode, self-verify, decompose) finds no lever beats the 47% plateau beyond n=100 noise; the transferable sub-finding is that CoVe self-verification, the dominant +17.8pp lever on LongMemEval-S (F-013), gives no BEAM benefit because BEAM failures are wrong answers, not abstentions. Provenance benchmarks/results/beam_campaign_resume_20260616_221030.log plus beam_campaign_20260616_115113.log (branch feat/beam-runner). Exploratory sweep under the standing score-up directive, not pre-registered. |
 | 2026-06-11 | 1 | First edition. Sections 0-7 drafted. Index rows F-001 through F-008, N-001 through N-006, E-001 through E-004. All numbers sourced from docs/benchmarks.md, CHANGELOG.md, and STATUS.md. |
 | 2026-06-11 | 1.1 | Added N-007 (gemma4:12b generator A/B, confirmed negative) with its index row. E-003 noted as still in flight after a judge-stage client-timeout crash on the harness side; a timeout-patched judge-only rerun is queued. |
 | 2026-06-12 | 1.3 | E-003 (LoCoMo-Refined full run) resolved as a methods limitation: the official qwen3:14b judge could not be made to emit reliable JSON under local Ollama across five mitigations, with failures concentrated on temporal questions, so no number is reported (a temporally-biased lower bound would mislead). The qwen3:14b column on the original 1540 set (F-005) is the closest comparable. |
