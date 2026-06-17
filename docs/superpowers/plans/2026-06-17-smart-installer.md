@@ -16,13 +16,13 @@ Source spec: `docs/superpowers/specs/2026-06-16-smart-installer-design.md`. This
 
 ## File Structure
 
-- **Create `taosmd/profiles.py`** — the registry and policy. `Switch` + `Profile` dataclasses, the `SWITCHES` and `PROFILES` registries, accessors (`list_switches`, `get_switch`, `get_profile`, `list_profiles`), `recommend_profile(tier, needs)`, `resolve_config(profile_id, consented_switches)`, and `profiles_schema()`. No I/O, no printing. One responsibility: what can be turned on, what it costs, what the bundles are.
-- **Create `taosmd/setup_prompt.py`** — pure prompt rendering. `render_setup_prompt(device_info, needs=None)` -> `str`, reusing `recipes.tier_of/recommend` and `profiles`. Deterministic given inputs. No probing, no printing (the CLI does those), so it is trivially testable.
-- **Modify `taosmd/cli.py`** — register the `setup-prompt` subcommand in `_build_parser()` (around the other `sub.add_parser(...)` calls, ~line 1237 next to `install-skill`), add the `_setup_prompt_cmd(args)` handler (near the other `_*_cmd` handlers), and add one dispatch line in `main()` (~line 1508, next to `install-skill`).
-- **Create `docs/INSTALL-AGENT-PROMPT.md`** — the committed static prompt: hardware-agnostic, instructs the agent to run the probe itself then follow the same flow.
-- **Modify `README.md`** — point the install section at the agent prompt as the recommended path.
-- **Create `tests/test_profiles.py`** — registry integrity, the Minimal consent invariant, `recommend_profile` per tier, `resolve_config` round-trips, schema shape.
-- **Create `tests/test_setup_prompt.py`** — with an injected `device_info`, the prompt contains the detected tier, the recommended profile, the ask-list, and is deterministic; probe-miss degrades to cpu/Minimal.
+- **Create `taosmd/profiles.py`** - the registry and policy. `Switch` + `Profile` dataclasses, the `SWITCHES` and `PROFILES` registries, accessors (`list_switches`, `get_switch`, `get_profile`, `list_profiles`), `recommend_profile(tier, needs)`, `resolve_config(profile_id, consented_switches)`, and `profiles_schema()`. No I/O, no printing. One responsibility: what can be turned on, what it costs, what the bundles are.
+- **Create `taosmd/setup_prompt.py`** - pure prompt rendering. `render_setup_prompt(device_info, needs=None)` -> `str`, reusing `recipes.tier_of/recommend` and `profiles`. Deterministic given inputs. No probing, no printing (the CLI does those), so it is trivially testable.
+- **Modify `taosmd/cli.py`** - register the `setup-prompt` subcommand in `_build_parser()` (around the other `sub.add_parser(...)` calls, ~line 1237 next to `install-skill`), add the `_setup_prompt_cmd(args)` handler (near the other `_*_cmd` handlers), and add one dispatch line in `main()` (~line 1508, next to `install-skill`).
+- **Create `docs/INSTALL-AGENT-PROMPT.md`** - the committed static prompt: hardware-agnostic, instructs the agent to run the probe itself then follow the same flow.
+- **Modify `README.md`** - point the install section at the agent prompt as the recommended path.
+- **Create `tests/test_profiles.py`** - registry integrity, the Minimal consent invariant, `recommend_profile` per tier, `resolve_config` round-trips, schema shape.
+- **Create `tests/test_setup_prompt.py`** - with an injected `device_info`, the prompt contains the detected tier, the recommended profile, the ask-list, and is deterministic; probe-miss degrades to cpu/Minimal.
 
 Run all tests with: `python -m pytest tests/test_profiles.py tests/test_setup_prompt.py -v` (the repo uses pytest; `.venv/bin/python -m pytest` on hosts with the venv).
 
@@ -744,7 +744,7 @@ git commit -m "docs(readme): recommend the agent install prompt as the default p
 
 Plan complete and saved to `docs/superpowers/plans/2026-06-17-smart-installer.md`. Two execution options:
 
-1. **Subagent-Driven (recommended)** — a fresh subagent per task, spec-compliance then code-quality review between tasks, fast iteration.
-2. **Inline Execution** — execute tasks in this session with checkpoints for review.
+1. **Subagent-Driven (recommended)** - a fresh subagent per task, spec-compliance then code-quality review between tasks, fast iteration.
+2. **Inline Execution** - execute tasks in this session with checkpoints for review.
 
 Branch off origin/master as `feat/smart-installer`; PR at the end, do not self-merge.
