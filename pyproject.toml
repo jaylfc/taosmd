@@ -8,7 +8,7 @@ version = "0.3.0"
 description = "Framework-agnostic, local-first AI memory system. 97.0% Recall@5 on LongMemEval-S, measured on a low-end reference stack."
 readme = "README.md"
 license = {file = "LICENSE"}
-authors = [{name = "jaylfc"}]
+authors = [{name = "the taOS project"}]
 requires-python = ">=3.10"
 dependencies = [
     "onnxruntime",

@@ -759,7 +759,7 @@ Free to use, fork, modify, and embed. You may not sell taOSmd itself as a hosted
 
 ## Credits
 
-Built by [jaylfc](https://github.com/jaylfc). Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem.
+Built by the [taOS](https://github.com/jaylfc/tinyagentos) project.
 
 Benchmark dataset: [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025)
 Embedding model: [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
