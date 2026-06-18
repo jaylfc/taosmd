@@ -740,7 +740,7 @@ If taOSmd is useful to you:
 
 ## License
 
-MIT + Commons Clause v1.0, copyright JAN LABS LTD.
+MIT + Commons Clause v1.0, copyright jaylfc.
 
 Free to use, fork, modify, and embed. You may not sell taOSmd itself as a hosted or managed service. See [LICENSE](./LICENSE) for the full terms.
 

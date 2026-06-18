@@ -112,33 +112,33 @@ def test_adapt_kg_outgoing_source_id_is_subject():
         "subject_id": "person:alice",
         "subject_name": "Alice",
         "predicate": "works_at",
-        "object_id": "org:jan_labs",
-        "object_name": "JAN Labs",
+        "object_id": "org:acme",
+        "object_name": "Acme",
         "direction": "outgoing",
         "confidence": 1.0,
     }
     adapted = _adapt_kg([row])
     assert adapted[0]["source_id"] == "person:alice"
-    assert "Alice works_at JAN Labs" == adapted[0]["text"]
+    assert "Alice works_at Acme" == adapted[0]["text"]
 
 
 def test_adapt_kg_incoming_source_id_is_object():
     from taosmd.retrieval import _adapt_kg
 
-    # Incoming query on "jan_labs": subject_name = "Alice" (far node),
-    # object_id = "org:jan_labs" (the anchor that was queried).
+    # Incoming query on "acme": subject_name = "Alice" (far node),
+    # object_id = "org:acme" (the anchor that was queried).
     row = {
         "subject_id": "person:alice",
         "subject_name": "Alice",
         "predicate": "works_at",
-        "object_id": "org:jan_labs",
+        "object_id": "org:acme",
         "direction": "incoming",
         "confidence": 0.9,
         # object_name is absent in real incoming results (no join for it)
     }
     adapted = _adapt_kg([row])
     # source_id must track the anchor (object_id), not the far node
-    assert adapted[0]["source_id"] == "org:jan_labs"
+    assert adapted[0]["source_id"] == "org:acme"
     # text must include the far-node subject
     assert "Alice" in adapted[0]["text"]
 

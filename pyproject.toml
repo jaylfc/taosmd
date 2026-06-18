@@ -8,7 +8,7 @@ version = "0.3.0"
 description = "Framework-agnostic, local-first AI memory system. 97.0% end-to-end Judge accuracy on LongMemEval-S, measured on a low-end reference stack."
 readme = "README.md"
 license = {file = "LICENSE"}
-authors = [{name = "JAN LABS LTD"}]
+authors = [{name = "jaylfc"}]
 requires-python = ">=3.10"
 dependencies = [
     "onnxruntime",
