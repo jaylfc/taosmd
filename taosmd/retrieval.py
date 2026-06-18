@@ -9,8 +9,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import os
 
 logger = logging.getLogger(__name__)
+
+# Sources whose hits count as the lexical (FTS / BM25 / keyword) recall set for
+# the MemX low-confidence rejection gate (Lever 1). "vector" is the dense path
+# and is deliberately excluded.
+LEXICAL_SOURCES = ("archive", "kg", "catalog")
 
 from taosmd.agents import run_if_enabled, is_task_enabled  # noqa: E402
 
@@ -658,6 +665,129 @@ def _filter_project_scope(
     return filtered
 
 
+# ---------------------------------------------------------------------------
+# Lever 1: MemX low-confidence rejection gate (rule R1)
+# ---------------------------------------------------------------------------
+
+
+def apply_reject_gate(
+    results: list[dict],
+    tau: float = 0.50,
+    lexical_sources: tuple[str, ...] = LEXICAL_SOURCES,
+) -> list[dict]:
+    """Abstain before generation when retrieval confidence is low (MemX R1).
+
+    Returns an empty list (the abstain signal) when BOTH of these hold:
+
+    * the lexical (FTS / BM25 / keyword) recall set is EMPTY, i.e. no hit
+      comes from any of ``lexical_sources``; and
+    * the maximum dense cosine similarity across the candidates is below
+      ``tau``. The dense similarity is read from the ``source_score`` of
+      "vector"-source hits. With no vector hits at all the max is taken as
+      0.0, which is below any positive tau.
+
+    Otherwise the input list is returned unchanged. This is a pure helper;
+    callers decide when to invoke it (see retrieve(), which gates it behind
+    TAOSMD_REJECT_GATE). An empty input abstains.
+
+    Args:
+        results: Normalised, already-merged result dicts.
+        tau: Dense similarity threshold below which (with no lexical hit) the
+            gate abstains. Default 0.50.
+        lexical_sources: Source names that count as lexical recall.
+
+    Returns:
+        The input list, or an empty list when the gate fires.
+    """
+    has_lexical = any(r.get("source") in lexical_sources for r in results)
+    if has_lexical:
+        return results
+
+    # Dense candidates are "vector"-source hits. For callers passing raw
+    # vector-search rows (no "source" key but a "similarity" field, e.g. the
+    # BEAM runner), treat those as dense too and read "similarity".
+    dense_scores = [
+        float(r.get("source_score", r.get("similarity", 0.0)))
+        for r in results
+        if r.get("source") == "vector"
+        or ("source" not in r and "similarity" in r)
+    ]
+    max_dense = max(dense_scores) if dense_scores else 0.0
+
+    if max_dense < tau:
+        logger.debug(
+            "apply_reject_gate: abstaining (no lexical hit, max_dense=%.3f < tau=%.3f)",
+            max_dense, tau,
+        )
+        return []
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Lever 2: MemX retrieval-frequency + importance rerank signals
+# ---------------------------------------------------------------------------
+
+
+def freq_weight(count: int) -> float:
+    """MemX retrieval-frequency term: ``freq = min(1, ln(count + 1) / 10)``.
+
+    Returns 0.0 at count 0 and rises monotonically, clamped to 1.0.
+    """
+    if count <= 0:
+        return 0.0
+    return min(1.0, math.log(count + 1) / 10.0)
+
+
+def apply_freq_rerank(
+    results: list[dict],
+    freq_weight_factor: float = 0.0,
+    importance_weight: float = 0.0,
+) -> list[dict]:
+    """Fold MemX frequency + importance signals into ranking (Lever 2).
+
+    For each hit, reads ``metadata["access_count"]`` and
+    ``metadata["importance"]`` (both default 0 when absent) and adds
+    ``freq_weight_factor * freq_weight(access_count) +
+    importance_weight * importance`` to ``rrf_score``, then re-sorts. Hits
+    keep their original relative order on ties (stable sort).
+
+    # upgrade-path: taOSmd does not yet populate metadata["access_count"] at
+    # retrieval time. AccessTracker exists (taosmd/access_tracker.py) but
+    # track_access() is not called from retrieve(), and vector memories carry
+    # no stored "importance" scalar (only the KG derives a per-query hit_rate).
+    # Until per-memory retrieval counts are wired into the vector store and an
+    # importance scalar is persisted, this lever has no real signal to fold and
+    # both weights default to 0.0 (no-op). Do NOT bolt on a half-working
+    # counter here; wire the store first, then turn the weights up.
+
+    Args:
+        results: Normalised result dicts carrying ``rrf_score``.
+        freq_weight_factor: Multiplier on the frequency term. Default 0.0.
+        importance_weight: Multiplier on the stored importance scalar.
+            Default 0.0.
+
+    Returns:
+        The re-sorted list (same objects, mutated rrf_score).
+    """
+    if not results:
+        return results
+    if freq_weight_factor == 0.0 and importance_weight == 0.0:
+        return results
+
+    for hit in results:
+        meta = hit.get("metadata", {}) or {}
+        count = int(meta.get("access_count", 0) or 0)
+        importance = float(meta.get("importance", 0.0) or 0.0)
+        bonus = (
+            freq_weight_factor * freq_weight(count)
+            + importance_weight * importance
+        )
+        hit["rrf_score"] = hit.get("rrf_score", 0.0) + bonus
+
+    results.sort(key=lambda h: h.get("rrf_score", 0.0), reverse=True)
+    return results
+
+
 async def retrieve(
     query: str,
     strategy: str = "thorough",
@@ -780,6 +910,17 @@ async def retrieve(
     if sources is None:
         sources = {}
 
+    # Lever 1 (MemX R1): low-confidence rejection gate. Opt-in, env-gated,
+    # DEFAULT-OFF. When TAOSMD_REJECT_GATE != "1" the gate is a no-op and
+    # retrieve() behaviour is byte-for-byte unchanged.
+    _reject_gate_on = os.environ.get("TAOSMD_REJECT_GATE", "0") == "1"
+    _reject_tau = float(os.environ.get("TAOSMD_REJECT_TAU", "0.50"))
+
+    def _maybe_reject(hits: list[dict]) -> list[dict]:
+        if _reject_gate_on:
+            return apply_reject_gate(hits, tau=_reject_tau)
+        return hits
+
     # Resolve effective K from per-agent fanout config when an agent is given.
     if agent is not None:
         from taosmd.agents import effective_fanout as _effective_fanout  # noqa: PLC0415
@@ -830,7 +971,7 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
-        return _filter_project_scope(results, project, search_agents)
+        return _maybe_reject(_filter_project_scope(results, project, search_agents))
 
     elif strategy == "fast":
         strategy_info = get_search_strategy(query)
@@ -863,7 +1004,7 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
-        return _filter_project_scope(results, project, search_agents)
+        return _maybe_reject(_filter_project_scope(results, project, search_agents))
 
     elif strategy == "minimal":
         strategy_info = get_search_strategy(query)
@@ -888,7 +1029,7 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
-        return _filter_project_scope(results, project, search_agents)
+        return _maybe_reject(_filter_project_scope(results, project, search_agents))
 
     elif strategy == "custom":
         if memory_layers is None:
@@ -929,7 +1070,7 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
-        return _filter_project_scope(results, project, search_agents)
+        return _maybe_reject(_filter_project_scope(results, project, search_agents))
 
     else:
         raise ValueError(f"Unknown strategy {strategy!r}. Must be one of: thorough, fast, minimal, custom.")
@@ -939,4 +1080,7 @@ __all__ = [
     "retrieve",
     "plan_retrieval",
     "apply_verification_verdicts",
+    "apply_reject_gate",
+    "apply_freq_rerank",
+    "freq_weight",
 ]
