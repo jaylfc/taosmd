@@ -90,6 +90,12 @@ RERANK = os.environ.get("TAOSMD_RERANK", "0") == "1"
 RERANK_PATH = os.environ.get("TAOSMD_RERANK_PATH", "models/bge-reranker-v2-m3-onnx")
 RERANK_TOP_K = int(os.environ.get("TAOSMD_RERANK_TOP_K", "8"))
 SELF_VERIFY = os.environ.get("TAOSMD_SELF_VERIFY", "0") == "1"
+# N-014: generation timeout is configurable and defaults higher than mem0's 60s.
+# On slow (CPU) generation a 60s cutoff stored an empty answer that the nugget
+# judge then scored as PASS on abstention rubrics. Raise it so generation does
+# not truncate to empty; the empty-answer guard in judge_prediction is the
+# belt-and-braces backstop.
+BEAM_LLM_TIMEOUT = int(os.environ.get("TAOSMD_BEAM_LLM_TIMEOUT", "120"))
 ONNX_PATH = os.environ.get(
     "TAOSMD_ONNX_PATH",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx"),
@@ -525,7 +531,7 @@ async def llm_answer(client, memories: list[str], question: str) -> str:
                 "think": False,
                 "options": {"temperature": 0, "num_predict": 256},
             },
-            timeout=60,
+            timeout=BEAM_LLM_TIMEOUT,
         )
         if resp.status_code == 200:
             ans = resp.json().get("message", {}).get("content", "")
@@ -694,6 +700,17 @@ async def judge_prediction(llm_client, rec: dict) -> dict:
     if not rec.get("rubric"):
         rec.update({"judgment": "ERROR", "score": 0.0, "generated_answer": answer,
                     "nugget_scores": [], "error": "No rubric nuggets"})
+    elif not (answer or "").strip():
+        # N-014 guard: an empty/whitespace answer auto-FAILs without calling the
+        # judge. mem0's nugget judge scores a non-responsive answer as full
+        # compliance on a NEGATIVE or abstention rubric, so a blank (e.g. a
+        # generation timeout) would otherwise PASS and inflate the score. A
+        # blank must never satisfy a nugget.
+        nugget_scores = [{"nugget": n, "score": 0.0,
+                          "reason": "empty answer (auto-fail, N-014 guard)"}
+                         for n in rec["rubric"]]
+        rec.update({"generated_answer": answer, "empty_answer": True,
+                    **score_question(nugget_scores)})
     else:
         nugget_scores = [await judge_nugget(llm_client, question, n, answer) for n in rec["rubric"]]
         rec.update({"generated_answer": answer, **score_question(nugget_scores)})

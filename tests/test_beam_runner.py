@@ -326,6 +326,32 @@ def test_judge_prediction_marks_error_when_no_rubric():
     assert rec["generated_answer"].startswith("I don't have enough")
 
 
+def test_judge_prediction_empty_answer_auto_fails_n014():
+    mod = _load_runner()
+    # A judge that would PASS everything if consulted (score 1.0). The N-014
+    # guard must FAIL an empty answer WITHOUT calling the judge, because mem0's
+    # nugget judge scores a non-responsive answer as full compliance on a
+    # negative/abstention rubric, so a blank (e.g. a generation timeout) would
+    # otherwise PASS and inflate the score.
+    client = _FakeClient('{"score": 1.0, "reason": "no colour mentioned"}')
+    rec = {
+        "question": "What is my favourite colour?",
+        "question_type": "abstention",
+        "rubric": ["Based on the provided chat, there is no information about a favourite colour"],
+        "generated_answer": "",
+    }
+    out = asyncio.run(mod.judge_prediction(client, rec))
+    assert out["judgment"] == "FAIL"
+    assert out["score"] == 0.0
+    assert out["empty_answer"] is True
+    assert out["nugget_scores"][0]["score"] == 0.0
+
+    # whitespace-only is equally non-responsive and must also auto-fail
+    rec2 = dict(rec, generated_answer="   \n  ")
+    out2 = asyncio.run(mod.judge_prediction(client, rec2))
+    assert out2["judgment"] == "FAIL" and out2["score"] == 0.0 and out2["empty_answer"] is True
+
+
 def test_judge_phase_iterates_predictions_and_computes_metrics(tmp_path):
     """The judge phase reads predictions, judges each, and feeds compute_metrics.
 
