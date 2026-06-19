@@ -1,0 +1,133 @@
+PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+======================================================================
+BEAM Benchmark — taOSmd   split=100K  limit=5  mode=LLM judge
+======================================================================
+  generator=qwen3.5:9b  judge=hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M  embedder=arctic-embed-s-onnx  rerank=True  self_verify=False
+  `datasets` not installed; falling back to HF datasets-server rows API
+  loaded 5 conversation(s)
+  conv[0] id=1: 188 turns -> 791 chunks in 14.9s, 20 questions
+    abstention               score=1.00 [PASS] How did the user feedback influence the UI/U
+    abstention               score=1.00 [PASS] Can you tell me about my background and prev
+    contradiction_resolution score=0.50 [PASS] Have I worked with Flask routes and handled 
+    contradiction_resolution score=0.50 [PASS] Have I integrated Flask-Login for session ma
+    event_ordering           score=0.67 [PASS] Can you list the order in which I brought up
+    event_ordering           score=0.20 [FAIL] Can you walk me through the order in which I
+    information_extraction   score=1.00 [PASS] When does my first sprint end?
+    information_extraction   score=0.00 [FAIL] How did I organize the tasks over the course
+    instruction_following    score=1.00 [PASS] Could you show me how to implement a login f
+    instruction_following    score=1.00 [PASS] Which libraries are used in this project?
+    knowledge_update         score=0.00 [FAIL] What is the average response time of the das
+    knowledge_update         score=0.00 [FAIL] How many commits have been merged into the m
+    multi_session_reasoning  score=0.00 [FAIL] How many new columns did I want to add to th
+    multi_session_reasoning  score=0.00 [FAIL] How many different user roles and security f
+    preference_following     score=0.75 [PASS] I'm planning to add user login, income and e
+    preference_following     score=0.50 [PASS] I'm looking to improve the security features
+    summarization            score=0.10 [FAIL] Can you provide a comprehensive summary of h
+    summarization            score=0.00 [FAIL] Can you give me a comprehensive summary of h
+    temporal_reasoning       score=0.00 [FAIL] How many weeks do I have between finishing t
+    temporal_reasoning       score=0.00 [FAIL] How many days were there between the end of 
+  conv[1] id=2: 200 turns -> 803 chunks in 15.2s, 20 questions
+    abstention               score=1.00 [PASS] What are the specific ESLint rules from the 
+    abstention               score=1.00 [PASS] What specific bugs were logged in the Jira b
+    contradiction_resolution score=0.50 [PASS] Have I obtained an API key for this project?
+    contradiction_resolution score=0.50 [PASS] Have I ever fixed any bugs related to the au
+    event_ordering           score=0.40 [FAIL] Can you list the order in which I brought up
+    event_ordering           score=0.60 [PASS] Can you list the order in which I brought up
+    information_extraction   score=1.00 [PASS] What technologies did I say I was using to s
+    information_extraction   score=0.00 [FAIL] How did you recommend managing the flow of r
+    instruction_following    score=1.00 [PASS] What are some common responses when somethin
+    instruction_following    score=0.00 [FAIL] When building an application that communicat
+    knowledge_update         score=1.00 [PASS] What is the daily call quota for the API key
+    knowledge_update         score=0.00 [FAIL] What is the test coverage percentage for my 
+    multi_session_reasoning  score=0.00 [FAIL] How many different features or concerns did 
+    multi_session_reasoning  score=0.00 [FAIL] Between my fetch call latency and my autocom
+    preference_following     score=1.00 [PASS] Can you help me set up a caching system for 
+    preference_following     score=0.50 [PASS] How can I track the status and results of ea
+    summarization            score=0.08 [FAIL] Can you give me a comprehensive summary of h
+    summarization            score=0.38 [FAIL] Can you summarize what I learned about imple
+    temporal_reasoning       score=0.00 [FAIL] How many days passed between when I obtained
+    temporal_reasoning       score=0.00 [FAIL] How many days do I have between scheduling t
+  conv[2] id=3: 194 turns -> 765 chunks in 22.2s, 20 questions
+    abstention               score=1.00 [PASS] What specific criteria did I use to prioriti
+    abstention               score=1.00 [PASS] What was the rationale behind choosing Forms
+    contradiction_resolution score=0.50 [PASS] Have I used Bootstrap components in my proje
+    contradiction_resolution score=0.25 [FAIL] Have I tested the contact form submission wi
+    event_ordering           score=0.00 [FAIL] Can you list the order in which I brought up
+    event_ordering           score=0.40 [FAIL] Can you list the order in which I brought up
+    information_extraction   score=1.00 [PASS] How long did I say the entire project is exp
+    information_extraction   score=0.75 [PASS] How did you recommend structuring the work t
+    instruction_following    score=0.25 [FAIL] How should I organize the different parts of
+    instruction_following    score=1.00 [PASS] If I’m creating a blog layout, which HTML el
+    knowledge_update         score=0.00 [FAIL] What is the deadline for completing the firs
+    knowledge_update         score=1.00 [PASS] How many project cards are included in my ga
+    multi_session_reasoning  score=1.00 [PASS] How many project cards do I have in total af
+    multi_session_reasoning  score=0.75 [PASS] Considering my form validation code, lazy lo
+    preference_following     score=0.50 [PASS] I'm planning to build a responsive portfolio
+    preference_following     score=0.50 [PASS] I'm working on adding lazy loading to my ima
+    summarization            score=0.00 [FAIL] Can you give me a comprehensive summary of h
+    summarization            score=0.00 [FAIL] Can you summarize how I approached and resol
+    temporal_reasoning       score=0.00 [FAIL] How many days are there between the deadline
+    temporal_reasoning       score=0.00 [FAIL] How many days passed between when I planned 
+  conv[3] id=4: 212 turns -> 744 chunks in 21.4s, 20 questions
+    abstention               score=1.00 [PASS] What specific criteria did I consider when c
+    abstention               score=1.00 [PASS] Can you share the agenda or structure of the
+    contradiction_resolution score=0.25 [FAIL] Have I ever worked on triangle classificatio
+    contradiction_resolution score=0.25 [FAIL] Have I ever worked on problems involving med
+    event_ordering           score=0.89 [PASS] Can you list the order in which I brought up
+    event_ordering           score=0.44 [FAIL] Can you list the order in which I brought up
+    information_extraction   score=0.00 [FAIL] What approach did I outline to demonstrate t
+    information_extraction   score=1.00 [PASS] How did I confirm that the proportional rela
+    instruction_following    score=0.50 [PASS] How can I find the area of a triangle using 
+    instruction_following    score=0.00 [FAIL] What are the different ways to calculate the
+    knowledge_update         score=0.00 [FAIL] What is my accuracy percentage in solving ar
+    knowledge_update         score=1.00 [PASS] How many classification problems have I comp
+    multi_session_reasoning  score=0.00 [FAIL] How many triangle classification problems ha
+    multi_session_reasoning  score=0.00 [FAIL] How much did my accuracy improve between the
+    preference_following     score=1.00 [PASS] Can you show me how to calculate the area of
+    preference_following     score=1.00 [PASS] Can you walk me through how to prove two tri
+    summarization            score=0.70 [PASS] Can you give me a clear summary of everythin
+    summarization            score=0.30 [FAIL] Can you give me a clear summary of how my un
+    temporal_reasoning       score=1.00 [PASS] Which improvement happened first: my quiz sc
+    temporal_reasoning       score=0.00 [FAIL] How many more problems did I complete betwee
+  conv[4] id=5: 238 turns -> 1043 chunks in 17.6s, 20 questions
+    abstention               score=1.00 [PASS] What was my emotional reaction to confusing 
+    abstention               score=1.00 [PASS] Can you tell me about any specific feedback 
+    contradiction_resolution score=0.50 [PASS] Have I completed any coin toss problems befo
+    contradiction_resolution score=0.00 [FAIL] Have I ever practiced conditional probabilit
+    event_ordering           score=0.17 [FAIL] Can you list the order in which I brought up
+    event_ordering           score=0.20 [FAIL] Can you list the order in which I brought up
+    information_extraction   score=0.00 [FAIL] What profession did I mention I work in?
+    information_extraction   score=1.00 [PASS] What probability did I mention for drawing a
+    instruction_following    score=1.00 [PASS] How do I calculate the chance of drawing a r
+    instruction_following    score=0.00 [FAIL] If I draw a card from a deck and then draw a
+    knowledge_update         score=0.00 [FAIL] How many total hours have I spent studying p
+    knowledge_update         score=0.00 [FAIL] How many conditional probability problems ha
+    multi_session_reasoning  score=0.00 [FAIL] How many total ways did I mention for arrang
+    multi_session_reasoning  score=0.00 [FAIL] In my questions about tossing coins and roll
+    preference_following     score=0.00 [FAIL] Can you walk me through how to find the prob
+    preference_following     score=1.00 [PASS] Can you explain step by step how to calculat
+    summarization            score=0.80 [PASS] Can you give me a clear summary of how my un
+    summarization            score=0.40 [FAIL] Can you give me a clear summary of how my un
+    temporal_reasoning       score=1.00 [PASS] How long did it take me to improve my accura
+    temporal_reasoning       score=0.00 [FAIL] How many days passed between when I focused 
+
+======================================================================
+BEAM RESULTS — taOSmd (mem0 judge methodology, head-to-head)
+======================================================================
+
+  Overall: 49/100 pass (>= 0.5)  accuracy=49.0%  avg_score=0.455  errors=0
+
+  By memory-ability type:
+    abstention                  10/10  (100.0%)  avg=1.000
+    contradiction_resolution     6/10  ( 60.0%)  avg=0.375
+    event_ordering               3/10  ( 30.0%)  avg=0.397
+    information_extraction       6/10  ( 60.0%)  avg=0.575
+    instruction_following        6/10  ( 60.0%)  avg=0.575
+    knowledge_update             3/10  ( 30.0%)  avg=0.300
+    multi_session_reasoning      2/10  ( 20.0%)  avg=0.175
+    preference_following         9/10  ( 90.0%)  avg=0.675
+    summarization                2/10  ( 20.0%)  avg=0.276
+    temporal_reasoning           2/10  ( 20.0%)  avg=0.200
+======================================================================
+
+  results -> /home/jay/taosmd/benchmarks/results/beam_100K_1781867930.json
