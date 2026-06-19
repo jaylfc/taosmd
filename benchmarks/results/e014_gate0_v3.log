@@ -1,0 +1,33 @@
+/home/jay/taosmd/benchmarks/locomo_runner.py:1273: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  _ts_placeholder = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[conv-26] ingested 419 turns in 3.3s
+  progress: 25 QAs processed
+  progress: 50 QAs processed
+  progress: 75 QAs processed
+  progress: 100 QAs processed
+  progress: 125 QAs processed
+  progress: 150 QAs processed
+[conv-30] ingested 369 turns in 2.0s
+  progress: 175 QAs processed
+  progress: 200 QAs processed
+/home/jay/taosmd/benchmarks/locomo_runner.py:1511: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+=========================================================
+LoCoMo Benchmark — taosmd (commit 96b7725)
+=========================================================
+Conversations: 10 | Questions: 200 | Model: hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M | Strategy: full | Top-K: 10
+---------------------------------------------------------
+Category         Count      F1   BLEU-1    Judge      R@K
+---------------------------------------------------------
+Single-hop (1)      43    0.12     0.08     0.00     0.63
+Temporal  (2)       63    0.25     0.18     0.00     0.95
+Multi-hop (3)       13    0.07     0.05     0.00     0.55
+Open-dom  (4)       81    0.22     0.14     0.00     0.63
+---------------------------------------------------------
+Overall            200    0.20     0.13     0.00     0.73
+=========================================================
+Latency  p50=2025 ms  p95=3878 ms  |  Context ~525 tok/query (mean)
+=========================================================
+
+wrote /home/jay/taosmd/benchmarks/results/locomo_20260619_190042.json
