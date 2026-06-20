@@ -73,7 +73,10 @@ SELF_VERIFY = os.environ.get("TAOSMD_SELF_VERIFY", "0") == "1"
 # Default is 512 words per chunk (larger than BEAM's 100-word default, since
 # novel narrative benefits from wider windows for coherence retrieval). The
 # caller can sweep TAOSMD_CHUNK_WORDS to find the optimal window.
-CHUNK_WORDS = int(os.environ.get("TAOSMD_CHUNK_WORDS", "512"))
+CHUNK_WORDS = int(os.environ.get("TAOSMD_CHUNK_WORDS", "3000"))
+# MemoryAgentBench EventQA ingests at chunk_size=4096 tiktoken tokens; match that
+# protocol exactly when tiktoken is available so retrieval sees the same chunks.
+CHUNK_TOKENS = int(os.environ.get("TAOSMD_EVENTQA_CHUNK_TOKENS", "4096"))
 
 ONNX_PATH = os.environ.get(
     "TAOSMD_ONNX_PATH",
@@ -91,17 +94,17 @@ _reranker = None
 
 
 def normalize_answer(s: str) -> str:
-    """Normalize a string: lowercase, strip articles, strip punctuation, collapse whitespace.
+    """Normalize a string: lowercase, strip punctuation, strip articles, collapse whitespace.
 
-    Replicates the SQuAD/DrQA normalize_answer used by MemoryAgentBench EventQA.
-    The order matters: articles are stripped by word-boundary regex BEFORE
-    punctuation removal so the regex operates on the original word boundaries.
+    Replicates MemoryAgentBench EventQA normalize_answer (utils/eval_other_utils.py)
+    EXACTLY, including the order: lowercase, then remove punctuation, then remove
+    articles, then collapse whitespace. The order matters for edge cases.
     """
     text = s.lower()
+    # Remove all punctuation characters (BEFORE articles, matching their order).
+    text = text.translate(str.maketrans("", "", string.punctuation))
     # Remove articles: a, an, the (whole-word match).
     text = re.sub(r"\b(a|an|the)\b", " ", text)
-    # Remove all punctuation characters.
-    text = text.translate(str.maketrans("", "", string.punctuation))
     # Collapse whitespace and strip.
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -223,7 +226,7 @@ def chunk_context(text: str) -> list[str]:
         import tiktoken  # noqa: PLC0415
         enc = tiktoken.get_encoding("cl100k_base")
         token_ids = enc.encode(text)
-        target = CHUNK_WORDS  # treat CHUNK_WORDS as token target when tiktoken is available
+        target = CHUNK_TOKENS  # match MemoryAgentBench EventQA chunk_size (4096 tiktoken tokens)
         chunks: list[str] = []
         for start in range(0, len(token_ids), target):
             segment_ids = token_ids[start : start + target]
