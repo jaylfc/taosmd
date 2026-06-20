@@ -35,6 +35,8 @@ Env levers (mirror beam_runner):
     TAOSMD_CONTEXT_CHARS      Max context chars passed to generator (default 16000)
     TAOSMD_CHUNK_WORDS        Chunk size in words (default 512)
     TAOSMD_SELF_VERIFY        "1" to enable self-verification pass (the lever)
+    TAOSMD_EVENTQA_NUM_CTX    Ollama context window for generation (default 8192;
+                              the default 4096 truncates EventQA prompts)
 """
 
 from __future__ import annotations
@@ -77,6 +79,12 @@ CHUNK_WORDS = int(os.environ.get("TAOSMD_CHUNK_WORDS", "3000"))
 # MemoryAgentBench EventQA ingests at chunk_size=4096 tiktoken tokens; match that
 # protocol exactly when tiktoken is available so retrieval sees the same chunks.
 CHUNK_TOKENS = int(os.environ.get("TAOSMD_EVENTQA_CHUNK_TOKENS", "4096"))
+# Ollama context window for generation. The default num_ctx (4096) is too small
+# for EventQA prompts: a 16000-char retrieved context of dense novel prose is
+# about 4500-5000 tokens, which overflows 4096 and makes Ollama truncate the
+# prompt, so the model emits a 1-2 token stub instead of a real answer. 8192
+# holds the full prompt plus the answer with headroom; raise it for longer tiers.
+NUM_CTX = int(os.environ.get("TAOSMD_EVENTQA_NUM_CTX", "8192"))
 
 ONNX_PATH = os.environ.get(
     "TAOSMD_ONNX_PATH",
@@ -297,7 +305,7 @@ async def llm_answer(client, context: str, question: str) -> str:
                 "prompt": "/no_think\n\n" + prompt,
                 "stream": False,
                 "think": False,
-                "options": {"temperature": 0, "num_predict": 64},
+                "options": {"temperature": 0, "num_predict": 64, "num_ctx": NUM_CTX},
             },
         )
         if resp.status_code == 200:
@@ -325,7 +333,7 @@ async def self_verify_answer(client, context: str, question: str, answer: str) -
                 "prompt": prompt,
                 "stream": False,
                 "think": False,
-                "options": {"temperature": 0, "num_predict": 64},
+                "options": {"temperature": 0, "num_predict": 64, "num_ctx": NUM_CTX},
             },
         )
         if resp.status_code == 200:
