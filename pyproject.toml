@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "taosmd"
 version = "0.3.0"
-description = "Framework-agnostic, local-first AI memory system. 97.0% end-to-end Judge accuracy on LongMemEval-S, measured on a low-end reference stack."
+description = "Framework-agnostic, local-first AI memory system. 97.0% Recall@5 on LongMemEval-S, measured on a low-end reference stack."
 readme = "README.md"
 license = {file = "LICENSE"}
-authors = [{name = "JAN LABS LTD"}]
+authors = [{name = "the taOS project"}]
 requires-python = ">=3.10"
 dependencies = [
     "onnxruntime",

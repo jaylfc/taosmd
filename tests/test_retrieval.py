@@ -107,8 +107,8 @@ def test_adapt_kg():
             "subject_id": "person:alice",
             "subject_name": "Alice",
             "predicate": "works_at",
-            "object_id": "org:jan_labs",
-            "object_name": "JAN Labs",
+            "object_id": "org:acme",
+            "object_name": "Acme",
             "direction": "outgoing",
             "confidence": 0.95,
         },
@@ -128,7 +128,7 @@ def test_adapt_kg():
     assert len(results) == 2
 
     first = results[0]
-    assert first["text"] == "Alice works_at JAN Labs"
+    assert first["text"] == "Alice works_at Acme"
     assert first["source"] == "kg"
     assert first["source_id"] == "person:alice"
     assert first["rank"] == 0

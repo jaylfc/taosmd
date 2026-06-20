@@ -690,6 +690,24 @@ Full timeline, per-category breakdowns, and provenance log: `docs/specs/2026-04-
 
 ---
 
+## BEAM long-context memory benchmark (mem0 nugget judge)
+
+BEAM (mem0, ICLR 2026) probes ten memory abilities (fact tracking, knowledge updates, contradiction resolution, temporal ordering, abstention, and more) over conversations from 100K up to 10M tokens, graded by a nugget-rubric judge (an answer passes at a rubric score of 0.5 or above). We ported mem0's own judge into `benchmarks/beam_runner.py` so the grading matches their published methodology, and ran the full local stack (arctic-embed-s, tight retrieval, qwen3.5:9b generator, Qwen3-4B-Instruct-2507 judge) against the public, ungated dataset (`Mohammadta/BEAM` on HuggingFace).
+
+| Tier | taOSmd (local 9B) | mem0 (frontier-class) |
+|---|---|---|
+| BEAM-100K | 47.0% (n=100); 49.0% on the hardened re-run | not published at this tier |
+| BEAM-1M | 40.0% (80/200), abstention 100% | 64 to 70% (top-200) |
+
+Read this honestly: BEAM rewards frontier-scale generation, and a local 9B lands clearly behind mem0's GPT-4-class numbers. The value here is an early, fully-provenanced, local-tier number on a brand-new benchmark, not a leaderboard win. Two things we checked and report as negatives or caveats:
+
+- **No configuration lever beats the plateau.** A seven-arm sweep (chunk size 50/100/200/300, sentence-mode, self-verify on and off, decomposition; n=100 each) stayed inside a 44 to 49% band. The CoVe answer self-verification that is the dominant lever on LongMemEval-S gives no BEAM benefit, because BEAM failures are wrong answers rather than abstentions and a verify-or-abstain pass can only recover abstentions. Tight retrieval (about 6 dense plus 3 lexical candidates) beats wider retrieval, which adds distractors the 9B cannot filter; bigger local generators (12B, 14B) do not beat the tuned 9B either.
+- **A harness empty-answer confound, surfaced and closed.** The runner's original 60s generation timeout could store an empty answer that the nugget judge then passed on negative or abstention rubrics, inflating the score on slow CPU generation (a 30B-A3B CPU run read 55% with half its answers empty, then 20% honest once they were not). A hardened re-run on the GPU (empty-answer-equals-FAIL guard plus a raised timeout) reproduced 49.0% at 100K and 40.0% at 1M with the guard firing zero times and abstention at 100%, so the GPU 9B numbers are audited clean and the confound is confined to slow-CPU generation.
+
+Provenance: `benchmarks/beam_runner.py` and the campaign logs under `benchmarks/results/` on branch `feat/beam-runner`; full pre-registration, kill criteria, and the negative results (N-013, N-014) are in the [research report](research-report.md).
+
+---
+
 ## Hardware tiers — recommended configurations
 
 The taOSmd architecture is portable; what changes per hardware tier is which generator + which retrieval flags fit the compute budget. The following recommendations name what is **measured** vs. **expected based on architecture** so you can calibrate trust.
