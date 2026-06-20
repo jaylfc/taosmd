@@ -1,0 +1,1217 @@
+{
+  "tier": "eventqa_65536",
+  "contexts": 5,
+  "question_limit": 20,
+  "generator": "qwen3.5:9b",
+  "onnx_path": "models/arctic-embed-s-onnx",
+  "rerank": true,
+  "self_verify": false,
+  "chunk_words": 3000,
+  "metrics": {
+    "accuracy": 75.0,
+    "n": 100,
+    "correct": 75
+  },
+  "results": [
+    {
+      "row_idx": 0,
+      "q_idx": 0,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Debbie sat with Stuart and Brent Tarleton on the porch of Tara.\n\n\nBelow is a list of possible subsequent events:\n\n['Debbie sported a lovely yellow paisley wrap that accompanied her flip-flops.', 'Debbie dressed in a vibrant orange spotted tunic that suited her canvas shoes.', 'Debbie adorned herself in a sleek purple chequered blouse that paired with her loafers.', 'Debbie wore a bright blue polka-dotted kimono that complemented her sandals.', 'Debbie wore a new green flowered-muslin dress that matched her slippers.', 'Debbie donned a chic red striped sundress that highlighted her espadrilles.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie wore a new green flowered-muslin dress that matched her slippers."
+      ],
+      "predicted": "Debbie wore a new green flowered-muslin dress that matched her slippers.",
+      "score": 1,
+      "retrieved_chars": 144717
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 1,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Debbie sat with Stuart and Brent Tarleton on the porch of Tara.\n2. Debbie wore a new green flowered-muslin dress that matched her slippers.\n\n\nBelow is a list of possible subsequent events:\n\n['Debbie expressed her boredom with the talk of war.', 'Debbie remarked on her weariness with the ongoing debates about social media trends.', 'Debbie conveyed her dissatisfaction with the chatter about political scandals.', 'Debbie lamented her disinterest in the discussion about climate change.', 'Debbie shared her frustration with the obsession over celebrity gossip.', 'Debbie revealed her annoyance with the focus on economic forecasts.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie expressed her boredom with the talk of war."
+      ],
+      "predicted": "['Debbie expressed her boredom with the talk of war.']",
+      "score": 1,
+      "retrieved_chars": 146008
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 2,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Debbie sat with Stuart and Brent Tarleton on the porch of Tara.\n2. Debbie wore a new green flowered-muslin dress that matched her slippers.\n3. Debbie expressed her boredom with the talk of war.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Debbie mentioned her mother, Lucian O'Kerry, during the conversation.\", \"Debbie highlighted her brother, Lucian O'Kerry, throughout the discussion.\", \"Debbie referenced her cousin, Lucian O'Kerry, while reminiscing about childhood memories.\", \"Debbie recalled her uncle, Lucian O'Kerry, while sharing a funny anecdote.\", \"Debbie spoke fondly of her father, Lucian O'Kerry, during the meeting.\", \"Debbie described her grandfather, Lucian O'Kerry, while telling a family story.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie mentioned her mother, Lucian O'Kerry, during the conversation."
+      ],
+      "predicted": "Debbie mentioned her mother, Lucian O'Kerry, during the conversation.",
+      "score": 1,
+      "retrieved_chars": 146668
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 3,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Debbie sat with Stuart and Brent Tarleton on the porch of Tara.\n2. Debbie wore a new green flowered-muslin dress that matched her slippers.\n3. Debbie expressed her boredom with the talk of war.\n4. Debbie mentioned her mother, Lucian O'Kerry, during the conversation.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Stuart's cousin, Beatrice Tarleton, showcased the champion stallion at the event.\", \"Debbie's uncle, Brent Hargrove, sold the beautiful gelding at the market.\", \"Beatrice's sister, Brent Hargrove, groomed the wild filly in the barn.\", \"Debbie's father, Stuart Tarleton, auctioned the prized mare at the fair.\", \"Debbie's mother, Beatrice Tarleton, handled the new stallion in the stable.\", \"Brent's brother, Stuart Hargrove, trained the young colt in the paddock.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie's mother, Beatrice Tarleton, handled the new stallion in the stable."
+      ],
+      "predicted": "Debbie's mother, Beatrice Tarleton, handled the new stallion in the stable.",
+      "score": 1,
+      "retrieved_chars": 145666
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 4,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Debbie sat with Stuart and Brent Tarleton on the porch of Tara.\n2. Debbie wore a new green flowered-muslin dress that matched her slippers.\n3. Debbie expressed her boredom with the talk of war.\n4. Debbie mentioned her mother, Lucian O'Kerry, during the conversation.\n5. Debbie's mother, Beatrice Tarleton, handled the new stallion in the stable.\n\n\nBelow is a list of possible subsequent events:\n\n['Debbie anticipated it wouldn\u2019t be windy on the day of the outdoor concert.', 'Debbie worried it wouldn\u2019t be warm on the day of the beach outing.', 'Debbie feared it wouldn\u2019t be sunny on the day of the parade.', 'Debbie hoped it would not rain on the day of the barbecue.', 'Debbie wished it wouldn\u2019t snow on the day of the picnic.', 'Debbie prayed it wouldn\u2019t hail on the day of the family reunion.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie hoped it would not rain on the day of the barbecue."
+      ],
+      "predicted": "Debbie hoped it would not rain on the day of the barbecue.",
+      "score": 1,
+      "retrieved_chars": 145886
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 5,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n2. Debbie wore a new green flowered-muslin dress that matched her slippers.\n3. Debbie expressed her boredom with the talk of war.\n4. Debbie mentioned her mother, Lucian O'Kerry, during the conversation.\n5. Debbie's mother, Beatrice Tarleton, handled the new stallion in the stable.\n6. Debbie hoped it would not rain on the day of the barbecue.\n\n\nBelow is a list of possible subsequent events:\n\n['Brent and Stuart persuaded Debbie to assure them tickets to the game.', 'Brent and Stuart convinced Debbie to vow them seats at the concert.', 'Brent and Stuart asked Debbie to promise them dances at the ball.', 'Brent and Stuart asked Debbie to commit to sharing stories at the gathering.', 'Brent and Stuart requested Debbie to pledge them rides to the festival.', 'Brent and Stuart urged Debbie to guarantee them meals at the banquet.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Brent and Stuart asked Debbie to promise them dances at the ball."
+      ],
+      "predicted": "Brent and Stuart persuaded Debbie to assure them tickets to the game.",
+      "score": 0,
+      "retrieved_chars": 145924
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 6,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n3. Debbie expressed her boredom with the talk of war.\n4. Debbie mentioned her mother, Lucian O'Kerry, during the conversation.\n5. Debbie's mother, Beatrice Tarleton, handled the new stallion in the stable.\n6. Debbie hoped it would not rain on the day of the barbecue.\n7. Brent and Stuart asked Debbie to promise them dances at the ball.\n\n\nBelow is a list of possible subsequent events:\n\n['Stuart noticed the travel itinerary changes while reviewing his emails at home.', 'Debbie received the promotion details during the networking event last week.', 'Debbie learned about the engagement announcement during the ball.', 'Stuart stumbled upon the surprise birthday invitation while browsing at the caf\u00e9.', 'Brent found out about the scholarship award during the outdoor ceremony.', 'Debbie discovered the unexpected reunion news while attending the gala.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie learned about the engagement announcement during the ball."
+      ],
+      "predicted": "['Stuart noticed the travel itinerary changes while reviewing his emails at home.']",
+      "score": 0,
+      "retrieved_chars": 145646
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 7,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n4. Debbie mentioned her mother, Lucian O'Kerry, during the conversation.\n5. Debbie's mother, Beatrice Tarleton, handled the new stallion in the stable.\n6. Debbie hoped it would not rain on the day of the barbecue.\n7. Brent and Stuart asked Debbie to promise them dances at the ball.\n8. Debbie learned about the engagement announcement during the ball.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Stuart revealed the engagement announcement for Kali to Charlie's sister.\", \"Stuart disclosed the vacation plans for Debbie to Brent's cousin.\", \"Stuart announced the promotion celebration for Debbie to Charlie's brother.\", \"Stuart revealed the surprise party details for Brent to Debbie's aunt.\", \"Stuart unveiled the charity event information for Kali to Brent's mother.\", \"Stuart shared the graduation news for Brent to Debbie's best friend.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Stuart revealed the engagement announcement for Kali to Charlie's sister."
+      ],
+      "predicted": "Stuart revealed the engagement announcement for Kali to Charlie's sister.",
+      "score": 1,
+      "retrieved_chars": 145752
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 8,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n5. Debbie's mother, Beatrice Tarleton, handled the new stallion in the stable.\n6. Debbie hoped it would not rain on the day of the barbecue.\n7. Brent and Stuart asked Debbie to promise them dances at the ball.\n8. Debbie learned about the engagement announcement during the ball.\n9. Stuart revealed the engagement announcement for Kali to Charlie's sister.\n\n\nBelow is a list of possible subsequent events:\n\n['Stuart arranged to meet the Tarleton twins for a game night.', 'Brent invited the Tarleton twins to join him for a picnic.', 'Debbie promised to help the Tarleton twins with their homework.', 'Debbie decided to watch a movie with the Tarleton twins.', 'Debbie agreed to eat supper with the Tarleton twins.', 'Stuart planned to attend a concert with the Tarleton twins.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie agreed to eat supper with the Tarleton twins."
+      ],
+      "predicted": "Debbie agreed to eat supper with the Tarleton twins.",
+      "score": 1,
+      "retrieved_chars": 145222
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 9,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n6. Debbie hoped it would not rain on the day of the barbecue.\n7. Brent and Stuart asked Debbie to promise them dances at the ball.\n8. Debbie learned about the engagement announcement during the ball.\n9. Stuart revealed the engagement announcement for Kali to Charlie's sister.\n10. Debbie agreed to eat supper with the Tarleton twins.\n\n\nBelow is a list of possible subsequent events:\n\n['Debbie vowed to sing every ballad with the Anderson sisters.', 'Debbie promised to dance all the waltzes with the Tarleton twins.', 'Stuart agreed to ride every rollercoaster with the Murphy triplets.', 'Stuart announced his intention to race all the boats with the Thompson brothers.', 'Debbie committed to bake all the pies with the Harrington cousins.', 'Brent declared he would paint all the portraits with the Lawson siblings.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie promised to dance all the waltzes with the Tarleton twins."
+      ],
+      "predicted": "Debbie promised to dance all the waltzes with the Tarleton twins.",
+      "score": 1,
+      "retrieved_chars": 145685
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 10,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n7. Brent and Stuart asked Debbie to promise them dances at the ball.\n8. Debbie learned about the engagement announcement during the ball.\n9. Stuart revealed the engagement announcement for Kali to Charlie's sister.\n10. Debbie agreed to eat supper with the Tarleton twins.\n11. Debbie promised to dance all the waltzes with the Tarleton twins.\n\n\nBelow is a list of possible subsequent events:\n\n[\"The Tarleton twins told Stuart they planned to stop by the Edwards' before dinner time.\", \"The Tarleton twins assured Stuart they would visit the Harmons' later in the evening.\", \"The Tarleton twins told Debbie they would be over at the Abriannaes' early in the morning.\", \"The Tarleton twins mentioned to Debbie they would swing by the Parkers' right after lunch.\", \"The Tarleton twins promised Brent they would join him at the Johnsons' on Saturday morning.\", \"The Tarleton twins informed Brent they would arrive at the Mulligans' house late in the afternoon.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The Tarleton twins told Debbie they would be over at the Abriannaes' early in the morning."
+      ],
+      "predicted": "The Tarleton twins told Stuart they planned to stop by the Edwards' before dinner time.",
+      "score": 0,
+      "retrieved_chars": 145219
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 11,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n8. Debbie learned about the engagement announcement during the ball.\n9. Stuart revealed the engagement announcement for Kali to Charlie's sister.\n10. Debbie agreed to eat supper with the Tarleton twins.\n11. Debbie promised to dance all the waltzes with the Tarleton twins.\n12. The Tarleton twins told Debbie they would be over at the Abriannaes' early in the morning.\n\n\nBelow is a list of possible subsequent events:\n\n['Brent questioned why Debbie chose to leave the party early without saying goodbye.', 'Brent wondered what prompted Debbie to avoid discussing their plans for the weekend.', \"Brent remarked on how strange it was that Debbie didn't invite them to the movie night.\", \"Brent voiced his confusion over Debbie's decision not to include them in the group outing.\", 'Brent expressed his puzzlement about why Debbie did not ask them to stay for supper.', 'Brent reflected on why Debbie seemed uninterested in their conversation during lunch.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Brent expressed his puzzlement about why Debbie did not ask them to stay for supper."
+      ],
+      "predicted": "Brent voiced his confusion over Debbie's decision not to include them in the group outing.",
+      "score": 0,
+      "retrieved_chars": 145348
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 12,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n9. Stuart revealed the engagement announcement for Kali to Charlie's sister.\n10. Debbie agreed to eat supper with the Tarleton twins.\n11. Debbie promised to dance all the waltzes with the Tarleton twins.\n12. The Tarleton twins told Debbie they would be over at the Abriannaes' early in the morning.\n13. Brent expressed his puzzlement about why Debbie did not ask them to stay for supper.\n\n\nBelow is a list of possible subsequent events:\n\n['Kali mentioned that it seemed Stuart had forgotten to notify Brent about the travel plans.', 'Brent noted that maybe Debbie had failed to update Kali about the vacation itinerary.', \"Stuart remarked that it was possible that Kali hadn't shared the news with Debbie about the new project.\", 'Brent speculated that perhaps Debbie had not informed Kali about the surprise party.', 'Debbie implied that potentially Brent had overlooked telling Stuart regarding the meeting schedule.', 'Stuart suggested that maybe Kali had not told Debbie about the engagement announcement.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Stuart suggested that maybe Kali had not told Debbie about the engagement announcement."
+      ],
+      "predicted": "Stuart suggested that maybe Kali had not told Debbie about the engagement announcement.",
+      "score": 1,
+      "retrieved_chars": 144938
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 13,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n10. Debbie agreed to eat supper with the Tarleton twins.\n11. Debbie promised to dance all the waltzes with the Tarleton twins.\n12. The Tarleton twins told Debbie they would be over at the Abriannaes' early in the morning.\n13. Brent expressed his puzzlement about why Debbie did not ask them to stay for supper.\n14. Stuart suggested that maybe Kali had not told Debbie about the engagement announcement.\n\n\nBelow is a list of possible subsequent events:\n\n[\"The Tarleton twins strikingly remembered when they were captivated by Brent's guitar skills during a local concert.\", \"The Tarleton twins recounted the evening they were enchanted by Stuart's photography at an art show.\", \"The Tarleton twins reflected on how they both discovered Brent's storytelling talent during a family reunion.\", \"The Tarleton twins vividly described the time they were impressed by Debbie's cooking at a neighborhood potluck.\", \"The Tarleton twins reminisced about the moment they first noticed Stuart's dance moves at a charity gala.\", \"The Tarleton twins recalled how they both became aware of Debbie's charms during a political speaking.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The Tarleton twins recalled how they both became aware of Debbie's charms during a political speaking."
+      ],
+      "predicted": "The Tarleton twins recalled how they both became aware of Debbie's charms during a political speaking.",
+      "score": 1,
+      "retrieved_chars": 145404
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 14,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n11. Debbie promised to dance all the waltzes with the Tarleton twins.\n12. The Tarleton twins told Debbie they would be over at the Abriannaes' early in the morning.\n13. Brent expressed his puzzlement about why Debbie did not ask them to stay for supper.\n14. Stuart suggested that maybe Kali had not told Debbie about the engagement announcement.\n15. The Tarleton twins recalled how they both became aware of Debbie's charms during a political speaking.\n\n\nBelow is a list of possible subsequent events:\n\n['Kali Abrianna was selected as the keynote speaker at the youth summit.', 'Kali Abrianna was elected captain of the Troop.', 'Kali Abrianna received the prestigious community service award.', 'Kali Abrianna won the first prize in the annual art competition.', 'Kali Abrianna earned a scholarship for her exceptional academic achievements.', 'Kali Abrianna was appointed leader of the environmental committee.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Kali Abrianna was elected captain of the Troop."
+      ],
+      "predicted": "['Kali Abrianna was elected captain of the Troop.']",
+      "score": 1,
+      "retrieved_chars": 145133
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 15,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n12. The Tarleton twins told Debbie they would be over at the Abriannaes' early in the morning.\n13. Brent expressed his puzzlement about why Debbie did not ask them to stay for supper.\n14. Stuart suggested that maybe Kali had not told Debbie about the engagement announcement.\n15. The Tarleton twins recalled how they both became aware of Debbie's charms during a political speaking.\n16. Kali Abrianna was elected captain of the Troop.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Debbie's father, John Abrianna, organized a fundraising dinner to support the troop.\", \"Debbie's father, John Abrianna, arranged for the troop to receive a grant for new uniforms.\", \"Debbie's father, John Abrianna, hosted a workshop to teach the troop essential survival techniques.\", \"Debbie's father, John Abrianna, contributed money to outfit the Troop.\", \"Debbie's father, John Abrianna, volunteered his time to mentor the troop members.\", \"Debbie's father, John Abrianna, donated equipment to enhance the troop's outdoor skills.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie's father, John Abrianna, contributed money to outfit the Troop."
+      ],
+      "predicted": "Debbie's father, John Abrianna, contributed money to outfit the Troop.",
+      "score": 1,
+      "retrieved_chars": 145289
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 16,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n13. Brent expressed his puzzlement about why Debbie did not ask them to stay for supper.\n14. Stuart suggested that maybe Kali had not told Debbie about the engagement announcement.\n15. The Tarleton twins recalled how they both became aware of Debbie's charms during a political speaking.\n16. Kali Abrianna was elected captain of the Troop.\n17. Debbie's father, John Abrianna, contributed money to outfit the Troop.\n\n\nBelow is a list of possible subsequent events:\n\n['Debbie was struck by an overwhelming sense of doubt and chaos when the neighborhood dogs all began barking in unison.', 'Debbie found herself engulfed in frustration and disbelief following the surprise announcement of her promotion.', \"Debbie experienced a wave of confusion and despair after the unexpected arrival of Aunt Marge's parrot.\", \"Debbie felt an unsettling mix of sadness and uncertainty when she discovered the library's new policy on late returns.\", \"Debbie felt a sense of misery and bewilderment after the Tarleton twins' visit.\", \"Debbie was flooded with a feeling of discomfort and perplexity after her friend revealed a secret she wasn't ready to hear.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie felt a sense of misery and bewilderment after the Tarleton twins' visit."
+      ],
+      "predicted": "Debbie felt an unsettling mix of sadness and uncertainty when she discovered the library's new policy on late returns.",
+      "score": 0,
+      "retrieved_chars": 145481
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 17,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n14. Stuart suggested that maybe Kali had not told Debbie about the engagement announcement.\n15. The Tarleton twins recalled how they both became aware of Debbie's charms during a political speaking.\n16. Kali Abrianna was elected captain of the Troop.\n17. Debbie's father, John Abrianna, contributed money to outfit the Troop.\n18. Debbie felt a sense of misery and bewilderment after the Tarleton twins' visit.\n\n\nBelow is a list of possible subsequent events:\n\n['Debbie recalled her feelings of love for Kali.', 'Debbie reminisced about her passionate moments with Kali.', 'Debbie cherished the memories of laughter shared with Kali.', 'Debbie reflected on her deep admiration for Kali.', 'Debbie pondered her unforgettable adventures alongside Kali.', 'Debbie thought back to the warm evenings spent with Kali.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie recalled her feelings of love for Kali."
+      ],
+      "predicted": "Debbie reflected on her deep admiration for Kali.",
+      "score": 0,
+      "retrieved_chars": 145482
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 18,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n15. The Tarleton twins recalled how they both became aware of Debbie's charms during a political speaking.\n16. Kali Abrianna was elected captain of the Troop.\n17. Debbie's father, John Abrianna, contributed money to outfit the Troop.\n18. Debbie felt a sense of misery and bewilderment after the Tarleton twins' visit.\n19. Debbie recalled her feelings of love for Kali.\n\n\nBelow is a list of possible subsequent events:\n\n['Debbie sat on the porch swing, hoping her mother would return from the store.', 'Debbie gazed out the window, eager to see her friend arrive from across the street.', 'Debbie paced in the garden, counting the minutes until her sister finally came home.', 'Debbie listened intently as her brother picked up his guitar, anticipating his new song.', 'Debbie waited for her father at the end of the driveway.', \"Debbie leaned against the fence, excitedly watching for her neighbor's dog to come play.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie waited for her father at the end of the driveway."
+      ],
+      "predicted": "Debbie gazed out the window, eager to see her friend arrive from across the street.",
+      "score": 0,
+      "retrieved_chars": 145223
+    },
+    {
+      "row_idx": 0,
+      "q_idx": 19,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n16. Kali Abrianna was elected captain of the Troop.\n17. Debbie's father, John Abrianna, contributed money to outfit the Troop.\n18. Debbie felt a sense of misery and bewilderment after the Tarleton twins' visit.\n19. Debbie recalled her feelings of love for Kali.\n20. Debbie waited for her father at the end of the driveway.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Debbie's spirit soared with excitement as she reminisced about Kali.\", \"Debbie's soul danced with delight as she visualized Kali\u2019s embrace.\", 'Debbie\u2019s mind raced with anticipation as she daydreamed about Kali.', \"Debbie's heart swelled with hope as she thought about Kali.\", \"Debbie's cheeks flushed with warmth as she recalled Kali's smile.\", 'Debbie\u2019s eyes sparkled with joy as she remembered Kali\u2019s laughter.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Debbie's heart swelled with hope as she thought about Kali."
+      ],
+      "predicted": "Debbie's spirit soared with excitement as she reminisced about Kali.",
+      "score": 0,
+      "retrieved_chars": 145305
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 0,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. M. Alton was appointed Bishop of D\u2014\u2014.\n\n\nBelow is a list of possible subsequent events:\n\n['The Bishop expressed glacial feelings towards Napoleon during his decline.', 'The Bishop indicated subtle disdain towards Napoleon during the tumult of his last days.', 'The Bishop harbored simmering resentment towards Napoleon amid rising tensions.', 'The Bishop conveyed muted hostility towards Napoleon in the aftermath of his defeat.', 'The Bishop articulated profound disillusionment towards Napoleon as his power waned.', 'The Bishop maintained an icy demeanor towards Napoleon throughout his fall from grace.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The Bishop expressed glacial feelings towards Napoleon during his decline."
+      ],
+      "predicted": "The Bishop maintained an icy demeanor towards Napoleon throughout his fall from grace.",
+      "score": 0,
+      "retrieved_chars": 146689
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 1,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. M. Alton was appointed Bishop of D\u2014\u2014.\n2. The Bishop expressed glacial feelings towards Napoleon during his decline.\n\n\nBelow is a list of possible subsequent events:\n\n[\"The Bishop denounced Napoleon's military strategies in a speech shortly after the general's return from his island confinement.\", \"The Bishop expressed his support for Napoleon's reforms, surprising many upon his unforeseen return from Elba.\", \"The Bishop publicly condemned Napoleon's ambitions during a sermon after his return from exile.\", 'The Bishop organized a banquet in honor of Napoleon, but the general failed to show up after his return from exile.', 'The Bishop secretly wrote a letter to Napoleon, urging him to abandon his quest for power upon his return from Elba.', 'The Bishop refused to see Napoleon when he passed through on his return from Elba.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The Bishop refused to see Napoleon when he passed through on his return from Elba."
+      ],
+      "predicted": "The Bishop refused to see Napoleon when he passed through on his return from Elba.",
+      "score": 1,
+      "retrieved_chars": 146921
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 2,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. M. Alton was appointed Bishop of D\u2014\u2014.\n2. The Bishop expressed glacial feelings towards Napoleon during his decline.\n3. The Bishop refused to see Napoleon when he passed through on his return from Elba.\n\n\nBelow is a list of possible subsequent events:\n\n['The Bishop resisted the pressure to organize a public demonstration of loyalty to Napoleon following his escape.', 'The Bishop avoided mobilizing the clergy to pray for Napoleon amidst the political turmoil.', \"The Bishop chose not to issue a pastoral letter endorsing Napoleon's new regime after his return.\", 'The Bishop abstained from ordering public prayers for Napoleon during the Hundred Days.', 'The Bishop refrained from authorizing special blessings for Napoleon as he returned from exile.', \"The Bishop declined to support Napoleon's call for a national fast during the restoration period.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The Bishop abstained from ordering public prayers for Napoleon during the Hundred Days."
+      ],
+      "predicted": "The Bishop abstained from ordering public prayers for Napoleon during the Hundred Days.",
+      "score": 1,
+      "retrieved_chars": 146921
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 3,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. M. Alton was appointed Bishop of D\u2014\u2014.\n2. The Bishop expressed glacial feelings towards Napoleon during his decline.\n3. The Bishop refused to see Napoleon when he passed through on his return from Elba.\n4. The Bishop abstained from ordering public prayers for Napoleon during the Hundred Days.\n\n\nBelow is a list of possible subsequent events:\n\n['A person of tattered attire stumbled into the hamlet of F\u2014\u2014.', 'A man of wretched appearance entered the town of D\u2014\u2014.', 'A stranger of unsettling appearance crossed into the perimeter of G\u2014\u2014.', 'A traveler of peculiar demeanor arrived at the village of B\u2014\u2014.', 'An individual with disheveled clothing appeared on the outskirts of C\u2014\u2014.', 'A figure of suspicious demeanor wandered into the region of E\u2014\u2014.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "A man of wretched appearance entered the town of D\u2014\u2014."
+      ],
+      "predicted": "'A man of wretched appearance entered the town of D\u2014\u2014.'",
+      "score": 1,
+      "retrieved_chars": 147218
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 4,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. M. Alton was appointed Bishop of D\u2014\u2014.\n2. The Bishop expressed glacial feelings towards Napoleon during his decline.\n3. The Bishop refused to see Napoleon when he passed through on his return from Elba.\n4. The Bishop abstained from ordering public prayers for Napoleon during the Hundred Days.\n5. A man of wretched appearance entered the town of D\u2014\u2014.\n\n\nBelow is a list of possible subsequent events:\n\n['The man painted at the easel across the field of avenue des Champs.', 'The man danced in the courtyard beside the garden of boulevard Michel.', 'The man meditated on the hilltop above the city of place des Vosges.', 'The man laughed on the bench by the riverbank of rue de la Libert\u00e9.', 'The man drank at the fountain under the trees of the boulevard Gassendi.', 'The man strolled along the path near the lake of Montagne de Lure.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man drank at the fountain under the trees of the boulevard Gassendi."
+      ],
+      "predicted": "The man painted at the easel across the field of avenue des Champs.",
+      "score": 0,
+      "retrieved_chars": 146336
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 5,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n2. The Bishop expressed glacial feelings towards Napoleon during his decline.\n3. The Bishop refused to see Napoleon when he passed through on his return from Elba.\n4. The Bishop abstained from ordering public prayers for Napoleon during the Hundred Days.\n5. A man of wretched appearance entered the town of D\u2014\u2014.\n6. The man drank at the fountain under the trees of the boulevard Gassendi.\n\n\nBelow is a list of possible subsequent events:\n\n['The man paused once more to admire the mural in the community center.', 'The man stopped again for a drink at the fountain in the market-place.', 'The man lingered yet again to gaze at the statue in the town square.', 'The man halted a moment to observe the vendors at the street fair.', 'The man hesitated briefly to listen to the musicians near the caf\u00e9.', 'The man rested again to savor the aroma from the bakery on the corner.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man stopped again for a drink at the fountain in the market-place."
+      ],
+      "predicted": "The man stopped again for a drink at the fountain in the market-place.",
+      "score": 1,
+      "retrieved_chars": 146292
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 6,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n3. The Bishop refused to see Napoleon when he passed through on his return from Elba.\n4. The Bishop abstained from ordering public prayers for Napoleon during the Hundred Days.\n5. A man of wretched appearance entered the town of D\u2014\u2014.\n6. The man drank at the fountain under the trees of the boulevard Gassendi.\n7. The man stopped again for a drink at the fountain in the market-place.\n\n\nBelow is a list of possible subsequent events:\n\n['The artist entered the gallery and exited thirty-five minutes later.', 'The woman stepped into the caf\u00e9 and emerged forty minutes later.', 'The student arrived at the library and departed fifty minutes afterward.', 'The child walked into the bookstore and reappeared twenty-five minutes afterward.', 'The man entered the town-hall and came out a quarter of an hour later.', 'The musician went into the studio and came out ten minutes later.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man entered the town-hall and came out a quarter of an hour later."
+      ],
+      "predicted": "The man entered the town-hall and came out a quarter of an hour later.",
+      "score": 1,
+      "retrieved_chars": 146558
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 7,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n4. The Bishop abstained from ordering public prayers for Napoleon during the Hundred Days.\n5. A man of wretched appearance entered the town of D\u2014\u2014.\n6. The man drank at the fountain under the trees of the boulevard Gassendi.\n7. The man stopped again for a drink at the fountain in the market-place.\n8. The man entered the town-hall and came out a quarter of an hour later.\n\n\nBelow is a list of possible subsequent events:\n\n['The man entered the inn at the sign of the Cross of Colbas.', 'The wanderer stepped onto the path revealed by the Lantern of Loryn.', 'The traveler paused at the crossroads marked by the Oak of Eldwyn.', 'The adventurer approached the tavern under the banner of the Silver Griffin.', 'The explorer arrived at the gate adorned with the Emblem of the Twilight Wolf.', 'The stranger lingered by the fountain crowned with the Winged Serpent.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man entered the inn at the sign of the Cross of Colbas."
+      ],
+      "predicted": "The man entered the inn at the sign of the Cross of Colbas.",
+      "score": 1,
+      "retrieved_chars": 146204
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 8,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n5. A man of wretched appearance entered the town of D\u2014\u2014.\n6. The man drank at the fountain under the trees of the boulevard Gassendi.\n7. The man stopped again for a drink at the fountain in the market-place.\n8. The man entered the town-hall and came out a quarter of an hour later.\n9. The man entered the inn at the sign of the Cross of Colbas.\n\n\nBelow is a list of possible subsequent events:\n\n['The traveler demanded a warm meal and a comfortable bed from the proprietor.', 'The wanderer required nourishment and accommodation from the caretaker.', 'The guest petitioned for dinner and a room from the manager.', 'The visitor asked for hospitality and provisions from the landlord.', 'The man requested food and lodging from the host.', 'The couple sought shelter and sustenance from the innkeeper.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man requested food and lodging from the host."
+      ],
+      "predicted": "The man requested food and lodging from the host.",
+      "score": 1,
+      "retrieved_chars": 147430
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 9,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n6. The man drank at the fountain under the trees of the boulevard Gassendi.\n7. The man stopped again for a drink at the fountain in the market-place.\n8. The man entered the town-hall and came out a quarter of an hour later.\n9. The man entered the inn at the sign of the Cross of Colbas.\n10. The man requested food and lodging from the host.\n\n\nBelow is a list of possible subsequent events:\n\n['The gentleman admitted that he carried cash sufficient for gifts and activities.', 'The individual clarified that he possessed resources for transportation and accommodation.', 'The man testified that he had financial means for travel and leisure.', 'The person disclosed that he had funds available for entertainment and supplies.', 'The man revealed that he had money to pay for food and lodging.', 'The participant expressed that he owned capital designated for meals and events.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man revealed that he had money to pay for food and lodging."
+      ],
+      "predicted": "The man revealed that he had money to pay for food and lodging.",
+      "score": 1,
+      "retrieved_chars": 131769
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 10,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n7. The man stopped again for a drink at the fountain in the market-place.\n8. The man entered the town-hall and came out a quarter of an hour later.\n9. The man entered the inn at the sign of the Cross of Colbas.\n10. The man requested food and lodging from the host.\n11. The man revealed that he had money to pay for food and lodging.\n\n\nBelow is a list of possible subsequent events:\n\n['The host informed the man that he could not receive him.', 'The organizer advised the guest that she would not be allowed to meet them.', 'The representative told the invitee that he could not enter the premises.', 'The manager announced to the participant that she was not welcome at the event.', 'The spokesperson notified the woman that she was not permitted to join him.', 'The facilitator conveyed to the attendee that he could not be accommodated.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The host informed the man that he could not receive him."
+      ],
+      "predicted": "The host informed the man that he could not receive him.",
+      "score": 1,
+      "retrieved_chars": 146722
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 11,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n8. The man entered the town-hall and came out a quarter of an hour later.\n9. The man entered the inn at the sign of the Cross of Colbas.\n10. The man requested food and lodging from the host.\n11. The man revealed that he had money to pay for food and lodging.\n12. The host informed the man that he could not receive him.\n\n\nBelow is a list of possible subsequent events:\n\n[\"The couple demanded to be seated despite the restaurant's full capacity.\", 'The woman insisted on entering the gallery despite the strict visitor policy.', \"The child persisted in playing the piano despite the mother's request for quiet.\", 'The traveler claimed a room was necessary despite the hotel being fully booked.', \"The man insisted on being accommodated despite the host's objections.\", 'The group requested to join the exclusive club despite their lack of invitation.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man insisted on being accommodated despite the host's objections."
+      ],
+      "predicted": "The man insisted on being accommodated despite the host's objections.",
+      "score": 1,
+      "retrieved_chars": 146722
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 12,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n9. The man entered the inn at the sign of the Cross of Colbas.\n10. The man requested food and lodging from the host.\n11. The man revealed that he had money to pay for food and lodging.\n12. The host informed the man that he could not receive him.\n13. The man insisted on being accommodated despite the host's objections.\n\n\nBelow is a list of possible subsequent events:\n\n['The supervisor indicated that the supplies were transported by the porters.', 'The curator announced that the paintings were discovered by the archivists.', 'The director confirmed that the tickets were managed by the coordinators.', 'The host revealed that the food was engaged by the wagoners.', 'The organizer stated that the prizes were collected by the volunteers.', 'The presenter stated that the data was analyzed by the researchers.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The host revealed that the food was engaged by the wagoners."
+      ],
+      "predicted": "The host revealed that the food was engaged by the wagoners.",
+      "score": 1,
+      "retrieved_chars": 147518
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 13,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n10. The man requested food and lodging from the host.\n11. The man revealed that he had money to pay for food and lodging.\n12. The host informed the man that he could not receive him.\n13. The man insisted on being accommodated despite the host's objections.\n14. The host revealed that the food was engaged by the wagoners.\n\n\nBelow is a list of possible subsequent events:\n\n[\"The man stated that he would remain at the inn despite the host's refusal.\", \"The woman claimed that she would stay in the village even after the mayor's objections.\", \"The scholar announced that he would present his findings at the conference despite the committee's skepticism.\", \"The child insisted that he would play in the park despite the parent's warnings.\", \"The artist declared that she would showcase her work at the gallery regardless of the curator's disapproval.\", \"The traveler vowed that he would explore the ruins even after the guide's cautions.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man stated that he would remain at the inn despite the host's refusal."
+      ],
+      "predicted": "The man stated that he would remain at the inn despite the host's refusal.",
+      "score": 1,
+      "retrieved_chars": 146762
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 14,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n11. The man revealed that he had money to pay for food and lodging.\n12. The host informed the man that he could not receive him.\n13. The man insisted on being accommodated despite the host's objections.\n14. The host revealed that the food was engaged by the wagoners.\n15. The man stated that he would remain at the inn despite the host's refusal.\n\n\nBelow is a list of possible subsequent events:\n\n['The host warned the man to go away.', 'The supervisor urged the child to step back from the edge.', 'The coordinator cautioned the artist to refrain from using bright colors.', 'The manager insisted the woman to leave the premises.', 'The director ordered the team to vacate the area promptly.', 'The leader encouraged the participant to abandon the task immediately.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The host warned the man to go away."
+      ],
+      "predicted": "The host warned the man to go away.",
+      "score": 1,
+      "retrieved_chars": 147518
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 15,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n12. The host informed the man that he could not receive him.\n13. The man insisted on being accommodated despite the host's objections.\n14. The host revealed that the food was engaged by the wagoners.\n15. The man stated that he would remain at the inn despite the host's refusal.\n16. The host warned the man to go away.\n\n\nBelow is a list of possible subsequent events:\n\n['The host identified the man as Humphrey Waylon.', 'The investigator recognized the figure as Jacquin Labarre.', 'The audience acknowledged the speaker as Humphrey Waylon.', 'The committee designated the artist as Jacquin Labarre.', 'The journalist reported the arrival of Humphrey Waylon.', 'The attendees pointed out the leader as Jacquin Labarre.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The host identified the man as Humphrey Waylon."
+      ],
+      "predicted": "The host identified the man as Humphrey Waylon.",
+      "score": 1,
+      "retrieved_chars": 147331
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 16,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n13. The man insisted on being accommodated despite the host's objections.\n14. The host revealed that the food was engaged by the wagoners.\n15. The man stated that he would remain at the inn despite the host's refusal.\n16. The host warned the man to go away.\n17. The host identified the man as Humphrey Waylon.\n\n\nBelow is a list of possible subsequent events:\n\n['The chef took his apron off and walked out of the kitchen.', 'The artist grabbed his portfolio and walked away from the gallery.', 'The man picked up his knapsack and departed from the inn.', 'The traveler slung his satchel over his shoulder and exited the caf\u00e9.', 'The scholar opened his briefcase and stepped out of the library.', 'The student closed his laptop and left the lecture hall.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man picked up his knapsack and departed from the inn."
+      ],
+      "predicted": "The man picked up his knapsack and departed from the inn.",
+      "score": 1,
+      "retrieved_chars": 146722
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 17,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n14. The host revealed that the food was engaged by the wagoners.\n15. The man stated that he would remain at the inn despite the host's refusal.\n16. The host warned the man to go away.\n17. The host identified the man as Humphrey Waylon.\n18. The man picked up his knapsack and departed from the inn.\n\n\nBelow is a list of possible subsequent events:\n\n['The cyclist pedaled steadily forth, gliding along the winding paths.', 'The man walked straight on, keeping close to the houses.', 'The woman strolled leisurely by, wandering through the quiet gardens.', 'The cat crept stealthily away, slipping through the narrow alleys.', 'The dog trotted happily along, bounding towards the nearby park.', 'The boy jogged swiftly past, darting between the parked cars.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man walked straight on, keeping close to the houses."
+      ],
+      "predicted": "The man walked straight on, keeping close to the houses.",
+      "score": 1,
+      "retrieved_chars": 146762
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 18,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n15. The man stated that he would remain at the inn despite the host's refusal.\n16. The host warned the man to go away.\n17. The host identified the man as Humphrey Waylon.\n18. The man picked up his knapsack and departed from the inn.\n19. The man walked straight on, keeping close to the houses.\n\n\nBelow is a list of possible subsequent events:\n\n['The traveler noticed strange whispers of nostalgia as dusk settled over the landscape.', 'The child sensed overwhelming waves of boredom as the clock struck noon.', 'The woman experienced sudden bursts of joy as the sun began to rise.', 'The teacher noted profound moments of clarity as the school day came to an end.', 'The artist encountered unexpected strokes of inspiration as the stars appeared in the sky.', 'The man felt sharp pangs of hunger as night drew near.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man felt sharp pangs of hunger as night drew near."
+      ],
+      "predicted": "The man felt sharp pangs of hunger as night drew near.",
+      "score": 1,
+      "retrieved_chars": 146762
+    },
+    {
+      "row_idx": 1,
+      "q_idx": 19,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n16. The host warned the man to go away.\n17. The host identified the man as Humphrey Waylon.\n18. The man picked up his knapsack and departed from the inn.\n19. The man walked straight on, keeping close to the houses.\n20. The man felt sharp pangs of hunger as night drew near.\n\n\nBelow is a list of possible subsequent events:\n\n['The child glanced over the balcony into the bustling market.', 'The man peeped through the window into the public house.', 'The woman leaned against the fence overlooking the garden.', 'The artist stood on the rooftop gazing down at the crowded festival.', 'The journalist hid behind a pillar capturing the moments at the gala.', 'The detective crouched behind the tree observing the abandoned warehouse.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The man peeped through the window into the public house."
+      ],
+      "predicted": "The man peeped through the window into the public house.",
+      "score": 1,
+      "retrieved_chars": 146762
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 0,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Pascal watched the motions of the ship and repeated the pilot's directions.\n\n\nBelow is a list of possible subsequent events:\n\n['Pascal revealed to Julianne the promotion of Lieutenant Harper.', 'Pascal notified Julianne about the resignation of Commander Eyre.', 'Pascal announced to Julianne the capture of Admiral Rousseau.', 'Pascal shared with Julianne the retirement of General Martineau.', 'Pascal informed Julianne of the death of Captain Leclere.', 'Pascal disclosed to Julianne the disappearance of Officer Boucher.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal informed Julianne of the death of Captain Leclere."
+      ],
+      "predicted": "Pascal informed Julianne of the death of Captain Leclere.",
+      "score": 1,
+      "retrieved_chars": 144545
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 1,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Pascal watched the motions of the ship and repeated the pilot's directions.\n2. Pascal informed Julianne of the death of Captain Leclere.\n\n\nBelow is a list of possible subsequent events:\n\n['Pascal directed the sailors to hoist the flags.', 'Pascal instructed the team to adjust the rigging.', 'Pascal signaled the crew to drop the anchor.', 'Pascal ordered the crew to take in sail.', 'Pascal urged the team to check the compass.', 'Pascal commanded the crew to secure the cargo.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal ordered the crew to take in sail."
+      ],
+      "predicted": "Pascal ordered the crew to take in sail.",
+      "score": 1,
+      "retrieved_chars": 146172
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 2,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Pascal watched the motions of the ship and repeated the pilot's directions.\n2. Pascal informed Julianne of the death of Captain Leclere.\n3. Pascal ordered the crew to take in sail.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Pascal disclosed to Julianne the secret to the ancient artifact's power.\", 'Pascal revealed to Julianne the whereabouts of the lost treasure.', 'Pascal narrated to Julianne the tale of the cursed pirate ship.', 'Pascal informed Julianne about the mysterious disappearance of the village leader.', 'Pascal explained to Julianne how Captain Leclere died.', 'Pascal described to Julianne the legend of the haunted lighthouse.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal explained to Julianne how Captain Leclere died."
+      ],
+      "predicted": "Pascal explained to Julianne how Captain Leclere died.",
+      "score": 1,
+      "retrieved_chars": 145639
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 3,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Pascal watched the motions of the ship and repeated the pilot's directions.\n2. Pascal informed Julianne of the death of Captain Leclere.\n3. Pascal ordered the crew to take in sail.\n4. Pascal explained to Julianne how Captain Leclere died.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Julianne complimented Pascal's abilities as a seaman.\", \"Julianne recognized Pascal's proficiency as a dancer at the community event.\", \"Julianne admired Pascal's expertise as a gardener during their weekend project.\", \"Julianne praised Pascal's skills as a chef during the dinner party.\", \"Julianne celebrated Pascal's capabilities as a musician at the annual concert.\", \"Julianne acknowledged Pascal's talents as an artist at the gallery opening.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Julianne complimented Pascal's abilities as a seaman."
+      ],
+      "predicted": "Julianne complimented Pascal's abilities as a seaman.",
+      "score": 1,
+      "retrieved_chars": 144683
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 4,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Pascal watched the motions of the ship and repeated the pilot's directions.\n2. Pascal informed Julianne of the death of Captain Leclere.\n3. Pascal ordered the crew to take in sail.\n4. Pascal explained to Julianne how Captain Leclere died.\n5. Julianne complimented Pascal's abilities as a seaman.\n\n\nBelow is a list of possible subsequent events:\n\n['Julianne instructed Pascal to come over to him.', 'Julianne gestured for Pascal to approach her during the meeting.', 'Julianne motioned to Pascal to sit next to her in the audience.', 'Julianne summoned Pascal to meet her at the park.', 'Julianne called Pascal to join her at the caf\u00e9.', 'Julianne waved at Pascal to bring her the documents.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Julianne instructed Pascal to come over to him."
+      ],
+      "predicted": "Julianne instructed Pascal to come over to him.",
+      "score": 1,
+      "retrieved_chars": 143676
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 5,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n2. Pascal informed Julianne of the death of Captain Leclere.\n3. Pascal ordered the crew to take in sail.\n4. Pascal explained to Julianne how Captain Leclere died.\n5. Julianne complimented Pascal's abilities as a seaman.\n6. Julianne instructed Pascal to come over to him.\n\n\nBelow is a list of possible subsequent events:\n\n['Pascal was commanded to fuel the engines for departure.', 'Pascal was instructed to raise the anchor promptly.', 'Pascal was told to secure the lifeboats tightly.', 'Pascal was advised to adjust the navigation charts.', 'Pascal received instructions to lower the sails.', 'Pascal was urged to check the weather conditions carefully.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal received instructions to lower the sails."
+      ],
+      "predicted": "Pascal received instructions to lower the sails.",
+      "score": 1,
+      "retrieved_chars": 144304
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 6,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n3. Pascal ordered the crew to take in sail.\n4. Pascal explained to Julianne how Captain Leclere died.\n5. Julianne complimented Pascal's abilities as a seaman.\n6. Julianne instructed Pascal to come over to him.\n7. Pascal received instructions to lower the sails.\n\n\nBelow is a list of possible subsequent events:\n\n['Pascal recognized Julianne for her role in motivating him toward the captain position.', 'Pascal expressed his joy to Julianne for her encouragement in pursuing the captaincy.', 'Pascal appreciated Julianne for believing in his potential as a team leader.', 'Pascal expressed gratitude to Julianne for considering him for captain.', 'Pascal acknowledged Julianne for her commitment to enhancing his leadership skills.', 'Pascal thanked Julianne for her support during the team evaluations.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal expressed gratitude to Julianne for considering him for captain."
+      ],
+      "predicted": "Pascal expressed gratitude to Julianne for considering him for captain.",
+      "score": 1,
+      "retrieved_chars": 142785
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 7,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n4. Pascal explained to Julianne how Captain Leclere died.\n5. Julianne complimented Pascal's abilities as a seaman.\n6. Julianne instructed Pascal to come over to him.\n7. Pascal received instructions to lower the sails.\n8. Pascal expressed gratitude to Julianne for considering him for captain.\n\n\nBelow is a list of possible subsequent events:\n\n['Julianne challenged Pascal to impress Abrielle with a grand gesture.', 'Julianne convinced Pascal that Abrielle preferred grand romantic gestures over simple gifts.', 'Julianne urged Pascal to ask Abrielle for help with his cooking skills.', 'Julianne warned Pascal that Abrielle might not appreciate his sarcasm.', 'Julianne teased Pascal about his betrothed, Abrielle.', \"Julianne playfully mocked Pascal's secret admiration for Abrielle.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Julianne teased Pascal about his betrothed, Abrielle."
+      ],
+      "predicted": "Julianne challenged Pascal to impress Abrielle with a grand gesture.",
+      "score": 0,
+      "retrieved_chars": 143889
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 8,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n5. Julianne complimented Pascal's abilities as a seaman.\n6. Julianne instructed Pascal to come over to him.\n7. Pascal received instructions to lower the sails.\n8. Pascal expressed gratitude to Julianne for considering him for captain.\n9. Julianne teased Pascal about his betrothed, Abrielle.\n\n\nBelow is a list of possible subsequent events:\n\n['Julianne suggested that Pascal should return later for the meeting.', 'Julianne allowed Pascal to take leave for his visits.', 'Julianne encouraged Pascal to take extra days off for his family.', 'Julianne granted Pascal the freedom to reschedule his appointments.', 'Julianne urged Pascal to prioritize his health by taking more time away.', 'Julianne convinced Pascal to extend his stay for the upcoming projects.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Julianne allowed Pascal to take leave for his visits."
+      ],
+      "predicted": "Julianne allowed Pascal to take leave for his visits.",
+      "score": 1,
+      "retrieved_chars": 143601
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 9,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n6. Julianne instructed Pascal to come over to him.\n7. Pascal received instructions to lower the sails.\n8. Pascal expressed gratitude to Julianne for considering him for captain.\n9. Julianne teased Pascal about his betrothed, Abrielle.\n10. Julianne allowed Pascal to take leave for his visits.\n\n\nBelow is a list of possible subsequent events:\n\n['Blaire followed Pascal with his eyes until he saw him spring out on the quay.', 'Blaire gazed at Pascal earnestly until he saw him vault onto the wharf.', 'Blaire observed Pascal carefully as he bounded off towards the pier.', 'Blaire watched Pascal intently as he leaped onto the dock.', 'Blaire tracked Pascal closely as he scrambled onto the platform.', 'Blaire kept an eye on Pascal until he spotted him jump onto the shore.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Blaire followed Pascal with his eyes until he saw him spring out on the quay."
+      ],
+      "predicted": "Blaire followed Pascal with his eyes until he saw him spring out on the quay.",
+      "score": 1,
+      "retrieved_chars": 143651
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 10,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n7. Pascal received instructions to lower the sails.\n8. Pascal expressed gratitude to Julianne for considering him for captain.\n9. Julianne teased Pascal about his betrothed, Abrielle.\n10. Julianne allowed Pascal to take leave for his visits.\n11. Blaire followed Pascal with his eyes until he saw him spring out on the quay.\n\n\nBelow is a list of possible subsequent events:\n\n['Pascal navigated along Cours Julien and explored Rue de la Palud.', 'Pascal crossed Place Castellane and ventured up Rue des Fabres.', 'Pascal traversed La Canebiere and took the Rue de Noailles.', 'Pascal wandered down Avenue des Chartreux and entered Rue du Puy.', 'Pascal strolled past Rue Paradis and turned onto Avenue de Saint-Just.', 'Pascal meandered through Boulevard Baille and stopped at Rue du Berre.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal traversed La Canebiere and took the Rue de Noailles."
+      ],
+      "predicted": "Pascal navigated along Cours Julien and explored Rue de la Palud.",
+      "score": 0,
+      "retrieved_chars": 143651
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 11,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n8. Pascal expressed gratitude to Julianne for considering him for captain.\n9. Julianne teased Pascal about his betrothed, Abrielle.\n10. Julianne allowed Pascal to take leave for his visits.\n11. Blaire followed Pascal with his eyes until he saw him spring out on the quay.\n12. Pascal traversed La Canebiere and took the Rue de Noailles.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Pascal exclaimed 'Father -- dear father!' upon seeing his father.\", \"Pascal called out 'Brother -- trusted brother!' upon discovering his brother.\", \"Pascal cried 'Sister -- precious sister!' upon finding his sister.\", \"Pascal cheered 'Teacher -- respected teacher!' upon greeting his teacher.\", \"Pascal gasped 'Friend -- cherished friend!' upon encountering his friend.\", \"Pascal shouted 'Mother -- beloved mother!' upon meeting his mother.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal exclaimed 'Father -- dear father!' upon seeing his father."
+      ],
+      "predicted": "Pascal exclaimed 'Father -- dear father!' upon seeing his father.",
+      "score": 1,
+      "retrieved_chars": 143651
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 12,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n9. Julianne teased Pascal about his betrothed, Abrielle.\n10. Julianne allowed Pascal to take leave for his visits.\n11. Blaire followed Pascal with his eyes until he saw him spring out on the quay.\n12. Pascal traversed La Canebiere and took the Rue de Noailles.\n13. Pascal exclaimed 'Father -- dear father!' upon seeing his father.\n\n\nBelow is a list of possible subsequent events:\n\n['Pascal shared with his friends the thrilling opportunity of possibly joining the regional soccer team.', 'Pascal revealed to his sister the exciting news of potentially winning a prestigious scholarship.', 'Pascal announced to his classmates the promising possibility of starring in the school play.', 'Pascal informed his father about the good fortune of possibly becoming a captain.', 'Pascal confided in his grandmother about the delightful prospect of attending a renowned music festival.', 'Pascal told his teacher about the fortunate chance of being selected for a summer internship.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal informed his father about the good fortune of possibly becoming a captain."
+      ],
+      "predicted": "Pascal informed his father about the good fortune of possibly becoming a captain.",
+      "score": 1,
+      "retrieved_chars": 143682
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 13,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n10. Julianne allowed Pascal to take leave for his visits.\n11. Blaire followed Pascal with his eyes until he saw him spring out on the quay.\n12. Pascal traversed La Canebiere and took the Rue de Noailles.\n13. Pascal exclaimed 'Father -- dear father!' upon seeing his father.\n14. Pascal informed his father about the good fortune of possibly becoming a captain.\n\n\nBelow is a list of possible subsequent events:\n\n['Pascal fell on his knees before his father in distress.', 'Pascal dropped to the floor before his peers in utter disappointment.', 'Pascal bowed his head before his mentor, filled with uncertainty.', 'Pascal stood silently in front of his mentor, overwhelmed with doubt.', 'Pascal turned pale and leaned against the wall, gripped by anxiety.', 'Pascal sank to the ground in front of his friends, engulfed in despair.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal fell on his knees before his father in distress."
+      ],
+      "predicted": "Pascal fell on his knees before his father in distress.",
+      "score": 1,
+      "retrieved_chars": 143713
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 14,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n11. Blaire followed Pascal with his eyes until he saw him spring out on the quay.\n12. Pascal traversed La Canebiere and took the Rue de Noailles.\n13. Pascal exclaimed 'Father -- dear father!' upon seeing his father.\n14. Pascal informed his father about the good fortune of possibly becoming a captain.\n15. Pascal fell on his knees before his father in distress.\n\n\nBelow is a list of possible subsequent events:\n\n['Corbin arrived at the coffee shop to toast Pascal on his recent achievement.', 'Corbin entered the gallery to honor Pascal on his artistic triumph.', 'Corbin appeared at the door to congratulate Pascal on his return.', 'Corbin logged into the video call to applaud Pascal on his latest project.', 'Corbin knocked on the window to greet Pascal on his unexpected visit.', \"Corbin rushed to the stage to celebrate Pascal's surprising announcement.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Corbin appeared at the door to congratulate Pascal on his return."
+      ],
+      "predicted": "'Corbin appeared at the door to congratulate Pascal on his return.'",
+      "score": 1,
+      "retrieved_chars": 143651
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 15,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n12. Pascal traversed La Canebiere and took the Rue de Noailles.\n13. Pascal exclaimed 'Father -- dear father!' upon seeing his father.\n14. Pascal informed his father about the good fortune of possibly becoming a captain.\n15. Pascal fell on his knees before his father in distress.\n16. Corbin appeared at the door to congratulate Pascal on his return.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Corbin criticized Pascal's choices and questionable decisions.\", \"Corbin challenged Pascal's influence and public reputation.\", \"Corbin admired Pascal's creativity and artistic vision.\", \"Corbin commented on Pascal's wealth and good fortune.\", \"Corbin questioned Pascal's honesty and recent activities.\", \"Corbin praised Pascal's talent and impressive achievements.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Corbin commented on Pascal's wealth and good fortune."
+      ],
+      "predicted": "\"Corbin commented on Pascal's wealth and good fortune.\"",
+      "score": 1,
+      "retrieved_chars": 144507
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 16,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n13. Pascal exclaimed 'Father -- dear father!' upon seeing his father.\n14. Pascal informed his father about the good fortune of possibly becoming a captain.\n15. Pascal fell on his knees before his father in distress.\n16. Corbin appeared at the door to congratulate Pascal on his return.\n17. Corbin commented on Pascal's wealth and good fortune.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Pascal inquired about his uncle's blessing to accompany Abrielle to the event.\", 'Pascal explained to his aunt why he needed her support to see Abrielle.', \"Pascal asked his father's permission to visit Abrielle.\", \"Pascal sought his sister's consent to attend the gathering with Abrielle.\", \"Pascal requested his mother's approval to meet with Abrielle.\", 'Pascal petitioned his grandfather for the opportunity to join Abrielle on her trip.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Pascal asked his father's permission to visit Abrielle."
+      ],
+      "predicted": "Pascal asked his father's permission to visit Abrielle.",
+      "score": 1,
+      "retrieved_chars": 145391
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 17,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n14. Pascal informed his father about the good fortune of possibly becoming a captain.\n15. Pascal fell on his knees before his father in distress.\n16. Corbin appeared at the door to congratulate Pascal on his return.\n17. Corbin commented on Pascal's wealth and good fortune.\n18. Pascal asked his father's permission to visit Abrielle.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Corbin and Blaire analyzed Pascal's plan to run for student council president.\", \"Corbin and Blaire pondered Pascal's dream of opening a gourmet restaurant.\", \"Corbin and Blaire speculated about Pascal's goal of writing a bestselling novel.\", \"Corbin and Blaire discussed Pascal's aspirations of becoming a captain.\", \"Corbin and Blaire debated Pascal's ambitions to launch a new fashion line.\", \"Corbin and Blaire explored Pascal's desire to travel the world as a photographer.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Corbin and Blaire discussed Pascal's aspirations of becoming a captain."
+      ],
+      "predicted": "Corbin and Blaire discussed Pascal's aspirations of becoming a captain.",
+      "score": 1,
+      "retrieved_chars": 145514
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 18,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n15. Pascal fell on his knees before his father in distress.\n16. Corbin appeared at the door to congratulate Pascal on his return.\n17. Corbin commented on Pascal's wealth and good fortune.\n18. Pascal asked his father's permission to visit Abrielle.\n19. Corbin and Blaire discussed Pascal's aspirations of becoming a captain.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Abrielle firmly reiterated her disinterest in Quinton's attempts at romance once more.\", \"Abrielle rolled her eyes, dismissing Quinton's advances with the same resolve as before.\", \"Abrielle expressed her refusal of Quinton's love for the hundredth time.\", 'Abrielle quietly affirmed her choice to remain friends with Quinton, ignoring his romantic gestures yet again.', \"Abrielle shook her head decisively, rejecting Quinton's heartfelt confession for the umpteenth time.\", \"Abrielle sighed as she turned down Quinton's marriage proposal yet again.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Abrielle expressed her refusal of Quinton's love for the hundredth time."
+      ],
+      "predicted": "Abrielle firmly reiterated her disinterest in Quinton's attempts at romance once more.",
+      "score": 0,
+      "retrieved_chars": 145645
+    },
+    {
+      "row_idx": 2,
+      "q_idx": 19,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n16. Corbin appeared at the door to congratulate Pascal on his return.\n17. Corbin commented on Pascal's wealth and good fortune.\n18. Pascal asked his father's permission to visit Abrielle.\n19. Corbin and Blaire discussed Pascal's aspirations of becoming a captain.\n20. Abrielle expressed her refusal of Quinton's love for the hundredth time.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Quinton supported Abrielle's aspirations, disclosing his own insecurities about achieving their dreams.\", \"Quinton expressed sympathy for Abrielle's struggles, revealing his own struggles with identity.\", \"Quinton recognized Abrielle's pain, unveiling his own hidden frustrations regarding their partnership.\", \"Quinton confronted Abrielle's fears, confessing his own doubts about their future together.\", \"Quinton validated Abrielle's concerns, sharing his own sense of loss amidst their evolving relationship.\", \"Quinton acknowledged Abrielle's feelings, admitting his own despair.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Quinton acknowledged Abrielle's feelings, admitting his own despair."
+      ],
+      "predicted": "Quinton expressed sympathy for Abrielle's struggles, revealing his own struggles with identity.",
+      "score": 0,
+      "retrieved_chars": 145614
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 0,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Kayla was born on a Friday at twelve o'clock at night.\n\n\nBelow is a list of possible subsequent events:\n\n['Mrs. Kayla strolled along the beach, troubled in mind and watching the waves crash.', 'Mrs. Kayla lingered on the porch, weary from her troubles and gazing at the falling leaves.', 'Mrs. Kayla wandered through the empty halls, lost in thought and haunted by memories.', 'Mrs. Kayla rested under the old oak, burdened by her worries and surrounded by silence.', 'Mrs. Kayla sat by the fire, poorly in health and low in spirits.', 'Mrs. Kayla stood in the garden, burdened by regrets and yearning for brighter days.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Mrs. Kayla sat by the fire, poorly in health and low in spirits."
+      ],
+      "predicted": "Mrs. Kayla sat by the fire, poorly in health and low in spirits.",
+      "score": 1,
+      "retrieved_chars": 139928
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 1,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Kayla was born on a Friday at twelve o'clock at night.\n2. Mrs. Kayla sat by the fire, poorly in health and low in spirits.\n\n\nBelow is a list of possible subsequent events:\n\n['Kayla strolled through the park and watched the children play.', 'Miss Rosie sat on the porch and gazed out at the horizon.', 'Kayla wandered down the street and paused to admire the flowers.', 'Miss Rosie arrived at the market and examined the fresh produce.', 'Miss Rosie entered the caf\u00e9 and scanned the menu with interest.', 'Miss Rosie approached the house and looked in at the window.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Miss Rosie approached the house and looked in at the window."
+      ],
+      "predicted": "Miss Rosie entered the caf\u00e9 and scanned the menu with interest.",
+      "score": 0,
+      "retrieved_chars": 140183
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 2,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Kayla was born on a Friday at twelve o'clock at night.\n2. Mrs. Kayla sat by the fire, poorly in health and low in spirits.\n3. Miss Rosie approached the house and looked in at the window.\n\n\nBelow is a list of possible subsequent events:\n\n['Miss Rosie insisted Kayla to turn off the lights.', 'Miss Rosie instructed Kayla to close the window.', 'Miss Rosie demanded Kayla to open the door.', 'Miss Rosie urged Kayla to answer the phone.', 'Miss Rosie challenged Kayla to finish the assignment.', 'Miss Rosie requested Kayla to tidy up the room.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Miss Rosie demanded Kayla to open the door."
+      ],
+      "predicted": "'Miss Rosie demanded Kayla to open the door.'",
+      "score": 1,
+      "retrieved_chars": 139750
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 3,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Kayla was born on a Friday at twelve o'clock at night.\n2. Mrs. Kayla sat by the fire, poorly in health and low in spirits.\n3. Miss Rosie approached the house and looked in at the window.\n4. Miss Rosie demanded Kayla to open the door.\n\n\nBelow is a list of possible subsequent events:\n\n['Kayla fainted during her visit with Miss Rosie.', 'Kayla tripped while trying to impress Miss Rosie with her dance moves.', 'Kayla sneezed unexpectedly during her tea time with Miss Rosie.', 'Kayla laughed so hard that she nearly cried while chatting with Miss Rosie.', 'Kayla stuttered while presenting her project to Miss Rosie.', 'Kayla fell asleep while listening to Miss Rosie\u2019s stories.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Kayla fainted during her visit with Miss Rosie."
+      ],
+      "predicted": "Kayla sneezed unexpectedly during her tea time with Miss Rosie.",
+      "score": 0,
+      "retrieved_chars": 139387
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 4,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Kayla was born on a Friday at twelve o'clock at night.\n2. Mrs. Kayla sat by the fire, poorly in health and low in spirits.\n3. Miss Rosie approached the house and looked in at the window.\n4. Miss Rosie demanded Kayla to open the door.\n5. Kayla fainted during her visit with Miss Rosie.\n\n\nBelow is a list of possible subsequent events:\n\n['Miss Rosie ordered Bea to bring tea for Kayla.', 'Miss Rosie asked Bea to deliver flowers to Kayla.', 'Miss Rosie told Bea to prepare a snack for Kayla.', 'Miss Rosie requested Bea to find a book for Kayla.', 'Miss Rosie made Bea promise to call Kayla later.', 'Miss Rosie instructed Bea to draft a letter for Kayla.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Miss Rosie ordered Bea to bring tea for Kayla."
+      ],
+      "predicted": "Miss Rosie ordered Bea to bring tea for Kayla.",
+      "score": 1,
+      "retrieved_chars": 140064
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 5,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n2. Mrs. Kayla sat by the fire, poorly in health and low in spirits.\n3. Miss Rosie approached the house and looked in at the window.\n4. Miss Rosie demanded Kayla to open the door.\n5. Kayla fainted during her visit with Miss Rosie.\n6. Miss Rosie ordered Bea to bring tea for Kayla.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Miss Rosie pledged to financially support Kayla's college education.\", \"Miss Rosie voiced her excitement about planning Kayla's birthday surprise party.\", 'Miss Rosie expressed her wish to mentor Kayla in her new business venture.', \"Miss Rosie revealed her plan to adopt Kayla's pet during her travels abroad.\", \"Miss Rosie declared her intention to be the godmother of Kayla's child.\", \"Miss Rosie announced her desire to host Kayla's upcoming wedding celebration.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Miss Rosie declared her intention to be the godmother of Kayla's child."
+      ],
+      "predicted": "Miss Rosie declared her intention to be the godmother of Kayla's child.",
+      "score": 1,
+      "retrieved_chars": 139511
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 6,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n3. Miss Rosie approached the house and looked in at the window.\n4. Miss Rosie demanded Kayla to open the door.\n5. Kayla fainted during her visit with Miss Rosie.\n6. Miss Rosie ordered Bea to bring tea for Kayla.\n7. Miss Rosie declared her intention to be the godmother of Kayla's child.\n\n\nBelow is a list of possible subsequent events:\n\n['Kayla fretted over her habit of treating her kids more like friends than authority figures.', 'Kayla expressed her concern about being a childish mother.', 'Kayla lamented her tendency to prioritize fun over educational activities.', 'Kayla questioned whether her playful nature hindered her parenting skills.', 'Kayla worried about her inability to discipline her children effectively.', 'Kayla pondered if her laughter-focused approach was detrimental to structured learning.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Kayla expressed her concern about being a childish mother."
+      ],
+      "predicted": "Kayla fretted over her habit of treating her kids more like friends than authority figures.",
+      "score": 0,
+      "retrieved_chars": 139143
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 7,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n4. Miss Rosie demanded Kayla to open the door.\n5. Kayla fainted during her visit with Miss Rosie.\n6. Miss Rosie ordered Bea to bring tea for Kayla.\n7. Miss Rosie declared her intention to be the godmother of Kayla's child.\n8. Kayla expressed her concern about being a childish mother.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Miss Rosie questioned Kayla's taste in the latest fashion trends during their lunch.\", 'Miss Rosie reprimanded Kayla for her decision to renovate the kitchen.', \"Miss Rosie criticized Kayla's late husband, Mr. Kayla, for his choice of house.\", 'Miss Rosie scolded Kayla over her choice of car before the family gathering.', \"Miss Rosie expressed disapproval of Kayla's recent vacation destination.\", 'Miss Rosie admonished Kayla for her decision to adopt the new puppy.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Miss Rosie criticized Kayla's late husband, Mr. Kayla, for his choice of house."
+      ],
+      "predicted": "Miss Rosie criticized Kayla's late husband, Mr. Kayla, for his choice of house.",
+      "score": 1,
+      "retrieved_chars": 138995
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 8,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n5. Kayla fainted during her visit with Miss Rosie.\n6. Miss Rosie ordered Bea to bring tea for Kayla.\n7. Miss Rosie declared her intention to be the godmother of Kayla's child.\n8. Kayla expressed her concern about being a childish mother.\n9. Miss Rosie criticized Kayla's late husband, Mr. Kayla, for his choice of house.\n\n\nBelow is a list of possible subsequent events:\n\n['Kayla described how Mr. Kayla was kind and attentive towards her.', 'Kayla shared that Mr. Kayla organized small celebrations to uplift her spirits during tough days.', 'Kayla explained that Mr. Kayla would frequently check in on her well-being, demonstrating his constant support.', 'Kayla noted that Mr. Kayla often encouraged her to pursue her passions, showing genuine interest in her dreams.', 'Kayla revealed that Mr. Kayla always remembered her favorite treats and surprised her with them.', 'Kayla mentioned how Mr. Kayla dedicated time to listen to her thoughts and feelings, making her feel valued.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Kayla described how Mr. Kayla was kind and attentive towards her."
+      ],
+      "predicted": "Kayla described how Mr. Kayla was kind and attentive towards her.",
+      "score": 1,
+      "retrieved_chars": 138608
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 9,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n6. Miss Rosie ordered Bea to bring tea for Kayla.\n7. Miss Rosie declared her intention to be the godmother of Kayla's child.\n8. Kayla expressed her concern about being a childish mother.\n9. Miss Rosie criticized Kayla's late husband, Mr. Kayla, for his choice of house.\n10. Kayla described how Mr. Kayla was kind and attentive towards her.\n\n\nBelow is a list of possible subsequent events:\n\n['Miss Rosie asked Kayla if she knew how to keep house.', 'Miss Rosie challenged Kayla to see if she could decorate a room creatively.', 'Miss Rosie questioned Kayla if she had learned how to mend clothes.', 'Miss Rosie suggested to Kayla that she might enjoy learning about home organization.', 'Miss Rosie wondered if Kayla had ever tried her hand at gardening.', 'Miss Rosie inquired whether Kayla was familiar with preparing traditional meals.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Miss Rosie asked Kayla if she knew how to keep house."
+      ],
+      "predicted": "Miss Rosie asked Kayla if she knew how to keep house.",
+      "score": 1,
+      "retrieved_chars": 138627
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 10,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n7. Miss Rosie declared her intention to be the godmother of Kayla's child.\n8. Kayla expressed her concern about being a childish mother.\n9. Miss Rosie criticized Kayla's late husband, Mr. Kayla, for his choice of house.\n10. Kayla described how Mr. Kayla was kind and attentive towards her.\n11. Miss Rosie asked Kayla if she knew how to keep house.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Bea mentioned her observations about Mrs. Sylvia's recent mood swings.\", \"Bea shared her thoughts on Mrs. Sylvia's declining social engagement.\", \"Bea expressed her worries regarding Mrs. Sylvia's financial struggles.\", \"Bea highlighted her fears regarding Mrs. Sylvia's housing instability.\", \"Bea conveyed her concern about Mrs. Sylvia's ill health.\", \"Bea noted her frustrations with Mrs. Sylvia's worsening memory issues.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Bea conveyed her concern about Mrs. Sylvia's ill health."
+      ],
+      "predicted": "Bea conveyed her concern about Mrs. Sylvia's ill health.",
+      "score": 1,
+      "retrieved_chars": 138995
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 11,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n8. Kayla expressed her concern about being a childish mother.\n9. Miss Rosie criticized Kayla's late husband, Mr. Kayla, for his choice of house.\n10. Kayla described how Mr. Kayla was kind and attentive towards her.\n11. Miss Rosie asked Kayla if she knew how to keep house.\n12. Bea conveyed her concern about Mrs. Sylvia's ill health.\n\n\nBelow is a list of possible subsequent events:\n\n['Bea sent Dorothy Bea to retrieve the medicine supplies from the storage room.', 'Bea dispatched Dorothy Bea to fetch the nurse and doctor.', 'Bea directed Dorothy Bea to call the ambulance for a prompt medical transfer.', 'Bea instructed Dorothy Bea to locate the missing medication and report back immediately.', 'Bea asked Dorothy Bea to contact the technician to fix the malfunctioning equipment.', 'Bea urged Dorothy Bea to find the janitor and request an urgent clean-up in the area.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Bea dispatched Dorothy Bea to fetch the nurse and doctor."
+      ],
+      "predicted": "Bea dispatched Dorothy Bea to fetch the nurse and doctor.",
+      "score": 1,
+      "retrieved_chars": 138824
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 12,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n9. Miss Rosie criticized Kayla's late husband, Mr. Kayla, for his choice of house.\n10. Kayla described how Mr. Kayla was kind and attentive towards her.\n11. Miss Rosie asked Kayla if she knew how to keep house.\n12. Bea conveyed her concern about Mrs. Sylvia's ill health.\n13. Bea dispatched Dorothy Bea to fetch the nurse and doctor.\n\n\nBelow is a list of possible subsequent events:\n\n['Mr. Chillip went to see if Mrs. Sylvia needed assistance with her cooking.', 'Mr. Chillip came over to discuss the garden renovations with Mrs. Sylvia.', \"Mr. Chillip stopped by to deliver flowers to Mrs. Sylvia's doorstep.\", \"Mr. Chillip visited to assess Mrs. Sylvia's new home security system.\", \"Mr. Chillip arrived to check on Mrs. Sylvia's condition.\", 'Mr. Chillip dropped in to lend Mrs. Sylvia a hand with her taxes.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Mr. Chillip arrived to check on Mrs. Sylvia's condition."
+      ],
+      "predicted": "Mr. Chillip arrived to check on Mrs. Sylvia's condition.",
+      "score": 1,
+      "retrieved_chars": 138824
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 13,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n10. Kayla described how Mr. Kayla was kind and attentive towards her.\n11. Miss Rosie asked Kayla if she knew how to keep house.\n12. Bea conveyed her concern about Mrs. Sylvia's ill health.\n13. Bea dispatched Dorothy Bea to fetch the nurse and doctor.\n14. Mr. Chillip arrived to check on Mrs. Sylvia's condition.\n\n\nBelow is a list of possible subsequent events:\n\n['Mr. Chillip attempted to reassure Mrs. Sylvia about her health.', 'Mr. Chillip suggested that Mrs. Sylvia take up gardening to relieve stress.', 'Mr. Chillip encouraged Mrs. Sylvia to join a local exercise class for fitness.', 'Mr. Chillip urged Mrs. Sylvia to consider a change in her diet.', 'Mr. Chillip proposed a weekend retreat for Mrs. Sylvia to unwind.', 'Mr. Chillip reminded Mrs. Sylvia to keep track of her medical appointments.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Mr. Chillip attempted to reassure Mrs. Sylvia about her health."
+      ],
+      "predicted": "Mr. Chillip attempted to reassure Mrs. Sylvia about her health.",
+      "score": 1,
+      "retrieved_chars": 138897
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 14,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n11. Miss Rosie asked Kayla if she knew how to keep house.\n12. Bea conveyed her concern about Mrs. Sylvia's ill health.\n13. Bea dispatched Dorothy Bea to fetch the nurse and doctor.\n14. Mr. Chillip arrived to check on Mrs. Sylvia's condition.\n15. Mr. Chillip attempted to reassure Mrs. Sylvia about her health.\n\n\nBelow is a list of possible subsequent events:\n\n['Bea watched Mr. Chillip as he leaned and whispered to Mrs. Sylvia.', 'Bea observed Mr. Chillip as he sat and looked at Mrs. Sylvia.', 'Bea noticed Mr. Chillip while he stood and gestured towards Mrs. Sylvia.', 'Bea perceived Mr. Chillip as he leaned back and laughed with Mrs. Sylvia.', 'Bea caught sight of Mr. Chillip while he walked and smiled at Mrs. Sylvia.', 'Bea regarded Mr. Chillip while he paused and pointed at Mrs. Sylvia.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Bea observed Mr. Chillip as he sat and looked at Mrs. Sylvia."
+      ],
+      "predicted": "Bea observed Mr. Chillip as he sat and looked at Mrs. Sylvia.",
+      "score": 1,
+      "retrieved_chars": 139848
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 15,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n12. Bea conveyed her concern about Mrs. Sylvia's ill health.\n13. Bea dispatched Dorothy Bea to fetch the nurse and doctor.\n14. Mr. Chillip arrived to check on Mrs. Sylvia's condition.\n15. Mr. Chillip attempted to reassure Mrs. Sylvia about her health.\n16. Bea observed Mr. Chillip as he sat and looked at Mrs. Sylvia.\n\n\nBelow is a list of possible subsequent events:\n\n['Mr. Chillip declared to Bea that Dr. Finch would soon be remarkably at ease.', 'Mr. Chillip mentioned to Bea that Mr. Bumble would soon be thoroughly relaxed.', 'Mr. Chillip informed Bea that Mrs. Sylvia would soon be quite comfortable.', 'Mr. Chillip assured Bea that Mr. Thompson would eventually feel right at home.', 'Mr. Chillip conveyed to Bea that Miss Cabbage would shortly be absolutely content.', 'Mr. Chillip told Bea that Ms. Fiddlesticks would quickly be very settled.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Mr. Chillip informed Bea that Mrs. Sylvia would soon be quite comfortable."
+      ],
+      "predicted": "Mr. Chillip informed Bea that Mrs. Sylvia would soon be quite comfortable.",
+      "score": 1,
+      "retrieved_chars": 125354
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 16,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n13. Bea dispatched Dorothy Bea to fetch the nurse and doctor.\n14. Mr. Chillip arrived to check on Mrs. Sylvia's condition.\n15. Mr. Chillip attempted to reassure Mrs. Sylvia about her health.\n16. Bea observed Mr. Chillip as he sat and looked at Mrs. Sylvia.\n17. Mr. Chillip informed Bea that Mrs. Sylvia would soon be quite comfortable.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Bea discussed with Mr. Chillip the kitten's status.\", \"Bea inquired with Mr. Chillip regarding the puppy's health.\", \"Bea asked Mr. Chillip about the baby's condition.\", \"Bea consulted Mr. Chillip about the toddler's progress.\", \"Bea probed Mr. Chillip about the rabbit's situation.\", \"Bea questioned Mr. Chillip concerning the cat's well-being.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Bea asked Mr. Chillip about the baby's condition."
+      ],
+      "predicted": "Bea asked Mr. Chillip about the baby's condition.",
+      "score": 1,
+      "retrieved_chars": 125354
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 17,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n14. Mr. Chillip arrived to check on Mrs. Sylvia's condition.\n15. Mr. Chillip attempted to reassure Mrs. Sylvia about her health.\n16. Bea observed Mr. Chillip as he sat and looked at Mrs. Sylvia.\n17. Mr. Chillip informed Bea that Mrs. Sylvia would soon be quite comfortable.\n18. Bea asked Mr. Chillip about the baby's condition.\n\n\nBelow is a list of possible subsequent events:\n\n['Mr. Chillip announced to Bea that the baby would arrive in the spring.', 'Mr. Chillip revealed to Bea that the baby was a boy.', 'Mr. Chillip informed Bea that the baby had already started to crawl.', 'Mr. Chillip shared with Bea that the baby was due on Christmas Day.', 'Mr. Chillip told Bea that the baby had a full head of hair.', 'Mr. Chillip surprised Bea by saying that the baby would be named after her grandfather.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Mr. Chillip revealed to Bea that the baby was a boy."
+      ],
+      "predicted": "Mr. Chillip revealed to Bea that the baby was a boy.",
+      "score": 1,
+      "retrieved_chars": 138424
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 18,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n15. Mr. Chillip attempted to reassure Mrs. Sylvia about her health.\n16. Bea observed Mr. Chillip as he sat and looked at Mrs. Sylvia.\n17. Mr. Chillip informed Bea that Mrs. Sylvia would soon be quite comfortable.\n18. Bea asked Mr. Chillip about the baby's condition.\n19. Mr. Chillip revealed to Bea that the baby was a boy.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Bea expressed her displeasure towards Mr. Chillip's announcement.\", \"Bea questioned Mr. Chillip's decision during the community discussion yesterday.\", 'Bea criticized Mr. Chillip for his comments on the new policy update.', \"Bea challenged Mr. Chillip's interpretation of the survey results this morning.\", \"Bea voiced her concerns regarding Mr. Chillip's budget allocation plans.\", 'Bea confronted Mr. Chillip about his recent proposal at the meeting.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Bea expressed her displeasure towards Mr. Chillip's announcement."
+      ],
+      "predicted": "Bea expressed her displeasure towards Mr. Chillip's announcement.",
+      "score": 1,
+      "retrieved_chars": 138897
+    },
+    {
+      "row_idx": 3,
+      "q_idx": 19,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n16. Bea observed Mr. Chillip as he sat and looked at Mrs. Sylvia.\n17. Mr. Chillip informed Bea that Mrs. Sylvia would soon be quite comfortable.\n18. Bea asked Mr. Chillip about the baby's condition.\n19. Mr. Chillip revealed to Bea that the baby was a boy.\n20. Bea expressed her displeasure towards Mr. Chillip's announcement.\n\n\nBelow is a list of possible subsequent events:\n\n['Bea and Davy lounged on the porch swing, watching the sunset unfold.', 'Bea and Davy sat by the parlour fire together.', 'Bea and Davy wandered along the beach, collecting shells hand in hand.', 'Bea and Davy stood on the balcony, gazing at the stars above.', 'Bea and Davy strolled through the moonlit garden side by side.', 'Bea and Davy lingered at the edge of the forest, sharing stories quietly.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Bea and Davy sat by the parlour fire together."
+      ],
+      "predicted": "Bea and Davy sat by the parlour fire together.",
+      "score": 1,
+      "retrieved_chars": 138897
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 0,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Edie Arkadyevitch woke up on the sofa in his study.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Charissa received an anonymous tip detailing Edie Arkadyevitch's secret relationship with a prominent artist.\", 'Charissa overheard a conversation that hinted Edie Arkadyevitch was involved in a scandal with a local politician.', \"Charissa discovered a letter revealing Edie Arkadyevitch's infidelity.\", 'Charissa stumbled upon an old photograph that proved Edie Arkadyevitch had been lying about her past.', \"Charissa intercepted a text message exposing Edie Arkadyevitch's plans to elope without her knowledge.\", \"Charissa found a diary that detailed Edie Arkadyevitch's romantic escapades with multiple acquaintances.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Charissa discovered a letter revealing Edie Arkadyevitch's infidelity."
+      ],
+      "predicted": "Charissa discovered a letter revealing Edie Arkadyevitch's infidelity.",
+      "score": 1,
+      "retrieved_chars": 143607
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 1,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Edie Arkadyevitch woke up on the sofa in his study.\n2. Charissa discovered a letter revealing Edie Arkadyevitch's infidelity.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch pondered on his foolish comments that led Charissa to recoil and retreat.', 'Edie Arkadyevitch reflected on his silly antics that induced Charissa to gasp and depart.', 'Edie Arkadyevitch sighed at his ridiculous laugh that made Charissa cringe and exit the room.', 'Edie Arkadyevitch regretted his inane joke that prompted Charissa to wince and walk out.', 'Edie Arkadyevitch was troubled by his absurd remarks that resulted in Charissa to flinch and flee.', 'Edie Arkadyevitch lamented over his idiotic smile that caused Charissa to shudder and leave.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch lamented over his idiotic smile that caused Charissa to shudder and leave."
+      ],
+      "predicted": "Edie Arkadyevitch pondered on his foolish comments that led Charissa to recoil and retreat.",
+      "score": 0,
+      "retrieved_chars": 143481
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 2,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Edie Arkadyevitch woke up on the sofa in his study.\n2. Charissa discovered a letter revealing Edie Arkadyevitch's infidelity.\n3. Edie Arkadyevitch lamented over his idiotic smile that caused Charissa to shudder and leave.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Matvey, Edie Arkadyevitch's valet, brought him his clothes and a telegram.\", \"Matvey, Edie Arkadyevitch's cook, prepared him breakfast and a note from a friend.\", \"Matvey, Edie Arkadyevitch's companion, delivered him a letter and a fresh set of linen.\", \"Matvey, Edie Arkadyevitch's gardener, offered him flowers and an invitation to a gala.\", \"Matvey, Edie Arkadyevitch's assistant, presented him with a briefcase and a newspaper.\", 'Matvey, Edie Arkadyevitch\u2019s chauffeur, handed him his hat and a package.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Matvey, Edie Arkadyevitch's valet, brought him his clothes and a telegram."
+      ],
+      "predicted": "Matvey, Edie Arkadyevitch's valet, brought him his clothes and a telegram.",
+      "score": 1,
+      "retrieved_chars": 143465
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 3,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Edie Arkadyevitch woke up on the sofa in his study.\n2. Charissa discovered a letter revealing Edie Arkadyevitch's infidelity.\n3. Edie Arkadyevitch lamented over his idiotic smile that caused Charissa to shudder and leave.\n4. Matvey, Edie Arkadyevitch's valet, brought him his clothes and a telegram.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch requested Matvey to remind Shary Jayden about the upcoming meeting with Karissa.', \"Edie Arkadyevitch asked Matvey to notify Shary Jayden regarding Karissa's unexpected departure.\", \"Edie Arkadyevitch instructed Matvey to inform Shary Jayden about Karissa's arrival.\", \"Edie Arkadyevitch directed Matvey to update Shary Jayden on Karissa's postponed arrival.\", \"Edie Arkadyevitch commanded Matvey to communicate with Shary Jayden about Karissa's early departure.\", 'Edie Arkadyevitch urged Matvey to inform Shary Jayden of Karissa\u2019s sudden change of plans.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch instructed Matvey to inform Shary Jayden about Karissa's arrival."
+      ],
+      "predicted": "Edie Arkadyevitch commanded Matvey to communicate with Shary Jayden about Karissa's early departure.",
+      "score": 0,
+      "retrieved_chars": 144510
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 4,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n1. Edie Arkadyevitch woke up on the sofa in his study.\n2. Charissa discovered a letter revealing Edie Arkadyevitch's infidelity.\n3. Edie Arkadyevitch lamented over his idiotic smile that caused Charissa to shudder and leave.\n4. Matvey, Edie Arkadyevitch's valet, brought him his clothes and a telegram.\n5. Edie Arkadyevitch instructed Matvey to inform Shary Jayden about Karissa's arrival.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Edie Arkadyevitch dressed for the day with Matvey's assistance.\", \"Edie Arkadyevitch planned her afternoon with Matvey's input.\", \"Edie Arkadyevitch organized her schedule with Matvey's help.\", \"Edie Arkadyevitch prepared a meal with Matvey's guidance.\", \"Edie Arkadyevitch studied a book with Matvey's support.\", \"Edie Arkadyevitch selected a new outfit with Matvey's advice.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch dressed for the day with Matvey's assistance."
+      ],
+      "predicted": "Edie Arkadyevitch dressed for the day with Matvey's assistance.",
+      "score": 1,
+      "retrieved_chars": 144494
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 5,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n2. Charissa discovered a letter revealing Edie Arkadyevitch's infidelity.\n3. Edie Arkadyevitch lamented over his idiotic smile that caused Charissa to shudder and leave.\n4. Matvey, Edie Arkadyevitch's valet, brought him his clothes and a telegram.\n5. Edie Arkadyevitch instructed Matvey to inform Shary Jayden about Karissa's arrival.\n6. Edie Arkadyevitch dressed for the day with Matvey's assistance.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch was troubled by the unexpected obligation to donate a significant portion of his savings to a local charity.', 'Edie Arkadyevitch was uneasy about the plan to renovate his childhood home, which held deep sentimental value for him.', 'Edie Arkadyevitch felt distressed about the need to sell a forest on his wife\u2019s property.', 'Edie Arkadyevitch struggled with guilt regarding the necessity to relocate a beloved pet to a new home due to his job transfer.', 'Edie Arkadyevitch experienced anxiety over the decision to auction off a vintage car from his father\u2019s estate.', 'Edie Arkadyevitch felt conflicted about the prospect of renting out a cherished family vacation cabin for extra income.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch felt distressed about the need to sell a forest on his wife\u2019s property."
+      ],
+      "predicted": "Edie Arkadyevitch felt distressed about the need to sell a forest on his wife's property.",
+      "score": 0,
+      "retrieved_chars": 143467
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 6,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n3. Edie Arkadyevitch lamented over his idiotic smile that caused Charissa to shudder and leave.\n4. Matvey, Edie Arkadyevitch's valet, brought him his clothes and a telegram.\n5. Edie Arkadyevitch instructed Matvey to inform Shary Jayden about Karissa's arrival.\n6. Edie Arkadyevitch dressed for the day with Matvey's assistance.\n7. Edie Arkadyevitch felt distressed about the need to sell a forest on his wife\u2019s property.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch visited an art exhibition and reflected on its cultural significance.', 'Edie Arkadyevitch explored a documentary film and analyzed its narrative techniques.', 'Edie Arkadyevitch wrote an article on social justice and shared it with her colleagues.', 'Edie Arkadyevitch attended a political rally and debated the speeches delivered.', 'Edie Arkadyevitch hosted a podcast episode and discussed contemporary societal issues.', 'Edie Arkadyevitch read a liberal newspaper and contemplated its views.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch read a liberal newspaper and contemplated its views."
+      ],
+      "predicted": "Edie Arkadyevitch read a liberal newspaper and contemplated its views.",
+      "score": 1,
+      "retrieved_chars": 143467
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 7,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n4. Matvey, Edie Arkadyevitch's valet, brought him his clothes and a telegram.\n5. Edie Arkadyevitch instructed Matvey to inform Shary Jayden about Karissa's arrival.\n6. Edie Arkadyevitch dressed for the day with Matvey's assistance.\n7. Edie Arkadyevitch felt distressed about the need to sell a forest on his wife\u2019s property.\n8. Edie Arkadyevitch read a liberal newspaper and contemplated its views.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch reminded his friends to meet for dinner at his house.', 'Edie Arkadyevitch called his children to come inside.', 'Edie Arkadyevitch urged his colleagues to join him for a conference call.', 'Edie Arkadyevitch invited his relatives to celebrate the holiday at his estate.', 'Edie Arkadyevitch encouraged his students to participate in the upcoming talent show.', 'Edie Arkadyevitch instructed his neighbors to gather at the park.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch called his children to come inside."
+      ],
+      "predicted": "Edie Arkadyevitch called his children to come inside.",
+      "score": 1,
+      "retrieved_chars": 144361
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 8,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n5. Edie Arkadyevitch instructed Matvey to inform Shary Jayden about Karissa's arrival.\n6. Edie Arkadyevitch dressed for the day with Matvey's assistance.\n7. Edie Arkadyevitch felt distressed about the need to sell a forest on his wife\u2019s property.\n8. Edie Arkadyevitch read a liberal newspaper and contemplated its views.\n9. Edie Arkadyevitch called his children to come inside.\n\n\nBelow is a list of possible subsequent events:\n\n['The little girl revealed to Edie Arkadyevitch that the dog had found her favorite toy.', 'The little girl disclosed to Edie Arkadyevitch that their father had returned home.', 'The little girl informed Edie Arkadyevitch that their mother was awake.', 'The little girl explained to Edie Arkadyevitch that their grandmother had baked cookies.', 'The little girl told Edie Arkadyevitch that their neighbor was preparing a surprise party.', 'The little girl announced to Edie Arkadyevitch that the ice cream truck was now outside.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "The little girl informed Edie Arkadyevitch that their mother was awake."
+      ],
+      "predicted": "The little girl disclosed to Edie Arkadyevitch that their father had returned home.",
+      "score": 0,
+      "retrieved_chars": 143467
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 9,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n6. Edie Arkadyevitch dressed for the day with Matvey's assistance.\n7. Edie Arkadyevitch felt distressed about the need to sell a forest on his wife\u2019s property.\n8. Edie Arkadyevitch read a liberal newspaper and contemplated its views.\n9. Edie Arkadyevitch called his children to come inside.\n10. The little girl informed Edie Arkadyevitch that their mother was awake.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Edie Arkadyevitch baked a cake for his daughter's birthday.\", \"Edie Arkadyevitch painted a mural for his daughter's room.\", 'Edie Arkadyevitch read a story to his daughter at bedtime.', 'Edie Arkadyevitch taught his daughter how to ride a bicycle.', \"Edie Arkadyevitch bought flowers for his daughter's recital.\", 'Edie Arkadyevitch gave sweets to his daughter.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch gave sweets to his daughter."
+      ],
+      "predicted": "\"Edie Arkadyevitch read a story to his daughter at bedtime.\"",
+      "score": 0,
+      "retrieved_chars": 143332
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 10,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n7. Edie Arkadyevitch felt distressed about the need to sell a forest on his wife\u2019s property.\n8. Edie Arkadyevitch read a liberal newspaper and contemplated its views.\n9. Edie Arkadyevitch called his children to come inside.\n10. The little girl informed Edie Arkadyevitch that their mother was awake.\n11. Edie Arkadyevitch gave sweets to his daughter.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Edie Arkadyevitch reviewed the chef's proposal for a new menu.\", \"Edie Arkadyevitch examined the musician's application for a grant.\", \"Edie Arkadyevitch listened to the staff captain's widow's request.\", \"Edie Arkadyevitch addressed the gardener's concerns about plant health.\", \"Edie Arkadyevitch assisted the teacher's plea for classroom donations.\", \"Edie Arkadyevitch considered the artist's invitation for an exhibition.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch listened to the staff captain's widow's request."
+      ],
+      "predicted": "Edie Arkadyevitch reviewed the chef's proposal for a new menu.",
+      "score": 0,
+      "retrieved_chars": 143332
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 11,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n8. Edie Arkadyevitch read a liberal newspaper and contemplated its views.\n9. Edie Arkadyevitch called his children to come inside.\n10. The little girl informed Edie Arkadyevitch that their mother was awake.\n11. Edie Arkadyevitch gave sweets to his daughter.\n12. Edie Arkadyevitch listened to the staff captain's widow's request.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch battled with his emotions as he navigated the complexities of his bond with Charissa.', 'Edie Arkadyevitch expressed internal conflict about his relationship with Charissa.', 'Edie Arkadyevitch encountered a crossroads in his life, reflecting on his turbulent connection with Charissa.', 'Edie Arkadyevitch found himself torn between his loyalty to Charissa and his personal ambitions.', 'Edie Arkadyevitch struggled to reconcile his feelings for Charissa amidst growing tensions.', 'Edie Arkadyevitch faced a dilemma as he weighed the consequences of his decisions regarding Charissa.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch expressed internal conflict about his relationship with Charissa."
+      ],
+      "predicted": "Edie Arkadyevitch expressed internal conflict about his relationship with Charissa.",
+      "score": 1,
+      "retrieved_chars": 144375
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 12,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n9. Edie Arkadyevitch called his children to come inside.\n10. The little girl informed Edie Arkadyevitch that their mother was awake.\n11. Edie Arkadyevitch gave sweets to his daughter.\n12. Edie Arkadyevitch listened to the staff captain's widow's request.\n13. Edie Arkadyevitch expressed internal conflict about his relationship with Charissa.\n\n\nBelow is a list of possible subsequent events:\n\n['Shary Jayden revealed a plan to relocate to New York City.', 'Shary Jayden expressed a desire to leave Edie Arkadyevitch.', 'Shary Jayden shared her thoughts on permanently distancing herself from her hometown.', 'Shary Jayden confirmed her decision to terminate her involvement with the local charity.', 'Shary Jayden indicated a preference to cease collaboration with her long-time partner.', 'Shary Jayden announced her intention to withdraw from public appearances altogether.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Shary Jayden expressed a desire to leave Edie Arkadyevitch."
+      ],
+      "predicted": "Shary Jayden expressed a desire to leave Edie Arkadyevitch.",
+      "score": 1,
+      "retrieved_chars": 143481
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 13,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n10. The little girl informed Edie Arkadyevitch that their mother was awake.\n11. Edie Arkadyevitch gave sweets to his daughter.\n12. Edie Arkadyevitch listened to the staff captain's widow's request.\n13. Edie Arkadyevitch expressed internal conflict about his relationship with Charissa.\n14. Shary Jayden expressed a desire to leave Edie Arkadyevitch.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch pleaded with Charissa for forgiveness.', 'Edie Arkadyevitch sought redemption from Shary Jayden after their heated argument.', 'Edie Arkadyevitch apologized to Shary Jayden for her reckless words.', 'Edie Arkadyevitch begged Shary Jayden to reconsider their friendship.', 'Edie Arkadyevitch confessed to Shary Jayden about her past mistakes.', 'Edie Arkadyevitch lamented her choices to Shary Jayden during their late-night conversation.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch pleaded with Charissa for forgiveness."
+      ],
+      "predicted": "Edie Arkadyevitch pleaded with Charissa for forgiveness.",
+      "score": 1,
+      "retrieved_chars": 144233
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 14,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n11. Edie Arkadyevitch gave sweets to his daughter.\n12. Edie Arkadyevitch listened to the staff captain's widow's request.\n13. Edie Arkadyevitch expressed internal conflict about his relationship with Charissa.\n14. Shary Jayden expressed a desire to leave Edie Arkadyevitch.\n15. Edie Arkadyevitch pleaded with Charissa for forgiveness.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Edie Arkadyevitch experienced a pang of regret as she witnessed Shary's tear-streaked cheeks.\", \"Edie Arkadyevitch succumbed to despair when she beheld Shary's forlorn expression.\", \"Edie Arkadyevitch was filled with dread as she caught a glimpse of Shary's anguished gaze.\", \"Edie Arkadyevitch felt a heavy weight in her chest upon noticing Shary's downcast demeanor.\", \"Edie Arkadyevitch was overcome with grief at the sight of Shary's troubled eyes.\", \"Edie Arkadyevitch felt sorrow upon seeing Charissa's suffering face.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch felt sorrow upon seeing Charissa's suffering face."
+      ],
+      "predicted": "Edie Arkadyevitch felt sorrow upon seeing Charissa's suffering face.",
+      "score": 1,
+      "retrieved_chars": 143190
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 15,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n12. Edie Arkadyevitch listened to the staff captain's widow's request.\n13. Edie Arkadyevitch expressed internal conflict about his relationship with Charissa.\n14. Shary Jayden expressed a desire to leave Edie Arkadyevitch.\n15. Edie Arkadyevitch pleaded with Charissa for forgiveness.\n16. Edie Arkadyevitch felt sorrow upon seeing Charissa's suffering face.\n\n\nBelow is a list of possible subsequent events:\n\n[\"Edie Arkadyevitch remarked on the smile that faded from Shary's lips as the phone rang unexpectedly.\", \"Edie Arkadyevitch sensed a warmth in Shary's smile as she gazed at the familiar sunset.\", \"Edie Arkadyevitch noted a shift in Shary's posture as the thunder rumbled outside.\", 'Edie Arkadyevitch felt a chill in the air when Shary mentioned a forgotten secret.', \"Edie Arkadyevitch observed a change in Charissa's demeanor upon hearing a child's cry.\", \"Edie Arkadyevitch detected a flicker of anxiety in Shary's voice when the lights began to dim.\"]\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch observed a change in Charissa's demeanor upon hearing a child's cry."
+      ],
+      "predicted": "Edie Arkadyevitch observed a change in Charissa's demeanor upon hearing a child's cry.",
+      "score": 1,
+      "retrieved_chars": 143481
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 16,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n13. Edie Arkadyevitch expressed internal conflict about his relationship with Charissa.\n14. Shary Jayden expressed a desire to leave Edie Arkadyevitch.\n15. Edie Arkadyevitch pleaded with Charissa for forgiveness.\n16. Edie Arkadyevitch felt sorrow upon seeing Charissa's suffering face.\n17. Edie Arkadyevitch observed a change in Charissa's demeanor upon hearing a child's cry.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch acknowledged the significance of community ties in shaping his business strategies.', 'Edie Arkadyevitch evaluated the role of old friends in navigating the complexities of his industry.', 'Edie Arkadyevitch recognized the influence of mentorship on his evolving professional aspirations.', 'Edie Arkadyevitch examined the ways in which networking shaped his public persona and opportunities.', 'Edie Arkadyevitch discovered an unexpected ally that propelled his latest project forward.', 'Edie Arkadyevitch reflected on his social connections that helped his career.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch reflected on his social connections that helped his career."
+      ],
+      "predicted": "Edie Arkadyevitch reflected on his social connections that helped his career.",
+      "score": 1,
+      "retrieved_chars": 143332
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 17,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n14. Shary Jayden expressed a desire to leave Edie Arkadyevitch.\n15. Edie Arkadyevitch pleaded with Charissa for forgiveness.\n16. Edie Arkadyevitch felt sorrow upon seeing Charissa's suffering face.\n17. Edie Arkadyevitch observed a change in Charissa's demeanor upon hearing a child's cry.\n18. Edie Arkadyevitch reflected on his social connections that helped his career.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch picked up his briefcase and made his way to the conference.', 'Edie Arkadyevitch adjusted his glasses and stepped onto the stage.', 'Edie Arkadyevitch tightened his belt and descended into the subway station.', 'Edie Arkadyevitch straightened his tie and walked into the gala hall.', 'Edie Arkadyevitch donned a lab coat and approached the research facility.', 'Edie Arkadyevitch put on his uniform and entered the boardroom.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch put on his uniform and entered the boardroom."
+      ],
+      "predicted": "Edie Arkadyevitch straightened his tie and walked into the gala hall.",
+      "score": 0,
+      "retrieved_chars": 143190
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 18,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n15. Edie Arkadyevitch pleaded with Charissa for forgiveness.\n16. Edie Arkadyevitch felt sorrow upon seeing Charissa's suffering face.\n17. Edie Arkadyevitch observed a change in Charissa's demeanor upon hearing a child's cry.\n18. Edie Arkadyevitch reflected on his social connections that helped his career.\n19. Edie Arkadyevitch put on his uniform and entered the boardroom.\n\n\nBelow is a list of possible subsequent events:\n\n['Edie Arkadyevitch waved at the audience and began to speak.', 'Edie Arkadyevitch greeted the attendees warmly and found his place.', 'Edie Arkadyevitch shook hands with his colleagues and sat down.', 'Edie Arkadyevitch raised his glass in a toast and took a seat.', 'Edie Arkadyevitch opened the door with a grin and entered the room.', 'Edie Arkadyevitch smiled at the camera and positioned himself on stage.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "Edie Arkadyevitch shook hands with his colleagues and sat down."
+      ],
+      "predicted": "Edie Arkadyevitch opened the door with a grin and entered the room.",
+      "score": 0,
+      "retrieved_chars": 144375
+    },
+    {
+      "row_idx": 4,
+      "q_idx": 19,
+      "source": "eventqa_65536",
+      "question": "These are the events that have already occurred:\n\n...\n16. Edie Arkadyevitch felt sorrow upon seeing Charissa's suffering face.\n17. Edie Arkadyevitch observed a change in Charissa's demeanor upon hearing a child's cry.\n18. Edie Arkadyevitch reflected on his social connections that helped his career.\n19. Edie Arkadyevitch put on his uniform and entered the boardroom.\n20. Edie Arkadyevitch shook hands with his colleagues and sat down.\n\n\nBelow is a list of possible subsequent events:\n\n['A client called Edie Arkadyevitch to discuss the latest project updates.', 'A reporter interviewed Edie Arkadyevitch about the upcoming exhibition.', 'A courier delivered a package to Edie Arkadyevitch at the office.', 'An assistant handed a document to Edie Arkadyevitch before the conference.', 'A secretary approached Edie Arkadyevitch with papers.', 'A colleague presented a proposal to Edie Arkadyevitch during the meeting.']\n\n Your task is to choose from the above events which event happens next based on the book excerpt. In your response to me, only include the answer without anything else. ",
+      "gold_list": [
+        "A secretary approached Edie Arkadyevitch with papers."
+      ],
+      "predicted": "A secretary approached Edie Arkadyevitch with papers.",
+      "score": 1,
+      "retrieved_chars": 143190
+    }
+  ]
+}
