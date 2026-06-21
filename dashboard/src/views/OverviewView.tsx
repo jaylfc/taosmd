@@ -56,6 +56,7 @@ function Ready({ stats, memories }: { stats: Stats; memories: Memory[] }) {
           />
         </div>
         <div className="flex flex-col gap-5 rounded-lg p-5" style={cardStyle}>
+          <TopList title="Top categories" items={stats.categories} />
           <TopList title="Top agents" items={stats.top_agents} />
           <TopList title="Top projects" items={stats.top_projects} />
         </div>

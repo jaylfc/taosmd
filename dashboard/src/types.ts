@@ -19,6 +19,7 @@ export interface Stats {
     flagged: number;
     hallucination_rate: number;
   };
+  categories: { name: string; count: number }[];
   top_agents: { name: string; count: number }[];
   top_projects: { name: string; count: number }[];
   recent_activity: { kind: string; label: string; ts: number }[];
