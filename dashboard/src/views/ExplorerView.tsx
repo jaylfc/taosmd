@@ -82,6 +82,7 @@ function DetailPanel({ node, graph }: { node: GraphNode; graph: Graph }) {
 export function ExplorerView() {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [showCurrent, setShowCurrent] = useState(false);
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -137,20 +138,45 @@ export function ExplorerView() {
               {state.graph.capped ? ` (showing the ${state.graph.nodes.length} most connected)` : ""}
             </span>
             <span className="flex items-center gap-3">
-              <span className="flex items-center gap-1.5">
-                <span style={{ width: 16, height: 0, borderTop: "1px solid var(--muted-bright)" }} aria-hidden="true" />
-                current
+              <span
+                role="radiogroup"
+                aria-label="Show facts"
+                className="inline-flex rounded"
+                style={{ border: "1px solid var(--border)", overflow: "hidden" }}
+              >
+                {([["all", "All"], ["current", "Current"]] as const).map(([val, lbl], i) => {
+                  const active = showCurrent === (val === "current");
+                  return (
+                    <button
+                      key={val}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setShowCurrent(val === "current")}
+                      className="px-2 py-0.5 text-xs font-medium transition-colors duration-150"
+                      style={{
+                        background: active ? "var(--accent-dim)" : "transparent",
+                        color: active ? "var(--accent)" : "var(--muted-bright)",
+                        borderLeft: i === 0 ? "none" : "1px solid var(--border)",
+                      }}
+                    >
+                      {lbl}
+                    </button>
+                  );
+                })}
               </span>
-              <span className="flex items-center gap-1.5">
-                <span style={{ width: 16, height: 0, borderTop: "1px dashed var(--muted)" }} aria-hidden="true" />
-                superseded
-              </span>
+              {!showCurrent && (
+                <span className="flex items-center gap-1.5">
+                  <span style={{ width: 16, height: 0, borderTop: "1px dashed var(--muted)" }} aria-hidden="true" />
+                  superseded
+                </span>
+              )}
             </span>
           </div>
 
           <ForceGraph
             nodes={state.graph.nodes}
-            edges={state.graph.edges}
+            edges={showCurrent ? state.graph.edges.filter((e) => e.active) : state.graph.edges}
             onSelect={setSelected}
             selectedId={selected?.id}
           />
