@@ -446,3 +446,13 @@ def test_list_memories_and_scoped_stats(isolated_data_dir):
     assert user_stats["memories"]["total"] >= 1
     assert all_stats["memories"]["total"] > user_stats["memories"]["total"]
     assert user_stats["scope"] == "user" and all_stats["scope"] == "all"
+
+
+def test_stats_includes_categories(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest("I prefer metric units and dark mode.", agent="user", data_dir=str(isolated_data_dir)))
+    asyncio.run(taosmd.ingest("Deployed the benchmark feature for the project.", agent="bot", data_dir=str(isolated_data_dir)))
+    out = asyncio.run(taosmd_api.dashboard_stats(data_dir=str(isolated_data_dir)))
+    assert "categories" in out and isinstance(out["categories"], list)
+    names = {c["name"] for c in out["categories"]}
+    assert names & {"Identity & Preferences", "Work & Learning"}

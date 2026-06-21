@@ -621,6 +621,15 @@ async def dashboard_stats(*, scope: str | None = None, data_dir=None) -> dict:
                + int(rate.get("contradicted", 0)))
 
     projects = await list_projects(data_dir=data_dir)
+
+    # Semantic categories of the memories in scope. upgrade-path: classify at
+    # ingest (librarian LLM when enriched, KG types where the graph is rich) and
+    # GROUP BY a stored category; for now classify recent texts at read time,
+    # capped so a very large store stays responsive.
+    from taosmd import categories as _categories  # noqa: PLC0415
+    mem_rows = await arc.list_memories(agent=agent, limit=2000)
+    categories = _categories.category_counts(m["text"] for m in mem_rows)
+
     return {
         "scope": scope or "all",
         "memories": {
@@ -636,6 +645,7 @@ async def dashboard_stats(*, scope: str | None = None, data_dir=None) -> dict:
             "flagged": flagged,
             "hallucination_rate": float(rate.get("hallucination_rate", 0.0)),
         },
+        "categories": categories,
         "top_agents": top_agents,
         "top_projects": top_projects,
         "recent_activity": recent,
