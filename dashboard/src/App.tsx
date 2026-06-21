@@ -4,7 +4,10 @@ import { PendingView } from "./views/PendingView";
 import { A2AView } from "./views/A2AView";
 import { ProjectsView } from "./views/ProjectsView";
 import { SettingsView } from "./views/SettingsView";
+import { OverviewView } from "./views/OverviewView";
+import { ExplorerView } from "./views/ExplorerView";
 import { getHealth } from "./api";
+import { initTheme, setScheme, type Scheme } from "./theme";
 import type { View, HealthInfo } from "./types";
 
 interface NavItemProps {
@@ -57,7 +60,9 @@ function HealthChip({ info }: { info: HealthInfo | null }) {
 }
 
 const NAV: { id: View; label: string }[] = [
+  { id: "home", label: "Home" },
   { id: "memory", label: "Memory" },
+  { id: "explorer", label: "Explorer" },
   { id: "projects", label: "Projects" },
   { id: "pending", label: "Pending" },
   { id: "a2a", label: "A2A channels" },
@@ -65,14 +70,19 @@ const NAV: { id: View; label: string }[] = [
 ];
 
 export function App() {
-  const [view, setView] = useState<View>("memory");
+  const [view, setView] = useState<View>("home");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [scheme, setSchemeState] = useState<Scheme>("dark");
 
   useEffect(() => {
     getHealth()
       .then(setHealth)
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setSchemeState(initTheme());
   }, []);
 
   // Keyboard nav for tabs
@@ -126,7 +136,20 @@ export function App() {
           memory inspector
         </span>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          <button
+            onClick={() => {
+              const next = scheme === "dark" ? "light" : "dark";
+              setScheme(next);
+              setSchemeState(next);
+            }}
+            className="rounded p-1.5 text-sm transition-colors duration-150"
+            style={{ color: "var(--muted)" }}
+            aria-label={scheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            aria-pressed={scheme === "light"}
+          >
+            {scheme === "dark" ? "☀" : "☾"}
+          </button>
           <HealthChip info={health} />
         </div>
       </header>
@@ -166,7 +189,9 @@ export function App() {
 
         {/* Content */}
         <main className="flex flex-1 min-w-0 overflow-y-auto" id={`panel-${view}`}>
+          {view === "home" && <OverviewView />}
           {view === "memory" && <MemoryView defaultAgent="default" />}
+          {view === "explorer" && <ExplorerView />}
           {view === "projects" && <ProjectsView />}
           {view === "pending" && <PendingView defaultAgent="default" />}
           {view === "a2a" && (

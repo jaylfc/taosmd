@@ -584,6 +584,90 @@ async def list_projects(*, data_dir=None) -> list[dict]:
     return list(projects.values())
 
 
+#: Reserved namespace for the human's own memory (share-to-collect + ambient
+#: capture write here). Distinct from each AI agent's working-memory namespace.
+USER_NAMESPACE = "user"
+
+
+def _scope_agent(scope: str | None) -> str | None:
+    """Resolve a dashboard scope to an agent filter (None means all namespaces)."""
+    return None if scope in (None, "", "all") else scope
+
+
+async def dashboard_stats(*, scope: str | None = None, data_dir=None) -> dict:
+    """Aggregate read-only dashboard stats over the existing stores.
+
+    Counts are derived from the archive (the per-install source of truth) and
+    the claims store, so a fresh install returns zeros rather than an error.
+    ``scope`` filters the per-agent fields to one agent (or the ``user``
+    namespace); the default ``all`` aggregates every namespace.
+    """
+    stores = await _ensure_stores(data_dir)
+    arc = stores["archive"]
+    agent = _scope_agent(scope)
+    arc_stats = await arc.stats()
+    total = await arc.scoped_total(agent)
+    growth = await arc.daily_counts(days=30, agent=agent)
+    recent = await arc.recent(limit=10, agent=agent)
+    top_agents = await arc.top_by("agent_name", limit=5)
+    top_projects = await arc.top_by("project", limit=5, agent=agent)
+    agents_n = 1 if agent is not None else await arc.distinct_agents()
+
+    claims = stores.get("claims")
+    rate = await claims.rate() if claims is not None else {}
+    supported = int(rate.get("supported", 0))
+    unverified = int(rate.get("unverified", 0))
+    flagged = (int(rate.get("partial", 0)) + int(rate.get("unsupported", 0))
+               + int(rate.get("contradicted", 0)))
+
+    projects = await list_projects(data_dir=data_dir)
+
+    # Semantic categories of the memories in scope. upgrade-path: classify at
+    # ingest (librarian LLM when enriched, KG types where the graph is rich) and
+    # GROUP BY a stored category; for now classify recent texts at read time,
+    # capped so a very large store stays responsive.
+    from taosmd import categories as _categories  # noqa: PLC0415
+    mem_rows = await arc.list_memories(agent=agent, limit=2000)
+    categories = _categories.category_counts(m["text"] for m in mem_rows)
+
+    return {
+        "scope": scope or "all",
+        "memories": {
+            "total": total,
+            "disk_mb": arc_stats.get("disk_usage_mb", 0),
+        },
+        "agents": agents_n,
+        "projects": len(projects),
+        "growth": growth,
+        "verification": {
+            "supported": supported,
+            "unverified": unverified,
+            "flagged": flagged,
+            "hallucination_rate": float(rate.get("hallucination_rate", 0.0)),
+        },
+        "categories": categories,
+        "top_agents": top_agents,
+        "top_projects": top_projects,
+        "recent_activity": recent,
+    }
+
+
+async def list_memories(*, scope: str | None = None, limit: int = 50, data_dir=None) -> list[dict]:
+    """Recent archived memories for the dashboard browse view.
+
+    ``scope`` is ``all`` (every namespace), ``user`` (the reserved personal
+    namespace), or a specific agent name. Returns ``{text, agent, kind, ts}``.
+    """
+    stores = await _ensure_stores(data_dir)
+    return await stores["archive"].list_memories(agent=_scope_agent(scope), limit=limit)
+
+
+async def graph(*, limit: int = 300, data_dir=None) -> dict:
+    """The knowledge-graph nodes and edges for the Explorer view (read-only)."""
+    stores = await _ensure_stores(data_dir)
+    return await stores["kg"].graph(limit=limit)
+
+
 async def list_shelves(*, project: str, data_dir=None) -> list[dict]:
     """List all agent shelves within a specific project.
 

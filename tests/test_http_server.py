@@ -698,3 +698,31 @@ def test_controls_post_empty_body_returns_400(live_server):
     status, body = _post(f"{live_server}/controls", {})
     assert status == 400
     assert "error" in body
+
+
+def test_stats_endpoint(live_server):
+    _post(f"{live_server}/ingest", {"text": "A stats memory for the overview.", "agent": "s"})
+    status, body = _get(f"{live_server}/stats")
+    assert status == 200, body
+    assert body["memories"]["total"] >= 1
+    assert "verification" in body and "growth" in body
+    assert any(a["name"] == "s" for a in body["top_agents"])
+
+
+def test_memories_endpoint_and_scoped_stats(live_server):
+    _post(f"{live_server}/ingest", {"text": "User memory via http.", "agent": "user"})
+    _post(f"{live_server}/ingest", {"text": "Bot memory via http.", "agent": "bot"})
+    status, body = _get(f"{live_server}/memories?scope=user&limit=10")
+    assert status == 200, body
+    assert body["memories"] and all(m["agent"] == "user" for m in body["memories"])
+    _, allb = _get(f"{live_server}/stats")
+    _, userb = _get(f"{live_server}/stats?scope=user")
+    assert userb["scope"] == "user"
+    assert allb["memories"]["total"] > userb["memories"]["total"]
+
+
+def test_graph_endpoint(live_server):
+    status, body = _get(f"{live_server}/graph")
+    assert status == 200, body
+    assert set(body) >= {"nodes", "edges", "total_nodes", "total_edges"}
+    assert isinstance(body["nodes"], list) and isinstance(body["edges"], list)

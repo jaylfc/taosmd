@@ -8,45 +8,49 @@
   All semantic tokens live here; components reference these, never raw Tailwind palette.
 */
 :root {
-  /* Surfaces */
-  --bg: #0d1017;          /* deepest background — content canvas */
-  --surface: #131720;     /* sidebar / toolbar / panel — cooler than bg */
-  --surface-2: #1a1f2e;   /* cards, hit rows, raised elements */
-  --border: #222738;      /* structural dividers */
-  --border-subtle: #1b2030; /* very faint separators inside panels */
+  /* Surfaces (taOS macOS graphite) */
+  --bg: #171717;
+  --surface: #1d1d1f;
+  --surface-2: #232325;
+  --border: rgba(255, 255, 255, 0.10);
+  --border-subtle: rgba(255, 255, 255, 0.06);
 
-  /* Text — minimum 4.5:1 contrast ratio on their respective backgrounds */
-  --ink: #dde1ea;         /* body text — #dde1ea on #0d1017 = ~11:1 */
-  --muted: #8d97aa;       /* secondary info — on #0d1017 = ~4.6:1 */
-  --muted-bright: #a8b2c4; /* muted-but-prominent labels */
+  /* Text */
+  --ink: rgba(255, 255, 255, 0.92);
+  --muted: rgba(255, 255, 255, 0.55);
+  --muted-bright: rgba(255, 255, 255, 0.70);
 
-  /* ONE accent — used ONLY for primary actions, current selection, live indicator */
-  --accent: #5b9cf6;      /* blue-ish; #5b9cf6 on #131720 = ~5.2:1 */
-  --accent-dim: #2a3f6a;  /* accent background wash for selection highlight */
-  --accent-hover: #7ab3ff;
+  /* Accent (taOS slate-blue, for selection and primary actions) */
+  --accent: #5b8def;
+  --accent-dim: rgba(91, 141, 239, 0.16);
+  --accent-hover: #7aa5f5;
 
-  /* State colors */
-  --error: #f87171;       /* #f87171 on #0d1017 = ~5.8:1 */
-  --warning: #f59e0b;
-  --success: #34d399;
-  --info: #60a5fa;
+  /* State colors (taOS traffic lights; reused by the dashboard charts) */
+  --error: #ff5f57;
+  --warning: #febc2e;
+  --success: #28c840;
+  --info: #5b8def;
 
-  /* Sender tint palette — subtle, NOT colored side-stripes, just bg tints */
-  --sender-0-bg: #131c2a;   /* blueish night */
-  --sender-1-bg: #1c1326;   /* plum */
-  --sender-2-bg: #111e1a;   /* forest */
-  --sender-3-bg: #1e1712;   /* amber dark */
-  --sender-4-bg: #1a1220;   /* violet */
-  --sender-5-bg: #0f1a1e;   /* teal */
+  /* Sender tint palette: subtle background tints, retuned to graphite */
+  --sender-0-bg: #14202e;
+  --sender-1-bg: #221426;
+  --sender-2-bg: #112019;
+  --sender-3-bg: #221b10;
+  --sender-4-bg: #1c1422;
+  --sender-5-bg: #0f1f22;
 
-  /* Typography — system-only, NO web fonts */
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Typography: system fonts, no web fonts */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Fira Code", Consolas, monospace;
 
   /* Interaction */
   --radius-sm: 4px;
   --radius: 6px;
   --radius-lg: 8px;
+  --radius-window: 10px;
+
+  /* Shadow (macOS soft card) */
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.2), 0 0 1px rgba(255, 255, 255, 0.05);
 
   /* Transitions */
   --t-fast: 150ms ease-out;
@@ -57,7 +61,33 @@
   --sidebar-w: 220px;
 }
 
-/* Reduced motion — honour user preference */
+/* Light scheme: taOS data-scheme="light" */
+:root[data-scheme="light"] {
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface-2: #f0f0f2;
+  --border: rgba(0, 0, 0, 0.12);
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --ink: rgba(0, 0, 0, 0.88);
+  --muted: rgba(0, 0, 0, 0.55);
+  --muted-bright: rgba(0, 0, 0, 0.68);
+  --accent: #3b6fd4;
+  --accent-dim: rgba(91, 141, 239, 0.12);
+  --accent-hover: #5b8def;
+  --error: #d83a32;
+  --warning: #c98a00;
+  --success: #1e9e33;
+  --info: #3b6fd4;
+  --sender-0-bg: #eef3fb;
+  --sender-1-bg: #f7eefb;
+  --sender-2-bg: #eef7f1;
+  --sender-3-bg: #fbf5ee;
+  --sender-4-bg: #f5eefb;
+  --sender-5-bg: #eef9fb;
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08), 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+/* Reduced motion, honour user preference */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
@@ -86,14 +116,14 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Focus ring — visible, a11y-first */
+/* Focus ring, visible, a11y-first */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
 
-/* Scrollbars — subtle, native style */
+/* Scrollbars, subtle, native style */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;

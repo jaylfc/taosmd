@@ -3,6 +3,19 @@
 ## Unreleased
 
 ### Added
+- **Dashboard memory cockpit.** The standalone web dashboard grows from a read-only
+  inspector into a cockpit, themed to taOS's macOS dark and light schemes with a toggle.
+  A **Home** overview reads a new `GET /stats` aggregate (memory growth, a
+  verification-coverage donut over the claims rate, top categories, top agents and
+  projects, and a recent-memory browse) with a scope selector across all memory, a
+  reserved `user` namespace, and any individual agent (`GET /stats?scope=` plus a new
+  `GET /memories`). A **Memory Explorer** tab renders the temporal knowledge graph as a
+  bundled, offline `d3-force` galaxy over a new read-only `GET /graph`, with superseded
+  facts faded and click-to-detail on each entity. Semantic categories
+  (`taosmd/categories.py`) classify memories with a deterministic keyword classifier, and
+  the librarian-LLM and knowledge-graph-type classifications are marked upgrade paths. All
+  charts are hand-rolled SVG, every view is keyboard-navigable and ARIA-labelled, and the
+  whole dashboard works fully offline with no CDN.
 - **Memory controls (registry + `/controls` API + dashboard Settings + docs).** A typed
   controls registry (`taosmd/controls.py`) is the single source of truth for every
   user-facing lever (scope, type, default, cost, pros and cons), consumed by the

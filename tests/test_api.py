@@ -403,3 +403,56 @@ def test_search_prefer_verified_resolves_from_config():
     with tempfile.TemporaryDirectory() as d:
         assert _cfg.get_controls(data_dir=d)["prefer_verified"] == "prefer_verified"
     assert _ctrl.default_controls()["prefer_verified"] == "prefer_verified"
+
+
+# ---------------------------------------------------------------------------
+# Dashboard stats aggregator
+# ---------------------------------------------------------------------------
+
+def test_stats_shape(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest(
+        "Stats overview test memory.", agent="s", data_dir=str(isolated_data_dir)))
+    out = asyncio.run(taosmd_api.dashboard_stats(data_dir=str(isolated_data_dir)))
+    assert set(out) >= {
+        "memories", "agents", "projects", "growth",
+        "verification", "top_agents", "top_projects", "recent_activity",
+    }
+    assert out["memories"]["total"] >= 1
+    assert out["agents"] >= 1
+    assert isinstance(out["growth"], list)
+    assert set(out["verification"]) >= {"supported", "unverified", "flagged", "hallucination_rate"}
+    assert any(a["name"] == "s" for a in out["top_agents"])
+
+
+def test_stats_empty_install_returns_zeros(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    out = asyncio.run(taosmd_api.dashboard_stats(data_dir=str(isolated_data_dir)))
+    assert out["memories"]["total"] == 0
+    assert out["agents"] == 0
+    assert out["growth"] == []
+    assert out["top_agents"] == []
+    assert out["recent_activity"] == []
+
+
+def test_list_memories_and_scoped_stats(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest("User scoped memory.", agent="user", data_dir=str(isolated_data_dir)))
+    asyncio.run(taosmd.ingest("Bot scoped memory.", agent="bot", data_dir=str(isolated_data_dir)))
+    mems = asyncio.run(taosmd_api.list_memories(scope="user", data_dir=str(isolated_data_dir)))
+    assert mems and all(m["agent"] == "user" for m in mems)
+    all_stats = asyncio.run(taosmd_api.dashboard_stats(data_dir=str(isolated_data_dir)))
+    user_stats = asyncio.run(taosmd_api.dashboard_stats(scope="user", data_dir=str(isolated_data_dir)))
+    assert user_stats["memories"]["total"] >= 1
+    assert all_stats["memories"]["total"] > user_stats["memories"]["total"]
+    assert user_stats["scope"] == "user" and all_stats["scope"] == "all"
+
+
+def test_stats_includes_categories(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest("I prefer metric units and dark mode.", agent="user", data_dir=str(isolated_data_dir)))
+    asyncio.run(taosmd.ingest("Deployed the benchmark feature for the project.", agent="bot", data_dir=str(isolated_data_dir)))
+    out = asyncio.run(taosmd_api.dashboard_stats(data_dir=str(isolated_data_dir)))
+    assert "categories" in out and isinstance(out["categories"], list)
+    names = {c["name"] for c in out["categories"]}
+    assert names & {"Identity & Preferences", "Work & Learning"}
