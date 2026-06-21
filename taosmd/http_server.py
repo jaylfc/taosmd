@@ -771,6 +771,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_memories(query)
                 elif method == "GET" and path == "/graph":
                     self._handle_graph(query)
+                elif method == "GET" and path == "/graph/activations":
+                    self._handle_graph_activations(query)
                 elif method == "GET" and path == "/search":
                     self._handle_search_get(query)
                 elif method == "POST" and path == "/search":
@@ -1030,6 +1032,21 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
             result = runner.run(service.graph(limit=limit_i, data_dir=data_dir))
+            self._send_json(200, result)
+
+        def _handle_graph_activations(self, qs: dict) -> None:
+            since = (qs.get("since") or [None])[0]
+            window = (qs.get("window") or [60])[0]
+            limit = (qs.get("limit") or [100])[0]
+            try:
+                since_f = float(since) if since is not None else None
+                window_f = float(window)
+                limit_i = int(limit)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("since/window must be numbers and limit an integer") from exc
+            result = runner.run(
+                service.graph_activations(since=since_f, window=window_f, limit=limit_i, data_dir=data_dir)
+            )
             self._send_json(200, result)
 
         def _handle_list_shelves(self, qs: dict) -> None:
