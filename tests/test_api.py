@@ -413,7 +413,7 @@ def test_stats_shape(isolated_data_dir):
     _setup_stores(isolated_data_dir)
     asyncio.run(taosmd.ingest(
         "Stats overview test memory.", agent="s", data_dir=str(isolated_data_dir)))
-    out = asyncio.run(taosmd_api.stats(data_dir=str(isolated_data_dir)))
+    out = asyncio.run(taosmd_api.dashboard_stats(data_dir=str(isolated_data_dir)))
     assert set(out) >= {
         "memories", "agents", "projects", "growth",
         "verification", "top_agents", "top_projects", "recent_activity",
@@ -427,7 +427,7 @@ def test_stats_shape(isolated_data_dir):
 
 def test_stats_empty_install_returns_zeros(isolated_data_dir):
     _setup_stores(isolated_data_dir)
-    out = asyncio.run(taosmd_api.stats(data_dir=str(isolated_data_dir)))
+    out = asyncio.run(taosmd_api.dashboard_stats(data_dir=str(isolated_data_dir)))
     assert out["memories"]["total"] == 0
     assert out["agents"] == 0
     assert out["growth"] == []

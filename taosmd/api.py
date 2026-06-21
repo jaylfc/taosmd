@@ -584,7 +584,7 @@ async def list_projects(*, data_dir=None) -> list[dict]:
     return list(projects.values())
 
 
-async def stats(*, data_dir=None) -> dict:
+async def dashboard_stats(*, data_dir=None) -> dict:
     """Aggregate read-only dashboard stats over the existing stores.
 
     Counts are derived from the archive (the per-install source of truth) and
