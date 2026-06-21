@@ -3,6 +3,7 @@ import { MemoryView } from "./views/MemoryView";
 import { PendingView } from "./views/PendingView";
 import { A2AView } from "./views/A2AView";
 import { ProjectsView } from "./views/ProjectsView";
+import { SettingsView } from "./views/SettingsView";
 import { getHealth } from "./api";
 import type { View, HealthInfo } from "./types";
 
@@ -60,6 +61,7 @@ const NAV: { id: View; label: string }[] = [
   { id: "projects", label: "Projects" },
   { id: "pending", label: "Pending" },
   { id: "a2a", label: "A2A channels" },
+  { id: "settings", label: "Settings" },
 ];
 
 export function App() {
@@ -172,6 +174,7 @@ export function App() {
               <A2AView />
             </div>
           )}
+          {view === "settings" && <SettingsView />}
         </main>
       </div>
     </div>
