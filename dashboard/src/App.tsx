@@ -4,6 +4,7 @@ import { PendingView } from "./views/PendingView";
 import { A2AView } from "./views/A2AView";
 import { ProjectsView } from "./views/ProjectsView";
 import { SettingsView } from "./views/SettingsView";
+import { OverviewView } from "./views/OverviewView";
 import { getHealth } from "./api";
 import { initTheme, setScheme, type Scheme } from "./theme";
 import type { View, HealthInfo } from "./types";
@@ -58,6 +59,7 @@ function HealthChip({ info }: { info: HealthInfo | null }) {
 }
 
 const NAV: { id: View; label: string }[] = [
+  { id: "home", label: "Home" },
   { id: "memory", label: "Memory" },
   { id: "projects", label: "Projects" },
   { id: "pending", label: "Pending" },
@@ -66,7 +68,7 @@ const NAV: { id: View; label: string }[] = [
 ];
 
 export function App() {
-  const [view, setView] = useState<View>("memory");
+  const [view, setView] = useState<View>("home");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [scheme, setSchemeState] = useState<Scheme>("dark");
@@ -185,6 +187,7 @@ export function App() {
 
         {/* Content */}
         <main className="flex flex-1 min-w-0 overflow-y-auto" id={`panel-${view}`}>
+          {view === "home" && <OverviewView />}
           {view === "memory" && <MemoryView defaultAgent="default" />}
           {view === "projects" && <ProjectsView />}
           {view === "pending" && <PendingView defaultAgent="default" />}
