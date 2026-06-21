@@ -629,3 +629,72 @@ def test_task_404_unknown_id(live_server):
     status, body = _post(f"{live_server}/tasks/t-000000000000", {"status": "closed"})
     assert status == 400
     assert "not found" in body["error"]
+
+
+# --- /controls: the memory-controls settings surface -------------------------
+
+
+def test_controls_get_returns_settings_and_schema(live_server):
+    status, body = _get(f"{live_server}/controls")
+    assert status == 200, body
+    assert set(body) >= {"settings", "schema"}
+    settings = body["settings"]
+    # prefer_verified ships on by default (tri-judge evidenced flip).
+    assert settings["prefer_verified"] == "prefer_verified"
+    schema = body["schema"]
+    assert {c["id"] for c in schema["controls"]} >= {
+        "prefer_verified", "reranker", "late_interaction", "fusion",
+        "adjacent_turns", "embedder", "binary_quant", "self_verify",
+    }
+    assert {p["id"] for p in schema["presets"]} == {"minimal", "quality", "integrity"}
+    # Every control carries the docs the README and UI render.
+    for c in schema["controls"]:
+        assert c["pros"] and c["cons"] and c["cost"] and c["description"]
+
+
+def test_controls_post_single_runtime_control_roundtrips(live_server):
+    status, body = _post(f"{live_server}/controls", {"prefer_verified": "off"})
+    assert status == 200, body
+    assert body["errors"] == {}
+    assert body["settings"]["prefer_verified"] == "off"
+    # Persisted: a fresh GET reflects it.
+    _, after = _get(f"{live_server}/controls")
+    assert after["settings"]["prefer_verified"] == "off"
+
+
+def test_controls_post_preset_applies_bundle(live_server):
+    status, body = _post(f"{live_server}/controls", {"preset": "integrity"})
+    assert status == 200, body
+    assert body["errors"] == {}
+    s = body["settings"]
+    assert s["prefer_verified"] == "prefer_verified"
+    assert s["reranker"] == "bge-v2-m3"
+    assert s["adjacent_turns"] == 2
+
+
+def test_controls_post_unknown_preset_returns_400(live_server):
+    status, body = _post(f"{live_server}/controls", {"preset": "nope"})
+    assert status == 400
+    assert "unknown preset" in body["error"]
+
+
+def test_controls_post_bad_value_returns_400_with_errors(live_server):
+    status, body = _post(f"{live_server}/controls", {"prefer_verified": "banana"})
+    assert status == 400
+    assert "prefer_verified" in body["errors"]
+    # The good default is untouched after a rejected write.
+    _, after = _get(f"{live_server}/controls")
+    assert after["settings"]["prefer_verified"] == "prefer_verified"
+
+
+def test_controls_post_store_scope_control_rejected(live_server):
+    # embedder is store-scope (a re-index, not a live toggle); set_control refuses it.
+    status, body = _post(f"{live_server}/controls", {"embedder": "minilm-onnx"})
+    assert status == 400
+    assert "embedder" in body["errors"]
+
+
+def test_controls_post_empty_body_returns_400(live_server):
+    status, body = _post(f"{live_server}/controls", {})
+    assert status == 400
+    assert "error" in body
