@@ -1,4 +1,37 @@
-export type View = "memory" | "pending" | "a2a" | "projects";
+export type View = "memory" | "pending" | "a2a" | "projects" | "settings";
+
+export type ControlValue = boolean | string | number;
+
+export interface ControlSpec {
+  id: string;
+  label: string;
+  category: "hardware" | "quality" | "integrity";
+  scope: "runtime" | "store" | "consumer";
+  type: "bool" | "choice" | "int";
+  config_key: string;
+  default: ControlValue;
+  choices: string[];
+  int_range: number[];
+  cost: string;
+  pros: string;
+  cons: string;
+  description: string;
+  benchmarks_anchor: string;
+}
+
+export interface PresetSpec {
+  id: string;
+  label: string;
+  description: string;
+  values: Record<string, ControlValue>;
+}
+
+export interface ControlsSchema {
+  controls: ControlSpec[];
+  presets: PresetSpec[];
+}
+
+export type ControlsSettings = Record<string, ControlValue>;
 
 export interface Hit {
   text: string;

@@ -6,6 +6,9 @@ import type {
   HealthInfo,
   Project,
   Shelf,
+  ControlsSchema,
+  ControlsSettings,
+  ControlValue,
 } from "./types";
 
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
@@ -72,4 +75,33 @@ export async function getShelves(project: string): Promise<Shelf[]> {
     `/shelves?project=${encodeURIComponent(project)}`
   );
   return shelves;
+}
+
+export async function getControls(): Promise<{
+  settings: ControlsSettings;
+  schema: ControlsSchema;
+}> {
+  return req<{ settings: ControlsSettings; schema: ControlsSchema }>("/controls");
+}
+
+// Write one or more controls, or apply a preset. A 400 that carries per-field
+// `errors` is a validation result, not a transport failure, so we return it.
+// Other failures (unknown preset, empty body, managed-by-taOS, network) throw.
+export async function postControls(
+  payload: Record<string, ControlValue> | { preset: string }
+): Promise<{ settings: ControlsSettings; errors: Record<string, string> }> {
+  const res = await fetch("/controls", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    settings?: ControlsSettings;
+    errors?: Record<string, string>;
+    error?: string;
+  };
+  if (!res.ok && !body.errors) {
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return { settings: body.settings ?? {}, errors: body.errors ?? {} };
 }

@@ -20,6 +20,7 @@ class Switch:
     cost: str              # short human note: latency / RAM / accuracy impact
     description: str       # one-line summary
     help: str              # longer text the dashboard shows
+    off_value: object = None  # value written when disabled; None = write nothing
 
 
 @dataclass
@@ -63,13 +64,15 @@ SWITCHES = {
     ),
     "prefer_verified": Switch(
         id="prefer_verified", label="Verified-memory recall gate", category="integrity",
-        config_key="claims.prefer_verified", on_value=True,
-        default=False, requires_consent=True,
-        cost="adds an entailment verify-pass at write time; no measured accuracy cost",
-        description="The claims gate (F-011): prefer entailment-verified memories on recall.",
-        help="Eliminates served-hallucination (0.040 -> 0.000) at no measured accuracy cost "
-             "on LoCoMo. Demotes (never deletes) unverified claims at serve time. For users "
-             "who need auditable, zero-served-hallucination memory.",
+        config_key="controls.prefer_verified", on_value="prefer_verified", off_value="off",
+        default=True, requires_consent=False,
+        cost="no query-time cost; a safe no-op until claims are verified",
+        description="The recall gate (F-011): prefer entailment-verified memories on recall. On by default.",
+        help="Demotes (never deletes) claims verified as unsupported out of default recall. "
+             "Eliminates served-hallucination (0.040 -> 0.000) at no measured accuracy cost, "
+             "tri-judge confirmed (E-018). Ships on by default because it is a safe no-op until "
+             "the verify-pass is populated; Minimal and Quality turn it off, Integrity keeps it on. "
+             "Writes the same controls.prefer_verified the runtime recall gate reads.",
     ),
 }
 
@@ -155,6 +158,11 @@ def resolve_config(profile_id: str, consented_switches: list[str] | None = None)
             enabled = wants
         if enabled:
             out[sw.config_key] = sw.on_value
+        elif sw.off_value is not None:
+            # A switch whose runtime default is on (e.g. the recall gate) must be
+            # written off explicitly when a profile opts out, or the runtime
+            # default would silently re-enable it.
+            out[sw.config_key] = sw.off_value
     return out
 
 
@@ -167,6 +175,7 @@ def profiles_schema() -> dict:
                 "config_key": s.config_key, "default": s.default,
                 "requires_consent": s.requires_consent, "cost": s.cost,
                 "description": s.description, "help": s.help,
+                "on_value": s.on_value, "off_value": s.off_value,
             }
             for s in SWITCHES.values()
         ],

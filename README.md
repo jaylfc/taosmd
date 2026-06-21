@@ -354,13 +354,13 @@ await vmem.init()
 
 Use it when the vector-store footprint or CPU distance cost is your binding constraint rather than recall, e.g. an Orange Pi / Rock 5 holding a large memory. Keep it off on a GPU box where full-precision cosine is effectively free.
 
-### Provable Memory (opt-in claims layer)
+### Provable Memory (recall gate on by default)
 
 Extraction turns conversations into facts, and extraction makes mistakes. Most memory systems discard the source after extracting, so a wrong fact is indistinguishable from a right one and the error rate is unmeasurable. taOSmd keeps a zero-loss archive, so every extracted claim stays linked to the source spans it came from. The claims layer uses that link to verify claims and to refuse to serve the ones that do not hold up.
 
-How it works: at ingest, each extracted fact is stored as a claim tagged with its archive span ids. A background verify-pass (idle or manual, `taosmd verify`) shows a small cross-family local model only the cited spans and records `supported` / `partial` / `unsupported`, fail-closed (any model or network error leaves the claim unverified, never promoted). At recall, an opt-in `prefer_verified` gate demotes unsupported claims out of the default results while keeping them queryable and in the archive, so a noisy verifier can never destroy a real memory.
+How it works: at ingest, each extracted fact is stored as a claim tagged with its archive span ids. A background verify-pass (idle or manual, `taosmd verify`) shows a small cross-family local model only the cited spans and records `supported` / `partial` / `unsupported`, fail-closed (any model or network error leaves the claim unverified, never promoted). At recall, the `prefer_verified` gate (on by default, see the evidence below) demotes claims verified as unsupported out of the default results while keeping them queryable and in the archive, so a noisy verifier can never destroy a real memory. The gate only acts on claims affirmatively verified as unsupported or contradicted, so it is a safe no-op for raw hits and for installs that have not run the verify-pass; pass `prefer_verified="off"` to a search call to turn it off.
 
-This makes the extraction-hallucination rate a standing metric rather than a one-off: on LoCoMo, **18.8% of regex-extracted facts were not fully supported by their source** (cross-family verified, `taosmd claims status` prints the live rate). A growing number of tools now measure memory quality; taOSmd measures it and then acts on it. In a pre-registered 200-question sweep the `prefer_verified` gate eliminated served-hallucination outright (a 0.04 served-unsupported rate dropped to 0.00) at no measured cost to answer accuracy or recall, so it is a recommended opt-in integrity mode. It stays **off by default** until a larger cross-judge confirm and an explicit sign-off, the same pre-registered discipline as every other lever ([research report](docs/research-report.md)).
+This makes the extraction-hallucination rate a standing metric rather than a one-off: on LoCoMo, **18.8% of regex-extracted facts were not fully supported by their source** (cross-family verified, `taosmd claims status` prints the live rate). A growing number of tools now measure memory quality; taOSmd measures it and then acts on it. In a pre-registered 200-question sweep the `prefer_verified` gate eliminated served-hallucination outright (a 0.04 served-unsupported rate dropped to 0.00) at no measured cost to answer accuracy or recall. A full tri-judge confirm at n=250 (E-018) then reproduced that under all three judges (strict llama3.1:8b, strict qwen3-4b-instruct, lenient gemma4:e2b): served-hallucination dropped to 0.000 every time, judged accuracy stayed within the 0.02 noise bound (a slight improvement under two of the three), and recall held within bound. With that evidence the gate is now **on by default**, the same pre-registered discipline as every other lever ([research report](docs/research-report.md)); it is a safe no-op until you populate and verify claims, and `prefer_verified="off"` opts out per call.
 
 ```bash
 taosmd verify          # run a verify-pass over unverified claims
@@ -388,6 +388,51 @@ taosmd.apply_recipe("my-agent", best.id)
 ```
 
 `taosmd.recipe_schema()` returns the recipe bundle as a JSON Schema, so a host UI can render any recipe generically. The default is tier-gated: the reranking leader where the cross-encoder is affordable, a lighter recipe (RRF, or the lite profile) on constrained tiers. See [docs/benchmarks.md](docs/benchmarks.md) for the per-recipe scores.
+
+## Configuration and controls
+
+A recipe sets the baseline; controls are the individual levers you can change on top of it. Every control is defined once in [`taosmd/controls.py`](taosmd/controls.py), and the standalone dashboard, the `/controls` API, the taOSmd app inside taOS, and this section all read that one registry, so they cannot drift. Each control falls into one of three scopes, and the scope is the honest answer to "does changing this take effect right away?":
+
+- **Live (runtime):** takes effect on the next search. These overlay the active recipe per query.
+- **Store-level:** changes how memories are indexed, so turning it on or off needs a re-index of the existing store, not a live toggle.
+- **Consumer-side:** applied in your own answer-generation. taOSmd retrieves and serves memory; it does not generate answers, so these are documented recommendations, never a switch in core that silently does nothing.
+
+You can set the live controls three ways: the dashboard Settings panel (presets plus an Advanced expander), the HTTP API (`GET /controls` returns the current settings and the schema; `POST /controls` applies a preset or per-control values), or a per-call argument that overrides the stored setting for one query (for example `search(..., prefer_verified="off")`). Inside taOS, the taOSmd app builds its settings UI against the same `GET`/`POST /controls` API and schema.
+
+### Live controls (take effect on the next search)
+
+| Control | Default | What it does | When to turn it on, and the trade-off | Resource cost |
+| --- | --- | --- | --- | --- |
+| `prefer_verified` | `prefer_verified` (on) | Demotes claims verified as unsupported out of default recall, while keeping them queryable and in the archive. | Eliminates served-hallucination (0.040 to 0.000) at no measured accuracy cost, tri-judge confirmed (E-018). `strict` additionally drops unverified claims and over-trades recall, so it stays opt-in. | No query-time cost; a safe no-op until the verify-pass is populated. |
+| `reranker` | `off` | Re-scores the candidate pool with a cross-encoder (`bge-v2-m3`) before serving. | The F-013 accuracy win where the hardware affords it (a GPU box, or any tier with headroom). Drop it on a Pi-class CPU tier. | One model download (`bge-reranker-v2-m3`) plus a cross-encoder pass per query. |
+| `fusion` | `rrf` | How dense and lexical hits are combined into one ranking (`rrf`, `mem0_additive`, or `boost`). | `rrf` and `mem0_additive` both beat the older mem0-only guidance at full scale; `boost` suits the smallest tiers. | None; it is a ranking-strategy choice. |
+| `adjacent_turns` | `2` (range 0 to 4) | Includes N positional neighbours around each retrieved hit. | Worth about +0.089 on LoCoMo at 2; surrounding turns add context. Use 1 on a Pi-class tier. | A wider context window per hit (more tokens to the generator). |
+
+### Store-level controls (a re-index to change)
+
+| Control | Default | What it does | When to turn it on, and the trade-off | Resource cost |
+| --- | --- | --- | --- | --- |
+| `embedder` | `arctic-embed-s` | Which ONNX dense embedder backs retrieval, set at setup (`arctic-embed-s` or `minilm-onnx`). | `arctic-embed-s` scores +0.057 judged retrieval over MiniLM at the same 384 dims and latency. MiniLM is the model the 97.0% Recall@5 headline was measured on. | A one-time model fetch; changing it re-embeds the whole store. |
+| `binary_quant` | `off` | Stores 1 bit per dimension instead of full-precision floats. | 32x smaller vector footprint, recall-neutral; for SBC and low-memory tiers. | Re-embed to apply; then 32x smaller vectors and cheaper CPU distance. |
+| `late_interaction` | `off` | Token-level MaxSim scoring; the store is built with per-token vectors. | Lifts evidence recall from 0.64 to 0.85 on LoCoMo, CPU-only, with no GPU or reranker. | Re-index to apply; then about 110 ms per query on a 16-core CPU. |
+
+### Consumer-side recommendation (applied in your answer-generation)
+
+| Control | Default | What it does | When to turn it on, and the trade-off | Resource cost |
+| --- | --- | --- | --- | --- |
+| `self_verify` | `off` | A CoVe-style check of the draft answer against the retrieved evidence, run in your answer-generation. | The dominant lever behind the 74.6% end-to-end Judge, +17.8pp on LongMemEval-S. taOSmd serves memory and does not generate answers, so this belongs in your answer-gen, paired with `reranker` for the verified-answer config. | A second LLM pass per answer; roughly doubles answer latency. |
+
+### Presets
+
+One-tap bundles of the live controls. The recall gate is on globally by default, so Minimal is the preset that turns it off.
+
+| Preset | `reranker` | `prefer_verified` | `fusion` | `adjacent_turns` | For |
+| --- | --- | --- | --- | --- | --- |
+| Minimal | `off` | `off` | `rrf` | 1 | Fastest and lightest: plain retrieval, weak hardware or speed-first. |
+| Quality | `bge-v2-m3` | `off` | `rrf` | 2 | Best accuracy where hardware affords (pair with `self_verify` in your answer-gen). |
+| Integrity | `bge-v2-m3` | `prefer_verified` | `rrf` | 2 | Quality plus the verified-memory gate: auditable, zero-served-hallucination recall. |
+
+The numbers above are cross-linked to their measurements in [docs/benchmarks.md](docs/benchmarks.md), and the full method and provenance for each lever are in the [research report](docs/research-report.md) (F-010 embedder, F-011 recall gate, F-013 reranking and self-verification, E-018 the tri-judge gate confirm).
 
 ## MCP server
 
@@ -528,7 +573,7 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 - **Coordination is part of the memory, not bolted on**, we are not aware of another local-first memory system that ships an auditable comms bus and a dependency-aware task graph inside the memory server itself. Both are projections of the same zero-loss archive, so who said what and who did what are reconstructable from the source of truth.
 - **Temporal facts**, validity windows, point-in-time queries
 - **Contradiction detection**, corrected facts supersede across both the typed knowledge graph (via `valid_to` invalidation) and the vector recall layer (matching chunks soft-hidden, not deleted); recall returns only the active fact
-- **Provable Memory (opt-in)**, because the archive keeps every source span, taOSmd can verify each extracted fact against the spans it came from, mark it supported or unsupported, and demote (never delete) the unsupported ones at recall. That makes the extraction-hallucination rate a measurable, standing number: 18.8% of regex-extracted facts on LoCoMo were not fully supported by their source, cross-family verified. Extraction-based systems that discard the source cannot measure this; we can ([methodology](docs/research-report.md))
+- **Provable Memory (recall gate on by default)**, because the archive keeps every source span, taOSmd can verify each extracted fact against the spans it came from, mark it supported or unsupported, and demote (never delete) the unsupported ones at recall. The `prefer_verified` gate ships on by default (a full tri-judge confirm eliminated served-hallucination at no accuracy cost) and is a safe no-op until you run the verify-pass. That makes the extraction-hallucination rate a measurable, standing number: 18.8% of regex-extracted facts on LoCoMo were not fully supported by their source, cross-family verified. Extraction-based systems that discard the source cannot measure this; we can ([methodology](docs/research-report.md))
 - **Zero-loss archive**, append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
 - **Intent-aware retrieval**, routes queries to optimal memory layer
 - **0.3ms embeddings**, ONNX Runtime on CPU (ARM or x86)

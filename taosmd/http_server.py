@@ -761,6 +761,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         self._send_json(404, {"error": "dashboard disabled (managed_by=taos)"})
                 elif method == "GET" and path == "/health":
                     self._send_json(200, {"status": "ok", "version": __version__})
+                elif method == "GET" and path == "/controls":
+                    self._handle_controls_get()
+                elif method == "POST" and path == "/controls":
+                    self._handle_controls_post()
                 elif method == "GET" and path == "/search":
                     self._handle_search_get(query)
                 elif method == "POST" and path == "/search":
@@ -960,6 +964,41 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_list_projects(self) -> None:
             projects = runner.run(service.list_projects(data_dir=data_dir))
             self._send_json(200, {"projects": projects})
+
+        def _handle_controls_get(self) -> None:
+            from taosmd import config as _config, controls as _controls  # noqa: PLC0415
+            self._send_json(200, {
+                "settings": _config.get_controls(data_dir=data_dir),
+                "schema": _controls.controls_schema(),
+            })
+
+        def _handle_controls_post(self) -> None:
+            from taosmd import config as _config, controls as _controls  # noqa: PLC0415
+            body = self._read_json_body()
+            preset = body.get("preset")
+            if preset:
+                p = _controls.PRESETS.get(preset)
+                if not p:
+                    self._send_json(400, {"error": f"unknown preset: {preset!r}"})
+                    return
+                updates = dict(p["values"])
+            else:
+                vals = body.get("values")
+                updates = vals if isinstance(vals, dict) else body
+            if not isinstance(updates, dict) or not updates:
+                self._send_json(400, {
+                    "error": "body must be {control_id: value}, {values: {...}}, or {preset: id}"})
+                return
+            errors = {}
+            for cid, val in updates.items():
+                try:
+                    _config.set_control(cid, val, data_dir=data_dir)
+                except ValueError as exc:
+                    errors[cid] = str(exc)
+            self._send_json(400 if errors else 200, {
+                "settings": _config.get_controls(data_dir=data_dir),
+                "errors": errors,
+            })
 
         def _handle_list_shelves(self, qs: dict) -> None:
             project = (qs.get("project") or [None])[0]
