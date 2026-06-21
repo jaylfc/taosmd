@@ -389,6 +389,51 @@ taosmd.apply_recipe("my-agent", best.id)
 
 `taosmd.recipe_schema()` returns the recipe bundle as a JSON Schema, so a host UI can render any recipe generically. The default is tier-gated: the reranking leader where the cross-encoder is affordable, a lighter recipe (RRF, or the lite profile) on constrained tiers. See [docs/benchmarks.md](docs/benchmarks.md) for the per-recipe scores.
 
+## Configuration and controls
+
+A recipe sets the baseline; controls are the individual levers you can change on top of it. Every control is defined once in [`taosmd/controls.py`](taosmd/controls.py), and the standalone dashboard, the `/controls` API, the taOSmd app inside taOS, and this section all read that one registry, so they cannot drift. Each control falls into one of three scopes, and the scope is the honest answer to "does changing this take effect right away?":
+
+- **Live (runtime):** takes effect on the next search. These overlay the active recipe per query.
+- **Store-level:** changes how memories are indexed, so turning it on or off needs a re-index of the existing store, not a live toggle.
+- **Consumer-side:** applied in your own answer-generation. taOSmd retrieves and serves memory; it does not generate answers, so these are documented recommendations, never a switch in core that silently does nothing.
+
+You can set the live controls three ways: the dashboard Settings panel (presets plus an Advanced expander), the HTTP API (`GET /controls` returns the current settings and the schema; `POST /controls` applies a preset or per-control values), or a per-call argument that overrides the stored setting for one query (for example `search(..., prefer_verified="off")`). Inside taOS, the taOSmd app builds its settings UI against the same `GET`/`POST /controls` API and schema.
+
+### Live controls (take effect on the next search)
+
+| Control | Default | What it does | When to turn it on, and the trade-off | Resource cost |
+| --- | --- | --- | --- | --- |
+| `prefer_verified` | `prefer_verified` (on) | Demotes claims verified as unsupported out of default recall, while keeping them queryable and in the archive. | Eliminates served-hallucination (0.040 to 0.000) at no measured accuracy cost, tri-judge confirmed (E-018). `strict` additionally drops unverified claims and over-trades recall, so it stays opt-in. | No query-time cost; a safe no-op until the verify-pass is populated. |
+| `reranker` | `off` | Re-scores the candidate pool with a cross-encoder (`bge-v2-m3`) before serving. | The F-013 accuracy win where the hardware affords it (a GPU box, or any tier with headroom). Drop it on a Pi-class CPU tier. | One model download (`bge-reranker-v2-m3`) plus a cross-encoder pass per query. |
+| `fusion` | `rrf` | How dense and lexical hits are combined into one ranking (`rrf`, `mem0_additive`, or `boost`). | `rrf` and `mem0_additive` both beat the older mem0-only guidance at full scale; `boost` suits the smallest tiers. | None; it is a ranking-strategy choice. |
+| `adjacent_turns` | `2` (range 0 to 4) | Includes N positional neighbours around each retrieved hit. | Worth about +0.089 on LoCoMo at 2; surrounding turns add context. Use 1 on a Pi-class tier. | A wider context window per hit (more tokens to the generator). |
+
+### Store-level controls (a re-index to change)
+
+| Control | Default | What it does | When to turn it on, and the trade-off | Resource cost |
+| --- | --- | --- | --- | --- |
+| `embedder` | `arctic-embed-s` | Which ONNX dense embedder backs retrieval, set at setup (`arctic-embed-s` or `minilm-onnx`). | `arctic-embed-s` scores +0.057 judged retrieval over MiniLM at the same 384 dims and latency. MiniLM is the model the 97.0% Recall@5 headline was measured on. | A one-time model fetch; changing it re-embeds the whole store. |
+| `binary_quant` | `off` | Stores 1 bit per dimension instead of full-precision floats. | 32x smaller vector footprint, recall-neutral; for SBC and low-memory tiers. | Re-embed to apply; then 32x smaller vectors and cheaper CPU distance. |
+| `late_interaction` | `off` | Token-level MaxSim scoring; the store is built with per-token vectors. | Lifts evidence recall from 0.64 to 0.85 on LoCoMo, CPU-only, with no GPU or reranker. | Re-index to apply; then about 110 ms per query on a 16-core CPU. |
+
+### Consumer-side recommendation (applied in your answer-generation)
+
+| Control | Default | What it does | When to turn it on, and the trade-off | Resource cost |
+| --- | --- | --- | --- | --- |
+| `self_verify` | `off` | A CoVe-style check of the draft answer against the retrieved evidence, run in your answer-generation. | The dominant lever behind the 74.6% end-to-end Judge, +17.8pp on LongMemEval-S. taOSmd serves memory and does not generate answers, so this belongs in your answer-gen, paired with `reranker` for the verified-answer config. | A second LLM pass per answer; roughly doubles answer latency. |
+
+### Presets
+
+One-tap bundles of the live controls. The recall gate is on globally by default, so Minimal is the preset that turns it off.
+
+| Preset | `reranker` | `prefer_verified` | `fusion` | `adjacent_turns` | For |
+| --- | --- | --- | --- | --- | --- |
+| Minimal | `off` | `off` | `rrf` | 1 | Fastest and lightest: plain retrieval, weak hardware or speed-first. |
+| Quality | `bge-v2-m3` | `off` | `rrf` | 2 | Best accuracy where hardware affords (pair with `self_verify` in your answer-gen). |
+| Integrity | `bge-v2-m3` | `prefer_verified` | `rrf` | 2 | Quality plus the verified-memory gate: auditable, zero-served-hallucination recall. |
+
+The numbers above are cross-linked to their measurements in [docs/benchmarks.md](docs/benchmarks.md), and the full method and provenance for each lever are in the [research report](docs/research-report.md) (F-010 embedder, F-011 recall gate, F-013 reranking and self-verification, E-018 the tri-judge gate confirm).
+
 ## MCP server
 
 taOSmd can expose its memory over the [Model Context Protocol](https://modelcontextprotocol.io) so any MCP-capable agent (Claude Desktop, Cursor, Codex, OpenWebUI, …) can read and write memory directly, no custom integration. The server is local-first and offline: it speaks the **stdio** transport (the standard for desktop MCP clients), with no network listener and no cloud dependency.
