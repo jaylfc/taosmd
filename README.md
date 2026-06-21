@@ -726,7 +726,15 @@ Three CLI commands consume the bus for monitoring (all share an id-based, exactl
 
 ### Web dashboard
 
-`GET /` and `GET /ui` serve a read-only local web dashboard, a bundled React single-page app with three views: memory search, the pending-review queue, and a live A2A channel monitor (it lists channels, then backfills a channel's history and live-updates over the SSE stream). It is served entirely from local bundled assets (no CDN, works fully offline); if the dashboard assets haven't been built, the server falls back to a minimal self-contained stdlib inspector page. Read-only, it exposes no write or destructive actions; the JSON endpoints above are the integration surface.
+`GET /` and `GET /ui` serve a local web dashboard, a bundled React single-page app served entirely from local assets (no CDN, works fully offline); if the assets have not been built, the server falls back to a minimal self-contained stdlib inspector page. It wears taOS's macOS-style theme with a dark and a light scheme and a toggle. The tabs:
+
+- **Home** is an overview over `GET /stats`: stat cards (total memories, agents, projects, verified facts), a memory-growth chart, the verification-coverage donut (verified, unverified, and flagged, with the live hallucination rate, the number no other memory system surfaces), top categories and top agents and projects, and a recent-memories browse list. A scope selector switches the whole view between all memory, the reserved `user` namespace, and any individual agent.
+- **Memory** searches what an agent remembers.
+- **Explorer** renders the temporal knowledge graph as a force-directed galaxy over `GET /graph`: entities as nodes sized by connectivity, relations as edges, superseded facts faded, with pan, zoom, and click-to-detail. The force layout (`d3-force`) is bundled, so the view stays offline.
+- **Projects**, **Pending**, and **A2A channels** browse projects, the pending-review queue, and a live A2A channel monitor (history backfill plus live SSE updates).
+- **Settings** reads and writes the memory controls through `GET`/`POST /controls` (presets plus an Advanced expander).
+
+Charts are hand-rolled SVG, every view is keyboard-navigable and ARIA-labelled, and reads stay non-destructive: the data and `/controls` endpoints are the integration surface.
 
 ### Persistent service
 
