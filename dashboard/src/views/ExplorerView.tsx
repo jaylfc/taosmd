@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getGraph, getGraphActivations } from "../api";
 import type { Graph, GraphNode } from "../types";
 import { ForceGraph, colorForType } from "../components/ForceGraph";
@@ -79,11 +79,64 @@ function DetailPanel({ node, graph }: { node: GraphNode; graph: Graph }) {
   );
 }
 
+const fmtTime = (t: number) => new Date(t * 1000).toLocaleString();
+
+function Scrubber({
+  graph,
+  asOf,
+  setAsOf,
+}: {
+  graph: Graph;
+  asOf: number | null;
+  setAsOf: (v: number | null) => void;
+}) {
+  const lo = graph.t_min;
+  const hi = graph.t_max;
+  if (lo == null || hi == null || hi <= lo) return null;
+  const value = asOf ?? hi;
+  return (
+    <div className="flex items-center gap-3 text-xs" style={{ color: "var(--muted)" }}>
+      <span className="shrink-0">Memory as of</span>
+      <input
+        type="range"
+        min={lo}
+        max={hi}
+        step={Math.max((hi - lo) / 240, 1)}
+        value={value}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          // Dragging fully right returns to the live view (no as_of).
+          setAsOf(v >= hi ? null : v);
+        }}
+        aria-label="Reconstruct the graph as of a past instant"
+        aria-valuetext={asOf != null ? fmtTime(asOf) : "now"}
+        className="flex-1"
+        style={{ accentColor: "var(--accent)" }}
+      />
+      <span className="shrink-0 tabular-nums" style={{ color: asOf != null ? "var(--accent)" : "var(--muted)" }}>
+        {asOf != null ? fmtTime(asOf) : "now"}
+      </span>
+      {asOf != null && (
+        <button
+          type="button"
+          onClick={() => setAsOf(null)}
+          className="shrink-0 rounded px-2 py-0.5 font-medium"
+          style={{ border: "1px solid var(--border)", color: "var(--accent)" }}
+        >
+          Now
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ExplorerView() {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [showCurrent, setShowCurrent] = useState(false);
   const [activatedIds, setActivatedIds] = useState<Set<string>>(new Set());
+  const [asOf, setAsOf] = useState<number | null>(null);
+  const firstScrub = useRef(true);
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -122,6 +175,29 @@ export function ExplorerView() {
       window.clearInterval(id);
     };
   }, [state]);
+
+  // Time scrubber: when as_of changes, refetch the graph as it stood at that
+  // instant (null = the live view). Debounced so dragging the slider does not
+  // spam the endpoint. The mount run is skipped because load() already fetched.
+  useEffect(() => {
+    if (firstScrub.current) {
+      firstScrub.current = false;
+      return;
+    }
+    let cancelled = false;
+    const t = window.setTimeout(async () => {
+      try {
+        const g = await getGraph(300, asOf);
+        if (!cancelled) setState((s) => (s.kind === "ready" ? { kind: "ready", graph: g } : s));
+      } catch {
+        // keep the current snapshot if a scrub fetch fails
+      }
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [asOf]);
 
   // Stable identity for the edge set: selecting a node re-renders ExplorerView,
   // and an inline edges.filter(...) would hand ForceGraph a fresh array each
@@ -184,6 +260,16 @@ export function ExplorerView() {
                   {activatedIds.size} recalled live
                 </span>
               )}
+              {asOf != null && (
+                <span className="flex items-center gap-1.5" style={{ color: "var(--accent)" }}>
+                  <span
+                    className="inline-block rounded-full"
+                    style={{ width: 7, height: 7, background: "var(--accent)" }}
+                    aria-hidden="true"
+                  />
+                  as of {fmtTime(asOf)}
+                </span>
+              )}
             </span>
             <span className="flex items-center gap-3">
               <span
@@ -221,6 +307,8 @@ export function ExplorerView() {
               )}
             </span>
           </div>
+
+          <Scrubber graph={state.graph} asOf={asOf} setAsOf={setAsOf} />
 
           <ForceGraph
             nodes={state.graph.nodes}

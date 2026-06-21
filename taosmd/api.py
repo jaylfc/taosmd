@@ -662,10 +662,14 @@ async def list_memories(*, scope: str | None = None, limit: int = 50, data_dir=N
     return await stores["archive"].list_memories(agent=_scope_agent(scope), limit=limit)
 
 
-async def graph(*, limit: int = 300, data_dir=None) -> dict:
-    """The knowledge-graph nodes and edges for the Explorer view (read-only)."""
+async def graph(*, limit: int = 300, as_of: float | None = None, data_dir=None) -> dict:
+    """The knowledge-graph nodes and edges for the Explorer view (read-only).
+
+    ``as_of`` (unix time) reconstructs the graph as it stood at that instant
+    for the time scrubber; omit it for the current view.
+    """
     stores = await _ensure_stores(data_dir)
-    return await stores["kg"].graph(limit=limit)
+    return await stores["kg"].graph(limit=limit, as_of=as_of)
 
 
 async def graph_activations(*, since: float | None = None, window: float = 60.0,

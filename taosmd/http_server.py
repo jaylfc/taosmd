@@ -1027,11 +1027,16 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_graph(self, qs: dict) -> None:
             limit = (qs.get("limit") or [300])[0]
+            as_of = (qs.get("as_of") or [None])[0]
             try:
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
-            result = runner.run(service.graph(limit=limit_i, data_dir=data_dir))
+            try:
+                as_of_f = float(as_of) if as_of is not None else None
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'as_of' must be a number") from exc
+            result = runner.run(service.graph(limit=limit_i, as_of=as_of_f, data_dir=data_dir))
             self._send_json(200, result)
 
         def _handle_graph_activations(self, qs: dict) -> None:

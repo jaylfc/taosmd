@@ -724,8 +724,20 @@ def test_memories_endpoint_and_scoped_stats(live_server):
 def test_graph_endpoint(live_server):
     status, body = _get(f"{live_server}/graph")
     assert status == 200, body
-    assert set(body) >= {"nodes", "edges", "total_nodes", "total_edges"}
+    assert set(body) >= {"nodes", "edges", "total_nodes", "total_edges", "t_min", "t_max"}
     assert isinstance(body["nodes"], list) and isinstance(body["edges"], list)
+
+
+def test_graph_as_of_endpoint(live_server):
+    status, body = _get(f"{live_server}/graph?as_of=1700000000")
+    assert status == 200, body
+    assert set(body) >= {"nodes", "edges", "t_min", "t_max"}
+    assert isinstance(body["edges"], list)
+
+
+def test_graph_as_of_rejects_non_numeric(live_server):
+    status, body = _get(f"{live_server}/graph?as_of=notatime")
+    assert status == 400, body
 
 
 def test_graph_activations_endpoint(live_server):
