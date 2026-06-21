@@ -1,6 +1,14 @@
 export type View = "home" | "memory" | "pending" | "a2a" | "projects" | "settings";
 
+export interface Memory {
+  text: string;
+  agent: string | null;
+  kind: string;
+  ts: number;
+}
+
 export interface Stats {
+  scope: string;
   memories: { total: number; disk_mb: number };
   agents: number;
   projects: number;

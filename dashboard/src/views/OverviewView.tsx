@@ -1,11 +1,13 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { getStats } from "../api";
-import type { Stats } from "../types";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { getStats, getMemories } from "../api";
+import type { Stats, Memory } from "../types";
 import { StatCard } from "../components/StatCard";
 import { GrowthChart } from "../components/GrowthChart";
 import { VerificationDonut } from "../components/VerificationDonut";
 import { TopList } from "../components/TopList";
 import { ActivityFeed } from "../components/ActivityFeed";
+import { MemoryList } from "../components/MemoryList";
+import { ScopeSelector } from "../components/ScopeSelector";
 import { SkeletonCard } from "../components/Skeleton";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { EmptyState } from "../components/EmptyState";
@@ -21,7 +23,7 @@ const cardStyle: React.CSSProperties = {
   boxShadow: "var(--shadow-card)",
 };
 
-function Ready({ stats }: { stats: Stats }) {
+function Ready({ stats, memories }: { stats: Stats; memories: Memory[] }) {
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -59,21 +61,33 @@ function Ready({ stats }: { stats: Stats }) {
         </div>
       </div>
 
-      <div className="rounded-lg p-5" style={cardStyle}>
-        <ActivityFeed items={stats.recent_activity} />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-lg p-5" style={cardStyle}>
+          <MemoryList items={memories} />
+        </div>
+        <div className="rounded-lg p-5" style={cardStyle}>
+          <ActivityFeed items={stats.recent_activity} />
+        </div>
       </div>
     </>
   );
 }
 
 export function OverviewView() {
+  const [scope, setScope] = useState("all");
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [agentNames, setAgentNames] = useState<string[]>([]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (sc: string) => {
     setState({ kind: "loading" });
     try {
-      const stats = await getStats();
+      const [stats, mems] = await Promise.all([getStats(sc), getMemories(sc, 20)]);
       setState({ kind: "ready", stats });
+      setMemories(mems);
+      if (sc === "all") {
+        setAgentNames(stats.top_agents.map((a) => a.name).filter(Boolean));
+      }
     } catch (err) {
       setState({
         kind: "error",
@@ -83,18 +97,33 @@ export function OverviewView() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void load(scope);
+  }, [load, scope]);
+
+  const scopeOptions = useMemo(() => {
+    const names = Array.from(
+      new Set(["user", ...agentNames].filter((n) => n && n !== "all")),
+    );
+    return [
+      { value: "all", label: "All memory" },
+      ...names.map((n) => ({ value: n, label: n === "user" ? "User (you)" : n })),
+    ];
+  }, [agentNames]);
 
   return (
     <section className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
-      <div>
-        <h1 className="text-lg font-semibold" style={{ color: "var(--ink)" }}>
-          Home
-        </h1>
-        <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
-          Your memory at a glance.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold" style={{ color: "var(--ink)" }}>
+            Home
+          </h1>
+          <p className="mt-1 text-sm" style={{ color: "var(--muted)" }}>
+            {scope === "all"
+              ? "Your memory at a glance."
+              : `Memory scoped to ${scope === "user" ? "you" : scope}.`}
+          </p>
+        </div>
+        <ScopeSelector scope={scope} options={scopeOptions} onChange={setScope} />
       </div>
 
       {state.kind === "loading" && (
@@ -105,18 +134,18 @@ export function OverviewView() {
       )}
 
       {state.kind === "error" && (
-        <ErrorBanner message={state.message} onRetry={() => void load()} />
+        <ErrorBanner message={state.message} onRetry={() => void load(scope)} />
       )}
 
       {state.kind === "ready" && state.stats.memories.total === 0 && (
         <EmptyState
           title="No memories yet"
-          description="Once your agents start storing memories, this overview fills in with growth, verification coverage, and recent activity."
+          description="Once memories are stored in this scope, the overview fills in with growth, verification coverage, and recent memories."
         />
       )}
 
       {state.kind === "ready" && state.stats.memories.total > 0 && (
-        <Ready stats={state.stats} />
+        <Ready stats={state.stats} memories={memories} />
       )}
     </section>
   );

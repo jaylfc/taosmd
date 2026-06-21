@@ -10,6 +10,7 @@ import type {
   ControlsSettings,
   ControlValue,
   Stats,
+  Memory,
 } from "./types";
 
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
@@ -25,8 +26,16 @@ export async function getHealth(): Promise<HealthInfo> {
   return req<HealthInfo>("/health");
 }
 
-export async function getStats(): Promise<Stats> {
-  return req<Stats>("/stats");
+export async function getStats(scope?: string): Promise<Stats> {
+  const q = scope && scope !== "all" ? `?scope=${encodeURIComponent(scope)}` : "";
+  return req<Stats>(`/stats${q}`);
+}
+
+export async function getMemories(scope?: string, limit = 50): Promise<Memory[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (scope && scope !== "all") params.set("scope", scope);
+  const { memories } = await req<{ memories: Memory[] }>(`/memories?${params}`);
+  return memories;
 }
 
 export async function searchMemory(
