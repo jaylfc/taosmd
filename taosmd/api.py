@@ -584,20 +584,34 @@ async def list_projects(*, data_dir=None) -> list[dict]:
     return list(projects.values())
 
 
-async def dashboard_stats(*, data_dir=None) -> dict:
+#: Reserved namespace for the human's own memory (share-to-collect + ambient
+#: capture write here). Distinct from each AI agent's working-memory namespace.
+USER_NAMESPACE = "user"
+
+
+def _scope_agent(scope: str | None) -> str | None:
+    """Resolve a dashboard scope to an agent filter (None means all namespaces)."""
+    return None if scope in (None, "", "all") else scope
+
+
+async def dashboard_stats(*, scope: str | None = None, data_dir=None) -> dict:
     """Aggregate read-only dashboard stats over the existing stores.
 
     Counts are derived from the archive (the per-install source of truth) and
     the claims store, so a fresh install returns zeros rather than an error.
+    ``scope`` filters the per-agent fields to one agent (or the ``user``
+    namespace); the default ``all`` aggregates every namespace.
     """
     stores = await _ensure_stores(data_dir)
     arc = stores["archive"]
+    agent = _scope_agent(scope)
     arc_stats = await arc.stats()
-    growth = await arc.daily_counts(days=30)
-    recent = await arc.recent(limit=10)
+    total = await arc.scoped_total(agent)
+    growth = await arc.daily_counts(days=30, agent=agent)
+    recent = await arc.recent(limit=10, agent=agent)
     top_agents = await arc.top_by("agent_name", limit=5)
-    top_projects = await arc.top_by("project", limit=5)
-    agents_n = await arc.distinct_agents()
+    top_projects = await arc.top_by("project", limit=5, agent=agent)
+    agents_n = 1 if agent is not None else await arc.distinct_agents()
 
     claims = stores.get("claims")
     rate = await claims.rate() if claims is not None else {}
@@ -608,8 +622,9 @@ async def dashboard_stats(*, data_dir=None) -> dict:
 
     projects = await list_projects(data_dir=data_dir)
     return {
+        "scope": scope or "all",
         "memories": {
-            "total": int(arc_stats.get("total_events", 0)),
+            "total": total,
             "disk_mb": arc_stats.get("disk_usage_mb", 0),
         },
         "agents": agents_n,
@@ -625,6 +640,16 @@ async def dashboard_stats(*, data_dir=None) -> dict:
         "top_projects": top_projects,
         "recent_activity": recent,
     }
+
+
+async def list_memories(*, scope: str | None = None, limit: int = 50, data_dir=None) -> list[dict]:
+    """Recent archived memories for the dashboard browse view.
+
+    ``scope`` is ``all`` (every namespace), ``user`` (the reserved personal
+    namespace), or a specific agent name. Returns ``{text, agent, kind, ts}``.
+    """
+    stores = await _ensure_stores(data_dir)
+    return await stores["archive"].list_memories(agent=_scope_agent(scope), limit=limit)
 
 
 async def list_shelves(*, project: str, data_dir=None) -> list[dict]:

@@ -707,3 +707,15 @@ def test_stats_endpoint(live_server):
     assert body["memories"]["total"] >= 1
     assert "verification" in body and "growth" in body
     assert any(a["name"] == "s" for a in body["top_agents"])
+
+
+def test_memories_endpoint_and_scoped_stats(live_server):
+    _post(f"{live_server}/ingest", {"text": "User memory via http.", "agent": "user"})
+    _post(f"{live_server}/ingest", {"text": "Bot memory via http.", "agent": "bot"})
+    status, body = _get(f"{live_server}/memories?scope=user&limit=10")
+    assert status == 200, body
+    assert body["memories"] and all(m["agent"] == "user" for m in body["memories"])
+    _, allb = _get(f"{live_server}/stats")
+    _, userb = _get(f"{live_server}/stats?scope=user")
+    assert userb["scope"] == "user"
+    assert allb["memories"]["total"] > userb["memories"]["total"]

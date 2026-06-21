@@ -433,3 +433,16 @@ def test_stats_empty_install_returns_zeros(isolated_data_dir):
     assert out["growth"] == []
     assert out["top_agents"] == []
     assert out["recent_activity"] == []
+
+
+def test_list_memories_and_scoped_stats(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest("User scoped memory.", agent="user", data_dir=str(isolated_data_dir)))
+    asyncio.run(taosmd.ingest("Bot scoped memory.", agent="bot", data_dir=str(isolated_data_dir)))
+    mems = asyncio.run(taosmd_api.list_memories(scope="user", data_dir=str(isolated_data_dir)))
+    assert mems and all(m["agent"] == "user" for m in mems)
+    all_stats = asyncio.run(taosmd_api.dashboard_stats(data_dir=str(isolated_data_dir)))
+    user_stats = asyncio.run(taosmd_api.dashboard_stats(scope="user", data_dir=str(isolated_data_dir)))
+    assert user_stats["memories"]["total"] >= 1
+    assert all_stats["memories"]["total"] > user_stats["memories"]["total"]
+    assert user_stats["scope"] == "user" and all_stats["scope"] == "all"

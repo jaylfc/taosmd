@@ -29,3 +29,25 @@ async def test_daily_counts_and_recent(tmp_path):
     assert top and top[0]["name"] == "a" and top[0]["count"] >= 1
     with pytest.raises(ValueError):
         await arc.top_by("evil; DROP TABLE", limit=5)
+
+
+@pytest.mark.asyncio
+async def test_scope_filtering_and_list_memories(tmp_path):
+    arc = ArchiveStore(archive_dir=str(tmp_path / "a"), index_path=str(tmp_path / "idx.db"))
+    await arc.init()
+    await arc.record(event_type="conversation", data={"text": "user note one"}, agent_name="user")
+    await arc.record(event_type="conversation", data={"text": "agent note"}, agent_name="bot")
+
+    assert await arc.scoped_total() == 2
+    assert await arc.scoped_total("user") == 1
+    g_all = await arc.daily_counts(30)
+    g_user = await arc.daily_counts(30, agent="user")
+    assert sum(d["count"] for d in g_all) == 2
+    assert sum(d["count"] for d in g_user) == 1
+
+    mems = await arc.list_memories(agent="user", limit=10)
+    assert len(mems) == 1
+    assert mems[0]["agent"] == "user"
+    assert "user note" in mems[0]["text"]
+    assert set(mems[0]) == {"text", "agent", "kind", "ts"}
+    assert len(await arc.list_memories(limit=10)) == 2

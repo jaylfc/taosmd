@@ -381,27 +381,37 @@ class ArchiveStore:
             "total": sum(r["n"] for r in rows),
         }
 
-    async def daily_counts(self, days: int = 30) -> list[dict]:
+    async def daily_counts(self, days: int = 30, agent: str | None = None) -> list[dict]:
         """Per-day archived-event counts for the last ``days`` days, oldest first.
 
         One grouped query (used by the dashboard growth chart) rather than one
-        ``daily_summary`` call per day.
+        ``daily_summary`` call per day. ``agent`` scopes the counts to one agent.
         """
-        cutoff = time.time() - days * 86400
+        where = "timestamp >= ?"
+        params: list = [time.time() - days * 86400]
+        if agent is not None:
+            where += " AND agent_name = ?"
+            params.append(agent)
         rows = self._conn.execute(
-            """SELECT date(timestamp, 'unixepoch') AS d, COUNT(*) AS n
-               FROM archive_index WHERE timestamp >= ?
+            f"""SELECT date(timestamp, 'unixepoch') AS d, COUNT(*) AS n
+               FROM archive_index WHERE {where}
                GROUP BY d ORDER BY d""",
-            (cutoff,),
+            tuple(params),
         ).fetchall()
         return [{"date": r["d"], "count": r["n"]} for r in rows]
 
-    async def recent(self, limit: int = 10) -> list[dict]:
+    async def recent(self, limit: int = 10, agent: str | None = None) -> list[dict]:
         """The most recent archived events as ``{kind, label, ts}``, newest first."""
+        where = ""
+        params: list = []
+        if agent is not None:
+            where = "WHERE agent_name = ?"
+            params.append(agent)
+        params.append(limit)
         rows = self._conn.execute(
-            "SELECT event_type, timestamp, agent_name FROM archive_index "
-            "ORDER BY timestamp DESC LIMIT ?",
-            (limit,),
+            f"SELECT event_type, timestamp, agent_name FROM archive_index "
+            f"{where} ORDER BY timestamp DESC LIMIT ?",
+            tuple(params),
         ).fetchall()
         return [
             {
@@ -420,16 +430,67 @@ class ArchiveStore:
         ).fetchone()
         return int(row["n"])
 
-    async def top_by(self, column: str, limit: int = 5) -> list[dict]:
+    async def scoped_total(self, agent: str | None = None) -> int:
+        """Total archived events, optionally scoped to one ``agent``."""
+        if agent is None:
+            row = self._conn.execute("SELECT COUNT(*) AS n FROM archive_index").fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM archive_index WHERE agent_name = ?", (agent,)
+            ).fetchone()
+        return int(row["n"])
+
+    async def top_by(self, column: str, limit: int = 5, agent: str | None = None) -> list[dict]:
         """Top ``{name, count}`` groups by ``column`` (agent_name or project)."""
         if column not in ("agent_name", "project"):
             raise ValueError(f"top_by column must be agent_name or project, got {column!r}")
+        where = f"{column} IS NOT NULL"
+        params: list = []
+        if agent is not None:
+            where += " AND agent_name = ?"
+            params.append(agent)
+        params.append(limit)
         rows = self._conn.execute(
             f"SELECT {column} AS name, COUNT(*) AS n FROM archive_index "
-            f"WHERE {column} IS NOT NULL GROUP BY {column} ORDER BY n DESC LIMIT ?",
-            (limit,),
+            f"WHERE {where} GROUP BY {column} ORDER BY n DESC LIMIT ?",
+            tuple(params),
         ).fetchall()
         return [{"name": r["name"], "count": r["n"]} for r in rows]
+
+    async def list_memories(self, agent: str | None = None, limit: int = 50) -> list[dict]:
+        """Recent archived memories for browse: ``{text, agent, kind, ts}`` newest first.
+
+        ``agent`` scopes to one agent (or the reserved ``user`` namespace); ``None``
+        returns every namespace. The text comes from the event summary, falling
+        back to the recorded payload's text/content/body field.
+        """
+        where = ""
+        params: list = []
+        if agent is not None:
+            where = "WHERE agent_name = ?"
+            params.append(agent)
+        params.append(limit)
+        rows = self._conn.execute(
+            f"SELECT event_type, timestamp, agent_name, summary, data_json "
+            f"FROM archive_index {where} ORDER BY timestamp DESC LIMIT ?",
+            tuple(params),
+        ).fetchall()
+        out = []
+        for r in rows:
+            text = r["summary"] or ""
+            if not text:
+                try:
+                    data = json.loads(r["data_json"] or "{}")
+                    text = data.get("text") or data.get("content") or data.get("body") or ""
+                except (ValueError, TypeError):
+                    text = ""
+            out.append({
+                "text": text,
+                "agent": r["agent_name"],
+                "kind": r["event_type"],
+                "ts": r["timestamp"],
+            })
+        return out
 
     # ------------------------------------------------------------------
     # Integrity verification

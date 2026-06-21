@@ -142,16 +142,28 @@ async def list_projects(*, data_dir=None) -> list[dict]:
     return await _api.list_projects(data_dir=data_dir)
 
 
-async def dashboard_stats(*, data_dir=None) -> dict:
-    """Aggregate dashboard stats over the stores.
+async def dashboard_stats(*, scope: str | None = None, data_dir=None) -> dict:
+    """Aggregate dashboard stats over the stores, optionally scoped to one agent.
 
     Thin wrapper over :func:`taosmd.api.dashboard_stats`. Forwarded to
     :class:`~taosmd.remote.RemoteClient` when a server URL is configured.
     """
     remote = _get_remote(data_dir)
     if remote is not None:
-        return await remote.dashboard_stats()
-    return await _api.dashboard_stats(data_dir=data_dir)
+        return await remote.dashboard_stats(scope=scope)
+    return await _api.dashboard_stats(scope=scope, data_dir=data_dir)
+
+
+async def list_memories(*, scope: str | None = None, limit: int = 50, data_dir=None) -> list[dict]:
+    """Recent archived memories for the dashboard browse view (scoped by ``scope``).
+
+    Thin wrapper over :func:`taosmd.api.list_memories`. Forwarded to
+    :class:`~taosmd.remote.RemoteClient` when a server URL is configured.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.list_memories(scope=scope, limit=limit)
+    return await _api.list_memories(scope=scope, limit=limit, data_dir=data_dir)
 
 
 async def list_shelves(*, project: str, data_dir=None) -> list[dict]:

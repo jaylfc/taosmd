@@ -136,9 +136,18 @@ class RemoteClient:
         resp = await self._run("GET", "/projects")
         return resp.get("projects", [])
 
-    async def dashboard_stats(self, **_opts) -> dict:
+    async def dashboard_stats(self, *, scope: str | None = None, **_opts) -> dict:
         """GET /stats: aggregate dashboard stats from the server."""
-        return await self._run("GET", "/stats")
+        params = {"scope": scope} if scope else None
+        return await self._run("GET", "/stats", params=params)
+
+    async def list_memories(self, *, scope: str | None = None, limit: int = 50, **_opts) -> list[dict]:
+        """GET /memories: recent archived memories for the browse view."""
+        params: dict = {"limit": limit}
+        if scope:
+            params["scope"] = scope
+        resp = await self._run("GET", "/memories", params=params)
+        return resp.get("memories", [])
 
     async def list_shelves(self, *, project: str, **_opts) -> list[dict]:
         """GET /shelves: list the agent shelves within ``project`` on the server."""
