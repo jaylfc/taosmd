@@ -410,7 +410,7 @@ async def search(
     also_include: list[str] | None = None,
     limit: int = 5,
     mode: str | None = None,
-    prefer_verified: str = "prefer_verified",
+    prefer_verified: str | None = None,
     data_dir=None,
 ) -> list[dict]:
     """Search the librarian's shelves for passages relevant to ``query``.
@@ -442,6 +442,14 @@ async def search(
         raise ValueError(f"unsupported search mode: {mode!r} (supported: 'bm25')")
     if not query:
         return []
+
+    # Resolve the recall gate from the persisted controls when the caller did
+    # not pass one explicitly. The gate ships on by default (prefer_verified);
+    # a per-call argument always overrides the stored control.
+    if prefer_verified is None:
+        from taosmd import config as _config  # noqa: PLC0415
+        prefer_verified = _config.get_controls(data_dir).get(
+            "prefer_verified", "prefer_verified")
 
     stores = await _ensure_stores(data_dir)
 

@@ -144,6 +144,56 @@ def set_default_recipe(recipe_id: str, clear: bool = False, data_dir=None) -> No
     _write(data, data_dir)
 
 
+def get_controls(data_dir=None) -> dict:
+    """Resolved value for every memory control.
+
+    Registry defaults (``taosmd.controls.default_controls``) overlaid with any
+    persisted runtime-control overrides under the config ``controls`` section.
+    Store-level and consumer-scope controls report their registry default, since
+    they are not live toggles (see :mod:`taosmd.controls`).
+    """
+    from taosmd import controls as _c  # noqa: PLC0415
+    resolved = _c.default_controls()
+    stored = _read(data_dir).get("controls")
+    if isinstance(stored, dict):
+        for cid, val in stored.items():
+            ctrl = _c.CONTROLS.get(cid)
+            if ctrl is None or ctrl.scope != "runtime":
+                continue
+            try:
+                resolved[cid] = _c.validate_control(cid, val)
+            except ValueError:
+                pass  # ignore a bad persisted value, keep the default
+    return resolved
+
+
+def set_control(control_id: str, value, data_dir=None) -> dict:
+    """Validate and persist one runtime control; return the new resolved controls.
+
+    Raises ValueError for an unknown control, a bad value, or a non-runtime
+    control: store-level controls (embedder, binary_quant) require a re-index,
+    and consumer-scope controls (self_verify) are applied in the consumer's
+    answer-generation, not in taOSmd core.
+    """
+    from taosmd import controls as _c  # noqa: PLC0415
+    ctrl = _c.CONTROLS.get(control_id)
+    if ctrl is None:
+        raise ValueError(f"unknown control: {control_id!r}")
+    if ctrl.scope != "runtime":
+        raise ValueError(
+            f"{control_id} is {ctrl.scope}-scope, not a live toggle "
+            "(store-level controls need a re-index; consumer controls apply in answer-gen)")
+    coerced = _c.validate_control(control_id, value)
+    data = _read(data_dir)
+    section = data.get("controls")
+    if not isinstance(section, dict):
+        section = {}
+    section[control_id] = coerced
+    data["controls"] = section
+    _write(data, data_dir)
+    return get_controls(data_dir)
+
+
 def resolve_memory_model(fallback: str | None = None, data_dir=None) -> str | None:
     """Return the global memory model if set, else ``fallback``.
 

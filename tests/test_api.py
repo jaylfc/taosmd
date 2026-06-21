@@ -360,12 +360,14 @@ def test_bm25_python_rank_orders_by_relevance():
     assert ranked[-1][1] == 0.0, "no-overlap doc should score zero"
 
 
-def test_search_defaults_to_prefer_verified():
-    """Provable memory ships on by default: search()'s prefer_verified param
-    defaults to "prefer_verified". The gate only demotes claims affirmatively
-    verified as unsupported/contradicted and keeps raw + unverified hits, so it
-    is a safe no-op for installs that never ran the verify-pass (E-018: tri-judge
-    confirmed served-hallucination eliminated at no accuracy cost)."""
+def test_search_prefer_verified_resolves_from_config():
+    """Provable memory ships on by default: search()'s prefer_verified param is a
+    sentinel (None) that resolves from the persisted controls at call time, and
+    the resolved default is "prefer_verified" (E-018 tri-judge evidenced, a safe
+    no-op until claims are verified). A per-call argument always overrides."""
     import inspect
-    sig = inspect.signature(taosmd_api.search)
-    assert sig.parameters["prefer_verified"].default == "prefer_verified"
+    from taosmd import config as _cfg, controls as _ctrl
+    assert inspect.signature(taosmd_api.search).parameters["prefer_verified"].default is None
+    with tempfile.TemporaryDirectory() as d:
+        assert _cfg.get_controls(data_dir=d)["prefer_verified"] == "prefer_verified"
+    assert _ctrl.default_controls()["prefer_verified"] == "prefer_verified"
