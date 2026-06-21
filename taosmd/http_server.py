@@ -765,6 +765,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_controls_get()
                 elif method == "POST" and path == "/controls":
                     self._handle_controls_post()
+                elif method == "GET" and path == "/stats":
+                    self._handle_stats()
                 elif method == "GET" and path == "/search":
                     self._handle_search_get(query)
                 elif method == "POST" and path == "/search":
@@ -999,6 +1001,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "settings": _config.get_controls(data_dir=data_dir),
                 "errors": errors,
             })
+
+        def _handle_stats(self) -> None:
+            result = runner.run(service.stats(data_dir=data_dir))
+            self._send_json(200, result)
 
         def _handle_list_shelves(self, qs: dict) -> None:
             project = (qs.get("project") or [None])[0]

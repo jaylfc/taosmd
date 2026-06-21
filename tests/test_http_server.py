@@ -698,3 +698,12 @@ def test_controls_post_empty_body_returns_400(live_server):
     status, body = _post(f"{live_server}/controls", {})
     assert status == 400
     assert "error" in body
+
+
+def test_stats_endpoint(live_server):
+    _post(f"{live_server}/ingest", {"text": "A stats memory for the overview.", "agent": "s"})
+    status, body = _get(f"{live_server}/stats")
+    assert status == 200, body
+    assert body["memories"]["total"] >= 1
+    assert "verification" in body and "growth" in body
+    assert any(a["name"] == "s" for a in body["top_agents"])
