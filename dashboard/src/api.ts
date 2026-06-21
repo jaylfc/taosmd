@@ -43,6 +43,12 @@ export async function getGraph(limit = 300): Promise<Graph> {
   return req<Graph>(`/graph?limit=${limit}`);
 }
 
+export async function getGraphActivations(
+  window = 60,
+): Promise<{ activations: { id: string; last_accessed_at: number }[]; now: number }> {
+  return req(`/graph/activations?window=${window}`);
+}
+
 export async function searchMemory(
   query: string,
   agent: string,

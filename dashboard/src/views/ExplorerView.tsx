@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { getGraph } from "../api";
+import { getGraph, getGraphActivations } from "../api";
 import type { Graph, GraphNode } from "../types";
 import { ForceGraph, colorForType } from "../components/ForceGraph";
 import { SkeletonCard } from "../components/Skeleton";
@@ -83,6 +83,7 @@ export function ExplorerView() {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [showCurrent, setShowCurrent] = useState(false);
+  const [activatedIds, setActivatedIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -100,6 +101,27 @@ export function ExplorerView() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Live recall: poll which entities the retrieve path recently touched and
+  // pulse them. Uses last_accessed_at via /graph/activations, no event bus.
+  useEffect(() => {
+    if (state.kind !== "ready" || state.graph.nodes.length === 0) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const { activations } = await getGraphActivations(45);
+        if (!cancelled) setActivatedIds(new Set(activations.map((a) => a.id)));
+      } catch {
+        // a failed poll leaves the static graph intact
+      }
+    };
+    void poll();
+    const id = window.setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [state]);
 
   return (
     <section className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-6">
@@ -133,9 +155,21 @@ export function ExplorerView() {
       {state.kind === "ready" && state.graph.nodes.length > 0 && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs" style={{ color: "var(--muted)" }}>
-            <span>
-              {state.graph.total_nodes} entities, {state.graph.total_edges} relations
-              {state.graph.capped ? ` (showing the ${state.graph.nodes.length} most connected)` : ""}
+            <span className="flex items-center gap-2">
+              <span>
+                {state.graph.total_nodes} entities, {state.graph.total_edges} relations
+                {state.graph.capped ? ` (showing the ${state.graph.nodes.length} most connected)` : ""}
+              </span>
+              {activatedIds.size > 0 && (
+                <span className="flex items-center gap-1.5" style={{ color: "var(--success)" }}>
+                  <span
+                    className="inline-block rounded-full"
+                    style={{ width: 7, height: 7, background: "var(--success)" }}
+                    aria-hidden="true"
+                  />
+                  {activatedIds.size} recalled live
+                </span>
+              )}
             </span>
             <span className="flex items-center gap-3">
               <span
@@ -179,6 +213,7 @@ export function ExplorerView() {
             edges={showCurrent ? state.graph.edges.filter((e) => e.active) : state.graph.edges}
             onSelect={setSelected}
             selectedId={selected?.id}
+            activatedIds={activatedIds}
           />
 
           {selected && <DetailPanel node={selected} graph={state.graph} />}
