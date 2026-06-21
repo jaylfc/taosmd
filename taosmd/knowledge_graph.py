@@ -520,3 +520,59 @@ class TemporalKnowledgeGraph:
         triples = self._conn.execute("SELECT COUNT(*) as n FROM kg_triples").fetchone()["n"]
         active = self._conn.execute("SELECT COUNT(*) as n FROM kg_triples WHERE valid_to IS NULL").fetchone()["n"]
         return {"entities": entities, "triples": triples, "active_triples": active}
+
+    async def graph(self, limit: int = 300) -> dict:
+        """Return the graph as ``{nodes, edges, capped, total_nodes, total_edges}``.
+
+        Nodes are entities sized by ``degree`` (triples touching them) and the
+        edges are the triples among the ``limit`` most-connected entities, so a
+        large graph stays responsive. Each edge carries ``active`` (the fact is
+        current: no ``valid_to`` and not superseded) so the view can fade the
+        rest. Read-only.
+        """
+        total_nodes = self._conn.execute("SELECT COUNT(*) AS n FROM kg_entities").fetchone()["n"]
+        total_edges = self._conn.execute("SELECT COUNT(*) AS n FROM kg_triples").fetchone()["n"]
+
+        deg_rows = self._conn.execute(
+            """SELECT eid, COUNT(*) AS d FROM (
+                  SELECT subject_id AS eid FROM kg_triples
+                  UNION ALL SELECT object_id AS eid FROM kg_triples
+               ) GROUP BY eid"""
+        ).fetchall()
+        degree = {r["eid"]: r["d"] for r in deg_rows}
+
+        if not degree:
+            ents = self._conn.execute(
+                "SELECT id, name, type FROM kg_entities LIMIT ?", (limit,)
+            ).fetchall()
+            nodes = [{"id": e["id"], "name": e["name"], "type": e["type"], "degree": 0} for e in ents]
+            return {"nodes": nodes, "edges": [], "capped": total_nodes > limit,
+                    "total_nodes": total_nodes, "total_edges": total_edges}
+
+        top_ids = [eid for eid, _ in sorted(degree.items(), key=lambda x: -x[1])[:limit]]
+        ph = ",".join("?" * len(top_ids))
+        ent_rows = self._conn.execute(
+            f"SELECT id, name, type FROM kg_entities WHERE id IN ({ph})", top_ids
+        ).fetchall()
+        nodes = [
+            {"id": e["id"], "name": e["name"], "type": e["type"], "degree": degree.get(e["id"], 0)}
+            for e in ent_rows
+        ]
+        edge_rows = self._conn.execute(
+            f"""SELECT subject_id, predicate, object_id, confidence, valid_to, superseded_by
+                FROM kg_triples
+                WHERE subject_id IN ({ph}) AND object_id IN ({ph})""",
+            top_ids + top_ids,
+        ).fetchall()
+        edges = [
+            {
+                "source": r["subject_id"],
+                "target": r["object_id"],
+                "predicate": r["predicate"],
+                "confidence": r["confidence"],
+                "active": r["valid_to"] is None and r["superseded_by"] is None,
+            }
+            for r in edge_rows
+        ]
+        return {"nodes": nodes, "edges": edges, "capped": total_nodes > limit,
+                "total_nodes": total_nodes, "total_edges": total_edges}

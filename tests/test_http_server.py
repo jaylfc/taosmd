@@ -719,3 +719,10 @@ def test_memories_endpoint_and_scoped_stats(live_server):
     _, userb = _get(f"{live_server}/stats?scope=user")
     assert userb["scope"] == "user"
     assert allb["memories"]["total"] > userb["memories"]["total"]
+
+
+def test_graph_endpoint(live_server):
+    status, body = _get(f"{live_server}/graph")
+    assert status == 200, body
+    assert set(body) >= {"nodes", "edges", "total_nodes", "total_edges"}
+    assert isinstance(body["nodes"], list) and isinstance(body["edges"], list)

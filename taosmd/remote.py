@@ -149,6 +149,10 @@ class RemoteClient:
         resp = await self._run("GET", "/memories", params=params)
         return resp.get("memories", [])
 
+    async def graph(self, *, limit: int = 300, **_opts) -> dict:
+        """GET /graph: the knowledge-graph nodes and edges from the server."""
+        return await self._run("GET", "/graph", params={"limit": limit})
+
     async def list_shelves(self, *, project: str, **_opts) -> list[dict]:
         """GET /shelves: list the agent shelves within ``project`` on the server."""
         resp = await self._run("GET", "/shelves", params={"project": project})

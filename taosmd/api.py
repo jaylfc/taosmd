@@ -662,6 +662,12 @@ async def list_memories(*, scope: str | None = None, limit: int = 50, data_dir=N
     return await stores["archive"].list_memories(agent=_scope_agent(scope), limit=limit)
 
 
+async def graph(*, limit: int = 300, data_dir=None) -> dict:
+    """The knowledge-graph nodes and edges for the Explorer view (read-only)."""
+    stores = await _ensure_stores(data_dir)
+    return await stores["kg"].graph(limit=limit)
+
+
 async def list_shelves(*, project: str, data_dir=None) -> list[dict]:
     """List all agent shelves within a specific project.
 
