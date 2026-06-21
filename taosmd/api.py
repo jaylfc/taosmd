@@ -410,7 +410,7 @@ async def search(
     also_include: list[str] | None = None,
     limit: int = 5,
     mode: str | None = None,
-    prefer_verified: str = "off",
+    prefer_verified: str = "prefer_verified",
     data_dir=None,
 ) -> list[dict]:
     """Search the librarian's shelves for passages relevant to ``query``.

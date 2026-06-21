@@ -358,3 +358,14 @@ def test_bm25_python_rank_orders_by_relevance():
     assert ranked[0][0] == 0, "exact-term doc should rank first"
     assert ranked[0][1] > 0.0
     assert ranked[-1][1] == 0.0, "no-overlap doc should score zero"
+
+
+def test_search_defaults_to_prefer_verified():
+    """Provable memory ships on by default: search()'s prefer_verified param
+    defaults to "prefer_verified". The gate only demotes claims affirmatively
+    verified as unsupported/contradicted and keeps raw + unverified hits, so it
+    is a safe no-op for installs that never ran the verify-pass (E-018: tri-judge
+    confirmed served-hallucination eliminated at no accuracy cost)."""
+    import inspect
+    sig = inspect.signature(taosmd_api.search)
+    assert sig.parameters["prefer_verified"].default == "prefer_verified"
