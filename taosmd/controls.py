@@ -8,11 +8,15 @@ never drift. No I/O here: policy and data only.
 
 Scope:
   runtime   per-query / retrieval behaviour; safe to toggle live, takes effect
-            on the next search. (prefer_verified, reranker, late_interaction,
-            fusion, adjacent_turns)
+            on the next search. prefer_verified is read from the controls config
+            by the recall gate; reranker, fusion, and adjacent_turns override the
+            active recipe per query. (prefer_verified, reranker, fusion,
+            adjacent_turns)
   store     a store-level choice; changing it requires re-processing existing
             memories (a re-index/re-embed), so the dashboard shows it as the
-            current install choice, not a live toggle. (embedder, binary_quant)
+            current install choice, not a live toggle. The token-level vectors
+            for late-interaction are written at ingest, so it is store-scope too.
+            (embedder, binary_quant, late_interaction)
   consumer  applied in the consumer's answer-generation, not in taOSmd core
             (taOSmd retrieves; it does not generate answers). Shown as an
             informational recommendation, never as a switch that does nothing.
@@ -57,21 +61,21 @@ CONTROLS: dict[str, Control] = {
         id="reranker", label="Cross-encoder reranking",
         category="quality", scope="runtime", type="choice",
         config_key="controls.reranker", default="off",
-        choices=("off", "bge-v2-m3", "ms-marco-MiniLM"),
-        cost="one extra model download plus a cross-encoder pass per query",
+        choices=("off", "bge-v2-m3"),
+        cost="one extra model download (bge-reranker-v2-m3) plus a cross-encoder pass per query",
         pros="the F-013 accuracy win where the hardware affords it (a GPU box, or any tier with headroom)",
         cons="adds per-query latency and a model; drop it on a Pi-class CPU tier",
-        description="Re-score the candidate pool with a cross-encoder before serving.",
+        description="Re-score the candidate pool with a cross-encoder before serving. Overrides the recipe per query.",
         benchmarks_anchor="locomo--multi-session-conversational-memory-1540-qas",
     ),
     "late_interaction": Control(
         id="late_interaction", label="Late-interaction (MaxSim) retrieval",
-        category="quality", scope="runtime", type="bool",
-        config_key="controls.late_interaction", default=False,
-        cost="about 110 ms per query on a 16-core CPU; no GPU or reranker needed",
+        category="quality", scope="store", type="bool",
+        config_key="vector_memory.late_interaction", default=False,
+        cost="re-index to apply; then about 110 ms per query on a 16-core CPU, no GPU or reranker needed",
         pros="lifts evidence recall from 0.64 to 0.85 on LoCoMo, CPU-only",
-        cons="a token-level scoring pass per query; the CPU cost can matter at high query volume",
-        description="Token-level MaxSim scoring over the candidate pool.",
+        cons="store-level: token-level vectors are written at ingest, so turning it on or off needs a re-index, not a live toggle",
+        description="Token-level MaxSim scoring; the store is built with per-token vectors (set at setup).",
         benchmarks_anchor="late-interaction-retrieval-token-level-maxsim-at-retrieval-time-tri-judge",
     ),
     "fusion": Control(
@@ -82,7 +86,7 @@ CONTROLS: dict[str, Control] = {
         cost="none; it is a ranking-strategy choice",
         pros="rrf and mem0_additive both beat the older mem0-only guidance at full scale",
         cons="the best choice is mildly tier and task dependent; boost suits the smallest tiers",
-        description="How dense and lexical hits are combined into one ranking.",
+        description="How dense and lexical hits are combined into one ranking. Overrides the recipe per query.",
         benchmarks_anchor="fusion-strategy-comparison-recall5",
     ),
     "adjacent_turns": Control(
@@ -92,7 +96,7 @@ CONTROLS: dict[str, Control] = {
         cost="a wider context window per hit (more tokens to the generator)",
         pros="worth about +0.089 on LoCoMo at 2; surrounding turns add context",
         cons="more context can over-budget a tiny generator; use 1 on a Pi-class tier",
-        description="Include N positional neighbours around each retrieved hit.",
+        description="Include N positional neighbours around each retrieved hit. Overrides the recipe per query.",
         benchmarks_anchor="locomo--multi-session-conversational-memory-1540-qas",
     ),
     "embedder": Control(
@@ -134,20 +138,20 @@ CONTROLS: dict[str, Control] = {
 PRESETS: dict[str, dict] = {
     "minimal": {
         "label": "Minimal",
-        "description": "Fastest and lightest: plain retrieval, no rerank, no late-interaction, gate off.",
-        "values": {"reranker": "off", "late_interaction": False,
+        "description": "Fastest and lightest: plain retrieval, no rerank, gate off.",
+        "values": {"reranker": "off",
                    "prefer_verified": "off", "fusion": "rrf", "adjacent_turns": 1},
     },
     "quality": {
         "label": "Quality",
         "description": "Best accuracy where hardware affords: reranking on (pair with self-verify in your answer-gen).",
-        "values": {"reranker": "bge-v2-m3", "late_interaction": False,
+        "values": {"reranker": "bge-v2-m3",
                    "prefer_verified": "off", "fusion": "rrf", "adjacent_turns": 2},
     },
     "integrity": {
         "label": "Integrity",
         "description": "Quality plus the verified-memory gate: auditable, zero-served-hallucination recall.",
-        "values": {"reranker": "bge-v2-m3", "late_interaction": False,
+        "values": {"reranker": "bge-v2-m3",
                    "prefer_verified": "prefer_verified", "fusion": "rrf", "adjacent_turns": 2},
     },
 }

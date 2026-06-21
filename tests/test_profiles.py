@@ -53,7 +53,16 @@ def test_resolve_config_minimal_enables_no_consent_switch():
     assert cfg.get("vector_memory.embed_model") == "arctic-embed-s"
     assert "retrieval.reranker" not in cfg
     assert "answer.self_verify" not in cfg
-    assert "claims.prefer_verified" not in cfg
+    # The recall gate writes the live key the runtime reads, and Minimal opts
+    # out explicitly (the runtime default is on, so "off" must be written).
+    assert cfg["controls.prefer_verified"] == "off"
+    assert "claims.prefer_verified" not in cfg  # the old dead key is gone
+
+
+def test_resolve_config_integrity_enables_recall_gate():
+    cfg = profiles.resolve_config("integrity", consented_switches=["rerank", "self_verify"])
+    # Integrity turns the gate on with the value the runtime recall gate reads.
+    assert cfg["controls.prefer_verified"] == "prefer_verified"
 
 
 def test_resolve_config_consent_required_switch_needs_explicit_consent():

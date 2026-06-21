@@ -194,6 +194,34 @@ def set_control(control_id: str, value, data_dir=None) -> dict:
     return get_controls(data_dir)
 
 
+def get_runtime_overrides(data_dir=None) -> dict:
+    """Persisted runtime-control overrides only, with no registry defaults filled.
+
+    ``get_controls`` fills every control with its default (for display). This
+    returns only the runtime controls a user has actually persisted, so the
+    retrieval path can treat the recipe as the baseline and apply a control
+    *only* when it was explicitly set. Bad or non-runtime persisted values are
+    skipped. ``prefer_verified`` is excluded here because it has no recipe
+    baseline and is resolved separately via :func:`get_controls`.
+    """
+    from taosmd import controls as _c  # noqa: PLC0415
+    out: dict = {}
+    stored = _read(data_dir).get("controls")
+    if not isinstance(stored, dict):
+        return out
+    for cid, val in stored.items():
+        if cid == "prefer_verified":
+            continue
+        ctrl = _c.CONTROLS.get(cid)
+        if ctrl is None or ctrl.scope != "runtime":
+            continue
+        try:
+            out[cid] = _c.validate_control(cid, val)
+        except ValueError:
+            pass
+    return out
+
+
 def resolve_memory_model(fallback: str | None = None, data_dir=None) -> str | None:
     """Return the global memory model if set, else ``fallback``.
 

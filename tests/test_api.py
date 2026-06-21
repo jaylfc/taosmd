@@ -209,6 +209,38 @@ def test_format_hit_falls_back_to_source_score():
 
 
 # ---------------------------------------------------------------------------
+# Runtime controls overlay the recipe (dashboard / PUT /controls levers)
+# ---------------------------------------------------------------------------
+
+def test_apply_runtime_overrides_noop_keeps_recipe():
+    rc = {"reranker": "bge-v2-m3", "fusion": "rrf", "adjacent_neighbors": 2}
+    out = taosmd_api._apply_runtime_overrides(rc, {})
+    assert out == rc
+    assert out is not rc  # never mutate the recipe object
+
+
+def test_apply_runtime_overrides_reranker_off_maps_to_none():
+    rc = {"reranker": "bge-v2-m3", "fusion": "rrf", "adjacent_neighbors": 2}
+    out = taosmd_api._apply_runtime_overrides(rc, {"reranker": "off"})
+    assert out["reranker"] == "none"
+    assert rc["reranker"] == "bge-v2-m3"  # original untouched
+
+
+def test_apply_runtime_overrides_reranker_on_over_recipe_none():
+    rc = {"reranker": "none", "fusion": "rrf", "adjacent_neighbors": 2}
+    out = taosmd_api._apply_runtime_overrides(rc, {"reranker": "bge-v2-m3"})
+    assert out["reranker"] == "bge-v2-m3"
+
+
+def test_apply_runtime_overrides_fusion_and_adjacency():
+    rc = {"reranker": "none", "fusion": "boost", "adjacent_neighbors": 0}
+    out = taosmd_api._apply_runtime_overrides(
+        rc, {"fusion": "mem0_additive", "adjacent_turns": 4})
+    assert out["fusion"] == "mem0_additive"
+    assert out["adjacent_neighbors"] == 4
+
+
+# ---------------------------------------------------------------------------
 # ingest_batch + mode="bm25" search (#25 user-memory contract)
 # ---------------------------------------------------------------------------
 

@@ -402,6 +402,24 @@ def _format_hit(hit: dict) -> dict:
     }
 
 
+def _apply_runtime_overrides(recipe_retrieval: dict, overrides: dict) -> dict:
+    """Overlay persisted runtime controls on a recipe's retrieval config.
+
+    The recipe is the baseline; a control overrides it only when explicitly set
+    (see :func:`taosmd.config.get_runtime_overrides`). ``reranker`` "off" maps to
+    the recipe's "none"; ``adjacent_turns`` maps to ``adjacent_neighbors``. The
+    recipe object is never mutated (a copy is returned).
+    """
+    rc = dict(recipe_retrieval)
+    if "reranker" in overrides:
+        rc["reranker"] = "none" if overrides["reranker"] == "off" else overrides["reranker"]
+    if "fusion" in overrides:
+        rc["fusion"] = overrides["fusion"]
+    if "adjacent_turns" in overrides:
+        rc["adjacent_neighbors"] = int(overrides["adjacent_turns"])
+    return rc
+
+
 async def search(
     query: str,
     *,
@@ -446,8 +464,8 @@ async def search(
     # Resolve the recall gate from the persisted controls when the caller did
     # not pass one explicitly. The gate ships on by default (prefer_verified);
     # a per-call argument always overrides the stored control.
+    from taosmd import config as _config  # noqa: PLC0415
     if prefer_verified is None:
-        from taosmd import config as _config  # noqa: PLC0415
         prefer_verified = _config.get_controls(data_dir).get(
             "prefer_verified", "prefer_verified")
 
@@ -489,9 +507,11 @@ async def search(
         return await _attach_and_gate_claims(hits, stores.get("claims"), prefer_verified)
 
     # Resolve the active recipe (per-agent -> global default -> recommend()[0])
-    # and map its retrieval knobs onto the retrieve() call below.
+    # and map its retrieval knobs onto the retrieve() call below. The recipe is
+    # the baseline; persisted runtime controls (dashboard / PUT /controls) then
+    # override reranker, fusion, and adjacency for this query.
     recipe = _recipes.resolve_recipe(agent, data_dir=data_dir)
-    rc = recipe.retrieval
+    rc = _apply_runtime_overrides(recipe.retrieval, _config.get_runtime_overrides(data_dir))
 
     # Build the reranker the recipe asks for; degrade (not block) when absent.
     reranker = None
