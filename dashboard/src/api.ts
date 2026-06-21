@@ -9,6 +9,7 @@ import type {
   ControlsSchema,
   ControlsSettings,
   ControlValue,
+  Stats,
 } from "./types";
 
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
@@ -22,6 +23,10 @@ async function req<T>(url: string, opts?: RequestInit): Promise<T> {
 
 export async function getHealth(): Promise<HealthInfo> {
   return req<HealthInfo>("/health");
+}
+
+export async function getStats(): Promise<Stats> {
+  return req<Stats>("/stats");
 }
 
 export async function searchMemory(

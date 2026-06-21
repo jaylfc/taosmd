@@ -1,4 +1,20 @@
-export type View = "memory" | "pending" | "a2a" | "projects" | "settings";
+export type View = "home" | "memory" | "pending" | "a2a" | "projects" | "settings";
+
+export interface Stats {
+  memories: { total: number; disk_mb: number };
+  agents: number;
+  projects: number;
+  growth: { date: string; count: number }[];
+  verification: {
+    supported: number;
+    unverified: number;
+    flagged: number;
+    hallucination_rate: number;
+  };
+  top_agents: { name: string; count: number }[];
+  top_projects: { name: string; count: number }[];
+  recent_activity: { kind: string; label: string; ts: number }[];
+}
 
 export type ControlValue = boolean | string | number;
 
