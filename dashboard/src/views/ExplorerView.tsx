@@ -123,6 +123,20 @@ export function ExplorerView() {
     };
   }, [state]);
 
+  // Stable identity for the edge set: selecting a node re-renders ExplorerView,
+  // and an inline edges.filter(...) would hand ForceGraph a fresh array each
+  // time, invalidating its layout memo and snapping the user's pan/zoom back.
+  // Only toggling All/Current or loading new graph data should recompute.
+  const visibleEdges = useMemo(
+    () =>
+      state.kind === "ready"
+        ? showCurrent
+          ? state.graph.edges.filter((e) => e.active)
+          : state.graph.edges
+        : [],
+    [state, showCurrent],
+  );
+
   return (
     <section className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-6">
       <div>
@@ -210,7 +224,7 @@ export function ExplorerView() {
 
           <ForceGraph
             nodes={state.graph.nodes}
-            edges={showCurrent ? state.graph.edges.filter((e) => e.active) : state.graph.edges}
+            edges={visibleEdges}
             onSelect={setSelected}
             selectedId={selected?.id}
             activatedIds={activatedIds}
