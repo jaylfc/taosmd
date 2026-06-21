@@ -5,6 +5,7 @@ import { A2AView } from "./views/A2AView";
 import { ProjectsView } from "./views/ProjectsView";
 import { SettingsView } from "./views/SettingsView";
 import { getHealth } from "./api";
+import { initTheme, setScheme, type Scheme } from "./theme";
 import type { View, HealthInfo } from "./types";
 
 interface NavItemProps {
@@ -68,11 +69,16 @@ export function App() {
   const [view, setView] = useState<View>("memory");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [scheme, setSchemeState] = useState<Scheme>("dark");
 
   useEffect(() => {
     getHealth()
       .then(setHealth)
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setSchemeState(initTheme());
   }, []);
 
   // Keyboard nav for tabs
@@ -126,7 +132,20 @@ export function App() {
           memory inspector
         </span>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          <button
+            onClick={() => {
+              const next = scheme === "dark" ? "light" : "dark";
+              setScheme(next);
+              setSchemeState(next);
+            }}
+            className="rounded p-1.5 text-sm transition-colors duration-150"
+            style={{ color: "var(--muted)" }}
+            aria-label={scheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            aria-pressed={scheme === "light"}
+          >
+            {scheme === "dark" ? "☀" : "☾"}
+          </button>
           <HealthChip info={health} />
         </div>
       </header>
