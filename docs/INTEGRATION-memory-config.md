@@ -1,12 +1,48 @@
-# taOSmd memory app: recommended config and toggles (integration handoff)
+# taOSmd memory app: controls contract and recommended config (integration handoff)
 
-This is the consolidated configuration surface for embedding taOSmd as the memory app in taOS: which models and retrieval settings to default per hardware tier, and which toggles to expose to the user. Full measurements and provenance are in [benchmarks.md](benchmarks.md#hardware-tiers-recommended-configurations); this page is the short, integration-focused view.
+This is the configuration surface for embedding taOSmd as the memory app in taOS: the API and schema the app builds its settings UI against, which controls exist and what scope they have, the per-tier model and retrieval defaults, and what not to default on. Full measurements and provenance are in [benchmarks.md](benchmarks.md) and the [research report](research-report.md); this page is the short, integration-focused view.
 
-## Always-on defaults (every tier)
+## The controls contract (build the settings UI against this)
 
-- Embedder: arctic-embed-s ONNX on CPU for fresh low-tier installs (the dense default, +0.057 judged retrieval over MiniLM at the same 384 dims and the same latency). MiniLM stays supported and is the model the 97.0% Recall@5 headline was measured on, so existing installs keep it.
-- Reranker: ms-marco-MiniLM ONNX on CPU, second-stage over the top-K vector hits.
-- Do not enable multihop-decompose (regresses at every model size measured) or the session_date context format (a no-op once the prompt carries absolute dates). Leave both off; no need to surface them.
+Every control is defined once in `taosmd/controls.py`. The standalone dashboard, this handoff, and the taOS app all read that registry through one API, so they cannot drift. The taOS app should render its settings UI generically from the schema rather than hard-coding controls.
+
+- `GET /controls` returns `{ "settings": {...}, "schema": { "controls": [...], "presets": [...] } }`. `settings` is the resolved current value for every control id. Each `schema.controls` entry carries `id`, `label`, `category`, `scope`, `type` (`bool` / `choice` / `int`), `config_key`, `default`, `choices`, `int_range`, `cost`, `pros`, `cons`, `description`, and `benchmarks_anchor`. Render the cost, pros, and cons next to each control; they are written for end users.
+- `POST /controls` accepts one of: `{ "preset": "minimal|quality|integrity" }`, `{ "values": { "<id>": <value>, ... } }`, or a bare `{ "<id>": <value> }`. It validates each value, persists the live ones, and returns `{ "settings": {...}, "errors": { "<id>": "<message>" } }`. A bad value returns HTTP 400 with the offending ids in `errors`; the good settings are left untouched. An unknown preset or empty body returns HTTP 400 with `{ "error": ... }`.
+- Scope is the contract for whether a control is a live toggle. `runtime` controls are live: a `POST` takes effect on the next search. `store` controls (the embedder, binary quantization, late-interaction) change how memories are indexed, so they need a re-index of the existing store and `POST /controls` rejects them with a clear message. `consumer` controls (`self_verify`) are applied in the app's own answer-generation, not in taOSmd core. Render `store` and `consumer` controls as informational state, never as live switches that would silently do nothing.
+
+## Controls by scope
+
+| Control | Scope | Config key | Default | What it does |
+|---|---|---|---|---|
+| `prefer_verified` | runtime (live) | `controls.prefer_verified` | `prefer_verified` (on) | Demotes claims verified as unsupported out of default recall. `off` / `prefer_verified` / `strict`. |
+| `reranker` | runtime (live) | `controls.reranker` | `off` | Cross-encoder re-scoring before serving. `off` / `bge-v2-m3`. Overrides the recipe per query. |
+| `fusion` | runtime (live) | `controls.fusion` | `rrf` | How dense and lexical hits combine. `rrf` / `mem0_additive` / `boost`. Overrides the recipe per query. |
+| `adjacent_turns` | runtime (live) | `controls.adjacent_turns` | `2` (0 to 4) | Positional neighbours included around each hit. Overrides the recipe per query. |
+| `embedder` | store (re-index) | `vector_memory.embed_model` | `arctic-embed-s` | Dense ONNX embedder, set at setup. `arctic-embed-s` / `minilm-onnx`. |
+| `binary_quant` | store (re-index) | `vector_memory.binary_quant` | `off` | 1 bit per dimension, 32x smaller vectors, recall-neutral. |
+| `late_interaction` | store (re-index) | `vector_memory.late_interaction` | `off` | Token-level MaxSim; per-token vectors are written at ingest. |
+| `self_verify` | consumer (answer-gen) | `answer.self_verify` | `off` | CoVe-style answer self-verification, run in the app's answer-generation. |
+
+The cost, pros, and cons for each are in the schema and mirrored in the README Configuration and controls section. Headline evidence: `prefer_verified` eliminates served-hallucination (0.040 to 0.000) at no measured accuracy cost, tri-judge confirmed (E-018); `reranker` plus `self_verify` is the 74.6% end-to-end LongMemEval-S Judge configuration (F-013); `arctic-embed-s` is +0.057 judged retrieval over MiniLM (F-010).
+
+## Presets (one-tap bundles of the live controls)
+
+| Preset | `reranker` | `prefer_verified` | `fusion` | `adjacent_turns` | For |
+|---|---|---|---|---|---|
+| Minimal | `off` | `off` | `rrf` | 1 | Fastest and lightest; weak hardware or speed-first. |
+| Quality | `bge-v2-m3` | `off` | `rrf` | 2 | Best accuracy where hardware affords (pair with `self_verify` in answer-gen). |
+| Integrity | `bge-v2-m3` | `prefer_verified` | `rrf` | 2 | Auditable, zero-served-hallucination recall. |
+
+The recall gate is on globally by default, so Minimal is the preset that turns it off.
+
+## Install-time profiles vs runtime controls
+
+These are two registries at two layers, and they share config keys so they agree:
+
+- `taosmd/profiles.py` is the install-time registry (the `taosmd setup-prompt` flow and the smart installer): switches with consent rules and three profiles (Minimal / Quality / Integrity) that the installer writes once at setup.
+- `taosmd/controls.py` is the runtime registry the memory app reads and writes live through `/controls`.
+
+The install picks a profile; the app tunes the live controls afterward. The recall gate writes the same `controls.prefer_verified` at both layers, so an install-time choice and a later live change cannot contradict each other.
 
 ## Per-tier generator and retrieval defaults
 
@@ -20,13 +56,11 @@ This is the consolidated configuration surface for embedding taOSmd as the memor
 
 Embedder, reranker, and judge run as CPU ONNX on every tier; GPU or NPU VRAM is for the generator only. Do not run the judge on the same device as the generator.
 
-## User-facing toggles to expose
+## Changes from the prior handoff
 
-- Verified-answer mode (opt-in): reranking plus a CoVe-style answer self-verification pass. This is the recommended config for answer quality and is the 74.6% end-to-end LongMemEval-S Judge number (vs 47.2% starved baseline). taOSmd serves memory, so answer generation is the consumer path; keep it off in the core default and recommend it on where the consumer wants graded answers.
-- prefer_verified integrity gate (opt-in, off by default): demotes (never deletes) facts the verifier could not support against their source span. A pre-registered sweep eliminated served-hallucination (0.04 to 0.00) at no measured accuracy or recall cost, reproduced at n=250 under a strict judge. Expose it as an integrity-mode toggle; keep the default off until a full tri-judge confirm and an explicit sign-off.
-- Late-interaction retrieval (opt-in): token-level MaxSim, lifts evidence recall from 0.64 to 0.85 on LoCoMo at about 110 ms/query on a 16-core CPU, no GPU or reranker needed. A good default-on option for CPU tiers that want better recall without a cross-encoder.
-- Binary embedding quantization (opt-in): 1 bit per dimension, 32x smaller vectors, recall-neutral. Expose as a footprint option for memory-constrained or SBC deployments.
-- Fusion mode: rrf or mem0_additive (both beat the older mem0-only guidance at full 1540-QA scale); boost is fine on the smallest tiers.
+- The cross-encoder reranker is `bge-v2-m3` only. The earlier note listing `ms-marco-MiniLM` was wrong; only `bge-v2-m3` is wired in the retrieval path.
+- `prefer_verified` is now on by default, not opt-in. The tri-judge confirm at n=250 (E-018) reproduced zero served-hallucination under all three judges at no measured accuracy or recall cost, and Jay signed off on the flip. It is a safe no-op until the verify-pass is populated.
+- Late-interaction is a store-level choice (a re-index), not a per-query toggle. The settings UI should present it as a setup option, not a live switch.
 
 ## What not to default on
 
