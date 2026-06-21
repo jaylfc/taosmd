@@ -381,6 +381,37 @@ class ArchiveStore:
             "total": sum(r["n"] for r in rows),
         }
 
+    async def daily_counts(self, days: int = 30) -> list[dict]:
+        """Per-day archived-event counts for the last ``days`` days, oldest first.
+
+        One grouped query (used by the dashboard growth chart) rather than one
+        ``daily_summary`` call per day.
+        """
+        cutoff = time.time() - days * 86400
+        rows = self._conn.execute(
+            """SELECT date(timestamp, 'unixepoch') AS d, COUNT(*) AS n
+               FROM archive_index WHERE timestamp >= ?
+               GROUP BY d ORDER BY d""",
+            (cutoff,),
+        ).fetchall()
+        return [{"date": r["d"], "count": r["n"]} for r in rows]
+
+    async def recent(self, limit: int = 10) -> list[dict]:
+        """The most recent archived events as ``{kind, label, ts}``, newest first."""
+        rows = self._conn.execute(
+            "SELECT event_type, timestamp, agent_name FROM archive_index "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "kind": r["event_type"],
+                "label": f"{r['event_type']} by {r['agent_name'] or 'unknown'}",
+                "ts": r["timestamp"],
+            }
+            for r in rows
+        ]
+
     # ------------------------------------------------------------------
     # Integrity verification
     # ------------------------------------------------------------------
