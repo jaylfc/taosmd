@@ -32,3 +32,19 @@ async def test_graph_empty(tmp_path):
     g = await kg.graph()
     assert g["nodes"] == [] and g["edges"] == []
     assert g["total_nodes"] == 0 and g["capped"] is False
+
+
+@pytest.mark.asyncio
+async def test_activations_after_query(tmp_path):
+    import time
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_triple("Jay", "prefers", "dark mode")
+    assert await kg.activations(since=time.time() - 60) == []
+    await kg.query_entity("Jay")  # track_access defaults True -> bumps last_accessed_at
+    acts = await kg.activations(since=time.time() - 60)
+    assert len(acts) >= 1
+    assert all(set(a) == {"id", "last_accessed_at"} for a in acts)
+    g = await kg.graph()
+    node_ids = {n["id"] for n in g["nodes"]}
+    assert {a["id"] for a in acts} <= node_ids

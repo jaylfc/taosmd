@@ -178,6 +178,19 @@ async def graph(*, limit: int = 300, data_dir=None) -> dict:
     return await _api.graph(limit=limit, data_dir=data_dir)
 
 
+async def graph_activations(*, since: float | None = None, window: float = 60.0,
+                            limit: int = 100, data_dir=None) -> dict:
+    """Entities recalled recently, for the Explorer live-recall pulse.
+
+    Thin wrapper over :func:`taosmd.api.graph_activations`. Forwarded to
+    :class:`~taosmd.remote.RemoteClient` when a server URL is configured.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.graph_activations(since=since, window=window, limit=limit)
+    return await _api.graph_activations(since=since, window=window, limit=limit, data_dir=data_dir)
+
+
 async def list_shelves(*, project: str, data_dir=None) -> list[dict]:
     """List the agent shelves that have memories within ``project``.
 

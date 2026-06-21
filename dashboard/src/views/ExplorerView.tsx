@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { getGraph } from "../api";
+import { getGraph, getGraphActivations } from "../api";
 import type { Graph, GraphNode } from "../types";
 import { ForceGraph, colorForType } from "../components/ForceGraph";
 import { SkeletonCard } from "../components/Skeleton";
@@ -82,6 +82,8 @@ function DetailPanel({ node, graph }: { node: GraphNode; graph: Graph }) {
 export function ExplorerView() {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [selected, setSelected] = useState<GraphNode | null>(null);
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [activatedIds, setActivatedIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -99,6 +101,41 @@ export function ExplorerView() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Live recall: poll which entities the retrieve path recently touched and
+  // pulse them. Uses last_accessed_at via /graph/activations, no event bus.
+  useEffect(() => {
+    if (state.kind !== "ready" || state.graph.nodes.length === 0) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const { activations } = await getGraphActivations(45);
+        if (!cancelled) setActivatedIds(new Set(activations.map((a) => a.id)));
+      } catch {
+        // a failed poll leaves the static graph intact
+      }
+    };
+    void poll();
+    const id = window.setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [state]);
+
+  // Stable identity for the edge set: selecting a node re-renders ExplorerView,
+  // and an inline edges.filter(...) would hand ForceGraph a fresh array each
+  // time, invalidating its layout memo and snapping the user's pan/zoom back.
+  // Only toggling All/Current or loading new graph data should recompute.
+  const visibleEdges = useMemo(
+    () =>
+      state.kind === "ready"
+        ? showCurrent
+          ? state.graph.edges.filter((e) => e.active)
+          : state.graph.edges
+        : [],
+    [state, showCurrent],
+  );
 
   return (
     <section className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-6">
@@ -132,27 +169,65 @@ export function ExplorerView() {
       {state.kind === "ready" && state.graph.nodes.length > 0 && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs" style={{ color: "var(--muted)" }}>
-            <span>
-              {state.graph.total_nodes} entities, {state.graph.total_edges} relations
-              {state.graph.capped ? ` (showing the ${state.graph.nodes.length} most connected)` : ""}
+            <span className="flex items-center gap-2">
+              <span>
+                {state.graph.total_nodes} entities, {state.graph.total_edges} relations
+                {state.graph.capped ? ` (showing the ${state.graph.nodes.length} most connected)` : ""}
+              </span>
+              {activatedIds.size > 0 && (
+                <span className="flex items-center gap-1.5" style={{ color: "var(--success)" }}>
+                  <span
+                    className="inline-block rounded-full"
+                    style={{ width: 7, height: 7, background: "var(--success)" }}
+                    aria-hidden="true"
+                  />
+                  {activatedIds.size} recalled live
+                </span>
+              )}
             </span>
             <span className="flex items-center gap-3">
-              <span className="flex items-center gap-1.5">
-                <span style={{ width: 16, height: 0, borderTop: "1px solid var(--muted-bright)" }} aria-hidden="true" />
-                current
+              <span
+                role="radiogroup"
+                aria-label="Show facts"
+                className="inline-flex rounded"
+                style={{ border: "1px solid var(--border)", overflow: "hidden" }}
+              >
+                {([["all", "All"], ["current", "Current"]] as const).map(([val, lbl], i) => {
+                  const active = showCurrent === (val === "current");
+                  return (
+                    <button
+                      key={val}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setShowCurrent(val === "current")}
+                      className="px-2 py-0.5 text-xs font-medium transition-colors duration-150"
+                      style={{
+                        background: active ? "var(--accent-dim)" : "transparent",
+                        color: active ? "var(--accent)" : "var(--muted-bright)",
+                        borderLeft: i === 0 ? "none" : "1px solid var(--border)",
+                      }}
+                    >
+                      {lbl}
+                    </button>
+                  );
+                })}
               </span>
-              <span className="flex items-center gap-1.5">
-                <span style={{ width: 16, height: 0, borderTop: "1px dashed var(--muted)" }} aria-hidden="true" />
-                superseded
-              </span>
+              {!showCurrent && (
+                <span className="flex items-center gap-1.5">
+                  <span style={{ width: 16, height: 0, borderTop: "1px dashed var(--muted)" }} aria-hidden="true" />
+                  superseded
+                </span>
+              )}
             </span>
           </div>
 
           <ForceGraph
             nodes={state.graph.nodes}
-            edges={state.graph.edges}
+            edges={visibleEdges}
             onSelect={setSelected}
             selectedId={selected?.id}
+            activatedIds={activatedIds}
           />
 
           {selected && <DetailPanel node={selected} graph={state.graph} />}

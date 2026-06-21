@@ -155,3 +155,26 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .msg-new { animation: none; }
 }
+
+/* Live-recall pulse: a ring that expands and fades out of a node that the
+   retrieve path just recalled. */
+@keyframes kg-pulse {
+  0%   { transform: scale(0.8); opacity: 0.55; }
+  70%  { opacity: 0.12; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+
+.kg-pulse-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: kg-pulse 1.6s ease-out infinite;
+}
+
+/* Reduced motion: no expanding animation, just a static highlight ring. */
+@media (prefers-reduced-motion: reduce) {
+  .kg-pulse-ring {
+    animation: none !important;
+    transform: scale(1.5);
+    opacity: 0.45 !important;
+  }
+}

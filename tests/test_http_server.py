@@ -726,3 +726,10 @@ def test_graph_endpoint(live_server):
     assert status == 200, body
     assert set(body) >= {"nodes", "edges", "total_nodes", "total_edges"}
     assert isinstance(body["nodes"], list) and isinstance(body["edges"], list)
+
+
+def test_graph_activations_endpoint(live_server):
+    status, body = _get(f"{live_server}/graph/activations")
+    assert status == 200, body
+    assert "activations" in body and isinstance(body["activations"], list)
+    assert "now" in body

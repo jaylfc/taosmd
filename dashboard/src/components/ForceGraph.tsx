@@ -34,12 +34,14 @@ export function ForceGraph({
   edges,
   onSelect,
   selectedId,
+  activatedIds,
   height = 480,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
   onSelect: (n: GraphNode) => void;
   selectedId?: string | null;
+  activatedIds?: Set<string>;
   height?: number;
 }) {
   const H = height;
@@ -159,6 +161,14 @@ export function ForceGraph({
                 onMouseEnter={() => setHover(n)}
                 onMouseLeave={() => setHover(null)}
               >
+                {activatedIds?.has(n.id) && (
+                  <circle
+                    className="kg-pulse-ring"
+                    r={r}
+                    fill={colorForType(n.type)}
+                    style={{ pointerEvents: "none" }}
+                  />
+                )}
                 <circle
                   r={r}
                   fill={colorForType(n.type)}

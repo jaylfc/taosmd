@@ -668,6 +668,20 @@ async def graph(*, limit: int = 300, data_dir=None) -> dict:
     return await stores["kg"].graph(limit=limit)
 
 
+async def graph_activations(*, since: float | None = None, window: float = 60.0,
+                            limit: int = 100, data_dir=None) -> dict:
+    """Entities the retrieve path recalled recently, for the live-recall pulse.
+
+    ``since`` is a unix time; when omitted it defaults to the last ``window``
+    seconds. Returns ``{activations: [{id, last_accessed_at}], now}`` so the
+    client can poll forward. Read-only.
+    """
+    stores = await _ensure_stores(data_dir)
+    cutoff = since if since is not None else (time.time() - window)
+    items = await stores["kg"].activations(since=cutoff, limit=limit)
+    return {"activations": items, "now": time.time()}
+
+
 async def list_shelves(*, project: str, data_dir=None) -> list[dict]:
     """List all agent shelves within a specific project.
 

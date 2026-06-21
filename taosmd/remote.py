@@ -153,6 +153,14 @@ class RemoteClient:
         """GET /graph: the knowledge-graph nodes and edges from the server."""
         return await self._run("GET", "/graph", params={"limit": limit})
 
+    async def graph_activations(self, *, since: float | None = None, window: float = 60.0,
+                                limit: int = 100, **_opts) -> dict:
+        """GET /graph/activations: recently recalled entities for the live pulse."""
+        params: dict = {"window": window, "limit": limit}
+        if since is not None:
+            params["since"] = since
+        return await self._run("GET", "/graph/activations", params=params)
+
     async def list_shelves(self, *, project: str, **_opts) -> list[dict]:
         """GET /shelves: list the agent shelves within ``project`` on the server."""
         resp = await self._run("GET", "/shelves", params={"project": project})

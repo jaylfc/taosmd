@@ -576,3 +576,23 @@ class TemporalKnowledgeGraph:
         ]
         return {"nodes": nodes, "edges": edges, "capped": total_nodes > limit,
                 "total_nodes": total_nodes, "total_edges": total_edges}
+
+    async def activations(self, since: float, limit: int = 100) -> list[dict]:
+        """Entities touched by retrieval since ``since`` (unix time), newest first.
+
+        Reads ``last_accessed_at`` on triples, which ``query_entity`` bumps with
+        ``track_access`` during retrieval, so this reflects what the retrieve
+        path recently recalled. Returns ``[{id, last_accessed_at}]``. Read-only;
+        it powers the Explorer's live-recall pulse without a separate event bus.
+        """
+        rows = self._conn.execute(
+            """SELECT eid, MAX(ts) AS ts FROM (
+                  SELECT subject_id AS eid, last_accessed_at AS ts FROM kg_triples
+                      WHERE last_accessed_at IS NOT NULL AND last_accessed_at >= ?
+                  UNION ALL
+                  SELECT object_id AS eid, last_accessed_at AS ts FROM kg_triples
+                      WHERE last_accessed_at IS NOT NULL AND last_accessed_at >= ?
+               ) GROUP BY eid ORDER BY ts DESC LIMIT ?""",
+            (since, since, limit),
+        ).fetchall()
+        return [{"id": r["eid"], "last_accessed_at": r["ts"]} for r in rows]
