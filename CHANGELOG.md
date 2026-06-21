@@ -3,6 +3,18 @@
 ## Unreleased
 
 ### Added
+- **Memory controls (registry + `/controls` API + dashboard Settings + docs).** A typed
+  controls registry (`taosmd/controls.py`) is the single source of truth for every
+  user-facing lever (scope, type, default, cost, pros and cons), consumed by the
+  standalone dashboard, a new `GET`/`POST /controls` HTTP API (current settings plus
+  schema, the Minimal/Quality/Integrity presets, and validated per-control writes), the
+  config store (`config.get_controls` / `set_control` / `get_runtime_overrides`), and a
+  README "Configuration and controls" section with a drift-guard parity test. The runtime
+  controls (`reranker`, `fusion`, `adjacent_turns`) now overlay the active recipe per
+  query, so a dashboard change takes effect on the next search; `late_interaction` is
+  documented as a store-scope choice (a re-index). The `prefer_verified` recall gate now
+  ships on by default (tri-judge evidenced, E-018: served-hallucination 0.040 to 0.000 at
+  no measured accuracy cost), a safe no-op until the verify-pass is populated.
 - **Claims layer (Provable Memory), default-off.** A new additive `taosmd/claims/`
   package that extracts facts as claims carrying their archive-span provenance,
   verifies them asynchronously against only those source spans with a
