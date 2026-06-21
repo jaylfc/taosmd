@@ -1,10 +1,40 @@
-export type View = "home" | "memory" | "pending" | "a2a" | "projects" | "settings";
+export type View =
+  | "home"
+  | "memory"
+  | "explorer"
+  | "pending"
+  | "a2a"
+  | "projects"
+  | "settings";
 
 export interface Memory {
   text: string;
   agent: string | null;
   kind: string;
   ts: number;
+}
+
+export interface GraphNode {
+  id: string;
+  name: string;
+  type: string;
+  degree: number;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  predicate: string;
+  confidence: number;
+  active: boolean;
+}
+
+export interface Graph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  capped: boolean;
+  total_nodes: number;
+  total_edges: number;
 }
 
 export interface Stats {

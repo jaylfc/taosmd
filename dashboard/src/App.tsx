@@ -5,6 +5,7 @@ import { A2AView } from "./views/A2AView";
 import { ProjectsView } from "./views/ProjectsView";
 import { SettingsView } from "./views/SettingsView";
 import { OverviewView } from "./views/OverviewView";
+import { ExplorerView } from "./views/ExplorerView";
 import { getHealth } from "./api";
 import { initTheme, setScheme, type Scheme } from "./theme";
 import type { View, HealthInfo } from "./types";
@@ -61,6 +62,7 @@ function HealthChip({ info }: { info: HealthInfo | null }) {
 const NAV: { id: View; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "memory", label: "Memory" },
+  { id: "explorer", label: "Explorer" },
   { id: "projects", label: "Projects" },
   { id: "pending", label: "Pending" },
   { id: "a2a", label: "A2A channels" },
@@ -189,6 +191,7 @@ export function App() {
         <main className="flex flex-1 min-w-0 overflow-y-auto" id={`panel-${view}`}>
           {view === "home" && <OverviewView />}
           {view === "memory" && <MemoryView defaultAgent="default" />}
+          {view === "explorer" && <ExplorerView />}
           {view === "projects" && <ProjectsView />}
           {view === "pending" && <PendingView defaultAgent="default" />}
           {view === "a2a" && (
