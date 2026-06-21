@@ -584,6 +584,49 @@ async def list_projects(*, data_dir=None) -> list[dict]:
     return list(projects.values())
 
 
+async def stats(*, data_dir=None) -> dict:
+    """Aggregate read-only dashboard stats over the existing stores.
+
+    Counts are derived from the archive (the per-install source of truth) and
+    the claims store, so a fresh install returns zeros rather than an error.
+    """
+    stores = await _ensure_stores(data_dir)
+    arc = stores["archive"]
+    arc_stats = await arc.stats()
+    growth = await arc.daily_counts(days=30)
+    recent = await arc.recent(limit=10)
+    top_agents = await arc.top_by("agent_name", limit=5)
+    top_projects = await arc.top_by("project", limit=5)
+    agents_n = await arc.distinct_agents()
+
+    claims = stores.get("claims")
+    rate = await claims.rate() if claims is not None else {}
+    supported = int(rate.get("supported", 0))
+    unverified = int(rate.get("unverified", 0))
+    flagged = (int(rate.get("partial", 0)) + int(rate.get("unsupported", 0))
+               + int(rate.get("contradicted", 0)))
+
+    projects = await list_projects(data_dir=data_dir)
+    return {
+        "memories": {
+            "total": int(arc_stats.get("total_events", 0)),
+            "disk_mb": arc_stats.get("disk_usage_mb", 0),
+        },
+        "agents": agents_n,
+        "projects": len(projects),
+        "growth": growth,
+        "verification": {
+            "supported": supported,
+            "unverified": unverified,
+            "flagged": flagged,
+            "hallucination_rate": float(rate.get("hallucination_rate", 0.0)),
+        },
+        "top_agents": top_agents,
+        "top_projects": top_projects,
+        "recent_activity": recent,
+    }
+
+
 async def list_shelves(*, project: str, data_dir=None) -> list[dict]:
     """List all agent shelves within a specific project.
 

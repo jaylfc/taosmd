@@ -23,3 +23,9 @@ async def test_daily_counts_and_recent(tmp_path):
     assert set(recent[0]) == {"kind", "label", "ts"}
     assert recent[0]["kind"] == "conversation"
     assert "a" in recent[0]["label"]
+
+    assert await arc.distinct_agents() == 1
+    top = await arc.top_by("agent_name", limit=5)
+    assert top and top[0]["name"] == "a" and top[0]["count"] >= 1
+    with pytest.raises(ValueError):
+        await arc.top_by("evil; DROP TABLE", limit=5)

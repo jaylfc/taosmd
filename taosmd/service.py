@@ -142,6 +142,18 @@ async def list_projects(*, data_dir=None) -> list[dict]:
     return await _api.list_projects(data_dir=data_dir)
 
 
+async def stats(*, data_dir=None) -> dict:
+    """Aggregate dashboard stats over the stores.
+
+    Thin wrapper over :func:`taosmd.api.stats`. Forwarded to
+    :class:`~taosmd.remote.RemoteClient` when a server URL is configured.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.stats()
+    return await _api.stats(data_dir=data_dir)
+
+
 async def list_shelves(*, project: str, data_dir=None) -> list[dict]:
     """List the agent shelves that have memories within ``project``.
 

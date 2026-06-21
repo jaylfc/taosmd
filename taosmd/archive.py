@@ -412,6 +412,25 @@ class ArchiveStore:
             for r in rows
         ]
 
+    async def distinct_agents(self) -> int:
+        """Number of distinct agents that have archived memories."""
+        row = self._conn.execute(
+            "SELECT COUNT(DISTINCT agent_name) AS n FROM archive_index "
+            "WHERE agent_name IS NOT NULL"
+        ).fetchone()
+        return int(row["n"])
+
+    async def top_by(self, column: str, limit: int = 5) -> list[dict]:
+        """Top ``{name, count}`` groups by ``column`` (agent_name or project)."""
+        if column not in ("agent_name", "project"):
+            raise ValueError(f"top_by column must be agent_name or project, got {column!r}")
+        rows = self._conn.execute(
+            f"SELECT {column} AS name, COUNT(*) AS n FROM archive_index "
+            f"WHERE {column} IS NOT NULL GROUP BY {column} ORDER BY n DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [{"name": r["name"], "count": r["n"]} for r in rows]
+
     # ------------------------------------------------------------------
     # Integrity verification
     # ------------------------------------------------------------------

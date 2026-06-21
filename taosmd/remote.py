@@ -136,6 +136,10 @@ class RemoteClient:
         resp = await self._run("GET", "/projects")
         return resp.get("projects", [])
 
+    async def stats(self, **_opts) -> dict:
+        """GET /stats: aggregate dashboard stats from the server."""
+        return await self._run("GET", "/stats")
+
     async def list_shelves(self, *, project: str, **_opts) -> list[dict]:
         """GET /shelves: list the agent shelves within ``project`` on the server."""
         resp = await self._run("GET", "/shelves", params={"project": project})
