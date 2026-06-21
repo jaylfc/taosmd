@@ -1,0 +1,52 @@
+{
+  "experiment": "E-009",
+  "dataset": "data/locomo/data/locomo10.json",
+  "conversations": 10,
+  "qas": 250,
+  "claims_extracted": 1853,
+  "config": {
+    "model": "qwen3:4b",
+    "verifier_model": "hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M",
+    "judge_model": "hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M",
+    "embed_mode": "onnx",
+    "top_k": 10,
+    "retrieval_top_k": 10,
+    "reranker": "off",
+    "fusion": "boost",
+    "strategy": "vector-only"
+  },
+  "aggregate": {
+    "off": {
+      "n": 250,
+      "judge": 0.464,
+      "recall_rate": 0.62,
+      "served_hallucination_rate": 0.056
+    },
+    "prefer_verified": {
+      "n": 250,
+      "judge": 0.484,
+      "recall_rate": 0.612,
+      "served_hallucination_rate": 0.0
+    },
+    "strict": {
+      "n": 250,
+      "judge": 0.432,
+      "recall_rate": 0.568,
+      "served_hallucination_rate": 0.0
+    }
+  },
+  "verdict": {
+    "prefer_verified": {
+      "served_hallucination_drop": 0.056,
+      "judge_drop": -0.02,
+      "recall_drop": 0.008,
+      "meets_necessary_conditions": true
+    },
+    "strict": {
+      "served_hallucination_drop": 0.056,
+      "judge_drop": 0.032,
+      "recall_drop": 0.052,
+      "meets_necessary_conditions": false
+    }
+  }
+}

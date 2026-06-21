@@ -1,0 +1,24 @@
+PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[conv-26] 419 turns, 168 claims, 168 verified, hall_rate=0.310
+[conv-30] 369 turns, 103 claims, 103 verified, hall_rate=0.320
+[conv-41] 663 turns, 255 claims, 255 verified, hall_rate=0.322
+[conv-42] 629 turns, 150 claims, 150 verified, hall_rate=0.400
+[conv-43] 680 turns, 238 claims, 238 verified, hall_rate=0.315
+[conv-44] 675 turns, 237 claims, 237 verified, hall_rate=0.342
+[conv-47] 689 turns, 200 claims, 200 verified, hall_rate=0.350
+[conv-48] 681 turns, 151 claims, 151 verified, hall_rate=0.285
+[conv-49] 509 turns, 154 claims, 154 verified, hall_rate=0.331
+[conv-50] 568 turns, 197 claims, 197 verified, hall_rate=0.218
+
+=== E-009 claims-gate probe ===
+QAs: 250   claims extracted: 1853
+mode               judge  recall  served_hall
+off                0.452   0.620        0.036
+prefer_verified    0.476   0.616        0.000
+strict             0.440   0.564        0.000
+
+verdict vs gate-off (necessary conditions; 'meaningful margin' is a human call):
+  prefer_verified: served_hall_drop=+0.036  judge_drop=-0.024  recall_drop=+0.004  => meets_necessary_conditions=True
+  strict: served_hall_drop=+0.036  judge_drop=+0.012  recall_drop=+0.056  => meets_necessary_conditions=False
+
+wrote benchmarks/results/e018c_gemma_20260621_013736.json
