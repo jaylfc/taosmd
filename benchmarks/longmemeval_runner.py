@@ -61,6 +61,24 @@ DECOMPOSE_MODEL = os.environ.get("TAOSMD_DECOMPOSE_MODEL", "gemma4:e2b")
 # one extra generator pass keeps the draft if it is fully supported by the
 # context, else rewrites it from the context. Default off.
 SELF_VERIFY = os.environ.get("TAOSMD_SELF_VERIFY", "0") == "1"
+# E-021 generator-prompt ablation. Three default-off answer-prompt arms, each
+# independent: when all are off the generation path is byte-identical to the
+# E-012 baseline.
+# E-021 arm 1: self-consistency. When N>1, sample N answers at a non-zero
+# temperature (self-verify still applied per the baseline), then aggregate to
+# one final answer by majority agreement, breaking ties toward the answer most
+# entailed by the retrieved context. Deterministic given a seed. N=0/1 = off.
+SELF_CONSISTENCY = int(os.environ.get("TAOSMD_SELF_CONSISTENCY", "0"))
+SELF_CONSISTENCY_TEMP = float(os.environ.get("TAOSMD_SELF_CONSISTENCY_TEMP", "0.7"))
+SELF_CONSISTENCY_SEED = int(os.environ.get("TAOSMD_SELF_CONSISTENCY_SEED", "1234"))
+# E-021 arm 2: evidence grounding. A stricter answer-prompt variant that tells
+# the generator to answer ONLY from the cited retrieved spans, quote the
+# supporting span inline, and abstain when the spans do not support an answer.
+EVIDENCE_GROUNDING = os.environ.get("TAOSMD_EVIDENCE_GROUNDING", "0") == "1"
+# E-021 arm 3: persona (pre-registered control). Prepend a "meticulous
+# archivist" persona to the answer prompt with NO procedural change. Expected
+# to be a dud; built faithfully as a clean persona-only edit.
+PERSONA = os.environ.get("TAOSMD_PERSONA", "0") == "1"
 # Representative sampling. The oracle set is ordered by question type, so a head
 # slice dataset[:limit] is single-type (the first ~133 questions are all
 # temporal). Set TAOSMD_SAMPLE_SEED to shuffle deterministically before slicing
@@ -102,6 +120,39 @@ Context:
 Question: {question}
 
 Answer:"""
+
+# E-021 arm 2: a stricter grounding rubric than ANSWER_PROMPT. Same {context}
+# and {question} fields so it is a drop-in variant.
+EVIDENCE_GROUNDING_PROMPT = """Based ONLY on the cited spans of context below, answer the question.
+Use nothing outside the context. Quote the exact supporting span inline in quotation marks.
+If the spans do not support an answer, say "I don't know." and quote nothing.
+Answer concisely in 1-2 sentences. /no_think
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+
+# E-021 arm 3: persona-only prefix (the pre-registered control). Prepended to
+# whichever answer prompt is in use, with no procedural change.
+PERSONA_PREFIX = "You are a meticulous archivist.\n\n"
+
+
+def build_answer_prompt(context: str, question: str) -> str:
+    """Build the generator prompt for the active E-021 arm.
+
+    With all E-021 flags off this returns the E-012 baseline ANSWER_PROMPT
+    formatted exactly as before (byte-identical). EVIDENCE_GROUNDING swaps in
+    the stricter rubric; PERSONA prepends the archivist persona with no other
+    change. The two are independent and compose.
+    """
+    template = EVIDENCE_GROUNDING_PROMPT if EVIDENCE_GROUNDING else ANSWER_PROMPT
+    prompt = template.format(context=context[:CONTEXT_CHARS], question=question)
+    if PERSONA:
+        prompt = PERSONA_PREFIX + prompt
+    return prompt
 
 
 def score_answer_substring(predicted: str, gold: str) -> bool:
@@ -151,17 +202,25 @@ def score_answer(predicted: str, gold: str) -> bool:
     return score_answer_substring(predicted, gold)
 
 
-async def llm_answer(client, context: str, question: str) -> str:
-    """Use remote LLM to generate answer from recalled context."""
+async def llm_answer(client, context: str, question: str, temperature: float = 0, seed: int | None = None) -> str:
+    """Use remote LLM to generate answer from recalled context.
+
+    temperature/seed default to the deterministic baseline (temp 0, no seed),
+    so the baseline request is byte-identical to the E-012 path. E-021
+    self-consistency passes a non-zero temperature and a per-sample seed.
+    """
+    options = {"temperature": temperature, "num_predict": 100}
+    if seed is not None:
+        options["seed"] = seed
     try:
         resp = await client.post(
             f"{REMOTE_LLM_URL}/api/chat",
             json={
                 "model": REMOTE_LLM_MODEL,
-                "messages": [{"role": "user", "content": ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)}],
+                "messages": [{"role": "user", "content": build_answer_prompt(context, question)}],
                 "stream": False,
                 "think": False,
-                "options": {"temperature": 0, "num_predict": 100},
+                "options": options,
             },
             timeout=30,
         )
@@ -248,6 +307,109 @@ async def self_verify_answer(client, context: str, question: str, answer: str) -
     except Exception:
         pass
     return answer
+
+
+def _normalize_answer(answer: str) -> str:
+    """Vote key: lowercased, whitespace-collapsed, trailing-punctuation-stripped."""
+    return " ".join(answer.lower().split()).strip(" .!?")
+
+
+def aggregate_answers(answers, entailment_scorer=None) -> str:
+    """E-021 arm 1 aggregation: pick the answer most samples agree on.
+
+    Majority vote over normalized answer text. On a tie among the top vote
+    count, prefer the candidate most entailed by the retrieved context
+    (entailment_scorer maps a representative answer -> float; higher = more
+    entailed); with no scorer, or if it ties, break deterministically by the
+    sorted normalized key so the result is reproducible given a seed.
+
+    Pure and synchronous so it is unit-testable without an LLM. Empty/blank
+    candidates are ignored; returns "" only if nothing usable was sampled.
+    """
+    counts = {}
+    representative = {}
+    for ans in answers:
+        if not ans or not ans.strip():
+            continue
+        key = _normalize_answer(ans)
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+        representative.setdefault(key, ans)
+    if not counts:
+        return ""
+    top = max(counts.values())
+    tied = sorted(k for k, c in counts.items() if c == top)
+    if len(tied) == 1:
+        return representative[tied[0]]
+    if entailment_scorer is not None:
+        # Most entailed wins; stable sorted() tie-break keeps it deterministic.
+        tied = sorted(tied, key=lambda k: (-entailment_scorer(representative[k]), k))
+    return representative[tied[0]]
+
+
+async def entailment_score(client, context: str, answer: str) -> float:
+    """Fraction-style support signal for the self-consistency tie-break.
+
+    Asks the generator whether the context supports the answer and maps a
+    leading YES to 1.0, else 0.0. Deterministic (temperature 0). Falls back to
+    0.0 on any failure so a broken scorer never changes the majority outcome.
+    """
+    prompt = (
+        "Does the context fully support the answer? Reply with only YES or NO. /no_think\n\n"
+        f"Context:\n{context[:CONTEXT_CHARS]}\n\nAnswer: {answer}\n\nVerdict:"
+    )
+    try:
+        resp = await client.post(
+            f"{REMOTE_LLM_URL}/api/chat",
+            json={
+                "model": REMOTE_LLM_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "think": False,
+                "options": {"temperature": 0, "num_predict": 4},
+            },
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            verdict = resp.json().get("message", {}).get("content", "").strip().lower()
+            return 1.0 if verdict.startswith("yes") else 0.0
+    except Exception:
+        pass
+    return 0.0
+
+
+async def self_consistency_answer(client, context: str, question: str, n: int) -> str:
+    """E-021 arm 1: sample n answers, self-verify each per the baseline, aggregate.
+
+    Each sample uses a non-zero temperature and a distinct per-sample seed
+    derived from SELF_CONSISTENCY_SEED, so the run is reproducible. SELF_VERIFY
+    is applied to each draft exactly as the baseline applies it to the single
+    draft, then aggregate_answers picks the agreed answer with an entailment
+    tie-break against the context.
+    """
+    samples = []
+    for j in range(n):
+        draft = await llm_answer(
+            client, context, question,
+            temperature=SELF_CONSISTENCY_TEMP,
+            seed=SELF_CONSISTENCY_SEED + j,
+        )
+        if SELF_VERIFY:
+            draft = await self_verify_answer(client, context, question, draft)
+        samples.append(draft)
+
+    async def _scorer_async(ans):
+        return await entailment_score(client, context, ans)
+
+    # Pre-score the candidates that could tie so aggregate_answers stays pure.
+    scores = {}
+    for ans in samples:
+        if ans and ans.strip():
+            key = _normalize_answer(ans)
+            if key and key not in scores:
+                scores[key] = await _scorer_async(ans)
+    return aggregate_answers(samples, entailment_scorer=lambda ans: scores.get(_normalize_answer(ans), 0.0))
 
 
 async def run_benchmark(limit: int = 50, question_type: str | None = None, use_llm: bool = False):
@@ -390,10 +552,16 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
 
         if use_llm and llm_client is not None:
             t_llm = time.time()
-            # Step 1: LLM generates answer from recalled context
-            answer = await llm_answer(llm_client, full_context, question)
-            if SELF_VERIFY:
-                answer = await self_verify_answer(llm_client, full_context, question, answer)
+            # Step 1: LLM generates answer from recalled context. E-021 arm 1
+            # (self-consistency) samples N answers and aggregates, applying
+            # self-verify per sample internally; otherwise the baseline path
+            # generates one answer and self-verifies it if enabled.
+            if SELF_CONSISTENCY > 1:
+                answer = await self_consistency_answer(llm_client, full_context, question, SELF_CONSISTENCY)
+            else:
+                answer = await llm_answer(llm_client, full_context, question)
+                if SELF_VERIFY:
+                    answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
             if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
                 correct = await score_answer_llm(llm_client, answer, gold_answer, question)
