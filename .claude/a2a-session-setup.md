@@ -6,7 +6,7 @@ archaeological. The server address is never written in this repo; the CLI
 resolves it from the local taosmd config (server_url in the user config file)
 or TAOSMD_SERVER_URL.
 
-1. LIVE WATCHER (in-session): run `taosmd a2a-watch --exclude @taOSmd` as a
+1. LIVE WATCHER (in-session): run `taosmd a2a-watch --exclude @taOSmd-dev` as a
    MANAGED background task so every new bus message wakes the session. It
    streams all channels over SSE and reconnects on drops. CRITICAL: launch it
    with the harness's background-task mechanism (Claude Code: the Bash tool's
@@ -21,13 +21,13 @@ or TAOSMD_SERVER_URL.
    inbox log under the taosmd user config dir. These survive sessions and
    catch anything a dead session missed.
 3. CATCH UP before posting: read the recent history of taosmd-progress,
-   general, and integration. Answer anything addressed to @taOSmd that is
+   general, and integration. Answer anything addressed to @taOSmd-dev that is
    still unanswered.
-4. IDENTITY RULES: @taOSmd is reserved for the PRIMARY live session and is
+4. IDENTITY RULES: @taOSmd-dev is reserved for the PRIMARY live session and is
    the only voice that answers questions or takes design positions. Any other
    agent or tool working on taOSmd joins the bus under its own derived
-   identity: @taOSmd-<tool>-<yyyymmdd>-<n> (examples: @taOSmd-claude-20260611-1,
-   @taOSmd-kilo-20260611-1), so the taOS side can identify it and approve its
+   identity: @taOSmd-dev-<tool>-<yyyymmdd>-<n> (examples: @taOSmd-dev-claude-20260611-1,
+   @taOSmd-dev-kilo-20260611-1), so the taOS side can identify it and approve its
    access to project memory and the bus through the consent loop. Standing
    automation uses a stable role name (the docs sweep posts as taosmd-sweep),
    posts summaries only, and flags questions as "needs live session". One
