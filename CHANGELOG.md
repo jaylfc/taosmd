@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.4.0
+
+Provable Memory and the memory cockpit. Adds the claims layer (facts carry their
+archive-span provenance and are verified asynchronously against only those spans,
+with a `prefer_verified` recall gate now on by default), the standalone
+dashboard's memory cockpit (themed Home/Overview over `GET /stats`, a Memory
+Explorer knowledge-graph galaxy over `GET /graph`, semantic categories, and a
+time scrubber), a typed memory-controls registry with a `/controls` API and
+dashboard Settings, and embedder hardening so a missing dense model fails loudly
+at setup instead of silently degrading retrieval at serve time.
+
 ### Added
 - **Dashboard memory cockpit.** The standalone web dashboard grows from a read-only
   inspector into a cockpit, themed to taOS's macOS dark and light schemes with a toggle.

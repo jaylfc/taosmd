@@ -1,4 +1,4 @@
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from .knowledge_graph import TemporalKnowledgeGraph as KnowledgeGraph
 from .vector_memory import VectorMemory
