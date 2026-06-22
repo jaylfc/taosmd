@@ -306,10 +306,11 @@ class VectorMemory:
                     logger.warning("sentence-transformers not installed, falling back to QMD")
                     self._embed_mode = "qmd"
         elif self._embed_mode == "onnx":
+            # Resolved before the try so the failure path can name it.
+            model_dir = self._onnx_path or "models/minilm-onnx"
             try:
                 import onnxruntime as ort
                 from transformers import AutoTokenizer
-                model_dir = self._onnx_path or "models/minilm-onnx"
                 # Find model.onnx at the dir root or under an onnx/ subdir
                 # (the layout arctic-embed and most HF ONNX exports ship).
                 model_file = f"{model_dir}/model.onnx"
@@ -322,7 +323,19 @@ class VectorMemory:
                 self._onnx_tokenizer = AutoTokenizer.from_pretrained(model_dir)
                 logger.info("Loaded ONNX embedding model from %s", model_file)
             except Exception as e:
-                logger.warning("ONNX model failed to load: %s, falling back to QMD", e)
+                # Loud and actionable: a silent embedder swap corrupts retrieval.
+                # The store's vectors are tied to the embedder that wrote them, so
+                # falling back to a different embedder than the store was built
+                # with returns meaningless results. Name the dir and the fix.
+                logger.warning(
+                    "ONNX embedder failed to load from %s (%s). Falling back to QMD "
+                    "remote embeddings. If a local embedder was expected, its ONNX "
+                    "files are missing or unreadable; run scripts/setup.sh to fetch "
+                    "them. NOTE: a store's vectors are tied to the embedder that "
+                    "wrote them, so serving a different embedder than the store was "
+                    "built with returns meaningless retrieval.",
+                    model_dir, e,
+                )
                 self._embed_mode = "qmd"
 
     def _migrate(self) -> None:
