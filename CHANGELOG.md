@@ -191,6 +191,17 @@
   falls back to a dependency-free Okapi BM25 (same k1/b) when not.
 
 ### Fixed
+- Setup now preflights the dense embedder so a missing model is loud, not
+  silent. A recipe writes `embed_model` (for example `arctic-embed-s`) into
+  config, but the ONNX files are fetched separately by `scripts/setup.sh`, so a
+  provisioning path that skips that script left the model absent and the store
+  silently fell back to a different embedder at serve time. Because a store's
+  vectors are tied to the embedder that wrote them, that returned meaningless
+  retrieval with no error. `auto_setup` gains a `_preflight_embedder_model`
+  check (mirroring the enricher-model preflight) that verifies the recommended
+  embedder's ONNX files are on disk and prints the exact fetch command when they
+  are not, and `VectorMemory`'s ONNX load-failure warning now names the model
+  directory, points at `scripts/setup.sh`, and flags the vector-space mismatch.
 - The live serve path now builds the vector store in the storage mode its
   recipe asks for. `late_interaction`/`colbert_model` lived only in
   `recipes.py` and were never read at store construction, so an 8 GB GPU
