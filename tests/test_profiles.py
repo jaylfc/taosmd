@@ -59,9 +59,17 @@ def test_resolve_config_minimal_enables_no_consent_switch():
     assert "claims.prefer_verified" not in cfg  # the old dead key is gone
 
 
-def test_resolve_config_integrity_enables_recall_gate():
+def test_resolve_config_integrity_uses_strict_gate():
     cfg = profiles.resolve_config("integrity", consented_switches=["rerank", "self_verify"])
-    # Integrity turns the gate on with the value the runtime recall gate reads.
+    # Integrity is the maximum-purity tier: it pins the strict gate variant.
+    assert cfg["controls.prefer_verified"] == "strict"
+
+
+def test_resolve_config_quality_enables_recall_gate():
+    # Quality now carries the verified gate on (a no-op until the verify-pass
+    # runs, no measured accuracy cost). prefer_verified is a non-consent switch,
+    # so it is written regardless of which quality switches were consented.
+    cfg = profiles.resolve_config("quality", consented_switches=[])
     assert cfg["controls.prefer_verified"] == "prefer_verified"
 
 

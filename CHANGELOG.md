@@ -190,6 +190,20 @@
   BM25 index reuses the fusion-path cache). Uses `bm25s` when installed and
   falls back to a dependency-free Okapi BM25 (same k1/b) when not.
 
+### Changed
+- **Verified-memory recall gate on by default, and a clearer preset ladder.** The
+  `prefer_verified` recall gate now ships on at the global default (the runtime falls
+  back to it when nothing is persisted), the flip backed by the E-018 tri-judge confirm
+  (served-hallucination 0.040 to 0.000 under all three judge families at no measured
+  accuracy or recall cost) and signed off. The three presets are now a clean ladder:
+  **Minimal** turns the gate off (the lean opt-out), **Quality** carries the gate on
+  alongside reranking (the recommended accuracy tier), and **Integrity** steps up to the
+  `strict` variant, which drops unverified claims for maximum purity and accepts a small
+  measured recall trade-off. The cross-encoder reranker stays on in the recommended
+  retrieve recipe, and answer self-verification (the dominant F-013 lever) stays an
+  opt-in consumer-side recommendation enabled in the Quality and Integrity install
+  profiles, since taOSmd serves memory and does not generate answers.
+
 ### Fixed
 - The live serve path now builds the vector store in the storage mode its
   recipe asks for. `late_interaction`/`colbert_model` lived only in
