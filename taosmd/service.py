@@ -260,6 +260,24 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
     return await _api.reconcile(agent=agent, data_dir=data_dir, repair=repair)
 
 
+async def reindex(*, agent: str, data_dir=None, check: bool = False) -> dict:
+    """Re-embed an agent's vector store from the zero-loss archive.
+
+    Thin wrapper over :func:`taosmd.api.reindex`. The append-only archive is the
+    source of truth; the vector store is a derived index. Switching embedders
+    (e.g. MiniLM -> arctic-embed-s) leaves the old vectors in an incompatible
+    space, so reindex clears the agent's vector rows and rebuilds them by
+    re-adding every archive turn, which re-embeds each one under the *currently
+    configured* embedder. The archive is never touched, so reindex is safe to
+    re-run and is applied per-agent (live agents cut over one at a time).
+
+    Returns ``{"agent", "archive_turns", "vector_before", "cleared", "readded",
+    "reindexed_ok"}``. When ``check=True`` this is a dry-run: ``cleared`` and
+    ``readded`` are 0 and nothing is modified.
+    """
+    return await _api.reindex(agent=agent, data_dir=data_dir, check=check)
+
+
 async def supersede(match: str, *, agent: str | None = None, data_dir=None) -> dict:
     """Soft-supersede vector chunk(s) whose stored text contains ``match``.
 
