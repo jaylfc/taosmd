@@ -135,6 +135,12 @@ async def setup(data_dir: str = DEFAULT_DATA_DIR, interactive: bool = True):
     # 9. Pre-flight: enricher-model availability
     _preflight_enricher_model(interactive=interactive)
 
+    # 9b. Pre-flight: dense embedder availability. The recipe wrote embed_model
+    # into config above, but the ONNX files are fetched by scripts/setup.sh; warn
+    # loudly if they are missing so the store does not silently degrade to a
+    # different embedder at serve time (which corrupts the vector space).
+    _preflight_embedder_model(_mode["embed_model"], interactive=interactive)
+
     # 10. Daily nightly librarian cron
     setup_cron = True
     if interactive:
@@ -356,6 +362,89 @@ def _preflight_enricher_model(
         if resp == "n":
             print("    Aborting setup. Re-run `python -m taosmd.auto_setup` after pulling a model.")
             sys.exit(0)
+
+
+# Exact fetch command per dense-embedder dir name, mirroring scripts/setup.sh.
+# A store's vectors are tied to one embedder (a stored arctic vector is
+# meaningless to a MiniLM query), so a missing model that silently degrades to a
+# different embedder corrupts retrieval. These let the preflight tell the user
+# exactly how to fetch the model the recipe selected.
+_EMBEDDER_DOWNLOAD = {
+    "minilm-onnx": (
+        "hf download onnx-models/all-MiniLM-L6-v2-onnx --local-dir models/minilm-onnx"
+    ),
+    "arctic-embed-s": (
+        "hf download Snowflake/snowflake-arctic-embed-s "
+        '--include "onnx/model.onnx" "*.json" "tokenizer*" "vocab*" "special_tokens*" '
+        "--local-dir models/arctic-embed-s"
+    ),
+}
+
+
+def _embedder_model_present(model_dir: str) -> bool:
+    """True if an ONNX model.onnx exists at the dir root or under onnx/.
+
+    Matches VectorMemory's own resolution order so the preflight checks the
+    exact files the loader will look for at serve time.
+    """
+    return (
+        Path(f"{model_dir}/model.onnx").exists()
+        or Path(f"{model_dir}/onnx/model.onnx").exists()
+    )
+
+
+def _preflight_embedder_model(
+    embed_model: str,
+    models_root: str = "models",
+    interactive: bool = True,
+) -> bool:
+    """Check the recommended dense ONNX embedder is present on disk.
+
+    The recipe writes ``embed_model`` into config, but the ONNX files are
+    fetched separately by scripts/setup.sh. If a provisioning path skips that
+    script the model is absent, and at serve time the store falls back to a
+    different embedder, which silently corrupts the vector space: a stored
+    vector is meaningless to a query embedded by a different model, so retrieval
+    returns wrong results with no error. This preflight catches that gap loudly
+    at setup, mirroring the enricher-model preflight.
+
+    Returns True when the model files are found, False when missing or when no
+    dense embedder is configured. Never raises. Does not block setup unless the
+    user declines interactively.
+    """
+    print("  Checking embedder model availability...", end="", flush=True)
+
+    if not embed_model:
+        print(" (no dense embedder configured)")
+        return False
+
+    model_dir = os.path.join(models_root, embed_model)
+    if _embedder_model_present(model_dir):
+        print(f" ✓ {embed_model} found at {model_dir}")
+        return True
+
+    print()  # break from the "..." line
+    print(f"  ⚠ Recommended embedder '{embed_model}' is NOT on disk (looked in {model_dir}/).")
+    print("     The recipe selected it, but the model files are fetched separately.")
+    print("     Without them the store falls back to a different embedder at serve")
+    print("     time. A store's vectors are tied to one embedder, so a stored vector")
+    print("     is meaningless to a query embedded by a different model: retrieval")
+    print("     silently returns wrong results. Fetch the model now:")
+    cmd = _EMBEDDER_DOWNLOAD.get(embed_model)
+    if cmd:
+        print(f"       {cmd}")
+    else:
+        print(f"     (see scripts/setup.sh for the {embed_model} download command)")
+    print("     Or re-run scripts/setup.sh, which fetches every recommended embedder.")
+    print()
+
+    if interactive:
+        resp = input("    Continue setup without the embedder? [Y/n]: ").strip().lower()
+        if resp == "n":
+            print("    Aborting setup. Fetch the embedder above, then re-run "
+                  "`python -m taosmd.auto_setup`.")
+            sys.exit(0)
+    return False
 
 
 if __name__ == "__main__":
