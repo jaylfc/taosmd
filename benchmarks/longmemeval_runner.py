@@ -109,6 +109,20 @@ def score_answer_substring(predicted: str, gold: str) -> bool:
     return gold.lower().strip() in predicted.lower()
 
 
+def _parse_verdict(content: str) -> bool:
+    """Parse a judge's one-word CORRECT / INCORRECT verdict into a pass/fail.
+
+    The negative verdict is checked FIRST on purpose: the string "INCORRECT"
+    contains the substring "CORRECT", so a naive ``"CORRECT" in judgment`` scores
+    every INCORRECT reply as a pass. An empty or unrecognised reply is treated as
+    incorrect (fail-closed).
+    """
+    j = (content or "").strip().upper()
+    if "INCORRECT" in j:
+        return False
+    return "CORRECT" in j
+
+
 async def score_answer_llm(client, predicted: str, gold: str, question: str) -> bool:
     """Score using LLM-as-judge (official LongMemEval approach)."""
     prompt = f"""You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
@@ -139,8 +153,8 @@ Verdict: /no_think"""
             timeout=30,
         )
         if resp.status_code == 200:
-            judgment = resp.json().get("message", {}).get("content", "").strip().upper()
-            return "CORRECT" in judgment
+            content = resp.json().get("message", {}).get("content", "")
+            return _parse_verdict(content)
     except Exception:
         pass
     return False
