@@ -1307,7 +1307,27 @@ class VectorMemory:
                 continue
             yield row["text"], meta
 
-    async def clear(self) -> int:
-        cursor = self._conn.execute("DELETE FROM vector_memory")
+    async def clear(self, agent: str | None = None) -> int:
+        """Delete vector rows. With no ``agent`` this wipes the whole store.
+
+        When ``agent`` is given, only rows whose stored metadata ``agent`` field
+        equals it are deleted, matching the per-agent scope used by :meth:`add`
+        (which writes ``{"agent": ...}`` at ingest time) and by
+        :meth:`iter_entries`. The append-only archive is never touched, so the
+        deleted rows can always be rebuilt by re-adding the archive turns (this
+        is what :func:`taosmd.api.reindex` does when an embedder changes).
+
+        Returns the number of rows deleted. Invalidates the BM25 cache when the
+        corpus changed so the next query rebuilds it.
+        """
+        if agent is None:
+            cursor = self._conn.execute("DELETE FROM vector_memory")
+        else:
+            cursor = self._conn.execute(
+                "DELETE FROM vector_memory WHERE json_extract(metadata_json, '$.agent') = ?",
+                (agent,),
+            )
         self._conn.commit()
+        if cursor.rowcount > 0:
+            self._bm25_dirty = True  # corpus changed; invalidate BM25 cache
         return cursor.rowcount

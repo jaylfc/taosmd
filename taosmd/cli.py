@@ -973,6 +973,61 @@ def _reconcile_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _reindex_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd reindex``: rebuild an agent's vector store from the archive.
+
+    Clears the agent's vector rows and re-adds every archive turn, which
+    re-embeds each under the CURRENTLY configured embedder. Used to cut an agent
+    over to a new embedder (e.g. arctic-embed-s); the zero-loss archive is the
+    source of truth so reindex is safe to re-run.
+    """
+    import asyncio  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+    from .agents import AgentRegistry  # noqa: PLC0415
+
+    check = args.check
+    data_dir = args.data_dir
+
+    print(
+        "note: reindex clears the agent's vector rows and rebuilds them from the "
+        "zero-loss archive under the CURRENTLY configured embedder. Set "
+        "vector_memory.embed_model to the target embedder (e.g. arctic-embed-s) "
+        "BEFORE running."
+    )
+
+    agent_names: list[str]
+    if args.agent:
+        agent_names = [args.agent]
+    else:
+        # Reindex all registered agents.
+        registry = AgentRegistry(data_dir)
+        agent_names = [a["name"] for a in registry.list_agents()]
+        if not agent_names:
+            print("No registered agents found.")
+            return 0
+
+    any_mismatch = False
+    for agent in agent_names:
+        result = asyncio.run(service.reindex(agent=agent, data_dir=data_dir, check=check))
+        mode = "check" if check else "reindex"
+        status = "ok" if result["reindexed_ok"] else "MISMATCH"
+        print(
+            f"[{mode}] {result['agent']:<24} "
+            f"archive={result['archive_turns']}  "
+            f"vector={result['vector_before']}  "
+            f"cleared={result['cleared']}  "
+            f"re-added={result['readded']}  "
+            f"{status}"
+        )
+        if not result["reindexed_ok"]:
+            any_mismatch = True
+
+    if check:
+        print("\nhint: run without --check to clear and rebuild the vector store.")
+    return 1 if any_mismatch and not check else 0
+
+
 def _claims_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd claims`` subcommand group."""
     import asyncio  # noqa: PLC0415
@@ -1420,6 +1475,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Dry-run: report missing counts without modifying the vector store.",
     )
 
+    # ----- reindex subcommand ------------------------------------------
+    reindex_p = sub.add_parser(
+        "reindex",
+        help="Re-embed an agent's vector store from the zero-loss archive under "
+             "the CURRENTLY configured embedder. Used to cut an agent over to a "
+             "new embedder (e.g. arctic-embed-s): clears the agent's vector rows "
+             "and re-adds every archive turn. The archive is never touched, so "
+             "reindex is per-agent and safe to re-run.",
+    )
+    reindex_p.add_argument(
+        "--agent", default=None,
+        help="Agent name to reindex. When omitted, all registered agents are reindexed.",
+    )
+    reindex_p.add_argument(
+        "--check", action="store_true",
+        help="Dry-run: report archive/vector counts without modifying the vector store.",
+    )
+
     # ----- project discovery subcommands --------------------------------
     sub.add_parser(
         "projects",
@@ -1592,6 +1665,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "reconcile":
         return _reconcile_cmd(args)
+
+    if args.cmd == "reindex":
+        return _reindex_cmd(args)
 
     if args.cmd in ("projects", "shelves"):
         return _projects_cmd(args)

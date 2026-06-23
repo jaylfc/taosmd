@@ -943,6 +943,112 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
     }
 
 
+async def reindex(*, agent: str, data_dir=None, check: bool = False) -> dict:
+    """Re-embed an agent's vector store from the zero-loss archive.
+
+    Switching embedders (e.g. MiniLM -> arctic-embed-s) produces an incompatible
+    vector space: a store embedded under the old model cannot be queried with the
+    new model. The append-only archive is the source of truth, so the safe,
+    re-runnable fix is to clear the agent's vector rows and re-add every archive
+    turn, which re-embeds each one under the *currently configured* embedder.
+
+    This is per-agent so live agents can be cut over one at a time. The archive
+    is never modified, so a reindex can always be re-run.
+
+    Args:
+        agent: Agent name whose vector store is rebuilt from its archive.
+        data_dir: Optional taosmd data dir. Defaults to ``$TAOSMD_DATA_DIR`` or
+            ``~/.taosmd``.
+        check: When True, a dry-run: report counts without modifying anything
+            (``cleared`` and ``readded`` are 0).
+
+    Returns:
+        ``{
+            "agent": str,
+            "archive_turns": int,   # non-empty conversation turns in the archive
+            "vector_before": int,   # agent's vector entries before reindex (incl. superseded)
+            "cleared": int,         # rows deleted (0 when check=True)
+            "readded": int,         # rows re-embedded and re-added (0 when check=True)
+            "reindexed_ok": bool,   # True when post-reindex active entries == archive turns
+        }``
+    """
+    import json as _json
+
+    if not agent:
+        raise ValueError("agent name is required")
+
+    stores = await _ensure_stores(data_dir)
+    archive = stores["archive"]
+    vmem = stores["vector"]
+
+    from taosmd.archive import EVENT_CONVERSATION
+
+    # --- Collect the agent's archive turns (source of truth) ------------
+    rows = await archive.query(
+        event_type=EVENT_CONVERSATION,
+        agent_name=agent,
+        limit=1_000_000,
+    )
+    archive_turns: list[dict] = []
+    for row in rows:
+        try:
+            data = _json.loads(row.get("data_json", "{}"))
+        except (_json.JSONDecodeError, TypeError):
+            data = {}
+        text = str(data.get("content", "")).strip()
+        if not text:
+            continue
+        archive_turns.append(data)
+
+    archive_count = len(archive_turns)
+
+    # --- Count the agent's current vector entries (incl. superseded) ----
+    vector_before = 0
+    async for _text, _meta in vmem.iter_entries(agent=agent, include_superseded=True):
+        vector_before += 1
+
+    if check:
+        return {
+            "agent": agent,
+            "archive_turns": archive_count,
+            "vector_before": vector_before,
+            "cleared": 0,
+            "readded": 0,
+            "reindexed_ok": vector_before == archive_count,
+        }
+
+    # --- Clear the agent's vector rows, then rebuild from the archive ---
+    cleared = await vmem.clear(agent=agent)
+
+    readded = 0
+    for data in archive_turns:
+        text = str(data.get("content", "")).strip()
+        meta: dict = {"agent": agent}
+        # Propagate role and timestamp from the archive entry where available,
+        # mirroring the metadata reconstruction used by reconcile().
+        if "role" in data:
+            meta["role"] = data["role"]
+        if "timestamp" in data:
+            meta["timestamp"] = data["timestamp"]
+        added_id = await vmem.add(text, metadata=meta)
+        if added_id != -1:
+            readded += 1
+
+    # --- Verify: active entries for the agent now match archive turns ---
+    active_after = 0
+    async for _text, _meta in vmem.iter_entries(agent=agent, include_superseded=False):
+        active_after += 1
+
+    return {
+        "agent": agent,
+        "archive_turns": archive_count,
+        "vector_before": vector_before,
+        "cleared": cleared,
+        "readded": readded,
+        "reindexed_ok": active_after == archive_count,
+    }
+
+
 async def supersede_vectors(match: str, *, data_dir=None) -> int:
     """Soft-supersede vector chunk(s) whose stored text contains ``match``.
 
