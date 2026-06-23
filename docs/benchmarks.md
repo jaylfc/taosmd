@@ -6,7 +6,7 @@
 
 Harness: [`benchmarks/longmemeval_recall.py`](../benchmarks/longmemeval_recall.py). Provenance: `benchmarks/results/enhanced_20260413_133215.json` (the `query_expand` variant, `top_k=5`).
 
-Honesty note (corrected 2026-06-14): an earlier edition of this section labelled the 97.0% as "end-to-end Judge accuracy." That was a mislabel. The number is and always was Recall@5 (top_k=5), as the source result file shows. A genuine end-to-end Judge measurement (retrieve, generate an answer, grade it against the reference) is published separately below as 74.6% (F-013, oracle set); it is a different and stricter metric, and it is not this number.
+Honesty note (corrected 2026-06-14): an earlier edition of this section labelled the 97.0% as "end-to-end Judge accuracy." That was a mislabel. The number is and always was Recall@5 (top_k=5), as the source result file shows. A genuine end-to-end Judge measurement (retrieve, generate an answer, grade it against the reference) is reported separately below; an earlier 74.6% figure (F-013) was inflated by a judge-parser bug (fixed 2026-06-23, PR #176, see the correction note below and research report N-017) and corrected to the 43 to 51 percent range. It is a different and stricter metric, and it is not this Recall@5 number.
 
 ### Per-category breakdown (Recall@5)
 
@@ -42,13 +42,15 @@ All four rows are Recall@5, so this is a direct comparison: taOSmd leads on the 
 
 ### End-to-end Judge on LongMemEval-S (the generation-side number)
 
-This is a SEPARATE number from the Recall@5 retrieval headline above and is never conflated with it. Measured honestly with a local 9B generator and an external strict judge on the oracle 500-question set. The F-012 baseline was 47.2% (236/500), starved of evidence; a pre-registered ablation (F-013) lifted it to **74.6%** (373/500) without changing the model, only the evidence pipeline plus a self-check.
+This is a SEPARATE number from the Recall@5 retrieval headline above and is never conflated with it. Measured with a local 9B generator and an external strict judge on the oracle 500-question set.
+
+**CORRECTION (2026-06-23, N-017).** The F-012 47.2% and F-013 74.6% figures in the table below were inflated by a verdict-parser bug: the judge parser counted INCORRECT replies as passes (the string "INCORRECT" contains "CORRECT"), so the Judge score tracked non-abstention rather than correctness. Fixed in PR #176. The corrected full-500 end-to-end Judge on the shipped qwen3.5:9b config is **42.8%** on the strict Qwen judge and **51.2%** on a cross-family llama judge. A gemma4:12b generator upgrade (under evaluation) lifts it to roughly **54 to 57%** and brings the combo to a match-or-beat against MemOS-lossless on a like-for-like head-to-head. The original ablation table is retained below for the record; every Judge figure in it is inflated by this bug. Full provenance in the [research report](research-report.md) (N-017).
 
 | config | Judge (oracle) |
 |--------|------|
 | F-012 baseline (starved) | 47.2% (236/500) |
 | + evidence-depth tuning | 56.8% (284/500) |
-| **+ reranking + answer self-verification** | **74.6% (373/500)** |
+| **+ reranking + answer self-verification** | 74.6% (373/500) INFLATED, see N-017 correction above (real 42.8% Qwen / 51.2% llama) |
 
 Generator qwen3.5:9b with `/no_think`, external strict judge Qwen3-4B-Instruct-2507, MiniLM embedder. Answer self-verification (a CoVe-style pass that checks the draft against the retrieved context) is the dominant lever and fixes the reasoning bottlenecks: temporal-reasoning 30 to 56%, multi-session 40 to 67%. Query decomposition was tested and dropped (it lowered every combination). Confirmed judge-robust: a cross-family second judge (llama3.1:8b) reproduced both numbers exactly. Full detail in the research report (F-013) and [`benchmarks/results/e012_ablation_results.md`](../benchmarks/results/e012_ablation_results.md).
 
