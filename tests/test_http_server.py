@@ -667,7 +667,7 @@ def test_controls_post_preset_applies_bundle(live_server):
     assert status == 200, body
     assert body["errors"] == {}
     s = body["settings"]
-    assert s["prefer_verified"] == "prefer_verified"
+    assert s["prefer_verified"] == "strict"  # Integrity is the strict/max-purity tier
     assert s["reranker"] == "bge-v2-m3"
     assert s["adjacent_turns"] == 2
 
