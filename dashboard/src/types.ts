@@ -35,6 +35,8 @@ export interface Graph {
   capped: boolean;
   total_nodes: number;
   total_edges: number;
+  t_min: number | null;
+  t_max: number | null;
 }
 
 export interface Stats {

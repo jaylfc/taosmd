@@ -521,33 +521,78 @@ class TemporalKnowledgeGraph:
         active = self._conn.execute("SELECT COUNT(*) as n FROM kg_triples WHERE valid_to IS NULL").fetchone()["n"]
         return {"entities": entities, "triples": triples, "active_triples": active}
 
-    async def graph(self, limit: int = 300) -> dict:
-        """Return the graph as ``{nodes, edges, capped, total_nodes, total_edges}``.
+    async def graph(self, limit: int = 300, as_of: float | None = None) -> dict:
+        """Return the graph as ``{nodes, edges, capped, total_nodes, total_edges, t_min, t_max}``.
 
         Nodes are entities sized by ``degree`` (triples touching them) and the
         edges are the triples among the ``limit`` most-connected entities, so a
         large graph stays responsive. Each edge carries ``active`` (the fact is
-        current: no ``valid_to`` and not superseded) so the view can fade the
-        rest. Read-only.
+        current today: no ``valid_to`` and not superseded) so the view can fade
+        the rest. ``t_min``/``t_max`` bound the graph's history (earliest
+        ``valid_from`` and the latest temporal point) so a client can build a
+        time scrubber without a second call. Read-only.
+
+        When ``as_of`` (unix time) is given, the graph is reconstructed as it
+        stood at that instant: only triples whose validity window contains
+        ``as_of`` (``valid_from <= as_of`` and ``valid_to`` null or ``>=
+        as_of``) are counted, ranked, and returned. ``active`` keeps meaning
+        "current today", so a fact that was live at ``as_of`` but has since been
+        replaced is included in the snapshot and flagged inactive.
         """
-        total_nodes = self._conn.execute("SELECT COUNT(*) AS n FROM kg_entities").fetchone()["n"]
-        total_edges = self._conn.execute("SELECT COUNT(*) AS n FROM kg_triples").fetchone()["n"]
+        # Validity predicate restricting to the as_of snapshot (empty otherwise).
+        if as_of is None:
+            tfilter, targs = "", ()
+        else:
+            tfilter = " AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)"
+            targs = (as_of, as_of)
+
+        # Time bounds over the whole history, so a scrubber's range stays stable
+        # while the user drags through past snapshots.
+        b = self._conn.execute(
+            "SELECT MIN(valid_from) AS lo, MAX(valid_from) AS hi_f, MAX(valid_to) AS hi_t FROM kg_triples"
+        ).fetchone()
+        t_min = b["lo"]
+        highs = [v for v in (b["hi_f"], b["hi_t"]) if v is not None]
+        t_max = max(highs) if highs else None
+
+        if as_of is None:
+            total_nodes = self._conn.execute("SELECT COUNT(*) AS n FROM kg_entities").fetchone()["n"]
+            total_edges = self._conn.execute("SELECT COUNT(*) AS n FROM kg_triples").fetchone()["n"]
+        else:
+            total_edges = self._conn.execute(
+                f"SELECT COUNT(*) AS n FROM kg_triples WHERE 1=1{tfilter}", targs
+            ).fetchone()["n"]
+            total_nodes = self._conn.execute(
+                f"""SELECT COUNT(*) AS n FROM (
+                       SELECT subject_id AS eid FROM kg_triples WHERE 1=1{tfilter}
+                       UNION SELECT object_id AS eid FROM kg_triples WHERE 1=1{tfilter})""",
+                targs + targs,
+            ).fetchone()["n"]
+
+        bounds = {"t_min": t_min, "t_max": t_max}
 
         deg_rows = self._conn.execute(
-            """SELECT eid, COUNT(*) AS d FROM (
-                  SELECT subject_id AS eid FROM kg_triples
-                  UNION ALL SELECT object_id AS eid FROM kg_triples
-               ) GROUP BY eid"""
+            f"""SELECT eid, COUNT(*) AS d FROM (
+                  SELECT subject_id AS eid FROM kg_triples WHERE 1=1{tfilter}
+                  UNION ALL SELECT object_id AS eid FROM kg_triples WHERE 1=1{tfilter}
+               ) GROUP BY eid""",
+            targs + targs,
         ).fetchall()
         degree = {r["eid"]: r["d"] for r in deg_rows}
 
         if not degree:
-            ents = self._conn.execute(
-                "SELECT id, name, type FROM kg_entities LIMIT ?", (limit,)
-            ).fetchall()
-            nodes = [{"id": e["id"], "name": e["name"], "type": e["type"], "degree": 0} for e in ents]
+            # With no edges in scope, show isolated entities for the live view
+            # but an empty snapshot for a past instant (those entities may not
+            # have existed yet, and we only know existence via triples here).
+            if as_of is None:
+                ents = self._conn.execute(
+                    "SELECT id, name, type FROM kg_entities LIMIT ?", (limit,)
+                ).fetchall()
+                nodes = [{"id": e["id"], "name": e["name"], "type": e["type"], "degree": 0} for e in ents]
+            else:
+                nodes = []
             return {"nodes": nodes, "edges": [], "capped": total_nodes > limit,
-                    "total_nodes": total_nodes, "total_edges": total_edges}
+                    "total_nodes": total_nodes, "total_edges": total_edges, **bounds}
 
         top_ids = [eid for eid, _ in sorted(degree.items(), key=lambda x: -x[1])[:limit]]
         ph = ",".join("?" * len(top_ids))
@@ -561,8 +606,8 @@ class TemporalKnowledgeGraph:
         edge_rows = self._conn.execute(
             f"""SELECT subject_id, predicate, object_id, confidence, valid_to, superseded_by
                 FROM kg_triples
-                WHERE subject_id IN ({ph}) AND object_id IN ({ph})""",
-            top_ids + top_ids,
+                WHERE subject_id IN ({ph}) AND object_id IN ({ph}){tfilter}""",
+            top_ids + top_ids + list(targs),
         ).fetchall()
         edges = [
             {
@@ -575,7 +620,7 @@ class TemporalKnowledgeGraph:
             for r in edge_rows
         ]
         return {"nodes": nodes, "edges": edges, "capped": total_nodes > limit,
-                "total_nodes": total_nodes, "total_edges": total_edges}
+                "total_nodes": total_nodes, "total_edges": total_edges, **bounds}
 
     async def activations(self, since: float, limit: int = 100) -> list[dict]:
         """Entities touched by retrieval since ``since`` (unix time), newest first.

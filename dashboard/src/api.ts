@@ -39,8 +39,9 @@ export async function getMemories(scope?: string, limit = 50): Promise<Memory[]>
   return memories;
 }
 
-export async function getGraph(limit = 300): Promise<Graph> {
-  return req<Graph>(`/graph?limit=${limit}`);
+export async function getGraph(limit = 300, asOf?: number | null): Promise<Graph> {
+  const at = asOf != null ? `&as_of=${asOf}` : "";
+  return req<Graph>(`/graph?limit=${limit}${at}`);
 }
 
 export async function getGraphActivations(
