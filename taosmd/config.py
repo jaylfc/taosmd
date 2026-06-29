@@ -254,14 +254,15 @@ def get_runtime_overrides(data_dir=None) -> dict:
 
 
 def resolve_memory_model(fallback: str | None = None, data_dir=None) -> str | None:
-    """Return the global memory model if set, else ``fallback``.
+    """Resolve the active generator model: pin > profile(tier) > fallback.
 
-    Consumers call this so an unset global transparently falls back to
-    their existing default. Standalone installs that never set a model
-    keep working exactly as before.
+    Delegates to generator_profiles.resolve_generator (lazy import to avoid a
+    cycle). Returns None when resolution yields the empty (retrieval-only)
+    value AND no fallback was given, preserving the historical None contract.
     """
-    model = get_memory_model(data_dir)
-    return model if model is not None else fallback
+    from . import generator_profiles  # lazy: avoids config<->profiles cycle
+    resolved = generator_profiles.resolve_generator(fallback=fallback, data_dir=data_dir)
+    return resolved or None
 
 
 # ---------------------------------------------------------------------------

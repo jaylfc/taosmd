@@ -198,13 +198,16 @@ def test_apply_recipe_does_not_clobber_existing_memory_model(tmp_path):
     assert taosmd_config.get_memory_model(data_dir=d) == "ollama:user-pick"
 
 
-def test_apply_recipe_sets_memory_model_when_unset(tmp_path):
-    # With no memory model configured, the recipe's generator seeds the global.
+def test_apply_recipe_no_longer_seeds_memory_model(tmp_path):
+    # apply_recipe no longer auto-seeds the global memory_model from the recipe
+    # generator. The active generator profile (default "balanced") mirrors the
+    # recipe generators per tier and is read live by resolve_generator, so
+    # seeding here would shadow a profile selection. Verify the pin stays unset.
     d = str(tmp_path)
     taosmd_agents.ensure_agent("frank", data_dir=d)
     assert taosmd_config.get_memory_model(data_dir=d) is None
     recipes.apply_recipe("frank", "maxsim-rerank-9b", data_dir=d)
-    assert taosmd_config.get_memory_model(data_dir=d) == "ollama:qwen3.5:9b"
+    assert taosmd_config.get_memory_model(data_dir=d) is None
 
 
 def test_resolve_falls_back_to_recommend_when_unconfigured(tmp_path, monkeypatch):

@@ -9,6 +9,9 @@ a new workload-to-model mapping is one row.
 Design: docs/superpowers/specs/2026-06-24-task-aware-generator-profiles-design.md
 """
 from dataclasses import dataclass, field
+from . import recipes
+from . import config as _config
+from . import agents as _agents
 
 # Highest VRAM first. Mirrors recipes.tier_of's vocabulary.
 TIER_ORDER: tuple[str, ...] = ("gpu-12gb", "gpu-8gb", "gpu-4gb", "pi-npu", "cpu")
@@ -81,3 +84,26 @@ def list_profiles() -> list[GeneratorProfile]:
 
 def default_profile_id() -> str:
     return "balanced"
+
+
+def resolve_generator(agent: str | None = None, *, fallback: str | None = None,
+                      data_dir=None) -> str:
+    """Resolve the active generator model string for the current tier.
+
+    Precedence: explicit pin > active profile (per-agent, then global,
+    default balanced) for the detected tier > fallback > "".
+    A "" result means retrieval-only (no local generator).
+    """
+    pin = _config.get_memory_model(data_dir)
+    if pin:
+        return pin
+    pid = None
+    if agent:
+        pid = _agents.get_agent_generator_profile(agent, data_dir=data_dir)
+    pid = pid or _config.get_generator_profile(data_dir) or default_profile_id()
+    prof = get_profile(pid)
+    if prof is not None:
+        tier = recipes.tier_of(recipes.local_probe())
+        if tier in prof.models:
+            return prof.models[tier]
+    return fallback or ""

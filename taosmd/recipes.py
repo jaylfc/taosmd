@@ -393,12 +393,10 @@ def apply_recipe(agent: str, recipe_id: str, data_dir=None) -> Recipe:
         agent, recipe_id=recipe_id,
         retrieval_config=dict(recipe.retrieval),
         librarian=_librarian_for(recipe), data_dir=data_dir)
-    gen = recipe.generator.get("model", "")
-    # Only seed the global memory model from the recipe when the user has not
-    # already chosen one. The fresh-install path (resolve_recipe -> apply_recipe
-    # for recommend()[0]) must not clobber a model the user configured.
-    if gen and _config.get_memory_model(data_dir=data_dir) is None:
-        _config.set_memory_model(gen, data_dir=data_dir)
+    # The generator is no longer copied into config here. The active generator
+    # profile (default "balanced") mirrors the recipe generators per tier and is
+    # read live by generator_profiles.resolve_generator, so auto-seeding would
+    # masquerade as a user pin and shadow a profile selection.
     return recipe
 
 
