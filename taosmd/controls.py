@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from . import generator_profiles as _gp
+
 
 @dataclass(frozen=True)
 class Control:
@@ -128,6 +130,20 @@ CONTROLS: dict[str, Control] = {
         pros="the dominant lever behind the 74.6% end-to-end Judge (a CoVe-style check of the draft against the evidence); +17.8pp on LongMemEval-S",
         cons="applied in your answer-generation, not in taOSmd core (taOSmd serves memory); roughly doubles answer latency",
         description="A recommendation, not a core toggle: pair reranking with a self-verify pass in your answer-gen for the verified-answer config.",
+        benchmarks_anchor="end-to-end-judge-on-longmemeval-s-the-generation-side-number",
+    ),
+    "generator_profile": Control(
+        id="generator_profile", label="Generator profile",
+        category="quality", scope="consumer", type="choice",
+        config_key="generator_profile",
+        default=_gp.default_profile_id(),
+        choices=tuple(p.id for p in _gp.list_profiles()),
+        cost="switches which answer model loads; gemma4:12b needs a 12GB GPU",
+        pros="picks the generator that wins your workload (for example "
+             "factual-recall = gemma4:12b for single-fact QA)",
+        cons="factual-recall loses on conversational and long-context work; "
+             "the default 'balanced' is the safe all-round choice",
+        description="Select the answer generator by workload. Default 'balanced'.",
         benchmarks_anchor="end-to-end-judge-on-longmemeval-s-the-generation-side-number",
     ),
 }

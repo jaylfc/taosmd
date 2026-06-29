@@ -203,8 +203,9 @@ any profile the user later selects. So:
   `type="choice"`, `category="quality"`, `scope="consumer"`, `choices` populated
   from `list_profiles()` ids at module load, `default="balanced"`, with
   `cost` / `pros` / `cons` / `benchmarks_anchor` from the profile data. It then
-  appears in `GET/POST /controls` and the dashboard Settings panel with no
-  dashboard code change; `validate_control` already enforces choice membership.
+  appears in `GET /controls` and the dashboard (read-only; consumer-scope controls
+  are not settable via POST /controls or the dashboard Settings panel); set via the
+  CLI only. `validate_control` already enforces choice membership.
 - CLI: `taosmd generator-profile list | show <id> | set <id> [--agent A]`,
   mirroring the recipe CLI verbs. `show` displays the per-tier model map and
   which entry applies to the current detected tier.

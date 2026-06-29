@@ -72,11 +72,23 @@ def test_resolve_prefers_global_over_fallback(data_dir):
     assert config.resolve_memory_model("fallback-model") == "ollama:qwen3:4b"
 
 
-def test_resolve_uses_fallback_when_unset(data_dir):
+def test_resolve_uses_fallback_when_unset(data_dir, monkeypatch):
+    # resolve_memory_model now delegates through the active generator profile.
+    # The fallback only applies when the profile does not cover the detected tier
+    # (or the profile lookup returns empty). Patch to an uncovered tier so the
+    # test correctly exercises the fallback path.
+    from taosmd import generator_profiles as gp
+    monkeypatch.setattr(gp.recipes, "local_probe", lambda: {"host": {}})
+    monkeypatch.setattr(gp.recipes, "tier_of", lambda info: "unknown-tier")
     assert config.resolve_memory_model("fallback-model") == "fallback-model"
 
 
-def test_resolve_none_fallback_when_unset(data_dir):
+def test_resolve_none_fallback_when_unset(data_dir, monkeypatch):
+    # Same: patch to an uncovered tier so no profile model is returned and the
+    # None contract is preserved (empty resolve -> None when no fallback given).
+    from taosmd import generator_profiles as gp
+    monkeypatch.setattr(gp.recipes, "local_probe", lambda: {"host": {}})
+    monkeypatch.setattr(gp.recipes, "tier_of", lambda info: "unknown-tier")
     assert config.resolve_memory_model() is None
 
 

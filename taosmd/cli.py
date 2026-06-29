@@ -141,6 +141,46 @@ def _memory_model_set(model: str | None, clear: bool) -> int:
     return 0
 
 
+def _generator_profile_list(data_dir=None) -> int:
+    from . import generator_profiles as gp
+    from . import config
+    active = config.get_generator_profile(data_dir=data_dir) or gp.default_profile_id()
+    for p in gp.list_profiles():
+        mark = "*" if p.id == active else " "
+        print(f"{mark} {p.id:16} {p.label}")
+    return 0
+
+
+def _generator_profile_show(profile_id: str, data_dir=None) -> int:
+    from . import generator_profiles as gp
+    p = gp.get_profile(profile_id)
+    if p is None:
+        print(f"error: unknown profile {profile_id!r}", file=sys.stderr)
+        return 1
+    print(f"{p.id}: {p.label}")
+    print(f"workload: {p.workload}")
+    for tier, model in p.models.items():
+        print(f"  {tier:9} {model or '(retrieval-only)'}")
+    if p.notes:
+        print(f"notes: {p.notes}")
+    return 0
+
+
+def _generator_profile_set(profile_id: str, agent=None, data_dir=None) -> int:
+    from . import generator_profiles as gp
+    from . import config, agents
+    if gp.get_profile(profile_id) is None:
+        print(f"error: unknown profile {profile_id!r}", file=sys.stderr)
+        return 1
+    if agent:
+        agents.set_agent_generator_profile(agent, profile_id, data_dir=data_dir)
+        print(f"agent {agent}: generator profile = {profile_id}")
+    else:
+        config.set_generator_profile(profile_id, data_dir=data_dir)
+        print(f"global generator profile = {profile_id}")
+    return 0
+
+
 def _config_set_server(url: str | None, clear: bool) -> int:
     from . import config  # noqa: PLC0415
 
@@ -1231,6 +1271,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Unset the memory model (revert to default)",
     )
 
+    # ----- generator-profile subcommand ---------------------------------
+    gp_p = sub.add_parser("generator-profile", help="select the answer generator by workload")
+    gp_sub = gp_p.add_subparsers(dest="generator_profile_cmd", required=True)
+    gp_sub.add_parser("list", help="list profiles and mark the active one")
+    gp_show = gp_sub.add_parser("show", help="show a profile's per-tier models")
+    gp_show.add_argument("profile_id")
+    gp_set = gp_sub.add_parser("set", help="set the active profile")
+    gp_set.add_argument("profile_id")
+    gp_set.add_argument("--agent", default=None, help="set per-agent instead of global")
+
     # ----- review subcommand (pending-decisions queue) -------------------
     review_p = sub.add_parser(
         "review",
@@ -1723,6 +1773,14 @@ def main(argv: list[str] | None = None) -> int:
             return _memory_model_get()
         if args.memory_model_cmd == "set":
             return _memory_model_set(args.model, args.clear)
+
+    if args.cmd == "generator-profile":
+        if args.generator_profile_cmd == "list":
+            return _generator_profile_list()
+        if args.generator_profile_cmd == "show":
+            return _generator_profile_show(args.profile_id)
+        if args.generator_profile_cmd == "set":
+            return _generator_profile_set(args.profile_id, agent=args.agent)
 
     parser.print_help()
     return 1

@@ -42,6 +42,8 @@ _REGISTRY_TOKEN_KEY = "registry_token"
 _MANAGED_BY_KEY = "managed_by"
 # Override: serve the web dashboard even when managed_by=taos.
 _SERVE_DASHBOARD_KEY = "serve_dashboard"
+# Key under which the active global generator-profile id is stored.
+_GENERATOR_PROFILE_KEY = "generator_profile"
 
 MANAGED_BY_STANDALONE = "standalone"
 MANAGED_BY_TAOS = "taos"
@@ -112,6 +114,35 @@ def set_memory_model(model: str, clear: bool = False, data_dir=None) -> None:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("model must be a non-empty string (or pass clear=True)")
         data[_MEMORY_MODEL_KEY] = model.strip()
+    _write(data, data_dir)
+
+
+def get_generator_profile(data_dir=None) -> str | None:
+    """Return the active global generator-profile id, or None if unset."""
+    pid = _read(data_dir).get(_GENERATOR_PROFILE_KEY)
+    if isinstance(pid, str) and pid.strip():
+        return pid
+    return None
+
+
+def set_generator_profile(profile_id: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the active global generator-profile id.
+
+    Args:
+        profile_id: a registered profile id. Ignored when clear is True.
+        clear: when True, remove the setting (unset).
+
+    Raises:
+        ValueError: when clear is False and profile_id is not a non-empty str.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_GENERATOR_PROFILE_KEY, None)
+        _write(data, data_dir)
+        return
+    if not isinstance(profile_id, str) or not profile_id.strip():
+        raise ValueError("profile_id must be a non-empty string")
+    data[_GENERATOR_PROFILE_KEY] = profile_id.strip()
     _write(data, data_dir)
 
 
@@ -223,14 +254,15 @@ def get_runtime_overrides(data_dir=None) -> dict:
 
 
 def resolve_memory_model(fallback: str | None = None, data_dir=None) -> str | None:
-    """Return the global memory model if set, else ``fallback``.
+    """Resolve the active generator model: pin > profile(tier) > fallback.
 
-    Consumers call this so an unset global transparently falls back to
-    their existing default. Standalone installs that never set a model
-    keep working exactly as before.
+    Delegates to generator_profiles.resolve_generator (lazy import to avoid a
+    cycle). Returns None when resolution yields the empty (retrieval-only)
+    value AND no fallback was given, preserving the historical None contract.
     """
-    model = get_memory_model(data_dir)
-    return model if model is not None else fallback
+    from . import generator_profiles  # lazy: avoids config<->profiles cycle
+    resolved = generator_profiles.resolve_generator(fallback=fallback, data_dir=data_dir)
+    return resolved or None
 
 
 # ---------------------------------------------------------------------------
@@ -498,4 +530,6 @@ __all__ = [
     "set_serve_dashboard",
     "MANAGED_BY_STANDALONE",
     "MANAGED_BY_TAOS",
+    "get_generator_profile",
+    "set_generator_profile",
 ]
