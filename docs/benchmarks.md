@@ -525,6 +525,8 @@ The "qwen3.5:9b production / llama3.1:8b fast alternative" framing from the May 
 > - **Production default**: still `qwen3.5:9b` because Single-hop is one of four categories; broad workloads should optimise for Overall.
 > - **Specialty deployments**: pick the workload-matched generator above.
 
+These per-workload picks are now selectable as generator profiles (balanced, factual-recall); see the README "Generator profiles" section and [docs/superpowers/specs/2026-06-24-task-aware-generator-profiles-design.md](superpowers/specs/2026-06-24-task-aware-generator-profiles-design.md).
+
 Measured on Fedora 12 GB 3060 host, May 7 2026. Dual-rescore script at `/home/jay/dual_judge_rescore.sh`; full summary at `/tmp/dual_judge_rescore_summary.tsv`. The full leaderboard above (line 54+) was scored exclusively under `qwen3:4b` and is *not* retroactively rescored — every cell from May 7 onward carries both judge attributions explicitly.
 
 #### Generator-temperature sweep
