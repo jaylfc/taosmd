@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { SkeletonCard } from "../components/Skeleton";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { GeneratorProfileSelector } from "../components/GeneratorProfileSelector";
 
 type LoadState =
   | { kind: "loading" }
@@ -468,6 +469,23 @@ export function SettingsView() {
                 {rowErrors._preset}
               </p>
             )}
+          </div>
+
+          {/* Generator profile */}
+          <div
+            className="rounded-lg p-4"
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <h2
+              className="mb-3 text-xs font-semibold uppercase tracking-wide"
+              style={{ color: "var(--muted-bright)" }}
+            >
+              Generator profile
+            </h2>
+            <GeneratorProfileSelector />
           </div>
 
           {/* Advanced */}

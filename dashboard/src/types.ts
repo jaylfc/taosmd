@@ -137,3 +137,16 @@ export interface Shelf {
   facts: number;
   last_ingest: number;
 }
+
+export interface GeneratorProfile {
+  id: string;
+  label: string;
+  workload: string;
+  models: Record<string, string>;
+}
+
+export interface GeneratorProfileState {
+  profiles: GeneratorProfile[];
+  active: string;
+  scope: string;
+}

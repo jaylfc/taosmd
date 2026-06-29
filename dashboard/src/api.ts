@@ -12,6 +12,8 @@ import type {
   Stats,
   Memory,
   Graph,
+  GeneratorProfile,
+  GeneratorProfileState,
 } from "./types";
 
 async function req<T>(url: string, opts?: RequestInit): Promise<T> {
@@ -107,6 +109,24 @@ export async function getControls(): Promise<{
   schema: ControlsSchema;
 }> {
   return req<{ settings: ControlsSettings; schema: ControlsSchema }>("/controls");
+}
+
+export async function getGeneratorProfile(scope?: string): Promise<GeneratorProfileState> {
+  const q = scope && scope !== "all" ? `?agent=${encodeURIComponent(scope)}` : "";
+  return req<GeneratorProfileState>(`/generator-profile${q}`);
+}
+
+export async function setGeneratorProfile(
+  profileId: string,
+  scope?: string,
+): Promise<GeneratorProfileState> {
+  const body: { profile_id: string; agent?: string } = { profile_id: profileId };
+  if (scope && scope !== "all") body.agent = scope;
+  return req<GeneratorProfileState>("/generator-profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 // Write one or more controls, or apply a preset. A 400 that carries per-field
