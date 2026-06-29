@@ -123,33 +123,31 @@ Seed profiles (only these two ship):
   `{gpu-12gb: ollama:gemma4:12b, gpu-8gb: ollama:llama3.1:8b,
   gpu-4gb: ollama:llama3.1:8b}`.
   - `gpu-12gb` = gemma4:12b is confirmed at full-500 (53.8 / 61.4, N-017).
-  - `gpu-8gb` = llama3.1:8b. gemma4:12b does not fit 8 GB, and llama3.1:8b is the
-    documented factual leader over qwen3.5:9b (LoCoMo Single-hop 0.65 vs 0.53,
-    benchmarks.md line 515), so it is the better factual pick at the tier where
-    both fit. PROVENANCE CAVEAT: this is a transfer from a LoCoMo Single-hop
-    measurement, NOT a LongMemEval-at-8GB measurement; LongMemEval (this
-    profile's defining benchmark) has qwen at 42.8 / 51.2 but no llama3.1:8b
-    number yet, and the two benchmarks can diverge. Flagged provisional pending a
-    LongMemEval-at-8GB confirm (a queued low-tier generator bench).
-  - `gpu-4gb` = llama3.1:8b is the documented factual leader (same line 515) and
-    is already the `fast-8b` 4 GB recipe generator (fits 4 GB with offload). Same
-    transfer caveat as 8 GB: a documented-leader carry-over, not a 4 GB
-    measurement.
+  - `gpu-8gb` = llama3.1:8b, CONFIRMED by E-023 (F-015). On LongMemEval-S
+    full-500 llama3.1:8b scores 49.2 on the cross-family Qwen judge versus
+    qwen3.5:9b's 42.8, a +6.4pp win achieved despite qwen holding the
+    same-family lenience advantage, so it is the better factual generator at the
+    8 GB tier where both fit. This replaces the earlier provisional transfer from
+    the LoCoMo Single-hop table with a direct measurement.
+  - `gpu-4gb` = llama3.1:8b, CONFIRMED by E-023 (F-015) as the best valid
+    4 GB-class candidate: gemma4:e4b is weaker (36.8 / 45.0) and qwen3:4b was
+    invalid (it emitted the self-verify scratchpad as its answer, caught by the
+    cross-family judge). llama3.1:8b is already the `fast-8b` 4 GB recipe
+    generator (fits 4 GB with offload).
   - `pi-npu` is intentionally absent: a Pi has no viable local factual generator,
     so it falls through to the recipe (retrieval-only there). A future low-tier
     bench can add it as data.
   - Notes must state plainly that this profile loses on conversational and
     long-context workloads (LoCoMo 0.63 vs 0.68, BEAM 46 vs 49), so it is the
     right pick only for single-fact QA. Evidence: the full-500 LongMemEval
-    numbers and the N-017 research-report entry.
+    numbers (N-017 for 12 GB, F-015 for 8 and 4 GB).
 
-Honest limitation to record in the spec and notes: at `gpu-4gb`, `balanced` and
+Honest limitation to record in the notes: at `gpu-4gb`, `balanced` and
 `factual-recall` resolve to the same model (`llama3.1:8b`), because it is the one
-viable 4 GB generator we have, so 4 GB has no real differentiation yet (the slot
-exists for a better 4 GB factual model after a low-tier bench). At `gpu-8gb` they
-DO differ (`balanced` = qwen3.5:9b, `factual-recall` = llama3.1:8b), which is the
-intended behaviour, but that 8 GB factual pick rests on the transfer caveat
-above, not a LongMemEval-at-8GB measurement.
+viable 4 GB generator we have, so 4 GB has no balanced-vs-factual differentiation
+(both pick the measured-best 4 GB generator). At `gpu-8gb` they differ as
+intended (`balanced` = qwen3.5:9b, `factual-recall` = llama3.1:8b), now backed by
+the E-023 measurement (F-015), not a transfer.
 
 ## Selection, storage, and resolution
 

@@ -12,7 +12,7 @@
 
 - Default profile is `balanced` and must reproduce today's per-tier recipe generators exactly. Never silently change the default generator.
 - `balanced.models` values, verbatim: `gpu-12gb` and `gpu-8gb` = `ollama:qwen3.5:9b`; `gpu-4gb` = `ollama:llama3.1:8b`; `pi-npu` = `""`; `cpu` = `""`.
-- `factual-recall.models` values, verbatim (8GB and 4GB are provisional pending E-023): `gpu-12gb` = `ollama:gemma4:12b`; `gpu-8gb` = `ollama:llama3.1:8b`; `gpu-4gb` = `ollama:llama3.1:8b`. No `pi-npu` or `cpu` key (falls through).
+- `factual-recall.models` values, verbatim (8GB and 4GB confirmed by E-023 / F-015): `gpu-12gb` = `ollama:gemma4:12b`; `gpu-8gb` = `ollama:llama3.1:8b`; `gpu-4gb` = `ollama:llama3.1:8b`. No `pi-npu` or `cpu` key (falls through).
 - Tier vocabulary and ordering come from `recipes.tier_of` / `recipes.local_probe`: `gpu-12gb` > `gpu-8gb` > `gpu-4gb` > `pi-npu` > `cpu`. Do not invent a new tier concept.
 - Model strings are `provider:model` (for example `ollama:qwen3.5:9b`); `""` means the `none` / retrieval-only backend.
 - No em dashes anywhere in code comments, docstrings, or docs. No AI attribution in commits. Commit author is jaylfc.
@@ -145,13 +145,14 @@ _register(GeneratorProfile(
     },
     evidence={
         "source": "docs/research-report.md N-017 (12GB full-500) + "
-                  "benchmarks.md line 515 (8/4GB transfer, E-023 confirming)",
-        "scores": {"gpu-12gb": "53.8 Qwen / 61.4 llama (full-500)"},
+                  "F-015 / E-023 (8 and 4GB full-500)",
+        "scores": {"gpu-12gb": "53.8 Qwen / 61.4 llama (full-500)",
+                   "gpu-8gb": "llama3.1:8b 49.2 Qwen / 54.4 llama (E-023)"},
     },
     notes="Loses on conversational and long-context workloads (LoCoMo 0.63 vs "
           "0.68, BEAM 46 vs 49), so pick it only for single-fact QA. The 8GB "
-          "and 4GB picks are provisional, transferred from the LoCoMo "
-          "Single-hop leader pending E-023.",
+          "and 4GB picks are llama3.1:8b, confirmed by E-023 (beats qwen3.5:9b "
+          "on the cross-family judge).",
 ))
 
 
@@ -757,7 +758,8 @@ but loses on conversational and long-context workloads, so it is opt-in. Select
 one with `taosmd generator-profile set <id>` (add `--agent NAME` for a single
 agent), or from the dashboard Settings panel. On devices too small for a local
 generator the profile resolves to retrieval-only. The 8GB and 4GB factual picks
-are provisional pending the E-023 low-tier bench (see the research report).
+are llama3.1:8b, confirmed by the E-023 low-tier bench (F-015 in the research
+report).
 ```
 
 - [ ] **Step 2: Add the benchmarks.md cross-reference**
@@ -795,7 +797,7 @@ Expected: PASS (all existing tests plus the new ones). If any pre-existing test 
 
 - [ ] **Step 2: Record the E-023 dependency**
 
-When E-023 lands (benchmarks/results/e023_lowtier_SUMMARY.txt), update `factual-recall.models` for `gpu-8gb` and `gpu-4gb` to the confirmed picks and remove the "provisional" wording in the profile `notes`, the spec, and the README. This is a data-only change plus a research-report status flip (E-023 to a finding or negative result). No code change beyond the `models` dict.
+E-023 has LANDED and resolved to F-015 (report rev 1.48): it confirmed the 8GB and 4GB factual picks as llama3.1:8b, so the `factual-recall.models` values in Task 1 are already final, the "provisional" wording is already removed, and no data change is needed. qwen3:4b was recorded INVALID (self-verify degeneration) and gemma4:e4b weaker, so neither enters the registry. This step is therefore informational only; nothing to do.
 
 - [ ] **Step 3: Commit any test fixups**
 
