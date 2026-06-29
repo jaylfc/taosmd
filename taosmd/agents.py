@@ -323,6 +323,25 @@ class AgentRegistry:
                 return dict(a)
         raise AgentNotFoundError(f"agent {name!r} is not registered")
 
+    def get_agent_generator_profile(self, name: str) -> str | None:
+        """Return the per-agent generator-profile id, or None if unset."""
+        rec = self.get_agent(name)
+        pid = rec.get("generator_profile_id")
+        return pid if isinstance(pid, str) and pid.strip() else None
+
+    def set_agent_generator_profile(self, name: str, profile_id: str | None) -> dict:
+        """Set or clear the per-agent generator-profile id (None/'' clears)."""
+        data = self._read()
+        for a in data["agents"]:
+            if a["name"] == name:
+                if profile_id and profile_id.strip():
+                    a["generator_profile_id"] = profile_id.strip()
+                else:
+                    a.pop("generator_profile_id", None)
+                self._write(data)
+                return dict(a)
+        raise AgentNotFoundError(f"agent {name!r} is not registered")
+
     # ----- librarian config --------------------------------------------
 
     def get_librarian(self, name: str) -> dict:
@@ -592,6 +611,14 @@ def set_agent_recipe_config(
         retrieval_config=retrieval_config,
         librarian=librarian,
     )
+
+
+def get_agent_generator_profile(name: str, data_dir=None) -> str | None:
+    return _registry(data_dir).get_agent_generator_profile(name)
+
+
+def set_agent_generator_profile(name: str, profile_id: str | None, data_dir=None) -> dict:
+    return _registry(data_dir).set_agent_generator_profile(name, profile_id)
 
 
 def get_librarian(name: str) -> dict:
