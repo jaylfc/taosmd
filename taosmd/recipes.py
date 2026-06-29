@@ -383,8 +383,7 @@ def apply_recipe(agent: str, recipe_id: str, data_dir=None) -> Recipe:
     """Apply a recipe to an agent: write its knobs through to the stores.
 
     Writes applied_recipe_id + the flattened retrieval_config + the implied
-    librarian block to the agent record, and the generator model to config
-    when the recipe names one. Raises ValueError on an unknown id.
+    librarian block to the agent record. Raises ValueError on an unknown id.
     """
     recipe = get_recipe(recipe_id)
     if recipe is None:

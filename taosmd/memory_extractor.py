@@ -256,11 +256,11 @@ async def process_conversation_turn(
         # pin a model (unset or the literal "default" sentinel), defer to the
         # global config; if that's also unset, fall back to the prior
         # "default" behaviour so standalone installs are unchanged.
-        from .config import get_memory_model  # noqa: PLC0415
+        from .config import resolve_memory_model  # noqa: PLC0415
 
         resolved_model = extraction_model
         if not resolved_model or resolved_model == "default":
-            resolved_model = get_memory_model() or "default"
+            resolved_model = resolve_memory_model() or "default"
         facts = await extract_facts_with_llm(
             text, llm_url, http_client,
             agent_name=agent_name or "default",
