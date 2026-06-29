@@ -1,54 +1,151 @@
-"""Regression test: memory_extractor uses resolve_memory_model (not get_memory_model).
+"""Regression test: process_conversation_turn uses resolve_memory_model, not get_memory_model.
 
-Verifies that the model-resolution code path at memory_extractor.py L259-263 routes
-through the generator-profile resolver, so a profile/recipe generator surfaces as a
-real model name rather than the "default" sentinel, and that the fallback to "default"
-fires when nothing is resolvable.
+Verifies the actual code path at memory_extractor.py L259-263: when extraction_model
+is "default" and no explicit pin exists, the function must call resolve_memory_model()
+(which consults the generator-profile registry) rather than get_memory_model() (which
+would return None on a fresh install, silently yielding the "default" sentinel and
+bypassing the profile system).
+
+These tests FAIL on the pre-fix code that used get_memory_model() because:
+- get_memory_model is monkeypatched to return None
+- on the buggy path: resolved_model = get_memory_model() or "default" -> "default"
+- on the fixed path: resolved_model = resolve_memory_model() -> "ollama:qwen3.5:9b"
+  (balanced profile, gpu-12gb tier), so Test 1 rejects the "default" sentinel.
 """
+from __future__ import annotations
+
+import asyncio
+
 import pytest
-from taosmd import generator_profiles as gp
+
 from taosmd import config
+from taosmd import generator_profiles as gp
+from taosmd.knowledge_graph import TemporalKnowledgeGraph
 
 
-@pytest.fixture
-def at_12gb(monkeypatch):
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+class _Captured(Exception):
+    """Sentinel raised by the spy to short-circuit after capturing the model arg."""
+
+
+def _make_spy(holder: list):
+    """Return an async spy for extract_facts_with_llm that records model and raises."""
+    async def _spy(text, llm_url, http_client, *, agent_name="default", model="default"):
+        holder.append(model)
+        raise _Captured(model)
+    return _spy
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+def test_covered_tier_resolves_real_model(monkeypatch, tmp_path):
+    """Test 1: covered tier -> extract_facts_with_llm receives the profile model, not 'default'.
+
+    This is the regression assertion: on the buggy pre-fix code (get_memory_model()),
+    get_memory_model is None so the path yields "default". The fixed code calls
+    resolve_memory_model() which returns "ollama:qwen3.5:9b", so Test 1 passes ONLY
+    on the fixed code.
+    """
+    # Deterministic tier resolution: balanced profile, gpu-12gb coverage.
     monkeypatch.setattr(gp.recipes, "local_probe", lambda: {"host": {}})
     monkeypatch.setattr(gp.recipes, "tier_of", lambda info: "gpu-12gb")
 
-
-@pytest.fixture
-def at_pi_npu(monkeypatch):
-    monkeypatch.setattr(gp.recipes, "local_probe", lambda: {"host": {}})
-    monkeypatch.setattr(gp.recipes, "tier_of", lambda info: "pi-npu")
-
-
-def test_extractor_resolves_real_model_via_profile(at_12gb, tmp_path):
-    # With a covered tier and default "balanced" profile, resolve_memory_model
-    # returns a concrete model string (qwen3.5:9b at 12 GB), not "default".
-    # This is the path memory_extractor.py now takes.
-    result = config.resolve_memory_model(data_dir=tmp_path)
-    assert result is not None, "resolve_memory_model returned None for a covered tier"
-    assert result != "default", f"resolve_memory_model returned sentinel 'default': {result!r}"
-    assert "qwen3.5" in result, f"expected qwen3.5:9b for balanced@12gb, got {result!r}"
-
-
-def test_extractor_resolves_factual_recall_profile(at_12gb, tmp_path):
-    # factual-recall profile at 12 GB should surface gemma4:12b.
-    config.set_generator_profile("factual-recall", data_dir=tmp_path)
-    result = config.resolve_memory_model(data_dir=tmp_path)
-    assert result is not None
-    assert result != "default"
-    assert "gemma4" in result, f"expected gemma4:12b for factual-recall@12gb, got {result!r}"
-
-
-def test_extractor_falls_back_to_default_when_unresolvable(at_pi_npu, tmp_path):
-    # balanced at pi-npu == "" (retrieval-only): resolve_memory_model returns None,
-    # so the extractor's `or "default"` fires and the sentinel is used.
-    result = config.resolve_memory_model(data_dir=tmp_path)
-    # resolve_memory_model returns None for empty/retrieval-only resolution
-    assert result is None, (
-        f"expected None for retrieval-only tier, got {result!r}; "
-        "extractor would not fall back to 'default'"
+    # No explicit memory-model pin and no explicit generator-profile pin.
+    monkeypatch.setattr(
+        "taosmd.config.get_memory_model", lambda data_dir=None: None
     )
-    # Confirm the extractor's fallback expression yields the sentinel
-    assert (result or "default") == "default"
+    monkeypatch.setattr(
+        "taosmd.config.get_generator_profile", lambda data_dir=None: None
+    )
+
+    captured: list[str] = []
+    monkeypatch.setattr(
+        "taosmd.memory_extractor.extract_facts_with_llm",
+        _make_spy(captured),
+    )
+
+    async def go():
+        from taosmd.memory_extractor import process_conversation_turn
+
+        kg = TemporalKnowledgeGraph(db_path=tmp_path / "kg.db")
+        await kg.init()
+        try:
+            with pytest.raises(_Captured):
+                await process_conversation_turn(
+                    text="Alice likes tea.",
+                    agent_name=None,
+                    kg=kg,
+                    llm_url="http://localhost:11434",
+                    http_client=object(),
+                    use_llm=True,
+                    extraction_model="default",
+                )
+        finally:
+            await kg.close()
+
+    _run(go())
+
+    assert len(captured) == 1, "spy was not called exactly once"
+    model = captured[0]
+    assert model != "default", (
+        f"model resolved to sentinel 'default'; expected a profile-derived model. "
+        f"This indicates process_conversation_turn is still using get_memory_model() "
+        f"instead of resolve_memory_model()."
+    )
+    assert "qwen3.5" in model, (
+        f"expected balanced@gpu-12gb -> qwen3.5:9b, got {model!r}"
+    )
+
+
+def test_unknown_tier_falls_back_to_default(monkeypatch, tmp_path):
+    """Test 2: tier absent from the balanced map -> model falls through to 'default'."""
+    monkeypatch.setattr(gp.recipes, "local_probe", lambda: {"host": {}})
+    monkeypatch.setattr(gp.recipes, "tier_of", lambda info: "unknown-tier")
+
+    monkeypatch.setattr(
+        "taosmd.config.get_memory_model", lambda data_dir=None: None
+    )
+    monkeypatch.setattr(
+        "taosmd.config.get_generator_profile", lambda data_dir=None: None
+    )
+
+    captured: list[str] = []
+    monkeypatch.setattr(
+        "taosmd.memory_extractor.extract_facts_with_llm",
+        _make_spy(captured),
+    )
+
+    async def go():
+        from taosmd.memory_extractor import process_conversation_turn
+
+        kg = TemporalKnowledgeGraph(db_path=tmp_path / "kg.db")
+        await kg.init()
+        try:
+            with pytest.raises(_Captured):
+                await process_conversation_turn(
+                    text="Bob drinks coffee.",
+                    agent_name=None,
+                    kg=kg,
+                    llm_url="http://localhost:11434",
+                    http_client=object(),
+                    use_llm=True,
+                    extraction_model="default",
+                )
+        finally:
+            await kg.close()
+
+    _run(go())
+
+    assert len(captured) == 1
+    assert captured[0] == "default", (
+        f"expected 'default' fallback for unknown tier, got {captured[0]!r}"
+    )
