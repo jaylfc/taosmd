@@ -112,3 +112,7 @@ The `rebootwin.sh` helper (see `benchmarks/rebootwin.sh`) automates steps 1 and 
 | Resume (helper prompt) | `bash benchmarks/rebootwin.sh resume` |
 | Check sidecar conversation count | `grep -c '"kind": "conv"' benchmarks/results/<name>.json.ckpt.jsonl` |
 | Check last exit code | `echo $?` immediately after the runner exits |
+
+## Waking the bench host back into Fedora (WOL)
+
+`rebootwin` sends the dual-boot host to Windows for one boot (it sets a one-time EFI BootNext to the Windows entry, then reboots). Fedora is the DEFAULT boot entry, so once that single Windows boot is consumed the host returns to Fedora on its next power-on. To get the GPU back when the host is powered off, send a Wake-on-LAN magic packet to its NIC and it auto-boots Fedora; then SSH in and check `nvidia-smi` and the bus before claiming the GPU. WOL needs no extra tool: a magic packet is six 0xFF bytes plus the target MAC repeated 16 times, broadcast to UDP 9 on the LAN (Python stdlib socket sends it). The host's MAC and the exact command are kept in the private bench-host reference, not in this public doc.
