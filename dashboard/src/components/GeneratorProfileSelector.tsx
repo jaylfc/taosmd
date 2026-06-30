@@ -13,9 +13,15 @@ export function GeneratorProfileSelector() {
 
   // Fetch agent list once for scope options
   useEffect(() => {
-    void getStats().then((s) => {
-      setAgentNames(s.top_agents.map((a) => a.name).filter(Boolean));
-    });
+    void getStats()
+      .then((s) => {
+        setAgentNames(s.top_agents.map((a) => a.name).filter(Boolean));
+      })
+      .catch((err: unknown) => {
+        // Surface via the existing ErrorBanner so the user sees a signal rather
+        // than silently falling back to the global "all" scope only.
+        setError(err instanceof Error ? err.message : String(err));
+      });
   }, []);
 
   const scopeOptions = useMemo(() => {
