@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 from taosmd import api as taosmd_api
-from taosmd import http_server, registry_auth
+from taosmd import config as cfg, http_server, registry_auth
 
 
 def _keypair():
@@ -57,10 +57,17 @@ def _post_send(base_url, from_, body, token=None):
 
 @pytest.fixture
 def authed_server(tmp_path, monkeypatch):
-    """Live server built with a registry verifier (fake opener, no network)."""
+    """Live server built with a registry verifier (fake opener, no network).
+
+    Runs in enforce mode (a2a_auth_enforce=True) so that auth failures return
+    401/403 rather than being logged and accepted.
+    """
     data_dir = tmp_path / "taosmd-data"
     data_dir.mkdir()
     monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+
+    # Enforce mode required so these rejection tests return 401/403.
+    cfg.set_a2a_auth_enforce(True, str(data_dir))
 
     def fake_opener(url, token=None):
         if url.endswith(registry_auth.PUBKEY_PATH):
@@ -113,10 +120,16 @@ def test_send_with_token_from_wrong_key_is_rejected(authed_server):
 
 @pytest.fixture
 def iss_pinned_server(tmp_path, monkeypatch):
-    """Live server whose verifier pins iss to the taOS registry value."""
+    """Live server whose verifier pins iss to the taOS registry value.
+
+    Runs in enforce mode so that issuer-mismatch rejections fire as 403.
+    """
     data_dir = tmp_path / "taosmd-data"
     data_dir.mkdir()
     monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+
+    # Enforce mode required so the wrong-iss rejection returns 403.
+    cfg.set_a2a_auth_enforce(True, str(data_dir))
 
     def fake_opener(url, token=None):
         if url.endswith(registry_auth.PUBKEY_PATH):
