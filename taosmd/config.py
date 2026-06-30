@@ -253,15 +253,17 @@ def get_runtime_overrides(data_dir=None) -> dict:
     return out
 
 
-def resolve_memory_model(fallback: str | None = None, data_dir=None) -> str | None:
+def resolve_memory_model(fallback: str | None = None, agent: str | None = None, data_dir=None) -> str | None:
     """Resolve the active generator model: pin > profile(tier) > fallback.
 
+    When agent is provided, a per-agent generator profile is consulted before
+    the global profile, mirroring the resolution order in resolve_generator.
     Delegates to generator_profiles.resolve_generator (lazy import to avoid a
     cycle). Returns None when resolution yields the empty (retrieval-only)
     value AND no fallback was given, preserving the historical None contract.
     """
     from . import generator_profiles  # lazy: avoids config<->profiles cycle
-    resolved = generator_profiles.resolve_generator(fallback=fallback, data_dir=data_dir)
+    resolved = generator_profiles.resolve_generator(agent=agent, fallback=fallback, data_dir=data_dir)
     return resolved or None
 
 

@@ -1045,7 +1045,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     _agents.set_agent_generator_profile(agent, pid, data_dir=data_dir)
                 else:
                     _cfg.set_generator_profile(pid, data_dir=data_dir)
-            except Exception as exc:  # e.g. AgentNotFoundError
+            except (_agents.AgentNotFoundError, ValueError) as exc:
                 self._send_json(400, {"error": str(exc)})
                 return
             profiles = [

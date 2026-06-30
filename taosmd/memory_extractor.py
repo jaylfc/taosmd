@@ -260,7 +260,7 @@ async def process_conversation_turn(
 
         resolved_model = extraction_model
         if not resolved_model or resolved_model == "default":
-            resolved_model = resolve_memory_model() or "default"
+            resolved_model = resolve_memory_model(agent=agent_name or "default") or "default"
         facts = await extract_facts_with_llm(
             text, llm_url, http_client,
             agent_name=agent_name or "default",

@@ -99,7 +99,10 @@ def resolve_generator(agent: str | None = None, *, fallback: str | None = None,
         return pin
     pid = None
     if agent:
-        pid = _agents.get_agent_generator_profile(agent, data_dir=data_dir)
+        try:
+            pid = _agents.get_agent_generator_profile(agent, data_dir=data_dir)
+        except _agents.AgentNotFoundError:
+            pid = None
     pid = pid or _config.get_generator_profile(data_dir) or default_profile_id()
     prof = get_profile(pid)
     if prof is not None:

@@ -137,7 +137,7 @@ async def lift_edu_to_triples(
     if not model:
         from .config import resolve_memory_model  # noqa: PLC0415
 
-        model = resolve_memory_model("llama3.1:8b")
+        model = resolve_memory_model(fallback="llama3.1:8b")
     messages = [
         {"role": "system", "content": _system_prompt()},
         {"role": "user", "content": _ONESHOT_INPUT},

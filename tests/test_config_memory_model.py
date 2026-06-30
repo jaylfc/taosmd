@@ -69,7 +69,7 @@ def test_corrupt_file_treated_as_unset(data_dir):
 
 def test_resolve_prefers_global_over_fallback(data_dir):
     config.set_memory_model("ollama:qwen3:4b")
-    assert config.resolve_memory_model("fallback-model") == "ollama:qwen3:4b"
+    assert config.resolve_memory_model(fallback="fallback-model") == "ollama:qwen3:4b"
 
 
 def test_resolve_uses_fallback_when_unset(data_dir, monkeypatch):
@@ -80,7 +80,7 @@ def test_resolve_uses_fallback_when_unset(data_dir, monkeypatch):
     from taosmd import generator_profiles as gp
     monkeypatch.setattr(gp.recipes, "local_probe", lambda: {"host": {}})
     monkeypatch.setattr(gp.recipes, "tier_of", lambda info: "unknown-tier")
-    assert config.resolve_memory_model("fallback-model") == "fallback-model"
+    assert config.resolve_memory_model(fallback="fallback-model") == "fallback-model"
 
 
 def test_resolve_none_fallback_when_unset(data_dir, monkeypatch):
