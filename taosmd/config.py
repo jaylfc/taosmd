@@ -523,7 +523,7 @@ def get_a2a_auth_enforce(data_dir=None) -> bool:
 
     Resolution order:
 
-    1. ``TAOSMD_A2A_AUTH_ENFORCE`` env var (``"1"`` or ``"true"`` = True)
+    1. ``TAOSMD_A2A_AUTH_ENFORCE`` env var (``"1"``, ``"true"``, or ``"yes"`` = True)
     2. ``a2a_auth_enforce`` bool in ``~/.taosmd/config.json``
     3. Default: ``False`` (verify-and-warn mode)
 
