@@ -765,6 +765,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_controls_get()
                 elif method == "POST" and path == "/controls":
                     self._handle_controls_post()
+                elif method == "GET" and path == "/generator-profile":
+                    self._handle_generator_profile_get(query)
+                elif method == "POST" and path == "/generator-profile":
+                    self._handle_generator_profile_post()
                 elif method == "GET" and path == "/stats":
                     self._handle_stats(query)
                 elif method == "GET" and path == "/memories":
@@ -1007,6 +1011,52 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "settings": _config.get_controls(data_dir=data_dir),
                 "errors": errors,
             })
+
+        def _handle_generator_profile_get(self, query) -> None:
+            from taosmd import generator_profiles as _gp, config as _cfg, agents as _agents  # noqa: PLC0415
+            raw = query.get("agent")
+            agent = raw[0] if isinstance(raw, list) else raw
+            profiles = [
+                {"id": p.id, "label": p.label, "workload": p.workload, "models": p.models}
+                for p in _gp.list_profiles()
+            ]
+            active, scope = None, "global"
+            if agent:
+                try:
+                    pid = _agents.get_agent_generator_profile(agent, data_dir=data_dir)
+                except Exception:
+                    pid = None
+                if pid:
+                    active, scope = pid, agent
+            if active is None:
+                active = _cfg.get_generator_profile(data_dir=data_dir) or _gp.default_profile_id()
+            self._send_json(200, {"profiles": profiles, "active": active, "scope": scope})
+
+        def _handle_generator_profile_post(self) -> None:
+            from taosmd import generator_profiles as _gp, config as _cfg, agents as _agents  # noqa: PLC0415
+            body = self._read_json_body()
+            pid = body.get("profile_id")
+            agent = body.get("agent")
+            if not pid or _gp.get_profile(pid) is None:
+                self._send_json(400, {"error": f"unknown profile: {pid!r}"})
+                return
+            try:
+                if agent:
+                    _agents.set_agent_generator_profile(agent, pid, data_dir=data_dir)
+                else:
+                    _cfg.set_generator_profile(pid, data_dir=data_dir)
+            except Exception as exc:  # e.g. AgentNotFoundError
+                self._send_json(400, {"error": str(exc)})
+                return
+            profiles = [
+                {"id": p.id, "label": p.label, "workload": p.workload, "models": p.models}
+                for p in _gp.list_profiles()
+            ]
+            if agent:
+                active, scope = pid, agent
+            else:
+                active, scope = pid, "global"
+            self._send_json(200, {"profiles": profiles, "active": active, "scope": scope})
 
         def _handle_stats(self, qs: dict) -> None:
             scope = (qs.get("scope") or [None])[0]
