@@ -1,11 +1,14 @@
 """Trust & Comms enforcement: grant check on A2A bus + dashboard gating.
 
-Tests the two new enforcement layers added on top of the existing registry
-verifier (test_http_server_registry_auth.py covers token verification alone):
+Tests the enforcement layers added on top of the existing registry verifier
+(test_http_server_registry_auth.py covers token verification alone):
 
-1. Grant check: a valid token + an active grant is required; a valid token
-   without a grant is rejected with 403.
-2. Dashboard gating: when managed_by=taos and serve_dashboard is not overridden,
+1. Verify-and-warn mode (default, a2a_auth_enforce=False): a verifier is
+   configured but auth failures are logged as WARNING and the message is
+   accepted. See warn_server fixture and the warn-mode test block.
+2. Enforce mode (a2a_auth_enforce=True): auth failures return 401/403.
+   See enforced_server fixture and the enforce-mode test block.
+3. Dashboard gating: when managed_by=taos and serve_dashboard is not overridden,
    GET / and GET /ui return 404; API routes stay up.
 """
 from __future__ import annotations
@@ -103,11 +106,41 @@ def _make_verifiers(grants: list[dict]):
 
 
 @pytest.fixture
-def enforced_server(tmp_path, monkeypatch):
-    """Server with both token verifier AND grants verifier wired in."""
+def warn_server(tmp_path, monkeypatch):
+    """Server with verifiers wired in but a2a_auth_enforce NOT set (default=False).
+
+    Auth failures are logged as WARNING and the message is still accepted.
+    """
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+
+    verifier, gv = _make_verifiers([{"canonical_id": "agent-allowed"}])
+    # Do NOT set a2a_auth_enforce -- default is False (warn mode).
+    httpd = http_server.make_server(
+        "127.0.0.1", 0, data_dir=str(data_dir),
+        verifier=verifier, grants_verifier=gv,
+    )
+    httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
+    host, port = httpd.server_address[:2]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        httpd.shutdown()
+        httpd.service_loop.close()
+
+
+@pytest.fixture
+def enforced_server(tmp_path, monkeypatch):
+    """Server with both token verifier AND grants verifier wired in, enforce=True."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+
+    # Explicitly enable enforce mode so failures return 401/403.
+    cfg.set_a2a_auth_enforce(True, str(data_dir))
 
     verifier, gv = _make_verifiers([{"canonical_id": "agent-allowed"}])
     httpd = http_server.make_server(
@@ -126,7 +159,53 @@ def enforced_server(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Grant check tests
+# Verify-and-warn mode tests (verifier configured, a2a_auth_enforce=False)
+# ---------------------------------------------------------------------------
+
+def test_warn_no_token_accepted(warn_server, caplog):
+    """No token: message accepted (200) and warning logged in warn mode."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
+        status, body = _post_send(warn_server, "any-agent", "hello")
+    assert status == 200, body
+    assert any("verify-and-warn" in r.message and "missing Bearer token" in r.message
+               for r in caplog.records)
+
+
+def test_warn_invalid_token_accepted(warn_server, caplog):
+    """Invalid token: message accepted and warning logged in warn mode."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
+        status, body = _post_send(warn_server, "any-agent", "hello", token="not-a-jwt")
+    assert status == 200, body
+    assert any("verify-and-warn" in r.message for r in caplog.records)
+
+
+def test_warn_valid_token_no_grant_accepted(warn_server, caplog):
+    """Valid token but no grant: message accepted and warning logged in warn mode."""
+    import logging
+    token = _mint("agent-no-grant")
+    with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
+        status, body = _post_send(warn_server, "agent-no-grant", "hello", token=token)
+    assert status == 200, body
+    assert any(
+        "verify-and-warn" in r.message and "no a2a_send grant" in r.message
+        for r in caplog.records
+    )
+
+
+def test_warn_valid_token_and_grant_no_warning(warn_server, caplog):
+    """Valid token + active grant: 200 with no verify-and-warn warning."""
+    import logging
+    token = _mint("agent-allowed")
+    with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
+        status, body = _post_send(warn_server, "agent-allowed", "hello", token=token)
+    assert status == 200, body
+    assert not any("verify-and-warn" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Enforce mode tests (a2a_auth_enforce=True)
 # ---------------------------------------------------------------------------
 
 def test_send_allowed_with_valid_token_and_grant(enforced_server):
@@ -149,11 +228,14 @@ def test_send_rejected_valid_token_no_grant(enforced_server):
 
 
 def test_send_rejected_expired_grant(tmp_path, monkeypatch):
-    """An expired grant is treated the same as no grant."""
+    """An expired grant is treated the same as no grant (enforce mode)."""
     import time
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+
+    # Enforce mode required so the expired-grant rejection actually fires.
+    cfg.set_a2a_auth_enforce(True, str(data_dir))
 
     past = time.time() - 10.0
     verifier, gv = _make_verifiers(

@@ -20,9 +20,19 @@ Design choices (matching the project's local-first, offline, additive vision):
 
 Security note
 -------------
-When a registry verifier is configured, ``POST /a2a/send`` requires a valid
-registry-minted EdDSA-JWT Bearer token and an active grant; the token's
-``sub`` is matched against the message ``from`` to prevent impersonation.
+When a registry verifier is configured, ``POST /a2a/send`` runs in one of
+two modes controlled by the ``a2a_auth_enforce`` config key:
+
+* **verify-and-warn** (default, ``a2a_auth_enforce=false``): the registry
+  EdDSA-JWT and grant check are performed; on failure a ``WARNING`` is logged
+  (including the sender handle and reason) but the message is still accepted.
+  This lets a deployment observe auth violations before enabling hard enforcement.
+* **enforce** (``a2a_auth_enforce=true``): failure returns ``401`` (missing
+  token) or ``403`` (bad token / no grant) and the message is dropped.
+
+In both modes the token's ``sub`` claim is matched against the ``from`` field
+to prevent impersonation, and an active grant in the grants feed is required.
+
 Data endpoints (ingest, search, tasks) additionally support *optional* token
 binding: when a Bearer token is present and the registry verifier is
 configured, the token is verified and any ``project_id`` claim in it overrides
@@ -1155,30 +1165,57 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'from' (non-empty string) is required")
             if not isinstance(body_text, str) or not body_text:
                 raise _BadRequest("'body' (non-empty string) is required")
-            # Registry auth (opt-in): when a verifier is configured, the sender
-            # must present a registry-minted EdDSA-JWT whose sub matches 'from',
-            # AND must have an active permission grant in the grants feed.
+            # Registry auth (opt-in): when a verifier is configured, run the
+            # identity + grant checks and collect any failure reason.
+            # In enforce mode (a2a_auth_enforce=true) failures are rejected with
+            # 401/403. In verify-and-warn mode (default) failures are logged as
+            # a WARNING but the message is accepted, allowing operators to observe
+            # violations before enabling hard enforcement.
             if _registry_verifier is not None:
                 from . import registry_auth  # noqa: PLC0415 - optional path
                 auth = self.headers.get("Authorization", "")
                 token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+
+                # Compute warn_reason (None = auth passed) and the status/message
+                # to use in enforce mode. We collect these without returning early
+                # so the enforce vs. warn decision is made in one place below.
+                warn_reason: str | None = None
+                _reject_status: int = 403
+                _reject_msg: str = ""
+
                 if not token:
-                    self._send_json(401, {"error": "registry auth: Bearer token required"})
-                    return
-                try:
-                    _registry_verifier.authorize(token, from_)
-                except registry_auth.AuthError as exc:
-                    self._send_json(403, {"error": f"registry auth: {exc}"})
-                    return
+                    warn_reason = "missing Bearer token"
+                    _reject_status = 401
+                    _reject_msg = "registry auth: Bearer token required"
+                else:
+                    try:
+                        _registry_verifier.authorize(token, from_)
+                    except registry_auth.AuthError as exc:
+                        warn_reason = str(exc)
+                        _reject_status = 403
+                        _reject_msg = f"registry auth: {exc}"
+
                 # Grant check: token proves identity; grant proves permission.
-                if _grants_verifier is not None:
+                if warn_reason is None and _grants_verifier is not None:
                     try:
                         if not _grants_verifier.has_grant(from_):
-                            self._send_json(403, {"error": f"registry auth: no active grant for {from_!r}"})
-                            return
+                            warn_reason = "no a2a_send grant"
+                            _reject_status = 403
+                            _reject_msg = f"registry auth: no active grant for {from_!r}"
                     except registry_auth.AuthError as exc:
-                        self._send_json(403, {"error": f"registry auth: {exc}"})
+                        warn_reason = str(exc)
+                        _reject_status = 403
+                        _reject_msg = f"registry auth: {exc}"
+
+                if warn_reason is not None:
+                    enforce = _config.get_a2a_auth_enforce(data_dir)
+                    if enforce:
+                        self._send_json(_reject_status, {"error": _reject_msg})
                         return
+                    logger.warning(
+                        "a2a verify-and-warn: accepting unverified post from %r: %s",
+                        from_, warn_reason,
+                    )
             result = runner.run(
                 service.a2a_send(
                     sender=from_, body=body_text,

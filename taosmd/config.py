@@ -44,6 +44,8 @@ _MANAGED_BY_KEY = "managed_by"
 _SERVE_DASHBOARD_KEY = "serve_dashboard"
 # Key under which the active global generator-profile id is stored.
 _GENERATOR_PROFILE_KEY = "generator_profile"
+# Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
+_A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
 
 MANAGED_BY_STANDALONE = "standalone"
 MANAGED_BY_TAOS = "taos"
@@ -512,6 +514,40 @@ def set_serve_dashboard(value: bool, data_dir=None) -> None:
     _write(data, data_dir)
 
 
+# ---------------------------------------------------------------------------
+# A2A auth enforce mode
+# ---------------------------------------------------------------------------
+
+def get_a2a_auth_enforce(data_dir=None) -> bool:
+    """Return whether A2A registry auth is in enforce mode.
+
+    Resolution order:
+
+    1. ``TAOSMD_A2A_AUTH_ENFORCE`` env var (``"1"`` or ``"true"`` = True)
+    2. ``a2a_auth_enforce`` bool in ``~/.taosmd/config.json``
+    3. Default: ``False`` (verify-and-warn mode)
+
+    When False (default), the A2A bus logs a warning when a post fails
+    registry auth checks but still accepts the message (verify-and-warn).
+    When True, failing posts are rejected with 401/403 as they were before
+    verify-and-warn was introduced.
+    """
+    env = os.environ.get("TAOSMD_A2A_AUTH_ENFORCE")
+    if env is not None:
+        return env.strip().lower() in ("1", "true", "yes")
+    data = _read(data_dir)
+    if _A2A_AUTH_ENFORCE_KEY in data:
+        return bool(data[_A2A_AUTH_ENFORCE_KEY])
+    return False
+
+
+def set_a2a_auth_enforce(value: bool, data_dir=None) -> None:
+    """Persist the a2a_auth_enforce flag."""
+    data = _read(data_dir)
+    data[_A2A_AUTH_ENFORCE_KEY] = bool(value)
+    _write(data, data_dir)
+
+
 __all__ = [
     "get_memory_model",
     "set_memory_model",
@@ -530,6 +566,8 @@ __all__ = [
     "set_managed_by",
     "get_serve_dashboard",
     "set_serve_dashboard",
+    "get_a2a_auth_enforce",
+    "set_a2a_auth_enforce",
     "MANAGED_BY_STANDALONE",
     "MANAGED_BY_TAOS",
     "get_generator_profile",
