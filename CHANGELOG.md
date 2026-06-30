@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Task-aware generator profiles: the answer generator is selectable by workload, not just by hardware tier. A data-driven generator-profile registry maps a workload to the best model per tier (`balanced` = qwen3.5:9b, the multi-session and long-context default; `factual-recall` = gemma4:12b on a 12 GB GPU and llama3.1:8b on 8/4 GB, for single-fact retrieval QA), resolved with precedence pin > per-agent profile > global > recipe > retrieval-only. Select it from the `taosmd generator-profile` CLI or the dashboard Settings view (global or per agent). The 8 and 4 GB factual picks are confirmed by the E-023 low-tier benchmark.
+
+A2A bus registry-auth verify-and-warn: the bus can verify registry-minted EdDSA-JWT agent identities (signature, sub matches the sender, and an active a2a_send grant) against the taOS agent registry. The default mode logs a warning and still accepts a post that fails the check, so the live multi-agent bus keeps working while agents migrate off self-asserted handles; an `a2a_auth_enforce` flag flips it to reject. Dormant until a registry URL is configured.
+
 ## 0.4.0
 
 Provable Memory and the memory cockpit. Adds the claims layer (facts carry their

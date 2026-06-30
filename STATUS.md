@@ -1,5 +1,18 @@
 # STATUS
 
+## RESTART HANDOFF (read first) - 2026-06-30
+
+Jay is restarting Claude to pick up the new Sonnet 5 model for subagents. THIS session + its session-only cron DIE. Disk, git, and memory persist; everything is merged and pushed (master clean).
+
+ON THE NEW SESSION (on-arrival checklist):
+1. RE-ARM the hourly monitor cron: CronCreate `13 * * * *`, durable, prompt = run .claude/audit-cron-prompt.md (usage gate, docs freshness, research report, memory, ALL-channel a2a bus sweep, repo PR/issue/bot-review sweep). The old cron id f8c41108 is dead.
+2. Subagents now use SONNET 5 (model:sonnet resolves to it); keep delegating exploration + implementation to Sonnet, reviews to Opus, my context for design + merge.
+3. Check the bus first thing for @taOS-dev's bus-auth ENFORCE-FLIP signal (held until all 4 agents tokened) and any new @taOSmd item. Read this STATUS.
+
+STATE (all SHIPPED + merged to master this session): #177 task-aware generator profiles, #178 dashboard settability, #179 test hardening, #180 bot-review fixes, #181 A2A verify-and-warn. CANARY DONE: my registry identity taosmd-dev-20260630-120353 is active (consent-minted, @taOS-dev verified); registry_token stored in ~/.taosmd/config.json so my bus posts are signed. BUS-AUTH (#138 Phase 2) verify-and-warn is built (warn default = log+accept; enforce behind config a2a_auth_enforce) and HELD: remaining is OPERATIONAL rollout (Jay/@taOS-dev): activate on the live Pi bus (deploy #181 + set registry_url -> warn mode), then the enforce flip. FEDORA BENCH HOST IS IN WINDOWS now (rebootwin = `sudo efibootmgr -n 0001 && sudo reboot`, Boot0001=Windows). To do any GPU/bench work, reboot it back to Fedora first (`sudo efibootmgr -n 0000 && sudo reboot`, Boot0000=Fedora) and check the bus + nvidia-smi. Open PRs #172/#173 are Jay's pre-existing, untouched. Usage healthy at handoff. .superpowers/ is now gitignored.
+
+---
+
 Working snapshot for whoever picks this repo up next. Updated whenever meaningful state changes. Shipped changes live in [CHANGELOG.md](CHANGELOG.md); measured results live in [docs/benchmarks.md](docs/benchmarks.md); the task list of record is GitHub issues.
 
 Last updated: 2026-06-30 (monitor): ALSO SHIPPED #181 verify-and-warn (bus-auth #138 Phase 2: warn default = log+accept, enforce held behind config a2a_auth_enforce, dormant until registry_url set). CANARY VERIFIED end-to-end by @taOS-dev (my consent-minted registry identity taosmd-dev-20260630-120353 active, signed bus posts working). Hourly ALL-CHANNEL + repo monitor armed (cron f8c41108, :13). .superpowers/ now gitignored (caught it leaking into one branch; master was clean). BUS-AUTH remaining is OPERATIONAL, Jay/@taOS-dev coordinate: activate the verifier on the live Pi bus (deploy #181 + set registry_url -> warn mode) then the enforce flip once all 4 tokened. Pre-existing open PRs #172/#173 are Jay's, untouched. (Earlier overnight block follows.)
