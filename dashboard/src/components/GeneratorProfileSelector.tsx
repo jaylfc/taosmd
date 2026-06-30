@@ -20,7 +20,7 @@ export function GeneratorProfileSelector() {
 
   const scopeOptions = useMemo(() => {
     const names = Array.from(
-      new Set(["user", ...agentNames].filter((n) => n && n !== "all")),
+      new Set([...agentNames].filter((n) => n && n !== "all")),
     );
     return [
       { value: "all", label: "All agents" },

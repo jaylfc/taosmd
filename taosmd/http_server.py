@@ -1022,7 +1022,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             ]
             active, scope = None, "global"
             if agent:
-                pid = _agents.get_agent_generator_profile(agent, data_dir=data_dir)
+                try:
+                    pid = _agents.get_agent_generator_profile(agent, data_dir=data_dir)
+                except Exception:
+                    pid = None
                 if pid:
                     active, scope = pid, agent
             if active is None:

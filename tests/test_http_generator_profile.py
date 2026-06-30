@@ -129,3 +129,12 @@ def test_post_unknown_profile_400(live_server_with_dir):
     status, body = _post(f"{base_url}/generator-profile", {"profile_id": "nope"})
     assert status == 400, body
     assert config.get_generator_profile(data_dir=data_dir) is None
+
+
+def test_get_unknown_agent_falls_back_to_global(live_server_with_dir):
+    """GET /generator-profile?agent=<unregistered> must return 200 with global scope."""
+    base_url, data_dir = live_server_with_dir
+    status, body = _get(f"{base_url}/generator-profile?agent=nonexistent-agent-xyz")
+    assert status == 200, body
+    assert body["scope"] == "global"
+    assert body["active"] == "balanced"
