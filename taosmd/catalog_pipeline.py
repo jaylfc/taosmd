@@ -167,7 +167,7 @@ class CatalogPipeline:
         # The memory model is a system-wide setting. When configured it
         # overrides the auto-detected model; when unset, the detected model
         # (prior behaviour) is kept as the fallback.
-        model = resolve_memory_model(model)
+        model = resolve_memory_model(fallback=model)
 
         # --- Stage 1b: Intake Classification (taxonomy filing) ---
         classify_results = []

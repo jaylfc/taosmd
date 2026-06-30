@@ -48,3 +48,18 @@ def test_per_agent_beats_global(at_12gb, tmp_path):
     agents.AgentRegistry(tmp_path).register_agent("bob")
     agents.set_agent_generator_profile("bob", "factual-recall", data_dir=tmp_path)
     assert gp.resolve_generator("bob", data_dir=tmp_path) == "ollama:gemma4:12b"
+
+
+def test_resolve_memory_model_uses_per_agent_profile(at_12gb, tmp_path):
+    from taosmd import config, agents
+    # global profile is balanced (qwen3.5:9b at gpu-12gb)
+    config.set_generator_profile("balanced", data_dir=tmp_path)
+    agents.AgentRegistry(tmp_path).register_agent("carol")
+    # per-agent profile is factual-recall (gemma4:12b at gpu-12gb)
+    agents.set_agent_generator_profile("carol", "factual-recall", data_dir=tmp_path)
+    result = config.resolve_memory_model(agent="carol", data_dir=tmp_path)
+    # must differ from global default (qwen3.5:9b) and match factual-recall
+    assert result == "ollama:gemma4:12b"
+    global_result = config.resolve_memory_model(data_dir=tmp_path)
+    assert global_result == "ollama:qwen3.5:9b"
+    assert result != global_result

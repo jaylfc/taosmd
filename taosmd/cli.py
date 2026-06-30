@@ -173,7 +173,11 @@ def _generator_profile_set(profile_id: str, agent=None, data_dir=None) -> int:
         print(f"error: unknown profile {profile_id!r}", file=sys.stderr)
         return 1
     if agent:
-        agents.set_agent_generator_profile(agent, profile_id, data_dir=data_dir)
+        try:
+            agents.set_agent_generator_profile(agent, profile_id, data_dir=data_dir)
+        except agents.AgentNotFoundError:
+            print(f"error: agent {agent!r} is not registered", file=sys.stderr)
+            return 1
         print(f"agent {agent}: generator profile = {profile_id}")
     else:
         config.set_generator_profile(profile_id, data_dir=data_dir)
@@ -1776,11 +1780,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "generator-profile":
         if args.generator_profile_cmd == "list":
-            return _generator_profile_list()
+            return _generator_profile_list(data_dir=args.data_dir)
         if args.generator_profile_cmd == "show":
-            return _generator_profile_show(args.profile_id)
+            return _generator_profile_show(args.profile_id, data_dir=args.data_dir)
         if args.generator_profile_cmd == "set":
-            return _generator_profile_set(args.profile_id, agent=args.agent)
+            return _generator_profile_set(args.profile_id, agent=args.agent, data_dir=args.data_dir)
 
     parser.print_help()
     return 1
