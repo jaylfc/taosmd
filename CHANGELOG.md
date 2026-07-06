@@ -2,8 +2,7 @@
 
 ## Unreleased
 
-- Task update endpoint (`POST /tasks/{id}`) now applies the same token-bound project scoping as the edge endpoints: a registry token bound to a project can only mutate that project's tasks, with the same non-enumerating 403 for foreign and nonexistent ids.
-
+Task update endpoint (`POST /tasks/{id}`) now applies the same token-bound project scoping as the edge endpoints: a registry token bound to a project can only mutate that project's tasks, with the same non-enumerating 403 for foreign and nonexistent ids.
 
 Task edge endpoints now enforce token binding and project scoping. `POST /tasks/{id}/edges` and `POST /tasks/{id}/edges/remove` skipped `_apply_token_binding`, unlike every other `/tasks` handler, so with a registry and grants configured a verified token whose grant had been revoked could still mutate the task graph, and a project-scoped token could add or remove edges on tasks belonging to other projects. Both handlers now route through the same binding as task create/list/update (grant-less verified tokens get 403), and because `task_edges` has no project column, a token-bound project is enforced by requiring BOTH referenced task ids to belong to that project via the tasks table before the graph is touched. The cross-project refusal is a non-enumerating 403: a task in a foreign project and a task that does not exist return an identical response. Tokenless and standalone (no registry) behavior is unchanged.
 
