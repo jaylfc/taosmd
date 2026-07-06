@@ -24,7 +24,7 @@ taOSmd is a persistent memory system. It gives you structured, searchable memory
 - **Session Catalogue** — LLM-derived timeline directory over the archive, organised by topic
 - **Crystal Store** — compact session digests with lessons learned
 
-97.0% Recall@5 on LongMemEval-S (a retrieval metric, like-for-like with MemPalace 96.6% and agentmemory 95.2%), measured locally on a low-end reference stack. An end-to-end Judge number is in progress. Runs entirely locally, no cloud dependencies.
+97.0% Recall@5 on LongMemEval-S (a retrieval metric, like-for-like with MemPalace 96.6% and agentmemory 95.2%), measured locally on a low-end reference stack. The end-to-end Judge baseline (corrected, post-PR #176) is 42.8% under a strict Qwen judge / 51.2% under llama3.1:8b with the shipped qwen3.5:9b generator; the `factual-recall` generator profile (gemma4:12b at 12 GB) reaches 53.8 / 61.4, parity with MemOS-lossless (54.0 / 61.2). Runs entirely locally, no cloud dependencies.
 
 ---
 
@@ -36,7 +36,7 @@ taOSmd is a persistent memory system. It gives you structured, searchable memory
 curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash
 ```
 
-This installs the embedding model (90MB), pulls Qwen3-4B via Ollama (2.6GB), creates all data stores, and sets up a daily archive compression cron. On RK3588 (Orange Pi, Rock 5) it uses the NPU-optimised model instead.
+This installs the embedding models (all-MiniLM-L6-v2 ONNX, 90MB, plus snowflake-arctic-embed-s ONNX, ~130MB, the shipped dense default), pulls Qwen3-4B via Ollama (2.6GB), creates all data stores, and installs the nightly librarian cron (3 AM: compresses old archive files via `compress_old_files()` and runs `CatalogPipeline.index_yesterday()` to catalogue, crystallize, and update the knowledge graph for the previous day). On RK3588 (Orange Pi, Rock 5) it uses the NPU-optimised model instead.
 
 ### Manual install
 
@@ -58,9 +58,13 @@ Once set up, you must do three things in every session:
 Archive EVERYTHING — user messages, your responses, tool calls, errors. The archive is append-only and kept forever. This is not optional: missed turns cannot be recovered.
 
 ```python
+import os
 from taosmd import Archive
 
-archive = Archive(archive_dir="~/.taosmd/archive", index_path="~/.taosmd/archive-index.db")
+archive = Archive(
+    archive_dir=os.path.expanduser("~/.taosmd/archive"),
+    index_path=os.path.expanduser("~/.taosmd/archive-index.db"),
+)
 await archive.init()
 
 # Call this for every turn — both user messages and your responses
@@ -90,8 +94,8 @@ After each user message, extract facts and store them in the knowledge graph and
 from taosmd import KnowledgeGraph, VectorMemory
 from taosmd.memory_extractor import process_conversation_turn
 
-kg = KnowledgeGraph("~/.taosmd/knowledge-graph.db")
-vmem = VectorMemory("~/.taosmd/vector-memory.db", embed_mode="onnx", onnx_path="<taosmd-dir>/models/minilm-onnx")
+kg = KnowledgeGraph(os.path.expanduser("~/.taosmd/knowledge-graph.db"))
+vmem = VectorMemory(os.path.expanduser("~/.taosmd/vector-memory.db"), embed_mode="onnx", onnx_path="<taosmd-dir>/models/minilm-onnx")
 await kg.init()
 await vmem.init()
 
@@ -125,7 +129,7 @@ semantic_results = await vmem.search("the question", hybrid=True)
 
 # If results are thin or you're uncertain, also check session crystals
 from taosmd import CrystalStore
-crystals = CrystalStore("~/.taosmd/crystals.db")
+crystals = CrystalStore(os.path.expanduser("~/.taosmd/crystals.db"))
 await crystals.init()
 recent = await crystals.recent(limit=10)
 crystal_hits = await crystals.search("the topic")
@@ -146,9 +150,10 @@ archive_hits = await archive.search_fts("broader search terms")
 At the end of every session, crystallise it:
 
 ```python
+import os
 from taosmd import CrystalStore
 
-crystals = CrystalStore("~/.taosmd/crystals.db")
+crystals = CrystalStore(os.path.expanduser("~/.taosmd/crystals.db"))
 await crystals.init()
 
 crystal = await crystals.crystallize(
@@ -170,17 +175,33 @@ The crystal stores a narrative summary, outcomes, and lessons learned. Lessons a
 taOSmd's Session Catalogue automatically derives a timeline directory from the archive. It classifies each session by topic and links related sessions:
 
 ```python
-from taosmd import SessionCatalog, CatalogPipeline
+import os
+from taosmd import CatalogPipeline
 
-catalog = SessionCatalog("~/.taosmd/catalog.db")
-pipeline = CatalogPipeline(catalog, archive, llm_url="http://localhost:11434", model="qwen3:4b")
-await catalog.init()
+d = os.path.expanduser("~/.taosmd")
+pipeline = CatalogPipeline(
+    archive_dir=os.path.join(d, "archive"),
+    sessions_dir=os.path.join(d, "sessions"),
+    catalog_db=os.path.join(d, "session-catalog.db"),
+    crystals_db=os.path.join(d, "crystals.db"),
+    kg_db=os.path.join(d, "knowledge-graph.db"),
+    llm_url="http://localhost:11434",
+)
+await pipeline.init()
 
-# Run after each session to keep the catalogue current
-await pipeline.run(session_id=session_id, turns=session_turns)
+# The pipeline indexes archive days (split, enrich, crystallize), not live turns:
+await pipeline.index_yesterday()                      # what the nightly cron runs
+await pipeline.index_day("2026-07-01", force=True)    # re-index one day
+await pipeline.index_range("2026-06-01", "2026-06-30")
+await pipeline.rebuild()                              # full re-index of the archive
+
+# The catalogue itself is pipeline.catalog (a SessionCatalog)
+sessions = await pipeline.catalog.search_topic("the topic")
+
+await pipeline.close()
 ```
 
-The catalogue is what the Librarian layer (coming) uses to route uncertain queries. Keep it current.
+The catalogue is what the shipped Librarian layer uses to route uncertain queries. Keep it current.
 
 ---
 
@@ -190,7 +211,7 @@ If you can't find something in structured retrieval (KG + vector + crystals), fo
 
 1. **Archive FTS** — full-text search the raw archive: `await archive.search_fts("query")`
 2. **Broader FTS** — try related terms, adjacent dates, or entity variants
-3. **Session catalogue** — check `await catalog.search("topic")` for relevant session IDs, then retrieve those sessions from the archive directly
+3. **Session catalogue** — check `await pipeline.catalog.search_topic("topic")` for relevant session IDs, then retrieve those sessions from the archive directly
 4. **Acknowledge the gap** — if nothing is found, tell the user clearly: "I don't have a record of this from our sessions." Do not guess or fabricate.
 
 Never return a fabricated answer when retrieval fails. The archive is complete for everything that was recorded — if it's not there, it wasn't captured.
@@ -208,10 +229,10 @@ Add to your `CLAUDE.md` or `AGENTS.md`:
 ```
 After every response, archive the conversation turn to taOSmd:
   python3 -c "
-import asyncio, sys, time
+import asyncio, os, sys, time
 from taosmd import Archive
 async def record():
-    a = Archive('~/.taosmd/archive', '~/.taosmd/archive-index.db')
+    a = Archive(os.path.expanduser('~/.taosmd/archive'), os.path.expanduser('~/.taosmd/archive-index.db'))
     await a.init()
     await a.record('conversation', {'role': sys.argv[1], 'content': sys.argv[2], 'timestamp': time.time()}, summary=sys.argv[2][:80])
 asyncio.run(record())
@@ -224,9 +245,9 @@ For production use, integrate the Python archive calls directly into your agent'
 
 ```python
 from taosmd import Archive
-import asyncio, time
+import asyncio, os, time
 
-archive = Archive("~/.taosmd/archive", "~/.taosmd/archive-index.db")
+archive = Archive(os.path.expanduser("~/.taosmd/archive"), os.path.expanduser("~/.taosmd/archive-index.db"))
 asyncio.run(archive.init())
 
 class TaOSmdCallbackHandler(BaseCallbackHandler):
@@ -251,10 +272,10 @@ class TaOSmdCallbackHandler(BaseCallbackHandler):
 Wrap the API call:
 
 ```python
-import httpx, asyncio, time
+import httpx, asyncio, os, time
 from taosmd import Archive
 
-archive = Archive("~/.taosmd/archive", "~/.taosmd/archive-index.db")
+archive = Archive(os.path.expanduser("~/.taosmd/archive"), os.path.expanduser("~/.taosmd/archive-index.db"))
 
 async def chat_with_memory(messages: list[dict]) -> str:
     await archive.init()
@@ -286,10 +307,10 @@ All data is stored in `~/.taosmd/` by default:
 | `vector-memory.db` | Embedded text chunks |
 | `archive/` | Raw JSONL conversation logs |
 | `archive-index.db` | FTS5 index over the archive |
-| `catalog.db` | Session catalogue with topic classification |
+| `session-catalog.db` | Session catalogue with topic classification |
 | `crystals.db` | Session digests and lessons |
 
-The archive directory contains one `.jsonl.gz` file per day (compressed by the daily cron at 3 AM). Never delete these files — they are the source of truth.
+The archive directory contains one `.jsonl.gz` file per day. The nightly cron installed by setup (3 AM) compresses old archive files (`compress_old_files()`) and runs `CatalogPipeline.index_yesterday()` to catalogue, crystallize, and update the knowledge graph for the previous day. Never delete these files — they are the source of truth.
 
 ---
 
@@ -300,9 +321,13 @@ A GPU machine (e.g. x86 + NVIDIA) gives ~10x speed on LLM extraction. Not requir
 ```bash
 # On the GPU machine
 ollama pull qwen3:4b
+```
 
-# Point taOSmd at it
-export TAOSMD_LLM_URL=http://<gpu-machine>:11434
+Then point taOSmd at it by passing the URL where you construct the LLM-backed pieces (there is no `TAOSMD_LLM_URL` environment variable):
+
+```python
+pipeline = CatalogPipeline(..., llm_url="http://<gpu-machine>:11434")
+crystal = await crystals.crystallize(..., llm_url="http://<gpu-machine>:11434")
 ```
 
 ---
@@ -315,6 +340,6 @@ export TAOSMD_LLM_URL=http://<gpu-machine>:11434
 | `archive.record(...)` for your response | Every turn |
 | `process_conversation_turn(...)` | Every user message |
 | `crystals.crystallize(...)` | End of session |
-| `pipeline.run(...)` | End of session |
+| `pipeline.index_yesterday()` (or the nightly cron) | Daily |
 | Search before answering history questions | On demand |
 | Escalate to archive FTS when uncertain | On demand |
