@@ -6,6 +6,10 @@ Task-aware generator profiles: the answer generator is selectable by workload, n
 
 A2A bus registry-auth verify-and-warn: the bus can verify registry-minted EdDSA-JWT agent identities (signature, sub matches the sender, and an active a2a_send grant) against the taOS agent registry. The default mode logs a warning and still accepts a post that fails the check, so the live multi-agent bus keeps working while agents migrate off self-asserted handles; an `a2a_auth_enforce` flag flips it to reject. Dormant until a registry URL is configured.
 
+`taosmd reindex` for per-agent embedder cutover (PR #175): a single-shot command that clears an agent's vector rows and rebuilds them from the zero-loss archive, re-embedding every turn under the currently configured embedder (for example MiniLM to arctic-embed-s). `--agent` cuts over one agent at a time, `--check` dry-runs, and because the archive is never touched a reindex is always safe to re-run.
+
+Judge verdict-parser fix in the LongMemEval harness (PR #176): the benchmark judge parser checked for the substring "CORRECT" after upper-casing, and "INCORRECT" contains "CORRECT", so every INCORRECT verdict had been scored as a pass since 2026-04-13. Published end-to-end Judge scores were corrected accordingly: on the full 500 with the shipped qwen3.5:9b generator, 74.6 percent became 42.8 (Qwen judge) / 51.2 (llama judge). The 97.0 percent Recall@5 headline is judge-free and unaffected.
+
 ## 0.4.0
 
 Provable Memory and the memory cockpit. Adds the claims layer (facts carry their
