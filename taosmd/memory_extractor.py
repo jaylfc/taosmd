@@ -146,6 +146,12 @@ def extract_facts_from_text(text: str) -> list[dict]:
 # LLM-based extraction (higher quality, optional)
 # ------------------------------------------------------------------
 
+# (model, llm_url) pairs whose LLM-failure fallback has already been
+# WARNING-logged this process. The first failure per pair is loud, repeats
+# drop to debug so a dead Ollama doesn't flood the log on every turn.
+_llm_fallback_warned: set[tuple[str, str]] = set()
+
+
 async def extract_facts_with_llm(
     text: str,
     llm_url: str,
@@ -191,7 +197,11 @@ async def extract_facts_with_llm(
             if isinstance(facts, list):
                 return [f for f in facts if "subject" in f and "predicate" in f and "object" in f]
     except Exception as e:
-        logger.warning(
+        key = (model_name, llm_url)
+        level = logging.DEBUG if key in _llm_fallback_warned else logging.WARNING
+        _llm_fallback_warned.add(key)
+        logger.log(
+            level,
             "LLM extraction failed (model=%r, url=%s), falling back to regex "
             "pattern extraction: %s",
             model_name, llm_url, e,

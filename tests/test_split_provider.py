@@ -48,3 +48,7 @@ def test_double_prefix_strips_one_layer():
 @pytest.mark.parametrize("value", ["default", "none"])
 def test_sentinels_pass_through(value):
     assert split_provider(value) == ("", value)
+
+
+def test_provider_head_is_case_normalized():
+    assert split_provider("Ollama:qwen3.5:9b") == ("ollama", "qwen3.5:9b")

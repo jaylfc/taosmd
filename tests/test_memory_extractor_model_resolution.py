@@ -172,10 +172,14 @@ def test_unknown_tier_falls_back_to_default(monkeypatch, tmp_path):
     )
 
 
-def test_llm_failure_regex_fallback_logs_warning(monkeypatch, tmp_path, caplog):
-    """When the LLM call fails, the regex fallback must be loud (WARNING), not silent."""
+def test_llm_failure_regex_fallback_logs_warning_once_then_debug(monkeypatch, tmp_path, caplog):
+    """The regex fallback is loud (WARNING) on the first failure per (model, url), then debug.
+
+    A dead Ollama would otherwise emit one WARNING per conversation turn.
+    """
     _pin_tier(monkeypatch, "gpu-12gb")
     _clear_pins(monkeypatch)
+    monkeypatch.setattr("taosmd.memory_extractor._llm_fallback_warned", set())
 
     payloads: list[dict] = []
     client = _PayloadCapturingClient(payloads, response=RuntimeError("connection refused"))
@@ -186,8 +190,17 @@ def test_llm_failure_regex_fallback_logs_warning(monkeypatch, tmp_path, caplog):
         kg = TemporalKnowledgeGraph(db_path=tmp_path / "kg.db")
         await kg.init()
         try:
-            return await process_conversation_turn(
+            first = await process_conversation_turn(
                 text="Alice likes tea.",
+                agent_name=None,
+                kg=kg,
+                llm_url="http://localhost:11434",
+                http_client=client,
+                use_llm=True,
+                extraction_model="default",
+            )
+            second = await process_conversation_turn(
+                text="Hello again.",
                 agent_name=None,
                 kg=kg,
                 llm_url="http://localhost:11434",
@@ -197,12 +210,21 @@ def test_llm_failure_regex_fallback_logs_warning(monkeypatch, tmp_path, caplog):
             )
         finally:
             await kg.close()
+        return first, second
 
-    with caplog.at_level(logging.WARNING, logger="taosmd.memory_extractor"):
-        result = _run(go())
+    with caplog.at_level(logging.DEBUG, logger="taosmd.memory_extractor"):
+        first, second = _run(go())
 
-    assert result["method"] == "regex"
-    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert any("fall" in r.getMessage().lower() for r in warnings), (
-        "expected a WARNING log announcing the regex fallback after LLM failure"
+    assert first["method"] == "regex"
+    assert second["method"] == "regex"
+    fallback_records = [
+        r for r in caplog.records if "falling back to regex" in r.getMessage()
+    ]
+    assert len(fallback_records) == 2
+    levels = [r.levelno for r in fallback_records]
+    assert levels[0] == logging.WARNING, (
+        "first LLM failure per (model, url) must be a WARNING"
+    )
+    assert levels[1] == logging.DEBUG, (
+        "repeat LLM failures for the same (model, url) must drop to debug"
     )

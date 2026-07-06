@@ -150,12 +150,21 @@ class AgentRecord:
         )
 
 
+# Once-per-process guard for the legacy ./data/agents.json warning. Module
+# level (not per instance) because _registry() constructs a fresh
+# AgentRegistry per call; a per-instance flag would re-warn on every call.
+# Being process-scoped it re-fires on every boot for as long as the
+# stranded legacy file exists, which is the intent: durable nagging, no
+# auto-migration.
+_legacy_registry_warned = False
+
+
 class AgentRegistry:
     """File-backed registry of agents on this taosmd install.
 
     Storage is a single JSON envelope rather than SQLite. Agent records
     are tiny, writes are rare, and a flat file makes the registry easy
-    to back up alongside the rest of ``data/``.
+    to back up alongside the rest of the canonical data dir.
     """
 
     def __init__(self, data_dir: Path | str | None = None):
@@ -172,24 +181,27 @@ class AgentRegistry:
             data_dir = _config._resolve_data_dir(None)
         self.data_dir = Path(data_dir)
         self.registry_path = self.data_dir / "agents.json"
-        self._legacy_warned = False
+        self._warn_if_legacy_registry()
 
     # ----- internal -----------------------------------------------------
 
     def _warn_if_legacy_registry(self) -> None:
-        """Warn (once) when a pre-fix CWD-relative ./data/agents.json exists.
+        """Warn (once per process) when a pre-fix CWD-relative ./data/agents.json exists.
 
         Earlier releases wrote the registry to $CWD/data/agents.json. We
         never auto-move data; we tell the user where the stray file is and
-        where it should live. Only fires for default-resolved registries;
-        explicit data_dir callers opted out of canonical resolution.
+        where it should live. Runs at construction regardless of whether the
+        canonical registry file exists (the stranded legacy config matters
+        either way), but only for default-resolved registries; explicit
+        data_dir callers opted out of canonical resolution.
         """
-        if self._legacy_warned or not self._default_resolved:
+        global _legacy_registry_warned
+        if _legacy_registry_warned or not self._default_resolved:
             return
         legacy = Path("data") / "agents.json"
         try:
             if legacy.exists() and legacy.resolve() != self.registry_path.resolve():
-                self._legacy_warned = True
+                _legacy_registry_warned = True
                 logger.warning(
                     "taosmd: found a legacy agent registry at %s but the active "
                     "registry is %s. Agents registered in the legacy file are "
@@ -202,7 +214,6 @@ class AgentRegistry:
 
     def _read(self) -> dict:
         if not self.registry_path.exists():
-            self._warn_if_legacy_registry()
             return {"agents": []}
         try:
             return json.loads(self.registry_path.read_text())

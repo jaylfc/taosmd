@@ -36,8 +36,8 @@ def split_provider(resolved: str) -> tuple[str, str]:
     if not resolved:
         return ("", "")
     head, sep, rest = resolved.partition(":")
-    if sep and head in KNOWN_PROVIDERS:
-        return (head, rest)
+    if sep and head.lower() in KNOWN_PROVIDERS:
+        return (head.lower(), rest)
     return ("", resolved)
 
 

@@ -63,7 +63,36 @@ def test_module_wrappers_resolve_canonically(monkeypatch, tmp_path):
     assert not (tmp_path / "data").exists()
 
 
-def test_legacy_data_dir_warning_fires_and_never_moves(monkeypatch, tmp_path, caplog):
+def test_legacy_data_dir_warning_fires_even_when_canonical_exists(monkeypatch, tmp_path, caplog):
+    """The stranded legacy file matters whether or not the canonical registry exists."""
+    monkeypatch.setattr(agents, "_legacy_registry_warned", False)
+    real = tmp_path / "real-data"
+    monkeypatch.setenv("TAOSMD_DATA_DIR", str(real))
+    monkeypatch.chdir(tmp_path)
+
+    legacy = tmp_path / "data"
+    legacy.mkdir()
+    (legacy / "agents.json").write_text('{"agents": []}')
+    # Canonical registry ALSO exists: the warning must still fire (a
+    # missing-canonical-only check would go permanently silent seconds
+    # after the first write while the stranded file lives on).
+    real.mkdir()
+    (real / "agents.json").write_text('{"agents": []}')
+
+    with caplog.at_level(logging.WARNING, logger="taosmd.agents"):
+        AgentRegistry()
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("agents.json" in m for m in warnings), (
+        "expected a WARNING pointing at the legacy ./data/agents.json"
+    )
+    # Never auto-moved: both files untouched.
+    assert (legacy / "agents.json").read_text() == '{"agents": []}'
+    assert (real / "agents.json").read_text() == '{"agents": []}'
+
+
+def test_legacy_data_dir_warning_once_per_process(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(agents, "_legacy_registry_warned", False)
     real = tmp_path / "real-data"
     monkeypatch.setenv("TAOSMD_DATA_DIR", str(real))
     monkeypatch.chdir(tmp_path)
@@ -72,20 +101,23 @@ def test_legacy_data_dir_warning_fires_and_never_moves(monkeypatch, tmp_path, ca
     legacy.mkdir()
     (legacy / "agents.json").write_text('{"agents": []}')
 
-    reg = AgentRegistry()
     with caplog.at_level(logging.WARNING, logger="taosmd.agents"):
-        reg.list_agents()
+        AgentRegistry()
+        # Repeated constructions and module-wrapper calls (each of which
+        # builds a fresh registry) must not re-warn within this process.
+        AgentRegistry().list_agents()
+        agents.agent_exists("nobody")
 
-    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-    assert any("agents.json" in m for m in warnings), (
-        "expected a WARNING pointing at the legacy ./data/agents.json"
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1, (
+        f"expected exactly one legacy warning per process, got {len(warnings)}"
     )
-    # Never auto-moved: legacy file untouched, canonical location untouched.
+    # Legacy file untouched.
     assert (legacy / "agents.json").exists()
-    assert not (real / "agents.json").exists()
 
 
 def test_no_legacy_warning_for_explicit_data_dir(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(agents, "_legacy_registry_warned", False)
     monkeypatch.chdir(tmp_path)
     legacy = tmp_path / "data"
     legacy.mkdir()

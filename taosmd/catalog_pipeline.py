@@ -22,6 +22,7 @@ import httpx
 
 from .agents import run_if_enabled
 from .config import resolve_memory_model
+from .generator_profiles import split_provider
 from .prompts import intake_classification_prompt
 from .session_catalog import SessionCatalog
 from .crystallize import CrystalStore
@@ -168,6 +169,11 @@ class CatalogPipeline:
         # overrides the auto-detected model; when unset, the detected model
         # (prior behaviour) is kept as the fallback.
         model = resolve_memory_model(fallback=model)
+        if model:
+            # Resolved profile values are provider-prefixed ("ollama:qwen3.5:9b");
+            # enrich_session and crystallize POST the model name verbatim to
+            # /api/generate, which wants the bare model name.
+            _, model = split_provider(model)
 
         # --- Stage 1b: Intake Classification (taxonomy filing) ---
         classify_results = []
