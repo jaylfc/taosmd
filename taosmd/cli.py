@@ -1466,8 +1466,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     a2a_bridge_p.add_argument(
         "--debounce", type=float, default=0.0,
-        help="Coalesce a burst: messages within S seconds of the last spawn are "
-             "batched into the next trigger run (default 0 = no debounce)",
+        help="Delay and serialize trigger runs: a message within S seconds of "
+             "the last spawn waits for the window to pass; each run receives "
+             "a single message (default 0 = no delay)",
     )
     a2a_bridge_p.add_argument(
         "--max-concurrency", dest="max_concurrency", type=int, default=1,

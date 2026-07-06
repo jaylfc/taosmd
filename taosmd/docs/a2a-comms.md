@@ -353,13 +353,14 @@ taosmd a2a-bridge --channel CHANNEL --exclude YOUR_AGENT_NAME \
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--trigger CMD` | (required) | Shell command run per message; JSON on its stdin |
-| `--debounce S` | `0` | Coalesce a burst: messages within S seconds of the last spawn are batched (passed as a JSON array) into the next run |
+| `--debounce S` | `0` | Delay and serialize trigger runs: a message arriving within S seconds of the last spawn waits for the window to pass before its own run fires. Each run still receives exactly one message |
 | `--max-concurrency N` | `1` | Cap simultaneous trigger processes; further messages wait for a free slot |
 | `--count N` | `0` | Exit after firing N times (0 = forever) |
 
-A single message reaches the trigger as a JSON object; a coalesced batch reaches
-it as a JSON array. Keep the hourly cron in place regardless: the bridge only
-fires while it is itself running.
+Every message reaches the trigger as a single JSON object on stdin; the bridge
+never batches messages into an array, it delays and serializes runs instead.
+Keep the hourly cron in place regardless: the bridge only fires while it is
+itself running.
 
 ---
 
@@ -400,10 +401,29 @@ a2a_members(channel="CHANNEL")
 | Method | Path | Parameters | Response |
 |--------|------|------------|----------|
 | `POST` | `/a2a/send` | body JSON `{"from", "body", "thread"?, "reply_to"?}` | `{"id", "from", "thread", "reply_to"}` |
-| `GET`  | `/a2a/messages` | `?thread=&since=&limit=` | `{"messages": [...]}` |
+| `GET`  | `/a2a/messages` | `?thread=&since=&limit=&fields=&format=` | `{"messages": [...]}`; `fields=id,sender,body` projects each message down to those keys; `format=ndjson` emits one message per line (`application/x-ndjson`) |
 | `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
+| `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires a configured server token (403 if none is set) |
+| `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
+| `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
+
+### Registry auth (verify-and-warn)
+
+`POST /a2a/send` can verify sender identity against a taOS registry. Three
+config keys control it (`taosmd/config.py`): `registry_url` (the registry base
+URL; without it the verifier is dormant and every message is accepted as
+before), `registry_token` (the token used to poll the auth-gated revoked
+feed), and `a2a_auth_enforce` (mode flip). The mode can also be set with the
+`TAOSMD_A2A_AUTH_ENFORCE` environment variable (`1`, `true`, or `yes` enable
+enforce; the env var wins over the config key). Default is verify-and-warn:
+an auth failure is logged as a warning and the message is still accepted, so
+a deployment can observe violations before flipping enforcement. In enforce
+mode a missing token returns `401` and a bad token or missing grant returns
+`403`, and the message is dropped. Independent of registry auth, when the
+server has `server_token` configured every `/a2a/*` endpoint requires a
+matching `Authorization: Bearer <token>` header.
 
 Each message in `/a2a/messages` and the SSE stream has shape:
 `{"id", "ts", "from", "body", "thread", "reply_to"}`
