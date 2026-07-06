@@ -48,3 +48,98 @@ async def test_activations_after_query(tmp_path):
     g = await kg.graph()
     node_ids = {n["id"] for n in g["nodes"]}
     assert {a["id"] for a in acts} <= node_ids
+
+
+# ----------------------------------------------------------------------
+# add_entity zero-loss: re-adding an entity must never silently drop a
+# recorded type/property. add_entity is called once per subject/object on
+# every add_triple, so the same entity is re-inserted constantly with
+# whatever type the current extraction guessed (often the "unknown"
+# placeholder). The old UPSERT clobbered name/type/properties last-writer-
+# wins; these tests pin the non-destructive merge.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_entity_concrete_type_not_downgraded_to_unknown(tmp_path):
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("Jay", "person")
+    # A later triple re-adds the same entity with the default placeholder.
+    await kg.add_entity("Jay", "unknown")
+    ent = await kg.get_entity("Jay")
+    assert ent["type"] == "person"  # concrete classification preserved
+    await kg.close()
+
+
+@pytest.mark.asyncio
+async def test_add_entity_placeholder_type_upgraded(tmp_path):
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("Jay")  # defaults to "unknown"
+    await kg.add_entity("Jay", "person")  # enrichment fills the placeholder
+    ent = await kg.get_entity("Jay")
+    assert ent["type"] == "person"
+    await kg.close()
+
+
+@pytest.mark.asyncio
+async def test_add_entity_first_seen_concrete_type_wins(tmp_path):
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("Acme", "person")
+    await kg.add_entity("Acme", "organization")  # conflicting reclassification
+    ent = await kg.get_entity("Acme")
+    # First-seen concrete type is kept; nothing is silently lost.
+    assert ent["type"] == "person"
+    await kg.close()
+
+
+@pytest.mark.asyncio
+async def test_add_entity_merges_properties_additively(tmp_path):
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("Jay", "person", '{"city": "London"}')
+    await kg.add_entity("Jay", "person", '{"role": "founder"}')
+    ent = await kg.get_entity("Jay")
+    import json
+    props = json.loads(ent["properties_json"])
+    assert props == {"city": "London", "role": "founder"}  # no key dropped
+    await kg.close()
+
+
+@pytest.mark.asyncio
+async def test_add_entity_existing_property_value_wins_on_conflict(tmp_path):
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("Jay", "person", '{"city": "London"}')
+    await kg.add_entity("Jay", "person", '{"city": "Paris"}')
+    ent = await kg.get_entity("Jay")
+    import json
+    props = json.loads(ent["properties_json"])
+    # The recorded value is preserved rather than overwritten.
+    assert props == {"city": "London"}
+    await kg.close()
+
+
+@pytest.mark.asyncio
+async def test_add_entity_keeps_first_seen_name(tmp_path):
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("taOSmd", "project")
+    # Same normalised id, different display casing on a later mention.
+    await kg.add_entity("TAOSMD", "project")
+    ent = await kg.get_entity("taosmd")
+    assert ent["name"] == "taOSmd"  # first-seen display name preserved
+    await kg.close()
+
+
+@pytest.mark.asyncio
+async def test_add_entity_preserves_created_at(tmp_path):
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("Jay", "person")
+    first = (await kg.get_entity("Jay"))["created_at"]
+    await kg.add_entity("Jay", "unknown")
+    assert (await kg.get_entity("Jay"))["created_at"] == first
+    await kg.close()
