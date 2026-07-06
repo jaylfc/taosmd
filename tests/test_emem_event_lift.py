@@ -258,3 +258,49 @@ def test_lifted_triples_round_trip_through_strict_kg(tmp_path):
 
     stats = _run(go())
     assert stats["active_triples"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Provider prefix must not reach the /api/chat payload
+# ---------------------------------------------------------------------------
+
+
+class _PayloadCapturingOllamaClient(_FakeOllamaClient):
+    """Fake client that also records the JSON body of each POST."""
+
+    def __init__(self, content_json: dict[str, Any]):
+        super().__init__(content_json)
+        self.payloads: list[dict] = []
+
+    async def post(self, url, json=None, timeout=None):
+        self.payloads.append(json)
+        return await super().post(url, json=json, timeout=timeout)
+
+
+def test_lift_edu_strips_provider_prefix_from_payload():
+    """A resolved "ollama:model" string reaches Ollama as the bare model name."""
+    client = _PayloadCapturingOllamaClient({"event_type": "none", "triples": []})
+
+    _run(lift_edu_to_triples(
+        "Bob moved to Tokyo.",
+        model="ollama:qwen3.5:9b",
+        ollama_url="http://localhost:11434",
+        http_client=client,
+    ))
+
+    assert len(client.payloads) == 1
+    assert client.payloads[0]["model"] == "qwen3.5:9b"
+
+
+def test_lift_edu_bare_model_payload_unchanged():
+    """A bare model name (colon and all) passes through to the payload as-is."""
+    client = _PayloadCapturingOllamaClient({"event_type": "none", "triples": []})
+
+    _run(lift_edu_to_triples(
+        "Bob moved to Tokyo.",
+        model="llama3.1:8b",
+        ollama_url="http://localhost:11434",
+        http_client=client,
+    ))
+
+    assert client.payloads[0]["model"] == "llama3.1:8b"

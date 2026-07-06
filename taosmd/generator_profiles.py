@@ -16,6 +16,30 @@ from . import agents as _agents
 # Highest VRAM first. Mirrors recipes.tier_of's vocabulary.
 TIER_ORDER: tuple[str, ...] = ("gpu-12gb", "gpu-8gb", "gpu-4gb", "pi-npu", "cpu")
 
+# Provider tokens recognised at the model boundary. Registry values are
+# "provider:model" strings; backends want the bare model name.
+KNOWN_PROVIDERS: tuple[str, ...] = ("ollama",)
+
+
+def split_provider(resolved: str) -> tuple[str, str]:
+    """Split a resolved ``provider:model`` string into ``(provider, model)``.
+
+    Only a LEADING known provider token counts: model names legitimately
+    contain colons (``qwen3.5:9b`` is a bare model, not a provider), so
+    anything that doesn't start with a known provider passes through
+    unchanged as ``("", resolved)``. Empty input yields ``("", "")``.
+
+    Use this at HTTP call sites so the bare model name is what reaches the
+    backend (live Ollama rejects the prefixed form); keep the prefixed
+    string for storage and CLI display.
+    """
+    if not resolved:
+        return ("", "")
+    head, sep, rest = resolved.partition(":")
+    if sep and head in KNOWN_PROVIDERS:
+        return (head, rest)
+    return ("", resolved)
+
 
 @dataclass
 class GeneratorProfile:

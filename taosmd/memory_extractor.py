@@ -164,11 +164,17 @@ async def extract_facts_with_llm(
         return extract_facts_from_text(text)
 
     from .prompts import extraction_prompt
+    from .generator_profiles import split_provider  # noqa: PLC0415
+
+    # Resolved model strings may carry a provider prefix ("ollama:qwen3.5:9b").
+    # The backend wants the bare model name; the prefixed form is rejected by
+    # live Ollama and would silently degrade extraction to regex.
+    _, model_name = split_provider(model)
     try:
         resp = await http_client.post(
             f"{llm_url}/v1/chat/completions",
             json={
-                "model": model,
+                "model": model_name,
                 "messages": [{"role": "user", "content": extraction_prompt(text, agent_name=agent_name)}],
                 "temperature": 0,
                 "max_tokens": 500,
@@ -185,7 +191,11 @@ async def extract_facts_with_llm(
             if isinstance(facts, list):
                 return [f for f in facts if "subject" in f and "predicate" in f and "object" in f]
     except Exception as e:
-        logger.debug("LLM extraction failed, falling back to patterns: %s", e)
+        logger.warning(
+            "LLM extraction failed (model=%r, url=%s), falling back to regex "
+            "pattern extraction: %s",
+            model_name, llm_url, e,
+        )
 
     return extract_facts_from_text(text)
 

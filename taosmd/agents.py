@@ -10,8 +10,9 @@ installs but left two real problems:
 2. The agent install message couldn't say "I registered as X" with
    certainty, there was no registration to point at.
 
-The registry is a single ``data/agents.json`` envelope that lists every
-agent on this taosmd install. Lazy creation on first write still works
+The registry is a single ``agents.json`` envelope in the canonical data
+dir (``TAOSMD_DATA_DIR``, then ``~/.taosmd``) that lists every agent on
+this taosmd install. Lazy creation on first write still works
 (back-compat): search/ingest auto-register an agent if it isn't in the
 registry yet, with ``display_name == name``. Explicit registration just
 gives the install agent a clean success/fail signal and lets the CLI
@@ -157,14 +158,51 @@ class AgentRegistry:
     to back up alongside the rest of ``data/``.
     """
 
-    def __init__(self, data_dir: Path | str = "data"):
+    def __init__(self, data_dir: Path | str | None = None):
+        # None resolves through the canonical resolver (TAOSMD_DATA_DIR,
+        # then ~/.taosmd) via taosmd.config._resolve_data_dir, so the
+        # registry lives in the SAME data dir as every other store. The
+        # historical default was the CWD-relative "data", which split the
+        # registry away from the service layer's stores. Explicit data_dir
+        # arguments (tests, non-default installs) are honored verbatim.
+        self._default_resolved = data_dir is None
+        if data_dir is None:
+            from . import config as _config  # noqa: PLC0415
+
+            data_dir = _config._resolve_data_dir(None)
         self.data_dir = Path(data_dir)
         self.registry_path = self.data_dir / "agents.json"
+        self._legacy_warned = False
 
     # ----- internal -----------------------------------------------------
 
+    def _warn_if_legacy_registry(self) -> None:
+        """Warn (once) when a pre-fix CWD-relative ./data/agents.json exists.
+
+        Earlier releases wrote the registry to $CWD/data/agents.json. We
+        never auto-move data; we tell the user where the stray file is and
+        where it should live. Only fires for default-resolved registries;
+        explicit data_dir callers opted out of canonical resolution.
+        """
+        if self._legacy_warned or not self._default_resolved:
+            return
+        legacy = Path("data") / "agents.json"
+        try:
+            if legacy.exists() and legacy.resolve() != self.registry_path.resolve():
+                self._legacy_warned = True
+                logger.warning(
+                    "taosmd: found a legacy agent registry at %s but the active "
+                    "registry is %s. Agents registered in the legacy file are "
+                    "invisible here; move it to %s manually to migrate (it is "
+                    "never moved automatically).",
+                    legacy.resolve(), self.registry_path, self.registry_path,
+                )
+        except OSError:
+            pass
+
     def _read(self) -> dict:
         if not self.registry_path.exists():
+            self._warn_if_legacy_registry()
             return {"agents": []}
         try:
             return json.loads(self.registry_path.read_text())
@@ -527,26 +565,19 @@ def run_if_enabled(agent_name: str, task: str, fn, *args, fallback=None, **kw):
     return fn(*args, **kw)
 
 # ---------------------------------------------------------------------------
-# Module-level convenience wrappers around a default registry rooted at
-# ./data, matching the rest of taosmd which assumes ./data unless told
-# otherwise. Pass a different ``data_dir`` to AgentRegistry directly for
-# tests or non-default installs.
+# Module-level convenience wrappers around a registry rooted at the canonical
+# data dir (TAOSMD_DATA_DIR, then ~/.taosmd — see taosmd.config._resolve_data_dir),
+# matching the rest of taosmd. Pass a different ``data_dir`` to AgentRegistry
+# directly for tests or non-default installs.
 # ---------------------------------------------------------------------------
-
-_default_registry: AgentRegistry | None = None
 
 
 def _registry(data_dir: Path | str | None = None) -> AgentRegistry:
-    # When a data_dir is given (tests, non-default installs), build a registry
-    # rooted there rather than touching the process-wide singleton. This is the
-    # same isolation the AgentRegistry(tmp_path) fixture in tests/test_agents.py
-    # relies on; there is no module-level singleton-reset hook.
-    if data_dir is not None:
-        return AgentRegistry(data_dir)
-    global _default_registry
-    if _default_registry is None:
-        _default_registry = AgentRegistry()
-    return _default_registry
+    # Constructed per call rather than cached: construction is two Path
+    # objects (no I/O), and a process-wide singleton would pin the FIRST
+    # resolution of TAOSMD_DATA_DIR forever, breaking anything (tests,
+    # embedding hosts) that legitimately changes the env between calls.
+    return AgentRegistry(data_dir)
 
 
 def register_agent(name: str, *, display_name: str = "", clobber: bool = False) -> dict:
