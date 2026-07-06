@@ -16,6 +16,10 @@ import asyncio
 import sqlite3
 import time
 
+import pytest
+
+import taosmd
+import taosmd.api as taosmd_api
 from taosmd.vector_memory import VectorMemory
 
 
@@ -173,21 +177,36 @@ def test_forget_reason_stored_in_metadata(tmp_path):
 
 
 def test_batch_items_with_forget_after_round_trip(tmp_path):
-    """Batch-ingested items with forget_after respect the TTL at retrieval."""
-    # Simulate the batch ingest path by adding items individually (same code
-    # path as api.ingest_batch which calls vmem.add per item with its metadata).
+    """Batch-ingested items with forget_after respect the TTL at retrieval.
+
+    This mirrors the REAL shape ``api.ingest_batch`` writes: the caller's
+    per-item metadata (with ``source_id`` / ``forget_after``) is nested under
+    ``meta["metadata"]`` alongside the top-level ``agent`` tag, not flattened.
+    Encoding the flat shape here previously masked the batch TTL bug.
+    """
     vmem = _make_store(tmp_path)
     try:
         past = time.time() - 60
         future = time.time() + 86400
 
         rid_expired = asyncio.run(
-            vmem.add("batch item expired", metadata={"source_id": "b1", "forget_after": past})
+            vmem.add(
+                "batch item expired",
+                metadata={"agent": "a", "metadata": {"source_id": "b1", "forget_after": past}},
+            )
         )
         rid_active = asyncio.run(
-            vmem.add("batch item active", metadata={"source_id": "b2", "forget_after": future})
+            vmem.add(
+                "batch item active",
+                metadata={"agent": "a", "metadata": {"source_id": "b2", "forget_after": future}},
+            )
         )
-        rid_plain = asyncio.run(vmem.add("batch item no ttl", metadata={"source_id": "b3"}))
+        rid_plain = asyncio.run(
+            vmem.add(
+                "batch item no ttl",
+                metadata={"agent": "a", "metadata": {"source_id": "b3"}},
+            )
+        )
 
         rows = vmem._load_active_rows()
         ids = {r["id"] for r in rows}
@@ -199,6 +218,72 @@ def test_batch_items_with_forget_after_round_trip(tmp_path):
 
     # All three raw rows must still exist (zero-loss).
     assert _row_count(tmp_path / "vec.db") == 3
+
+
+@pytest.fixture
+def isolated(tmp_path, monkeypatch):
+    """Isolated data dir + clean stores cache, mirroring the integrity suite."""
+    data_dir = tmp_path / "taosmd-data"
+    data_dir.mkdir()
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+    yield data_dir
+    for stores in list(taosmd_api._stores_cache.values()):
+        for store in (stores.get("archive"), stores.get("vector"),
+                      stores.get("kg"), stores.get("claims")):
+            if store and hasattr(store, "close"):
+                try:
+                    asyncio.run(store.close())
+                except Exception:
+                    pass
+
+
+def _patch_embedder(stores: dict) -> None:
+    vmem = stores["vector"]
+
+    async def _fake_embed(text: str, task: str = "search_document") -> list[float]:
+        h = hash(text) & 0xFFFFFFFF
+        return [((h >> (i * 4)) & 0xFF) / 255.0 for i in range(8)]
+
+    vmem.embed = _fake_embed  # type: ignore[assignment]
+
+
+def test_ingest_batch_forget_after_expires_via_api(isolated):
+    """End-to-end: forget_after supplied via api.ingest_batch actually expires.
+
+    Exercises the true producer (not a hand-built row): ingest_batch nests the
+    caller's per-item metadata under ``meta["metadata"]``, so a flat TTL filter
+    silently never expires batch-supplied forget_after. This proves the fix.
+    """
+    stores = asyncio.run(taosmd_api._ensure_stores(str(isolated)))
+    _patch_embedder(stores)
+    agent = "ttl-batch-agent"
+
+    past = time.time() - 3600
+    future = time.time() + 86400
+    result = asyncio.run(taosmd.ingest_batch(
+        [
+            {"text": "expired batch fact about cats", "id": "e1",
+             "metadata": {"forget_after": past}},
+            {"text": "active batch fact about dogs", "id": "a1",
+             "metadata": {"forget_after": future}},
+            {"text": "plain batch fact about birds", "id": "p1"},
+        ],
+        agent=agent,
+        data_dir=str(isolated),
+    ))
+    assert result["ingested"] == 3
+
+    vmem = stores["vector"]
+    rows = vmem._load_active_rows()
+    active_texts = {r["text"] for r in rows}
+    assert "expired batch fact about cats" not in active_texts, (
+        "forget_after supplied via ingest_batch must hide the expired row")
+    assert "active batch fact about dogs" in active_texts
+    assert "plain batch fact about birds" in active_texts
+
+    # Zero-loss: all three raw rows still exist in the DB.
+    total = vmem._conn.execute("SELECT COUNT(*) FROM vector_memory").fetchone()[0]
+    assert total == 3
 
 
 def test_ttl_filter_uses_now_override(tmp_path):
