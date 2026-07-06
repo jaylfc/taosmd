@@ -538,3 +538,29 @@ def test_edge_endpoints_tokenless_on_authed_server_unchanged(project_server):
                          {"to_id": t2, "type": "blocks"})
     assert s == 200, body
     assert body["removed_ts"] is not None
+
+
+def test_task_update_scoped_token_cannot_touch_foreign_project(project_server):
+    """A proj-a token must not mutate a proj-b task, and the refusal must
+    not reveal whether the foreign task exists."""
+    t_foreign = _create_task(project_server, "Foreign task", project="proj-b")
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    s_foreign, b_foreign = _post_json(
+        project_server, f"/tasks/{t_foreign}",
+        {"status": "closed", "assignee": "agent-1"}, token=tok)
+    s_missing, b_missing = _post_json(
+        project_server, "/tasks/t-000000000000",
+        {"status": "closed", "assignee": "agent-1"}, token=tok)
+    assert s_foreign == s_missing == 403
+    assert b_foreign == b_missing
+
+
+def test_task_update_scoped_token_same_project_succeeds(project_server):
+    """A proj-a token can update a proj-a task."""
+    t_in = _create_task(project_server, "Own task", project="proj-a")
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    status, body = _post_json(
+        project_server, f"/tasks/{t_in}",
+        {"status": "in_progress", "assignee": "agent-1"}, token=tok)
+    assert status == 200, body
+    assert body["status"] == "in_progress"
