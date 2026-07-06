@@ -91,8 +91,8 @@ _register(GeneratorProfile(
                   "F-015 / E-023 (8 and 4GB full-500)",
         "scores": {"gpu-12gb": "granite4.1:8b 54.8 Qwen / 60.4 llama "
                                "(full-500, F-016)",
-                   "gpu-8gb": "granite4.1:8b 54.8 Qwen / 60.4 llama vs prior "
-                              "llama3.1:8b 49.2 / 54.4 (E-023)"},
+                   "gpu-8gb": "granite4.1:8b 54.8 Qwen / 60.4 llama (F-016) vs "
+                              "prior llama3.1:8b 49.2 / 54.4 (E-023)"},
     },
     notes="Loses on conversational and long-context workloads (LoCoMo 0.475 "
           "vs 0.515 external judge, E-024 kill criterion), so pick it only "
