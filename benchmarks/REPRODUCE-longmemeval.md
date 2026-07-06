@@ -18,8 +18,10 @@ It is **not** end-to-end QA accuracy and **not** an LLM-as-judge score. A
 separate harness measures the genuine end-to-end Judge number (retrieve, then
 generate an answer, then grade it); that is tracked as E-012 and is a much
 lower number, because retrieval being solved does not mean the small local
-generator answers correctly. Do not describe this Recall@5 figure as Judge
-accuracy.
+generator answers correctly. Post-N-017 (PR #176 fixed a judge verdict-parser
+bug that counted INCORRECT as a pass), the corrected full-500 Judge baseline
+is 42.8% (qwen3.5:9b) / 51.2% (llama3.1:8b). Do not describe this Recall@5
+figure as Judge accuracy.
 
 The comparison point is MemPalace, which reports 96.6% Recall@5 on the same set
 with the same metric, so the head-to-head is like for like.

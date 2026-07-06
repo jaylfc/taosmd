@@ -1,5 +1,13 @@
 # E-012 score-up ablation results (F-013)
 
+> **CORRECTION (N-017 / PR #176, 2026-06-23): every Judge score in this file is inflated.**
+> The pre-#176 judge verdict parser checked `"CORRECT" in judgment` after upper-casing,
+> and "INCORRECT" contains "CORRECT", so every INCORRECT verdict was counted as a PASS.
+> These numbers therefore measured non-abstention, not correctness. The corrected
+> full-500 baseline for the shipped config is **42.8% (qwen3.5:9b) / 51.2% (llama3.1:8b)**;
+> the gemma4:12b combo reaches 53.8 / 61.4, parity with MemOS-lossless (54.0 / 61.2).
+> This file is kept as methodology history; do not cite its absolute scores.
+
 Provenance for finding F-013. Honest end-to-end Judge on LongMemEval-S oracle
 (500 questions). Generator qwen3.5:9b with `/no_think`, MiniLM embedder, external
 strict judge Qwen3-4B-Instruct-2507 (non-thinking). Harness
