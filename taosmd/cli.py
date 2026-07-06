@@ -1182,8 +1182,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="taosmd")
     parser.add_argument(
         "--data-dir",
-        default="data",
-        help="Path to the taosmd data directory (default: ./data)",
+        default=None,
+        help="Path to the taosmd data directory "
+             "(default: $TAOSMD_DATA_DIR, else ~/.taosmd)",
     )
     parser.add_argument(
         "--server",
@@ -1659,6 +1660,15 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.data_dir is None:
+        # Resolve the default through the canonical resolver so the CLI
+        # operates on the same data dir as the service layer. The old
+        # CWD-relative "data" default split the agent registry (and every
+        # other CLI-touched store) away from where serve/ingest write.
+        from .config import _resolve_data_dir  # noqa: PLC0415
+
+        args.data_dir = _resolve_data_dir(None)
 
     if args.cmd == "config":
         if args.config_cmd == "set-server":

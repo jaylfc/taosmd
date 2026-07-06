@@ -211,3 +211,84 @@ class TestCrystallizeAgentScoping:
             f"Expected at least one lookup_date call with agent_name='alice' "
             f"(crystallize stage); got calls: {lookup_calls}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Provider prefix must not reach the /api/generate payload
+# ---------------------------------------------------------------------------
+
+class TestEnrichModelResolution:
+
+    def test_index_day_sends_bare_model_to_api_generate(self, tmp_path, monkeypatch):
+        """A provider-prefixed resolved model ("ollama:qwen3.5:9b") reaches
+        session enrichment's /api/generate call as the bare model name.
+
+        This is the nightly auto_setup cron path: catalog_pipeline resolves
+        the memory model (which can be a provider-prefixed profile value) and
+        forwards it to session_catalog.enrich_session / crystallize.
+        """
+        pipeline = _make_pipeline(tmp_path)
+        _write_archive(tmp_path / "archive", _make_three_events())
+
+        async def _fake_detect(self):
+            return (3, "qwen3.5:9b")
+
+        monkeypatch.setattr(CatalogPipeline, "detect_best_tier", _fake_detect)
+        monkeypatch.setattr(
+            "taosmd.catalog_pipeline.resolve_memory_model",
+            lambda fallback=None, **kw: "ollama:qwen3.5:9b",
+        )
+        # Bypass the per-agent librarian task gate: this test is about the
+        # model string at the HTTP boundary, not task enablement.
+        monkeypatch.setattr(
+            "taosmd.catalog_pipeline.run_if_enabled",
+            lambda agent, task, fn, *a, fallback=None, **kw: fn(*a, **kw),
+        )
+
+        payloads: list[dict] = []
+        canned = json.dumps({
+            "topic": "feature work",
+            "description": "worked on the feature",
+            "category": "other",
+        })
+
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"response": canned}
+
+        class _FakeAsyncClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json=None, **kw):
+                payloads.append(json)
+                return _FakeResponse()
+
+        monkeypatch.setattr(
+            "taosmd.session_catalog.httpx.AsyncClient", _FakeAsyncClient
+        )
+
+        async def run():
+            await pipeline.init()
+            result = await pipeline.index_day("2025-04-13", skip_crystallize=True)
+            await pipeline.close()
+            return result
+
+        result = asyncio.run(run())
+
+        assert result["enrich"]["enriched"] == 2
+        assert len(payloads) == 2, "expected one /api/generate call per session"
+        for payload in payloads:
+            assert payload["model"] == "qwen3.5:9b", (
+                f"provider prefix leaked into the /api/generate payload: "
+                f"{payload['model']!r}"
+            )

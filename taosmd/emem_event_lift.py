@@ -138,6 +138,11 @@ async def lift_edu_to_triples(
         from .config import resolve_memory_model  # noqa: PLC0415
 
         model = resolve_memory_model(fallback="llama3.1:8b")
+    from .generator_profiles import split_provider  # noqa: PLC0415
+
+    # Strip a leading provider prefix ("ollama:qwen3.5:9b" -> "qwen3.5:9b");
+    # /api/chat wants the bare model name and rejects the prefixed form.
+    _, model = split_provider(model)
     messages = [
         {"role": "system", "content": _system_prompt()},
         {"role": "user", "content": _ONESHOT_INPUT},
