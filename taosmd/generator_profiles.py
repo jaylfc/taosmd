@@ -81,20 +81,26 @@ _register(GeneratorProfile(
     workload="single-fact retrieval QA, LongMemEval style. NOT for "
              "conversational or long-context use.",
     models={
-        "gpu-12gb": "ollama:gemma4:12b",
-        "gpu-8gb": "ollama:llama3.1:8b",
+        "gpu-12gb": "ollama:granite4.1:8b",
+        "gpu-8gb": "ollama:granite4.1:8b",
         "gpu-4gb": "ollama:llama3.1:8b",
     },
     evidence={
-        "source": "docs/research-report.md N-017 (12GB full-500) + "
+        "source": "docs/research-report.md F-016 / E-024 (granite4.1:8b "
+                  "full-500 + LoCoMo probe) + N-017 (gemma4:12b prior pick) + "
                   "F-015 / E-023 (8 and 4GB full-500)",
-        "scores": {"gpu-12gb": "53.8 Qwen / 61.4 llama (full-500)",
-                   "gpu-8gb": "llama3.1:8b 49.2 Qwen / 54.4 llama (E-023)"},
+        "scores": {"gpu-12gb": "granite4.1:8b 54.8 Qwen / 60.4 llama "
+                               "(full-500, F-016)",
+                   "gpu-8gb": "granite4.1:8b 54.8 Qwen / 60.4 llama vs prior "
+                              "llama3.1:8b 49.2 / 54.4 (E-023)"},
     },
-    notes="Loses on conversational and long-context workloads (LoCoMo 0.63 vs "
-          "0.68, BEAM 46 vs 49), so pick it only for single-fact QA. The 8GB "
-          "and 4GB picks are llama3.1:8b, confirmed by E-023 (beats qwen3.5:9b "
-          "on the cross-family judge).",
+    notes="Loses on conversational and long-context workloads (LoCoMo 0.475 "
+          "vs 0.515 external judge, E-024 kill criterion), so pick it only "
+          "for single-fact QA. granite4.1:8b at 4.9GB q4 (Apache-2.0) is a "
+          "statistical tie with the prior 12GB pick gemma4:12b (54.8/60.4 vs "
+          "53.8/61.4); the VRAM headroom and license break the tie, and the "
+          "same weights serve the 8GB tier. The 4GB pick stays llama3.1:8b "
+          "(granite does not fit 4GB).",
 ))
 
 

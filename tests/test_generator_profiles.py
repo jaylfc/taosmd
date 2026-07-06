@@ -27,8 +27,8 @@ def test_balanced_mirrors_recipe_generators():
 
 def test_factual_recall_tiers():
     fr = gp.get_profile("factual-recall").models
-    assert fr["gpu-12gb"] == "ollama:gemma4:12b"
-    assert fr["gpu-8gb"] == "ollama:llama3.1:8b"
+    assert fr["gpu-12gb"] == "ollama:granite4.1:8b"
+    assert fr["gpu-8gb"] == "ollama:granite4.1:8b"
     assert fr["gpu-4gb"] == "ollama:llama3.1:8b"
     assert "pi-npu" not in fr  # falls through to the recipe (retrieval-only)
 
