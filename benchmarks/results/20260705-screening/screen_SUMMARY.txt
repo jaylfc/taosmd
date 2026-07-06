@@ -1,0 +1,4 @@
+ARMRESULT|lfm2.5:8b|qwen=79/200|llama=95/200|dump=bench-logs/20260705-screening/predictions_screen_lfm2.5_8b__20260705_205836.json
+ARMRESULT|granite4.1:8b|qwen=105/200|llama=123/200|dump=bench-logs/20260705-screening/predictions_screen_granite4.1_8b__20260705_205836.json
+ARMRESULT|qwen3.5:9b|qwen=97/200|llama=118/200|dump=bench-logs/20260705-screening/predictions_screen_qwen3.5_9b__20260705_205836.json
+ARMRESULT|granite4.1:8b|qwen=274/500|llama=302/500|dump=bench-logs/20260705-screening/predictions_screen_granite4.1_8b__20260706_014203.json
