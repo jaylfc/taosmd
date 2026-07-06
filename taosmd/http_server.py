@@ -61,10 +61,8 @@ Endpoints
 ``GET  /ui``               -> alias of ``GET /``
 ``GET  /health``           -> ``{"status": "ok", "version": <str>}``
 ``POST /ingest``           ``{"text", "agent", "project"?}`` -> ingest result
-                           Metadata note: callers may include ``forget_after`` (unix float) and
-                           ``forget_reason`` (str) in the user metadata dict.  Rows whose
-                           ``forget_after`` has passed are hidden from retrieval (zero-loss:
-                           the raw row is never deleted).
+                           (does not accept per-turn user metadata; use ``/ingest/batch``
+                           for ``forget_after`` and other metadata).
                            When one or more vector writes fail (embedder down), the result
                            adds ``"vector_failures": int`` and ``"degraded": true``: the
                            turns are archived but not searchable until reconcile repairs
