@@ -390,3 +390,151 @@ def test_tokened_ingest_global_token_with_global_grant_passes(project_server):
                               {"text": "global token, global grant", "agent": "agent-global"},
                               token=tok)
     assert status == 200, body
+
+
+# ---------------------------------------------------------------------------
+# Task edge endpoints: token binding + project scoping
+# ---------------------------------------------------------------------------
+
+def _create_task(base_url, title, project=None):
+    """Create a task tokenlessly (standalone path) and return its id."""
+    payload = {"title": title, "created_by": "setup"}
+    if project is not None:
+        payload["project"] = project
+    status, body = _post_json(base_url, "/tasks", payload)
+    assert status == 200, body
+    return body["id"]
+
+
+def _ready_ids(base_url):
+    status, body = _get_json(base_url, "/tasks/ready")
+    assert status == 200, body
+    return {t["id"] for t in body["tasks"]}
+
+
+def test_add_edge_grantless_verified_token_is_403(project_server):
+    """A verified token whose sub holds no grant must not add edges."""
+    t1 = _create_task(project_server, "Blocker", project="proj-a")
+    t2 = _create_task(project_server, "Blocked", project="proj-a")
+    tok = _make_token("agent-ungranted", iss=registry_auth.REGISTRY_ISS)
+    status, body = _post_json(
+        project_server, f"/tasks/{t1}/edges",
+        {"to_id": t2, "type": "blocks", "created_by": "agent-ungranted"},
+        token=tok)
+    assert status == 403
+    assert "no active grant" in body["error"]
+    # The graph must be untouched: t2 is still ready (not blocked).
+    assert t2 in _ready_ids(project_server)
+
+
+def test_remove_edge_grantless_verified_token_is_403(project_server):
+    """A verified token whose sub holds no grant must not remove edges."""
+    t1 = _create_task(project_server, "Blocker", project="proj-a")
+    t2 = _create_task(project_server, "Blocked", project="proj-a")
+    s, _ = _post_json(project_server, f"/tasks/{t1}/edges",
+                      {"to_id": t2, "type": "blocks", "created_by": "setup"})
+    assert s == 200
+    tok = _make_token("agent-ungranted", iss=registry_auth.REGISTRY_ISS)
+    status, body = _post_json(
+        project_server, f"/tasks/{t1}/edges/remove",
+        {"to_id": t2, "type": "blocks"}, token=tok)
+    assert status == 403
+    assert "no active grant" in body["error"]
+    # The edge must still be active: t2 remains blocked.
+    assert t2 not in _ready_ids(project_server)
+
+
+def test_add_edge_scoped_token_cross_project_to_id_is_403(project_server):
+    """A proj-a token cannot add an edge whose to_id lives in proj-b."""
+    t_in = _create_task(project_server, "In scope", project="proj-a")
+    t_out = _create_task(project_server, "Out of scope", project="proj-b")
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    status, _ = _post_json(
+        project_server, f"/tasks/{t_in}/edges",
+        {"to_id": t_out, "type": "blocks", "created_by": "agent-1"},
+        token=tok)
+    assert status == 403
+    # The foreign task must not have been blocked.
+    assert t_out in _ready_ids(project_server)
+
+
+def test_add_edge_scoped_token_cross_project_from_id_is_403(project_server):
+    """A proj-a token cannot add an edge whose from_id lives in proj-b."""
+    t_out = _create_task(project_server, "Foreign blocker", project="proj-b")
+    t_in = _create_task(project_server, "Local blocked", project="proj-a")
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    status, _ = _post_json(
+        project_server, f"/tasks/{t_out}/edges",
+        {"to_id": t_in, "type": "blocks", "created_by": "agent-1"},
+        token=tok)
+    assert status == 403
+    assert t_in in _ready_ids(project_server)
+
+
+def test_add_edge_scoped_token_does_not_enumerate_foreign_tasks(project_server):
+    """The 403 for a foreign existing task and for a task that does not
+    exist must be indistinguishable (same status, same error body)."""
+    t_in = _create_task(project_server, "Probe base", project="proj-a")
+    t_foreign = _create_task(project_server, "Foreign target", project="proj-b")
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    s_foreign, b_foreign = _post_json(
+        project_server, f"/tasks/{t_in}/edges",
+        {"to_id": t_foreign, "type": "blocks", "created_by": "agent-1"},
+        token=tok)
+    s_missing, b_missing = _post_json(
+        project_server, f"/tasks/{t_in}/edges",
+        {"to_id": "t-000000000000", "type": "blocks", "created_by": "agent-1"},
+        token=tok)
+    assert s_foreign == s_missing == 403
+    assert b_foreign == b_missing
+
+
+def test_add_and_remove_edge_scoped_token_same_project_succeeds(project_server):
+    """A proj-a token can add and remove edges between proj-a tasks."""
+    t1 = _create_task(project_server, "Scoped blocker", project="proj-a")
+    t2 = _create_task(project_server, "Scoped blocked", project="proj-a")
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    status, body = _post_json(
+        project_server, f"/tasks/{t1}/edges",
+        {"to_id": t2, "type": "blocks", "created_by": "agent-1"},
+        token=tok)
+    assert status == 200, body
+    assert body["from_id"] == t1
+    assert body["to_id"] == t2
+    assert t2 not in _ready_ids(project_server)
+
+    status, body = _post_json(
+        project_server, f"/tasks/{t1}/edges/remove",
+        {"to_id": t2, "type": "blocks"}, token=tok)
+    assert status == 200, body
+    assert body["removed_ts"] is not None
+    assert t2 in _ready_ids(project_server)
+
+
+def test_remove_edge_scoped_token_cross_project_is_403(project_server):
+    """A proj-a token cannot remove an edge between proj-b tasks."""
+    t1 = _create_task(project_server, "Foreign blocker", project="proj-b")
+    t2 = _create_task(project_server, "Foreign blocked", project="proj-b")
+    s, _ = _post_json(project_server, f"/tasks/{t1}/edges",
+                      {"to_id": t2, "type": "blocks", "created_by": "setup"})
+    assert s == 200
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    status, _ = _post_json(
+        project_server, f"/tasks/{t1}/edges/remove",
+        {"to_id": t2, "type": "blocks"}, token=tok)
+    assert status == 403
+    # The foreign edge must still be active.
+    assert t2 not in _ready_ids(project_server)
+
+
+def test_edge_endpoints_tokenless_on_authed_server_unchanged(project_server):
+    """Without a token the edge endpoints behave exactly as standalone."""
+    t1 = _create_task(project_server, "Plain blocker", project="proj-b")
+    t2 = _create_task(project_server, "Plain blocked", project="proj-b")
+    s, body = _post_json(project_server, f"/tasks/{t1}/edges",
+                         {"to_id": t2, "type": "blocks", "created_by": "setup"})
+    assert s == 200, body
+    s, body = _post_json(project_server, f"/tasks/{t1}/edges/remove",
+                         {"to_id": t2, "type": "blocks"})
+    assert s == 200, body
+    assert body["removed_ts"] is not None

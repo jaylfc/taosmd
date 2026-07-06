@@ -291,6 +291,30 @@ async def list_tasks(
     return [_row_to_dict(r) for r in rows]
 
 
+async def get_task_projects(
+    task_ids: list[str],
+    *,
+    data_dir: str | None = None,
+) -> dict[str, str | None]:
+    """Return ``{task_id: project}`` for the ids that exist.
+
+    Missing ids are simply absent from the result. Used by the HTTP
+    server's token-binding layer to enforce project scoping on edge
+    mutations: ``task_edges`` has no project column, so scoping resolves
+    through the tasks table.
+    """
+    ids = [tid for tid in task_ids if isinstance(tid, str) and tid]
+    if not ids:
+        return {}
+    conn = _get_db(data_dir)
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"SELECT id, project FROM tasks WHERE id IN ({placeholders})",  # noqa: S608 - placeholders only
+        ids,
+    ).fetchall()
+    return {row["id"]: row["project"] for row in rows}
+
+
 async def ready_tasks(
     *,
     project: str | None = None,
