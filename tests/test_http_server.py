@@ -578,6 +578,39 @@ def test_task_add_edge(live_server):
     assert body["removed_ts"] is None
 
 
+def test_task_list_edges_filters_active_edges(live_server):
+    """GET /tasks/edges lists active task edges and supports query filters."""
+    _, t1 = _post(f"{live_server}/tasks", {"title": "Parent", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "Child", "created_by": "a"})
+    _, t3 = _post(f"{live_server}/tasks", {"title": "Related", "created_by": "a"})
+    _post(
+        f"{live_server}/tasks/{t1['id']}/edges",
+        {"to_id": t2["id"], "type": "parent", "created_by": "a"},
+    )
+    _post(
+        f"{live_server}/tasks/{t2['id']}/edges",
+        {"to_id": t3["id"], "type": "relates", "created_by": "a"},
+    )
+    _post(
+        f"{live_server}/tasks/{t2['id']}/edges/remove",
+        {"to_id": t3["id"], "type": "relates"},
+    )
+
+    status, body = _get(f"{live_server}/tasks/edges?from_id={t1['id']}&type=parent")
+
+    assert status == 200
+    assert body["edges"] == [
+        {
+            "from_id": t1["id"],
+            "to_id": t2["id"],
+            "type": "parent",
+            "created_ts": body["edges"][0]["created_ts"],
+            "created_by": "a",
+            "removed_ts": None,
+        }
+    ]
+
+
 def test_task_add_edge_bad_type(live_server):
     _, t1 = _post(f"{live_server}/tasks", {"title": "T1", "created_by": "a"})
     _, t2 = _post(f"{live_server}/tasks", {"title": "T2", "created_by": "a"})

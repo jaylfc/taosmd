@@ -13,6 +13,7 @@ benchmarks/data/*
 models/minilm-onnx/model.onnx
 models/cross-encoder-onnx/
 .env
+.venv/
 *.log
 eval/reports/
 .superpowers/

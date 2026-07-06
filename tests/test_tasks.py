@@ -285,6 +285,43 @@ def test_remove_edge_already_removed(data_dir):
         run(tasks_mod.remove_edge(a["id"], b["id"], "blocks", data_dir=data_dir))
 
 
+def test_list_edges_returns_only_active_edges_by_default(data_dir):
+    a = run(tasks_mod.create_task("A", created_by="x", data_dir=data_dir))
+    b = run(tasks_mod.create_task("B", created_by="x", data_dir=data_dir))
+    c = run(tasks_mod.create_task("C", created_by="x", data_dir=data_dir))
+    run(tasks_mod.add_edge(a["id"], b["id"], "blocks", "x", data_dir=data_dir))
+    run(tasks_mod.add_edge(b["id"], c["id"], "parent", "x", data_dir=data_dir))
+    run(tasks_mod.remove_edge(b["id"], c["id"], "parent", data_dir=data_dir))
+
+    edges = run(tasks_mod.list_edges(data_dir=data_dir))
+
+    assert edges == [
+        {
+            "from_id": a["id"],
+            "to_id": b["id"],
+            "type": "blocks",
+            "created_ts": edges[0]["created_ts"],
+            "created_by": "x",
+            "removed_ts": None,
+        }
+    ]
+
+
+def test_list_edges_filters_active_edges(data_dir):
+    a = run(tasks_mod.create_task("A", created_by="x", data_dir=data_dir))
+    b = run(tasks_mod.create_task("B", created_by="x", data_dir=data_dir))
+    c = run(tasks_mod.create_task("C", created_by="x", data_dir=data_dir))
+    run(tasks_mod.add_edge(a["id"], b["id"], "blocks", "x", data_dir=data_dir))
+    run(tasks_mod.add_edge(a["id"], c["id"], "parent", "x", data_dir=data_dir))
+    run(tasks_mod.add_edge(b["id"], c["id"], "relates", "x", data_dir=data_dir))
+
+    edges = run(tasks_mod.list_edges(from_id=a["id"], edge_type="parent", data_dir=data_dir))
+
+    assert [(e["from_id"], e["to_id"], e["type"]) for e in edges] == [
+        (a["id"], c["id"], "parent")
+    ]
+
+
 # ---------------------------------------------------------------------------
 # depends_on in create_task
 # ---------------------------------------------------------------------------
