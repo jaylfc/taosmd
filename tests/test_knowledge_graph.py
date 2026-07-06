@@ -143,3 +143,37 @@ async def test_add_entity_preserves_created_at(tmp_path):
     await kg.add_entity("Jay", "unknown")
     assert (await kg.get_entity("Jay"))["created_at"] == first
     await kg.close()
+
+
+@pytest.mark.asyncio
+async def test_add_entity_survives_malformed_properties_in_column(tmp_path):
+    """A malformed properties_json already in the row must not crash a re-add;
+    the existing (malformed) value is preserved untouched (crash-safety)."""
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("Widget", "thing")
+    eid = kg._entity_id("Widget")
+    kg._conn.execute(
+        "UPDATE kg_entities SET properties_json = ? WHERE id = ?",
+        ("not valid json", eid),
+    )
+    kg._conn.commit()
+    # Re-add must not raise and must leave the existing value in place.
+    await kg.add_entity("Widget", "thing", properties='{"color": "blue"}')
+    ent = await kg.get_entity("Widget")
+    assert ent["properties_json"] == "not valid json"
+    await kg.close()
+
+
+@pytest.mark.asyncio
+async def test_add_entity_conflicting_concrete_type_keeps_first_and_logs(tmp_path, caplog):
+    """Two different concrete types keep the first and emit a debug drift signal."""
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("Acme", "organization")
+    with caplog.at_level("DEBUG", logger="taosmd.knowledge_graph"):
+        await kg.add_entity("Acme", "person")
+    ent = await kg.get_entity("Acme")
+    assert ent["type"] == "organization"  # first-seen concrete type wins
+    assert any("dropping conflicting" in r.message for r in caplog.records)
+    await kg.close()

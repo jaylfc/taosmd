@@ -180,6 +180,19 @@ class TemporalKnowledgeGraph:
         new_type = existing["type"]
         if existing["type"] in placeholder and entity_type not in placeholder:
             new_type = entity_type
+        elif (
+            entity_type not in placeholder
+            and existing["type"] not in placeholder
+            and entity_type != existing["type"]
+        ):
+            # Two different concrete types for one entity id. We keep the
+            # first-seen classification (non-destructive), but the losing type
+            # is not tombstoned anywhere, so log it as a drift signal (mirrors
+            # how add_triple surfaces out-of-vocab predicates).
+            logger.debug(
+                "kg entity %s: keeping first-seen type %r, dropping conflicting %r",
+                eid, existing["type"], entity_type,
+            )
         merged_props = _merge_entity_properties(existing["properties_json"], properties)
         if new_type != existing["type"] or merged_props != existing["properties_json"]:
             self._conn.execute(
