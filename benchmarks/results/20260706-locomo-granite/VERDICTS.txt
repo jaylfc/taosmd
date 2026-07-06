@@ -1,0 +1,2 @@
+VERDICT granite41_8b: n=200 overall=0.4750 | MultiHop=0.256(n=43) Temporal=0.381(n=63) OpenDomain=0.385(n=13) SingleHop=0.679(n=81)
+VERDICT qwen35_9b: n=200 overall=0.5150 | MultiHop=0.279(n=43) Temporal=0.524(n=63) OpenDomain=0.538(n=13) SingleHop=0.630(n=81)
