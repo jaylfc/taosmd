@@ -138,9 +138,10 @@ CONTROLS: dict[str, Control] = {
         config_key="generator_profile",
         default=_gp.default_profile_id(),
         choices=tuple(p.id for p in _gp.list_profiles()),
-        cost="switches which answer model loads; gemma4:12b needs a 12GB GPU",
+        cost="switches which answer model loads; granite4.1:8b needs an "
+             "8GB+ GPU (4.9GB q4)",
         pros="picks the generator that wins your workload (for example "
-             "factual-recall = gemma4:12b for single-fact QA)",
+             "factual-recall = granite4.1:8b for single-fact QA)",
         cons="factual-recall loses on conversational and long-context work; "
              "the default 'balanced' is the safe all-round choice",
         description="Select the answer generator by workload. Default 'balanced'.",
