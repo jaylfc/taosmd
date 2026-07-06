@@ -148,8 +148,11 @@ modern small one, so the gap is unsurprising. The low-tier recipes (`lite-pi`,
 `fast-8b`) now select arctic-embed-s as the dense embedder; `scripts/setup.sh`
 fetches it and it is registered in the taOS model store. The asymmetric
 handling that makes it work (query-only prefix, CLS pooling) is in the ONNX
-embed path. Higher GPU tiers keep MiniLM pending their own recipe-level
-tri-judge re-run. Provenance: bench host e007_*/e007full_* 20260613.
+embed path. `arctic-embed-s` is now the shipped default embedder for fresh
+setups on every tier (`vector_memory.embed_model` default in
+`taosmd/controls.py`); existing installs keep their configured embedder until
+they re-index. The higher-GPU-tier recipe-level tri-judge re-run is still
+pending. Provenance: bench host e007_*/e007full_* 20260613.
 
 **Community-standard judge column (qwen3:14b).** The same three full-1540
 prediction files rejudged with qwen3:14b, the official judge of the
@@ -213,7 +216,7 @@ All taOSmd rows on the same commit series (`feat/locomo-param-configs` merged to
 
 ### Key architectural findings
 
-- **`adjacent_turns` is the dominant lever at every model size we measured.** 5B: adj=1 → 0.465, adj=2 → 0.499. 9B: adj=1 → 0.481, adj=2 → 0.516. Going from adj=1 to adj=2 adds more than the entire stack of `k=20 + llm-exp` adds. Available in core via `retrieve(adjacent_neighbors=N, position_key=..., group_key=...)` — see `taosmd/retrieval.py`. Default off; consumers opt in by populating an integer position field on each item's metadata at ingest time.
+- **`adjacent_turns` is the dominant lever at every model size we measured.** 5B: adj=1 → 0.465, adj=2 → 0.499. 9B: adj=1 → 0.481, adj=2 → 0.516. Going from adj=1 to adj=2 adds more than the entire stack of `k=20 + llm-exp` adds. Available in core via `retrieve(adjacent_neighbors=N, position_key=..., group_key=...)` — see `taosmd/retrieval.py`. The raw API argument defaults off, but the shipped `adjacent_turns` control (`taosmd/controls.py`) defaults to 2, so the standard search path runs with adjacency on; consumers of the raw API opt in by populating an integer position field on each item's metadata at ingest time.
 - **At 9B, individual retrieval levers need the full-stack scaffolding to express their value.** Adding RRF *alone* on top of adj=2 regresses (0.500 vs 0.516); adding multi-level retrieval *alone* on top of adj=2 helps modestly (0.524); combining the two without k=20 + llm-exp scaffolding is *worse* than either alone (0.495). But the same components inside the full stack — k=20 + adj=2 + llm-exp + RRF — give the leader at 0.557. The wider candidate pool from k=20 is what gives the fusion something useful to merge; without it RRF over-smooths a narrow ranked list.
 - **Multihop decomposition is a footgun across model sizes.** 5B: 0.317 (-0.093 vs baseline). 9B: **0.306** (worse than 5B). Not a sizing issue — sub-query retrieval inherently surfaces lower-quality chunks. **Don't enable `--multihop-decompose` in production.**
 - **Generator size alone is a weak lever.** qwen3.5:9b + k=20 (0.458) is *worse* than gemma4:e2b + adj=1 (0.465). Doubling parameters gives ≤ +0.005 unless architecture scales with it.
@@ -347,7 +350,7 @@ Headlines:
 
 - **The cliff is shallow above Q3.** Q4_K_M, Q5_K_M and IQ4_XS all sit within ±0.01. Q6_K drops 0.04 — at 200 QAs that's within subset-noise but worth noting as a non-monotonicity.
 - **IQ4_XS is the 8 GB tier candidate.** 4.81 GB fits an 8 GB GPU with KV-cache headroom; -0.01 from production. IQ kernels run at K-quant speed on Ampere when the Modelfile is correct (see methodology note below) — 1622 s vs 1749 s for Q4_K_M.
-- **UD-IQ2_M is the smallest 9B-family quant we tested.** 3.4 GB at -0.05 from production. It can fit a 4 GB GPU with KV-cache headroom, but `qwen3:4b` (a different architecture, measured at 0.530 on the 1050 Ti tier) outperforms it on quality and runs faster — for 4 GB GPUs, the qwen3:4b path is the recommendation, not UD-IQ2_M. See the 4 GB GPU hardware-tier section.
+- **UD-IQ2_M is the smallest 9B-family quant we tested.** 3.4 GB at -0.05 from production. It can fit a 4 GB GPU with KV-cache headroom, but `qwen3:4b` (a different architecture, measured at 0.530 on the 1050 Ti tier) outperforms it on quality and runs faster — for 4 GB GPUs, prefer either the shipped default `llama3.1:8b` (the `fast-8b` recipe / `balanced` profile pick at this tier, partial offload) or the measured qwen3:4b path, not UD-IQ2_M. See the 4 GB GPU hardware-tier section.
 - **Q6_K's 0.52 is real but unexplained.** F1 (0.215) is also slightly lower than Q4_K_M's. Most likely subset-200 noise; the lower-bit Q5_K_M ties Q4_K_M at 0.56 in the same run. Reported as measured, not corrected for.
 - **Below Q3 the quality gap widens.** Q3_K_S at 0.49 (-0.07) is the floor where the 9B becomes meaningfully worse than the leader.
 
@@ -520,10 +523,10 @@ The "qwen3.5:9b production / llama3.1:8b fast alternative" framing from the May 
 
 > **12 GB GPU production guidance (matched-judge methodology):**
 > - **Best overall quality** → `qwen3.5:9b` Q4_K_M (0.71 overall under gemma4:e2b)
-> - **Best factual recall (Single-hop)** → `llama3.1:8b` (0.65 Single-hop, 2.4× faster than qwen)
+> - **Best factual recall (single-fact QA)** → the shipped `factual-recall` generator profile: `gemma4:12b` at the 12 GB tier (53.8 Qwen / 61.4 llama on the corrected LongMemEval-S full-500, N-017), `llama3.1:8b` at the 8 and 4 GB tiers (E-023/F-015). The earlier `llama3.1:8b` Single-hop pick (0.65) stands as the LoCoMo-era measurement that seeded this profile.
 > - **Best temporal reasoning** → `mistral-small3.2` (0.71 Temporal, but 2.8× slower than qwen)
-> - **Production default**: still `qwen3.5:9b` because Single-hop is one of four categories; broad workloads should optimise for Overall.
-> - **Specialty deployments**: pick the workload-matched generator above.
+> - **Production default**: still `qwen3.5:9b` (the `balanced` profile) because single-fact QA is one workload among several; broad workloads should optimise for Overall. `gemma4:12b` loses on conversational/long-context work (LoCoMo 0.63 vs 0.68, BEAM 46 vs 49), so it stays a per-task pick, not the default.
+> - **Specialty deployments**: pick the workload-matched generator profile above (`taosmd generator-profile`, see `taosmd/generator_profiles.py`).
 
 These per-workload picks are now selectable as generator profiles (balanced, factual-recall); see the README "Generator profiles" section and [docs/superpowers/specs/2026-06-24-task-aware-generator-profiles-design.md](superpowers/specs/2026-06-24-task-aware-generator-profiles-design.md).
 
@@ -718,8 +721,8 @@ The taOSmd architecture is portable; what changes per hardware tier is which gen
 
 ### Always-on defaults (every tier)
 
-- **Embedder**: `all-MiniLM-L6-v2` ONNX on CPU. 384-dim, ~90 MB, 0.3–10 ms per embed across all tested CPUs. Avoid PyTorch — it's 200× slower for the same quality at this model size.
-- **Reranker**: `ms-marco-MiniLM` ONNX on CPU. Same backend, second-stage rerank over top-K vector hits.
+- **Embedder**: `arctic-embed-s` ONNX on CPU (the shipped default: `vector_memory.embed_model` in `taosmd/controls.py`). 384-dim, ~130 MB, same latency class as MiniLM; existing installs keep `minilm-onnx` until they re-index. Avoid PyTorch — it's 200× slower for the same quality at this model size.
+- **Reranker**: off by default (`controls.reranker` defaults to `off`). The wired cross-encoder is `bge-reranker-v2-m3`, enabled via the `reranker` control or by applying the `maxsim-rerank-9b` recipe on 12 GB-class hardware.
 - **Don't enable** `--multihop-decompose`. Regresses at every model size we measured (5B: -0.093, 9B: even worse). Footgun.
 - **Skip** `--context-format session_date`. No-op once the answer prompt has absolute dates (taOSmd's prompt-opt default).
 
@@ -727,7 +730,8 @@ The taOSmd architecture is portable; what changes per hardware tier is which gen
 
 This is the LoCoMo benchmark host. All numbers in the LoCoMo leaderboard above were measured here.
 
-- **Generator (production default — best quality)**: `qwen3.5:9b` Q4_K_M (5.3 GB on disk, ~12 GB used at runtime) + leader recipe (`--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`). Measured **0.557** ext judge on full LoCoMo (1540 QAs) and 0.56 on the 200-QA subset — within noise. Use `think=false` (built into the runner since PR #42) — 20× speedup with no measured quality loss.
+- **Shipped recipe (leader)**: `maxsim-rerank-9b` (`taosmd/recipes.py`): qwen3.5:9b + fusion `mem0_additive` + `bge-v2-m3` cross-encoder rerank over a candidate pool of 50, adj=2. Full-1540 tri-judge **0.748 (gemma4:e2b lenient) / 0.394 (llama3.1:8b strict) / 0.659 (qwen3:4b-instruct-2507)**. This is the current LoCoMo leader and what the 12 GB tier applies by default.
+- **Historical (pre-MaxSim leader)**: `qwen3.5:9b` Q4_K_M (5.3 GB on disk, ~12 GB used at runtime) + the older RRF recipe (`--retrieval-top-k 20 --adjacent-turns 2 --llm-query-expansion --fusion rrf`). Measured **0.557** ext judge on full LoCoMo (1540 QAs) and 0.56 on the 200-QA subset — within noise. Kept as the single-external-judge history; the tri-judge MaxSim+rerank row above supersedes it as the recommendation. Use `think=false` (built into the runner since PR #42) — 20× speedup with no measured quality loss.
 - **Generator (fast-tier alternative within the same hardware)**: `llama3.1:8b` (4.9 GB on disk) + the same leader recipe. Measured **0.54** ext rejudge on 200 QAs — only -0.02 from the qwen leader, but **2.4× faster per QA** (743 s vs 1749 s). Right pick for users who care about realtime turn latency or run multiple agents on one GPU.
 - **Tied-but-slower (not promoted)**: `mistral-small3.2` matches qwen at 0.56 ext rejudge but takes 2.8× the wall-clock per QA, so the speed cost outweighs the no-quality-gain at this tier. Documented in the generator-candidates table above for completeness.
 - **Don't use at this tier**: `phi4-reasoning` — reasoning tokens kill throughput; same failure mode as `--thinking-mode` on qwen3 (see negative results).
@@ -750,6 +754,8 @@ A native 8 GB measurement would replace the "extrapolated" label in the next pas
 ### 16 GB Orange Pi 5 Plus (RK3588 NPU) — measured
 
 Both the LongMemEval-S 97.0% Recall@5 reference stack AND LoCoMo measurements now exist on this tier. The LongMemEval-S 97.0% is Recall@5 (retrieval only, no judge); the LoCoMo numbers below are judged with the same external `qwen3:4b` judge as the 12 GB benchmarks, so the LoCoMo numbers are directly comparable across tiers.
+
+Note on shipped defaults: at the `pi-npu` and `cpu` tiers the shipped default is **retrieval-only** (no local generator). The `balanced` profile maps both tiers to an empty generator (`taosmd/generator_profiles.py`) and the `lite-pi` recipe ships `generator.model = ""` (`taosmd/recipes.py`). The Qwen3-4B-on-NPU stack below is the measured benchmark configuration, an opt-in, not what a fresh install runs.
 
 LoCoMo measurements (qwen3-4b-chat via rkllama on the NPU, all with `--adjacent-turns 2`):
 
@@ -795,7 +801,7 @@ Notes on what this tells us:
 - **RRF vs boost is flat at 4 GB / qwen3:4b.** Same direction as the 9 B finding ("RRF alone regresses on adj=2") but smaller magnitude — neither helps nor hurts at this tier with this generator. The leader recipe's RRF lift comes from the *combination* with k=20 + llm-exp, not RRF alone.
 - **Operational defaults below stay correct as written.**
 
-- **Generator (best fit)**: `qwen3:4b` at Q4 (~2.5 GB VRAM). Fits with ~1.5 GB headroom for KV cache. `qwen3:2b` is the fallback if context budget is tight.
+- **Generator (shipped default)**: `llama3.1:8b`, which is what the `fast-8b` recipe and the `balanced` and `factual-recall` profiles resolve to at the `gpu-4gb` tier (`taosmd/recipes.py`, `taosmd/generator_profiles.py`); it runs with partial CPU offload on a 4 GB card. `qwen3:4b` at Q4 (~2.5 GB VRAM, ~1.5 GB KV headroom) remains the fully-on-GPU alternative and is the configuration behind the measured 0.530 above; `qwen3:2b` is the fallback if context budget is tight.
 - **Skip**: `--llm-query-expansion` (extra LLM call too costly at this tier), `--multihop-decompose` (regresses anyway).
 - **Best measured LoCoMo config**: `--adjacent-turns 2 --retrieval-top-k 10`. Confirmed at 0.530.
 - **Embedder, reranker, judge**: same as larger tiers (CPU ONNX). 4 GB VRAM is for the generator only.
