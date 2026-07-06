@@ -10,7 +10,7 @@ Provable Memory: a zero-loss archive that is never overwritten, plus a verifier 
 
 Most memory systems pull facts out of your conversations and throw the source away. So when a fact is wrong, nothing flags it, and when it gets overwritten, the old version is gone without a trace. taOSmd works the other way around. Everything lands first in an append-only archive that is never edited or deleted, and the memory you search is derived from that archive, never written over it. Because the source stays, taOSmd checks each extracted fact against the exact text it came from, tells you the share it cannot support, and keeps the unsupported ones out of recall. On our own data that unsupported-fact rate was 18.8 percent, a number systems that discard the source cannot even measure.
 
-Recall@5 means the correct evidence session lands in the top-5 retrieved, the same retrieval metric MemPalace (96.6%) and agentmemory (95.2%) publish, measured the same way for a like-for-like comparison. The stricter end-to-end Judge measurement (retrieve, generate, then grade the answer against the reference with an LLM) is a separate, lower number. An earlier 74.6% figure for it was inflated by a verdict-scoring bug (the judge parser counted INCORRECT verdicts as passes), found and fixed on 2026-06-23 (PR #176); corrected, the end-to-end Judge is in the 43 to 51 percent range on the shipped config (judge-dependent), with a stronger local generator under evaluation that lifts it further, see [docs/benchmarks.md](docs/benchmarks.md#end-to-end-judge-on-longmemeval-s-the-generation-side-number) and the research report (N-017). It is a separate, stricter metric and is never conflated with the Recall@5 retrieval number. Runs offline on anything with 8 GB+ RAM and Python 3.10+: a Pi 4B, an old laptop, an Intel mini PC, a Mac mini, or a 16 GB Orange Pi 5 Plus (our reference low-end). Zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
+Recall@5 means the correct evidence session lands in the top-5 retrieved, the same retrieval metric MemPalace (96.6%) and agentmemory (95.2%) publish, measured the same way for a like-for-like comparison. The stricter end-to-end Judge measurement (retrieve, generate, then grade the answer against the reference with an LLM) is a separate, lower number. An earlier 74.6% figure for it was inflated by a verdict-scoring bug (the judge parser counted INCORRECT verdicts as passes), found and fixed on 2026-06-23 (PR #176); corrected, the end-to-end Judge is in the 43 to 51 percent range on the shipped config (judge-dependent), and the shipped `factual-recall` generator profile (gemma4:12b at the 12 GB tier) lifts it to 53.8 / 61.4, parity with MemOS-lossless (54.0 / 61.2), see [docs/benchmarks.md](docs/benchmarks.md#end-to-end-judge-on-longmemeval-s-the-generation-side-number) and the research report (N-017). It is a separate, stricter metric and is never conflated with the Recall@5 retrieval number. Runs offline on anything with 8 GB+ RAM and Python 3.10+: a Pi 4B, an old laptop, an Intel mini PC, a Mac mini, or a 16 GB Orange Pi 5 Plus (our reference low-end). Zero cloud dependencies. Part of the [taOS](https://github.com/jaylfc/tinyagentos) ecosystem. Methodology and comparison notes in [docs/benchmarks.md](docs/benchmarks.md).
 
 ---
 
@@ -54,7 +54,7 @@ The cleanest way to install taOSmd is to ask your agent to do it. Paste this mes
 >
 > Don't summarise the repo or paraphrase the rules. Copy them verbatim, the wording is the contract.
 
-The agent will pull the repo, run the install, register itself, append the per-turn rules block to its own instruction file, and verify everything works. After that, every turn it runs it'll check the librarian when it's uncertain, see [taOSmd/docs/agent-rules.md](taOSmd/docs/agent-rules.md) for the rules block it installs (also available via `taosmd.agent_rules()`).
+The agent will pull the repo, run the install, register itself, append the per-turn rules block to its own instruction file, and verify everything works. After that, every turn it runs it'll check the librarian when it's uncertain, see [taosmd/docs/agent-rules.md](taosmd/docs/agent-rules.md) for the rules block it installs (also available via `taosmd.agent_rules()`).
 
 **Multiple agents in one framework?** Same install message works. The agent will ask you to name it before registering, so each agent gets its own shelf. The taOSmd service stays one process with one shared set of stores; per-agent isolation is enforced by an `agent` tag on every row, not by separate files. See [docs/multi-agent.md](docs/multi-agent.md) for the full naming convention, project-scoped and cross-agent memory, migration scenarios, and a five-agent worked example.
 
@@ -70,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.
 
 This will:
 1. Clone the repo and install Python dependencies
-2. Download the all-MiniLM-L6-v2 ONNX embedding model (90MB)
+2. Download the embedding models: all-MiniLM-L6-v2 ONNX (90MB) and snowflake-arctic-embed-s ONNX (~130MB, the shipped dense default)
 3. Install Ollama and pull Qwen3-4B for fact extraction + answering (2.6GB)
 4. On RK3588: download the NPU-optimised Qwen3-4B RKLLM model instead (4.6GB)
 5. Create the data directory and run a self-test
@@ -129,8 +129,9 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 >
 > **Store facts you learn about me:**
 > ```python
+> import os
 > from taosmd import KnowledgeGraph
-> kg = KnowledgeGraph("~/.taosmd/knowledge-graph.db")
+> kg = KnowledgeGraph(os.path.expanduser("~/.taosmd/knowledge-graph.db"))
 > await kg.init()
 > await kg.add_triple("User", "prefers", "local models")
 > ```
@@ -138,7 +139,7 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 > **Archive every conversation turn (zero-loss: never summarise, never delete):**
 > ```python
 > from taosmd import Archive
-> archive = Archive(archive_dir="~/.taosmd/archive", index_path="~/.taosmd/archive-index.db")
+> archive = Archive(archive_dir=os.path.expanduser("~/.taosmd/archive"), index_path=os.path.expanduser("~/.taosmd/archive-index.db"))
 > await archive.init()
 > await archive.record("conversation", {"role": "user", "content": message}, summary=message[:80])
 > ```
@@ -146,7 +147,7 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 > **Search my history when I ask about something:**
 > ```python
 > from taosmd import VectorMemory
-> vmem = VectorMemory("~/.taosmd/vector-memory.db", embed_mode="onnx", onnx_path="<taosmd-dir>/models/minilm-onnx")
+> vmem = VectorMemory(os.path.expanduser("~/.taosmd/vector-memory.db"), embed_mode="onnx", onnx_path="<taosmd-dir>/models/minilm-onnx")
 > await vmem.init()
 > # fusion="mem0_additive" is a strong CPU-friendly fusion; MaxSim+rerank (bge-v2-m3) leads on a GPU box. See docs/benchmarks.md.
 > # Falls back to hybrid keyword+vector if `hybrid=False`.
@@ -174,7 +175,7 @@ If you're using Claude Code, OpenClaw, Cursor, or any AI coding agent, paste thi
 
 ## Benchmark Results
 
-**97.0% Recall@5 on LongMemEval-S** (500 questions, standard test set). Recall@5 is a retrieval metric: did the correct evidence session land in the top-5 retrieved. Harness: `benchmarks/longmemeval_recall.py`. This is the same metric MemPalace (96.6%) and agentmemory (95.2%) publish, so it is a like-for-like comparison. The end-to-end Judge number (retrieve, generate, grade the answer) is reported separately and is a lower, stricter metric; an earlier 74.6% figure was inflated by a judge-parser bug, fixed 2026-06-23 (PR #176), and the corrected range is 43 to 51 percent on the shipped config, see [End-to-end Judge](docs/benchmarks.md#end-to-end-judge-on-longmemeval-s-the-generation-side-number).
+**97.0% Recall@5 on LongMemEval-S** (500 questions, standard test set). Recall@5 is a retrieval metric: did the correct evidence session land in the top-5 retrieved. Harness: `benchmarks/longmemeval_recall.py`. This is the same metric MemPalace (96.6%) and agentmemory (95.2%) publish, so it is a like-for-like comparison. The end-to-end Judge number (retrieve, generate, grade the answer) is reported separately and is a lower, stricter metric; an earlier 74.6% figure was inflated by a judge-parser bug, fixed 2026-06-23 (PR #176), and the corrected range is 43 to 51 percent on the shipped config; the shipped `factual-recall` generator profile (gemma4:12b at 12 GB) reaches 53.8 / 61.4, parity with MemOS-lossless. See [End-to-end Judge](docs/benchmarks.md#end-to-end-judge-on-longmemeval-s-the-generation-side-number).
 
 > These are our own reproducible measurements, not a third-party-audited landscape ranking. Every number pins its metric, models, dataset, and commit so you can re-run it on your own hardware. The LongMemEval-S 97.0% above is Recall@5 (retrieval only, no generation or grading step). The LoCoMo numbers below are judged end-to-end, and there we deliberately report under a strict local judge (`qwen3:4b`) alongside the lenient frontier-judge number other systems publish, so the comparison is honest about what is being measured. See the [judge-sensitivity analysis](docs/benchmarks.md#judge-sensitivity--what-we-are-really-measuring).
 
@@ -198,7 +199,7 @@ See [docs/benchmarks.md](docs/benchmarks.md) for the full LongMemEval-S breakdow
 |----------|---------------|-------|
 | Raw cosine (same algorithm as MemPalace) | 95.0% | baseline |
 | Additive keyword boost | 96.6% | +1.6 |
-| **Hybrid + query expansion (default)** | **97.0%** | **+2.0** |
+| **Hybrid + query expansion (the 97.0% headline recipe)** | **97.0%** | **+2.0** |
 | All-turns hybrid (harder test) | 93.2% | -1.8 |
 
 ### Librarian Layer, Vocabulary-Gap Benchmark
@@ -257,7 +258,7 @@ Full table, the 9B quant cliff (8 quants from Q2 through Q6, including the 8 GB-
 ## Architecture
 
 ```
-taOSmd Memory Stack (v0.3):
+taOSmd Memory Stack (v0.4):
 
 Memory Layers:
 ├── Temporal Knowledge Graph      structured facts with validity windows
@@ -271,7 +272,7 @@ Processing:
 ├── Session Splitter              30-min gap heuristic, per-session split files
 ├── Session Enricher              LLM topic/description/category (tiered: 1=heuristic, 2=4B, 3=9B+)
 ├── Session Crystallizer          narrative digests, outcomes, lessons → KG
-├── Secret Filtering              17 regex patterns, auto-redact on all ingest paths
+├── Secret Filtering              23 regex patterns, auto-redact on all ingest paths
 └── Retention Scoring             Ebbinghaus decay with hot/warm/cold tiers
 
 Retrieval:
@@ -320,7 +321,7 @@ For multi-turn data where surrounding turns add context, populate an integer pos
 ```python
 from taosmd import VectorMemory, retrieve
 
-vmem = VectorMemory("data/vectors.db")
+vmem = VectorMemory("data/vectors.db", embed_mode="onnx", onnx_path="<taosmd-dir>/models/arctic-embed-s")
 await vmem.init()
 
 # Tag each turn with its position (and optional group, e.g. session)
@@ -347,9 +348,11 @@ Score retrieval by sign-bit Hamming similarity instead of full-precision cosine.
 from taosmd import VectorMemory
 
 # Default is full-precision cosine; opt in per store.
-vmem = VectorMemory("data/vectors.db", binary_quant=True)
+vmem = VectorMemory("data/vectors.db", embed_mode="onnx", onnx_path="<taosmd-dir>/models/arctic-embed-s", binary_quant=True)
 await vmem.init()
-# vmem.binary_quant can also be toggled after construction.
+# binary_quant is fixed for the store's lifetime: a binary-quant store
+# persists packed sign bits, not float vectors, so an existing DB cannot
+# be flipped between modes. Choose it at creation.
 ```
 
 Use it when the vector-store footprint or CPU distance cost is your binding constraint rather than recall, e.g. an Orange Pi / Rock 5 holding a large memory. Keep it off on a GPU box where full-precision cosine is effectively free.
@@ -421,7 +424,7 @@ You can set the live controls three ways: the dashboard Settings panel (presets 
 | Control | Default | What it does | When to turn it on, and the trade-off | Resource cost |
 | --- | --- | --- | --- | --- |
 | `self_verify` | `off` | A CoVe-style check of the draft answer against the retrieved evidence, run in your answer-generation. | The dominant answer-quality lever on LongMemEval-S (the F-013 end-to-end Judge figures it was measured against were inflated by a since-fixed judge-parser bug, research report N-017; self-verify remains the strongest answer-prompt lever). taOSmd serves memory and does not generate answers, so this belongs in your answer-gen, paired with `reranker` for the verified-answer config. | A second LLM pass per answer; roughly doubles answer latency. |
-| `generator_profile` | `balanced` | Selects the answer generator by workload. `balanced` (qwen3.5:9b on 12/8 GB, llama3.1:8b on 4 GB) is the multi-session and long-context leader and reproduces the previous behaviour. | Switch to `factual-recall` (gemma4:12b on 12 GB, llama3.1:8b on 4/8 GB) for single-fact retrieval QA. It wins Single-hop but loses on conversational and long-context tasks, so it is opt-in. Set with `taosmd generator-profile set <id>` or from the dashboard Settings view (global, or per agent via the scope selector). On devices too small for a local generator the profile resolves to retrieval-only. | Loads a different generator model; `factual-recall` at the 12 GB tier requires gemma4:12b. |
+| `generator_profile` | `balanced` | Selects the answer generator by workload. `balanced` (qwen3.5:9b on 12/8 GB, llama3.1:8b on 4 GB) is the multi-session and long-context leader and reproduces the previous behaviour. | Switch to `factual-recall` (gemma4:12b on 12 GB, llama3.1:8b on 4/8 GB) for single-fact retrieval QA. It wins single-fact QA (LongMemEval) but loses LoCoMo (0.63 vs 0.68) and BEAM, so it is opt-in. Set with `taosmd generator-profile set <id>` or from the dashboard Settings view (global, or per agent via the scope selector). On devices too small for a local generator the profile resolves to retrieval-only. | Loads a different generator model; `factual-recall` at the 12 GB tier requires gemma4:12b. |
 
 ### Generator profiles
 
@@ -565,7 +568,7 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 
 ## Key Features
 
-- **97.0% Recall@5** on LongMemEval-S (retrieval metric, like-for-like with MemPalace 96.6% and agentmemory 95.2%), measured on our low-end reference stack; plus a separate end-to-end Judge number (retrieve, generate, grade); an earlier 74.6% figure for it was inflated by a since-fixed judge-parser bug and corrected to the 43 to 51 percent range on the shipped config ([methodology](docs/benchmarks.md#end-to-end-judge-on-longmemeval-s-the-generation-side-number), research report N-017)
+- **97.0% Recall@5** on LongMemEval-S (retrieval metric, like-for-like with MemPalace 96.6% and agentmemory 95.2%), measured on our low-end reference stack; plus a separate end-to-end Judge number (retrieve, generate, grade); an earlier 74.6% figure for it was inflated by a since-fixed judge-parser bug and corrected to the 43 to 51 percent range on the shipped config; the shipped `factual-recall` profile (gemma4:12b at 12 GB) reaches 53.8 / 61.4, parity with MemOS-lossless ([methodology](docs/benchmarks.md#end-to-end-judge-on-longmemeval-s-the-generation-side-number), research report N-017)
 - **BEAM long-context benchmark (new)**, an early, fully-provenanced local-tier number on mem0's ICLR-2026 suite (conversations to 1M+ tokens, graded by mem0's own nugget judge): 47% at 100K and 40% at 1M with the local 9B. mem0's frontier-class numbers are 64 to 70% at 1M, so this is an honest local-tier result on a hard benchmark, not a leaderboard win, published with its methodology and negative results ([numbers](docs/benchmarks.md#beam-long-context-memory-benchmark-mem0-nugget-judge))
 - **Zero cloud dependencies**, runs entirely on local hardware
 - **Framework-agnostic**, Python API, CLI, [MCP server](#mcp-server), and local HTTP/REST API work with any agent framework
@@ -679,8 +682,10 @@ Not required for any tier, the LLM runs locally on whatever you've got. A GPU wo
 # On your GPU machine
 ollama pull qwen3:4b  # Same model as the smaller node, same quality
 
-# Point taOSmd at the GPU worker
-export TAOSMD_LLM_URL=http://<gpu-machine>:11434
+# Point taOSmd at the GPU worker: pass the URL where you construct the
+# LLM-backed pieces (there is no TAOSMD_LLM_URL environment variable), e.g.
+#   CatalogPipeline(..., llm_url="http://<gpu-machine>:11434")
+#   crystals.crystallize(..., llm_url="http://<gpu-machine>:11434")
 ```
 
 ## API
@@ -778,7 +783,7 @@ Copies the bundled `taosmd-a2a` agent-setup skill into `~/.claude/skills/taosmd-
 
 ```bash
 # Full LongMemEval-S benchmark (500 questions)
-python benchmarks/longmemeval_runner.py
+python benchmarks/longmemeval_runner.py --limit 500
 
 # Recall@5 only
 python benchmarks/longmemeval_recall.py
