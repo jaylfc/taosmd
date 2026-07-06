@@ -19,7 +19,7 @@ data/
 
 One taosmd process holds the embedding model, the LLM client, and the catalog pipeline in memory. There is **one shared set of stores** for the whole data directory: `vector-memory.db`, `knowledge-graph.db`, and `archive-index.db` are used by every agent. Per-agent isolation is enforced by an `agent` field stored in each row's metadata and filtered at query time, not by separate files.
 
-The `data/agents.json` registry and `agent-memory/{name}/` directories exist for bookkeeping (agent list, display names, stats) and to support `delete_agent --drop-data`. They do not route reads or writes. Every search and ingest call goes to the same shared stores and is scoped by the `agent` parameter.
+The `data/agents.json` registry and `agent-memory/{name}/` directories exist for bookkeeping (agent list, display names, stats) and to support `taosmd agent rm <name> --drop-data` (the `delete_agent(name, drop_data=True)` API). They do not route reads or writes. Every search and ingest call goes to the same shared stores and is scoped by the `agent` parameter.
 
 ## Naming convention
 
@@ -146,6 +146,7 @@ You've been running everything as `jay` and want to split personal life out into
 
 ```python
 import asyncio
+from datetime import datetime, timezone
 import taosmd
 from taosmd.archive import ArchiveStore
 
@@ -157,10 +158,26 @@ async def split():
         index_path="data/archive-index.db",
     )
     await store.init()
-    for record in store.iter_archive(agent="jay"):
-        if record.metadata.get("topic") == "personal":   # your filter
-            # Re-ingest under the new agent name to create tagged copies.
-            await taosmd.ingest(record.text, agent="jay-personal")
+
+    # Locate the source agent's events through the index. query() filters on
+    # agent_name / event_type / time window / FTS search and returns index
+    # rows; raise limit (or page with offset) to cover the full history.
+    rows = await store.query(agent_name="jay", event_type="conversation", limit=100000)
+    days = sorted({
+        datetime.fromtimestamp(r["timestamp"], tz=timezone.utc).strftime("%Y-%m-%d")
+        for r in rows
+    })
+
+    # export_day() returns the full raw events for a day (it reads the JSONL,
+    # compressed days included), so the re-ingest uses the verbatim text.
+    for day in days:
+        for event in await store.export_day(day):
+            if event.get("agent_name") != "jay":
+                continue
+            content = event.get("data", {}).get("content", "")
+            if "personal" in content:                    # your filter
+                # Re-ingest under the new agent name to create tagged copies.
+                await taosmd.ingest(content, agent="jay-personal")
 
 asyncio.run(split())
 

@@ -22,6 +22,14 @@ Every control is defined once in `taosmd/controls.py`. The standalone dashboard,
 | `binary_quant` | store (re-index) | `vector_memory.binary_quant` | `off` | 1 bit per dimension, 32x smaller vectors, recall-neutral. |
 | `late_interaction` | store (re-index) | `vector_memory.late_interaction` | `off` | Token-level MaxSim; per-token vectors are written at ingest. |
 | `self_verify` | consumer (answer-gen) | `answer.self_verify` | `off` | CoVe-style answer self-verification, run in the app's answer-generation. |
+| `generator_profile` | consumer (answer-gen) | `generator_profile` | `balanced` | Selects the answer generator by workload per hardware tier. `balanced` / `factual-recall` (gemma4:12b at 12 GB for single-fact QA; loses conversational/long-context work). |
+
+The generator profile also has its own dedicated surface beyond `/controls`:
+
+- `GET /generator-profile` (optional `?agent=<name>`) returns `{ "profiles": [...], "active": "<id>", "scope": "global" | "<agent>" }`; each profile carries `id`, `label`, `workload`, and the per-tier `models` map.
+- `POST /generator-profile` with `{ "profile_id": "<id>", "agent": "<name>"? }` sets the global default (no `agent`) or a per-agent override; an unknown profile or agent returns HTTP 400.
+- CLI: `taosmd generator-profile list` / `show <id>` / `set <id> [--agent NAME]`.
+- Resolution precedence at answer time: explicit model pin > per-agent profile > global profile (default `balanced`) > recipe generator > retrieval-only (see `taosmd/generator_profiles.py::resolve_generator`).
 
 The cost, pros, and cons for each are in the schema and mirrored in the README Configuration and controls section. Headline evidence: `prefer_verified` eliminates served-hallucination (0.040 to 0.000) at no measured accuracy cost, tri-judge confirmed (E-018); `reranker` plus `self_verify` is the F-013 end-to-end LongMemEval-S Judge configuration (the originally published 74.6% was inflated by the pre-#176 judge-parser bug, N-017; the corrected full-500 baseline is 42.8% qwen3.5:9b / 51.2% llama3.1:8b, and the gemma4:12b factual-recall combo reaches 53.8 / 61.4, parity with MemOS-lossless); `arctic-embed-s` is +0.057 judged retrieval over MiniLM (F-010).
 

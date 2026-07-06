@@ -3,8 +3,9 @@
 Project rule: every working session connects to the A2A bus before doing
 anything else, so coordination with the other agents is realtime rather than
 archaeological. The server address is never written in this repo; the CLI
-resolves it from the local taosmd config (server_url in the user config file)
-or TAOSMD_SERVER_URL.
+resolves it in this precedence order: an explicit `--server` flag, then
+`TAOSMD_SERVER_URL`, then `server_url` in the user config file, then the
+local default `http://127.0.0.1:7900`.
 
 1. LIVE WATCHER (in-session): run `taosmd a2a-watch --exclude @taOSmd-dev` as a
    MANAGED background task so every new bus message wakes the session. It
