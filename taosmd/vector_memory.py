@@ -775,7 +775,18 @@ class VectorMemory:
             # exclude the row from active recall. Non-numeric values are
             # ignored (row stays visible) with a debug log so bad metadata
             # never silently hides memories.
+            #
+            # Read forget_after from both the top level and the nested user
+            # metadata dict: single ``ingest`` / low-level ``add`` stamp it
+            # flat, while ``ingest_batch`` (and reconcile-repaired batch rows)
+            # nest the caller's per-item metadata under ``meta["metadata"]``.
+            # Tolerating both shapes makes forget_after expire identically no
+            # matter which ingest path wrote the row. Top level wins if set.
             fa = meta.get("forget_after")
+            if fa is None:
+                inner = meta.get("metadata")
+                if isinstance(inner, dict):
+                    fa = inner.get("forget_after")
             if fa is not None:
                 try:
                     if float(fa) < now:
