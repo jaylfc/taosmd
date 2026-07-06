@@ -84,8 +84,11 @@ class RemoteClient:
     async def ingest(self, text: str, agent: str, *, project: str | None = None, **_opts) -> dict:
         """POST /ingest: shelve ``text`` into the remote agent's memory.
 
-        Returns ``{"archived", "agent", "project", "data_dir"}``. ``project``
-        is forwarded so project-scoped memory works over the remote path.
+        Returns ``{"archived", "agent", "project", "data_dir"}``, plus
+        ``"vector_failures"`` and ``"degraded": true`` when the server's
+        embedder failed (archived but not searchable until the server runs
+        reconcile). ``project`` is forwarded so project-scoped memory works
+        over the remote path.
         """
         body: dict = {"text": text, "agent": agent}
         if project is not None:
@@ -97,7 +100,10 @@ class RemoteClient:
     ) -> dict:
         """POST /ingest/batch: bulk-shelve items with idempotent re-import.
 
-        Returns ``{"ingested", "skipped", "agent", "data_dir"}``.
+        Returns ``{"ingested", "skipped", "agent", "data_dir"}``, plus
+        ``"vector_failures"`` and ``"degraded": true`` when the server's
+        embedder failed for one or more items (archived but not searchable
+        until the server runs reconcile).
         """
         body: dict = {"items": items, "agent": agent}
         if project is not None:

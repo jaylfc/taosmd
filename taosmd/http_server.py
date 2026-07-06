@@ -65,9 +65,16 @@ Endpoints
                            ``forget_reason`` (str) in the user metadata dict.  Rows whose
                            ``forget_after`` has passed are hidden from retrieval (zero-loss:
                            the raw row is never deleted).
+                           When one or more vector writes fail (embedder down), the result
+                           adds ``"vector_failures": int`` and ``"degraded": true``: the
+                           turns are archived but not searchable until reconcile repairs
+                           the gap.
 ``POST /ingest/batch``     ``{"items": [{"text", "id"?, "metadata"?: {"forget_after"?: float, "forget_reason"?: str, ...}}], "agent", "project"?}`` -> ``{"ingested", "skipped", ...}``
                            Per-item ``metadata`` may include ``forget_after`` (unix float) and
                            ``forget_reason`` (str) with the same TTL semantics as single ingest.
+                           Adds ``"vector_failures": int`` and ``"degraded": true`` to the
+                           result when embedding failed for one or more items (archived,
+                           repairable via reconcile), same as single ingest.
 ``POST /search``           ``{"query", "agent", "limit"?, "project"?, "also_include"?, "mode"?}`` -> ``{"hits": [...]}``
 ``GET  /search?q=&agent=&limit=&project=&also_include=a,b&mode=bm25``  -> ``{"hits": [...]}``
 ``GET  /projects``                                         -> ``{"projects": [...]}``

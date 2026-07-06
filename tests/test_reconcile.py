@@ -260,6 +260,51 @@ def test_reconcile_duplicate_text_repairs_exactly_one_copy(isolated):
 
 
 # ---------------------------------------------------------------------------
+# Repair metadata parity with the hot ingest path
+# ---------------------------------------------------------------------------
+
+def test_reconcile_repair_preserves_project_and_archive_span(isolated):
+    """A repaired row must carry the same provenance the hot path writes:
+    the project scope and the archive_span_id of the archive row it backs.
+    Without them the re-added row falls out of project-scoped search and the
+    claims gate can no longer look up its verification status.
+    """
+    import json as _json
+
+    data_dir = isolated
+    stores = _setup(data_dir)
+    agent = "provenance-agent"
+    project = "proj-fingerprint-123"
+
+    lost_text = "the turn that fell in the crash gap"
+    asyncio.run(taosmd.ingest(
+        lost_text, agent=agent, project=project, data_dir=str(data_dir)))
+
+    # The archive row id is the span the repaired vector row must point at.
+    from taosmd.archive import EVENT_CONVERSATION
+    archive_rows = asyncio.run(stores["archive"].query(
+        event_type=EVENT_CONVERSATION, agent_name=agent))
+    assert len(archive_rows) == 1
+    span_id = archive_rows[0]["id"]
+
+    dropped = _drop_vector_row_by_text(data_dir, lost_text)
+    assert dropped == 1
+
+    result = asyncio.run(taosmd_api.reconcile(agent=agent, data_dir=str(data_dir), repair=True))
+    assert result["readded"] == 1
+
+    vmem = stores["vector"]
+    rows = vmem._conn.execute(
+        "SELECT metadata_json FROM vector_memory WHERE text = ?", (lost_text,)
+    ).fetchall()
+    assert len(rows) == 1
+    meta = _json.loads(rows[0][0])
+    assert meta.get("project") == project, "repair must preserve the project scope"
+    assert meta.get("archive_span_id") == span_id, (
+        "repair must re-link the vector row to its archive span")
+
+
+# ---------------------------------------------------------------------------
 # Empty store edge case
 # ---------------------------------------------------------------------------
 

@@ -204,7 +204,10 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
 
     Returns:
         ``{"archived": int, "agent": str, "project": str|None, "data_dir": str}``, where ``archived``
-        is the count of non-empty turns that were shelved.
+        is the count of non-empty turns that were shelved. When one or more
+        vector writes fail (embedder down), ``"vector_failures": int`` and
+        ``"degraded": True`` are added: the turns are safe in the archive but
+        not searchable until :func:`reconcile` repairs the gap.
     """
     if not agent:
         raise ValueError("agent name is required")
@@ -215,6 +218,7 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
     ensure_agent(agent)
 
     archived = 0
+    vector_failures = 0
     for item in items:
         text = str(item.get("content", "")).strip()
         if not text:
@@ -237,7 +241,8 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
         # gate can look up the verification status of the claims it backs.
         if isinstance(span_id, int) and span_id >= 0:
             meta["archive_span_id"] = span_id
-        await stores["vector"].add(text, metadata=meta)
+        if await stores["vector"].add(text, metadata=meta) == -1:
+            vector_failures += 1
         # Claims layer (additive): extract facts as claims tagged with the same
         # archive span. Stored unverified; the verify-pass checks them async.
         if "claims" in stores and isinstance(span_id, int) and span_id >= 0:
@@ -248,7 +253,20 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
         archived += 1
 
     update_stats(agent, last_ingest_at=int(time.time()))
-    return {"archived": archived, "agent": agent, "project": project, "data_dir": stores["data_dir"]}
+    result = {"archived": archived, "agent": agent, "project": project, "data_dir": stores["data_dir"]}
+    if vector_failures:
+        # Archive-first zero-loss: the archive writes stand and ingest does
+        # not raise on embed failure (sqlite/redaction errors still propagate
+        # by design), but the caller must be able to SEE that these turns are
+        # not searchable until reconcile() re-embeds them.
+        logger.warning(
+            "taosmd ingest: %d/%d vector writes failed (embed backend %s); "
+            "turns are archived and recoverable via reconcile",
+            vector_failures, archived, stores["vector"]._embedder_identity(),
+        )
+        result["vector_failures"] = vector_failures
+        result["degraded"] = True
+    return result
 
 
 async def ingest_batch(
@@ -279,7 +297,10 @@ async def ingest_batch(
     Returns:
         ``{"ingested": int, "skipped": int, "agent": str, "data_dir": str}``.
         ``skipped`` counts duplicate ids (incl. in-batch repeats) and
-        empty-text items.
+        empty-text items. When one or more vector writes fail (embedder
+        down), ``"vector_failures": int`` and ``"degraded": True`` are added:
+        the items are safe in the archive but not searchable until
+        :func:`reconcile` repairs the gap.
 
     Raises:
         ValueError: On a structurally invalid request (bad agent, items not
@@ -309,6 +330,7 @@ async def ingest_batch(
     seen = stores["vector"].existing_source_ids(agent=agent)
     ingested = 0
     skipped = 0
+    vector_failures = 0
     for item in items:
         text = item["text"].strip()
         sid = item.get("id")
@@ -318,7 +340,7 @@ async def ingest_batch(
         user_md = dict(item.get("metadata") or {})
         if sid:
             user_md["source_id"] = sid
-        await stores["archive"].record(
+        span_id = await stores["archive"].record(
             "conversation",
             {"content": text, "metadata": user_md},
             agent_name=agent,
@@ -328,19 +350,45 @@ async def ingest_batch(
         meta: dict = {"agent": agent, "metadata": user_md}
         if project:
             meta["project"] = project
-        await stores["vector"].add(text, metadata=meta)
+        # Provenance: same archive-span linkage as the single ingest path, so
+        # batch-ingested rows are gate-visible and reconcile/verify can trace
+        # them back to their archive row.
+        if isinstance(span_id, int) and span_id >= 0:
+            meta["archive_span_id"] = span_id
+        if await stores["vector"].add(text, metadata=meta) == -1:
+            vector_failures += 1
+        # Claims layer, same as single ingest: extract facts tagged with the
+        # backing archive span; stored unverified for the async verify-pass.
+        if "claims" in stores and isinstance(span_id, int) and span_id >= 0:
+            from taosmd.claims.extract import claims_from_text  # noqa: PLC0415
+            for c in claims_from_text(text, span_id):
+                await stores["claims"].add_claim(
+                    c["text"], c["archive_span_ids"], c["source_extractor"])
         if sid:
             seen.add(sid)
         ingested += 1
 
     if ingested:
         update_stats(agent, last_ingest_at=int(time.time()))
-    return {
+    result = {
         "ingested": ingested,
         "skipped": skipped,
         "agent": agent,
         "data_dir": stores["data_dir"],
     }
+    if vector_failures:
+        # Archive-first zero-loss: the archive writes stand and the batch does
+        # not raise on embed failure (sqlite/redaction errors still propagate
+        # by design), but the caller must be able to SEE that these items are
+        # not searchable until reconcile() re-embeds them.
+        logger.warning(
+            "taosmd ingest_batch: %d/%d vector writes failed (embed backend %s); "
+            "items are archived and recoverable via reconcile",
+            vector_failures, ingested, stores["vector"]._embedder_identity(),
+        )
+        result["vector_failures"] = vector_failures
+        result["degraded"] = True
+    return result
 
 
 async def _attach_and_gate_claims(hits: list[dict], claim_store, mode: str) -> list[dict]:
@@ -882,9 +930,12 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
         agent_name=agent,
         limit=1_000_000,
     )
-    archive_texts: list[tuple[str, dict]] = []  # (text, row) for re-add
+    archive_texts: list[tuple[str, dict, dict]] = []  # (text, data, row) for re-add
     archive_counter: Counter[str] = Counter()
-    for row in rows:
+    # query() returns newest-first; iterate oldest-first so the representative
+    # row kept per text value below is genuinely the first-seen (original)
+    # archive row, matching what the hot ingest path wrote first.
+    for row in reversed(rows):
         try:
             data = _json.loads(row.get("data_json", "{}"))
         except (_json.JSONDecodeError, TypeError):
@@ -895,7 +946,7 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
         archive_counter[text] += 1
         # Keep the first-seen archive row per text value for metadata
         # reconstruction; duplicates will use the same metadata shape.
-        archive_texts.append((text, data))
+        archive_texts.append((text, data, row))
 
     # --- Build vector multiset (including superseded) -------------------
     vector_counter: Counter[str] = Counter()
@@ -912,21 +963,36 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
     readded = 0
 
     if repair and missing:
-        # Build a lookup of text → archive data for timestamp reconstruction.
-        # Only need one representative row per distinct text.
-        text_to_data: dict[str, dict] = {}
-        for text, data in archive_texts:
-            if text not in text_to_data:
-                text_to_data[text] = data
+        # Build a lookup of text → (archive data, index row) for metadata
+        # reconstruction. Only need one representative row per distinct text.
+        text_to_row: dict[str, tuple[dict, dict]] = {}
+        for text, data, row in archive_texts:
+            if text not in text_to_row:
+                text_to_row[text] = (data, row)
 
         for text, count in missing.items():
-            data = text_to_data.get(text, {})
+            data, row = text_to_row.get(text, ({}, {}))
             meta: dict = {"agent": agent}
             # Propagate role and timestamp from the archive entry where available.
             if "role" in data:
                 meta["role"] = data["role"]
             if "timestamp" in data:
                 meta["timestamp"] = data["timestamp"]
+            # Carry the archive row's nested user metadata (source_id,
+            # forget_after, ...). Without it a repaired batch row loses its
+            # source_id, so existing_source_ids() no longer sees it and a
+            # re-POST of the same batch duplicates every repaired item.
+            if isinstance(data.get("metadata"), dict) and data["metadata"]:
+                meta["metadata"] = data["metadata"]
+            # Repair must carry the same provenance the hot ingest path
+            # writes: the project scope (so the row stays visible to
+            # project-scoped search) and the archive_span_id (so the claims
+            # gate can look up the verification status of its backing span).
+            if row.get("project"):
+                meta["project"] = row["project"]
+            span_id = row.get("id")
+            if isinstance(span_id, int) and span_id >= 0:
+                meta["archive_span_id"] = span_id
             for _ in range(count):
                 added_id = await vmem.add(text, metadata=meta)
                 if added_id != -1:
