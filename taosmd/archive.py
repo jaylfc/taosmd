@@ -155,16 +155,22 @@ class ArchiveStore:
         return self._archive_dir / f"{dt.year}" / f"{dt.month:02d}" / f"{dt.day:02d}.jsonl"
 
     def _ensure_file(self, ts: float) -> tuple[Any, str]:
-        """Ensure the daily JSONL file is open for writing."""
+        """Ensure the daily JSONL file is open for writing.
+
+        Files are one-per-day (YYYY/MM/DD.jsonl), so the open handle must
+        roll over at day boundaries: keying the check on anything coarser
+        (e.g. the year/month parent directory) would keep appending to
+        yesterday's file after midnight UTC while the index points at
+        today's, corrupting file_path/line_number provenance.
+        """
         path = self._get_daily_path(ts)
-        date_str = path.stem
-        parent = str(path.parent)
-        if self._current_date != parent:
+        date_str = str(path)
+        if self._current_date != date_str:
             if self._current_file:
                 self._current_file.close()
             path.parent.mkdir(parents=True, exist_ok=True)
             self._current_file = open(path, "a", encoding="utf-8")
-            self._current_date = parent
+            self._current_date = date_str
         return self._current_file, str(path)
 
     async def record(
