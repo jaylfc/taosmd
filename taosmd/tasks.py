@@ -16,6 +16,7 @@ Public API
 create_task(title, *, body, project, assignee, priority, depends_on,
             created_by, data_dir) -> dict
 list_tasks(*, status, project, assignee, limit, data_dir) -> list[dict]
+list_edges(*, from_id, to_id, edge_type, limit, data_dir) -> list[dict]
 ready_tasks(*, project, assignee, limit, data_dir) -> list[dict]
 prime(*, project, assignee, data_dir) -> {"text": str, "tasks": list[dict]}
 update_task(task_id, *, status, assignee, priority, body, data_dir) -> dict
@@ -289,6 +290,42 @@ async def list_tasks(
         params,
     ).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+async def list_edges(
+    *,
+    from_id: str | None = None,
+    to_id: str | None = None,
+    edge_type: str | None = None,
+    limit: int = 500,
+    data_dir: str | None = None,
+) -> list[dict]:
+    """Return active task edges matching the given filters, newest first."""
+    if edge_type is not None and edge_type not in VALID_EDGE_TYPES:
+        raise ValueError(f"edge_type must be one of {sorted(VALID_EDGE_TYPES)}")
+
+    conn = _get_db(data_dir)
+    conditions: list[str] = ["removed_ts IS NULL"]
+    params: list[Any] = []
+
+    if from_id is not None:
+        conditions.append("from_id = ?")
+        params.append(from_id)
+    if to_id is not None:
+        conditions.append("to_id = ?")
+        params.append(to_id)
+    if edge_type is not None:
+        conditions.append("type = ?")
+        params.append(edge_type)
+
+    params.append(limit)
+    rows = conn.execute(
+        "SELECT from_id, to_id, type, created_ts, created_by, removed_ts "
+        f"FROM task_edges WHERE {' AND '.join(conditions)} "
+        "ORDER BY created_ts DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 async def ready_tasks(

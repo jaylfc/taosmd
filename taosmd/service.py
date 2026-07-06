@@ -645,6 +645,30 @@ async def task_list(
     )
 
 
+async def task_list_edges(
+    *,
+    from_id: str | None = None,
+    to_id: str | None = None,
+    edge_type: str | None = None,
+    limit: int = 500,
+    data_dir=None,
+) -> list[dict]:
+    """Return active task edges matching the given filters.
+
+    Thin wrapper over :func:`taosmd.tasks.list_edges`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.task_list_edges(
+            from_id=from_id, to_id=to_id, edge_type=edge_type, limit=limit
+        )
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.list_edges(
+        from_id=from_id, to_id=to_id, edge_type=edge_type,
+        limit=limit, data_dir=data_dir,
+    )
+
+
 async def task_ready(
     *,
     project: str | None = None,
@@ -837,7 +861,7 @@ async def admin_a2a_supersede_message(msg_id: int, *, data_dir=None) -> dict:
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
            "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
-           "task_create", "task_list", "task_ready", "task_prime",
+           "task_create", "task_list", "task_list_edges", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
            "admin_a2a_delete_channel", "admin_a2a_rename_channel",

@@ -88,6 +88,7 @@ Endpoints
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
 ``POST /tasks``            ``{"title", "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [...], "created_by"}`` -> task object
 ``GET  /tasks``            ``?status=&project=&assignee=&limit=``  -> ``{"tasks": [...]}``
+``GET  /tasks/edges``      ``?from_id=&to_id=&type=&limit=``       -> ``{"edges": [...]}``
 ``GET  /tasks/ready``      ``?project=&assignee=&limit=``  -> ``{"tasks": [...]}``
 ``GET  /tasks/prime``      ``?project=&assignee=``         -> ``{"text": ..., "tasks": [...]}``
 ``POST /tasks/{id}``       ``{"status"?, "assignee"?, "priority"?, "body"?}`` -> updated task object
@@ -826,6 +827,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_task_create()
                 elif method == "GET" and path == "/tasks":
                     self._handle_task_list(query)
+                elif method == "GET" and path == "/tasks/edges":
+                    self._handle_task_list_edges(query)
                 elif method == "GET" and path == "/tasks/ready":
                     self._handle_task_ready(query)
                 elif method == "GET" and path == "/tasks/prime":
@@ -1382,6 +1385,29 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             )
             self._send_json(200, {"tasks": tasks})
 
+        def _handle_task_list_edges(self, qs: dict) -> None:
+            from_id = (qs.get("from_id") or [None])[0]
+            to_id = (qs.get("to_id") or [None])[0]
+            edge_type = (qs.get("type") or [None])[0]
+            limit_raw = (qs.get("limit") or [500])[0]
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            try:
+                edges = runner.run(
+                    service.task_list_edges(
+                        from_id=from_id,
+                        to_id=to_id,
+                        edge_type=edge_type,
+                        limit=limit_i,
+                        data_dir=data_dir,
+                    )
+                )
+            except ValueError as exc:
+                raise _BadRequest(str(exc)) from exc
+            self._send_json(200, {"edges": edges})
+
         def _handle_task_ready(self, qs: dict) -> None:
             project = (qs.get("project") or [None])[0]
             assignee = (qs.get("assignee") or [None])[0]
@@ -1651,7 +1677,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
           "GET /pending, POST /pending/resolve, "
           "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "
           "GET /a2a/channels, GET /a2a/members, "
-          "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
+          "POST /tasks, GET /tasks, GET /tasks/edges, GET /tasks/ready, GET /tasks/prime, "
           "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove")
     print("Admin (token required): POST /shelves, POST /shelves/{id}/archive, "
           "POST /shelves/{id}/unarchive, "
