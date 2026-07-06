@@ -288,3 +288,37 @@ def test_ingest_batch_prevalidation_still_rejects_before_writing(isolated):
         event_type=EVENT_CONVERSATION, agent_name="prevalidate-agent"))
     assert rows == []
     assert _vector_rows(stores) == []
+
+
+def test_reconcile_repair_gives_each_duplicate_text_its_own_span(isolated):
+    """N missing copies of the same text must map to N distinct archive rows.
+
+    Repair used to stamp every re-added copy with one representative row's
+    span, collapsing distinct provenance onto a single archive span.
+    """
+    stores = asyncio.run(taosmd_api._ensure_stores(str(isolated)))
+    _break_embedder(stores)
+    agent = "dup-span-agent"
+    text = "the same fact recorded twice"
+
+    for _ in range(2):
+        result = asyncio.run(taosmd.ingest(text, agent=agent, data_dir=str(isolated)))
+        assert result["vector_failures"] == 1
+    assert _vector_rows(stores) == []
+
+    from taosmd.archive import EVENT_CONVERSATION
+    archive_rows = asyncio.run(stores["archive"].query(
+        event_type=EVENT_CONVERSATION, agent_name=agent))
+    archive_span_ids = sorted(r["id"] for r in archive_rows)
+    assert len(archive_span_ids) == 2
+
+    _patch_embedder(stores)
+    repair = asyncio.run(taosmd_api.reconcile(
+        agent=agent, data_dir=str(isolated), repair=True))
+    assert repair["readded"] == 2
+
+    rows = _vector_rows(stores)
+    assert len(rows) == 2
+    repaired_spans = sorted(meta.get("archive_span_id") for _text, meta in rows)
+    assert repaired_spans == archive_span_ids, (
+        "each repaired copy must carry its own archive row's span")

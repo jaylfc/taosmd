@@ -963,37 +963,43 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
     readded = 0
 
     if repair and missing:
-        # Build a lookup of text → (archive data, index row) for metadata
-        # reconstruction. Only need one representative row per distinct text.
-        text_to_row: dict[str, tuple[dict, dict]] = {}
+        # Build a lookup of text → [(archive data, index row), ...] keeping
+        # every archive row per text, oldest first (archive_texts was built
+        # from reversed newest-first query results). Each repaired copy must
+        # carry its own row's span and metadata: stamping N copies with one
+        # representative row would collapse distinct provenance onto a
+        # single span.
+        text_to_rows: dict[str, list[tuple[dict, dict]]] = {}
         for text, data, row in archive_texts:
-            if text not in text_to_row:
-                text_to_row[text] = (data, row)
+            text_to_rows.setdefault(text, []).append((data, row))
 
         for text, count in missing.items():
-            data, row = text_to_row.get(text, ({}, {}))
-            meta: dict = {"agent": agent}
-            # Propagate role and timestamp from the archive entry where available.
-            if "role" in data:
-                meta["role"] = data["role"]
-            if "timestamp" in data:
-                meta["timestamp"] = data["timestamp"]
-            # Carry the archive row's nested user metadata (source_id,
-            # forget_after, ...). Without it a repaired batch row loses its
-            # source_id, so existing_source_ids() no longer sees it and a
-            # re-POST of the same batch duplicates every repaired item.
-            if isinstance(data.get("metadata"), dict) and data["metadata"]:
-                meta["metadata"] = data["metadata"]
-            # Repair must carry the same provenance the hot ingest path
-            # writes: the project scope (so the row stays visible to
-            # project-scoped search) and the archive_span_id (so the claims
-            # gate can look up the verification status of its backing span).
-            if row.get("project"):
-                meta["project"] = row["project"]
-            span_id = row.get("id")
-            if isinstance(span_id, int) and span_id >= 0:
-                meta["archive_span_id"] = span_id
-            for _ in range(count):
+            rows_for_text = text_to_rows.get(text, [({}, {})])
+            for i in range(count):
+                data, row = (
+                    rows_for_text[i] if i < len(rows_for_text) else rows_for_text[-1]
+                )
+                meta: dict = {"agent": agent}
+                # Propagate role and timestamp from the archive entry where available.
+                if "role" in data:
+                    meta["role"] = data["role"]
+                if "timestamp" in data:
+                    meta["timestamp"] = data["timestamp"]
+                # Carry the archive row's nested user metadata (source_id,
+                # forget_after, ...). Without it a repaired batch row loses its
+                # source_id, so existing_source_ids() no longer sees it and a
+                # re-POST of the same batch duplicates every repaired item.
+                if isinstance(data.get("metadata"), dict) and data["metadata"]:
+                    meta["metadata"] = data["metadata"]
+                # Repair must carry the same provenance the hot ingest path
+                # writes: the project scope (so the row stays visible to
+                # project-scoped search) and the archive_span_id (so the claims
+                # gate can look up the verification status of its backing span).
+                if row.get("project"):
+                    meta["project"] = row["project"]
+                span_id = row.get("id")
+                if isinstance(span_id, int) and span_id >= 0:
+                    meta["archive_span_id"] = span_id
                 added_id = await vmem.add(text, metadata=meta)
                 if added_id != -1:
                     readded += 1
