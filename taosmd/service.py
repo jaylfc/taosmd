@@ -731,6 +731,19 @@ async def task_add_edge(
     )
 
 
+async def task_projects(task_ids: list[str], *, data_dir=None) -> dict:
+    """Return ``{task_id: project}`` for the ids that exist locally.
+
+    Auth-layer helper for the HTTP server's edge-endpoint project scoping.
+    This intentionally does NOT forward to a remote server: the server that
+    enforces token binding is the owner of the task store, so the lookup
+    always reads the local projection (fails closed when the tasks are not
+    present locally).
+    """
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.get_task_projects(task_ids, data_dir=data_dir)
+
+
 async def task_remove_edge(
     from_id: str,
     to_id: str,
@@ -838,7 +851,7 @@ async def admin_a2a_supersede_message(msg_id: int, *, data_dir=None) -> dict:
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
            "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
            "task_create", "task_list", "task_ready", "task_prime",
-           "task_update", "task_add_edge", "task_remove_edge",
+           "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
            "admin_a2a_delete_channel", "admin_a2a_rename_channel",
            "admin_a2a_supersede_message"]

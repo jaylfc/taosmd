@@ -1447,6 +1447,35 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest(str(exc)) from exc
             self._send_json(200, result)
 
+        def _enforce_edge_project_scope(
+            self, project: str | None, from_id: str, to_id: str
+        ) -> bool:
+            """Require both edge endpoints to live in the token-bound project.
+
+            ``task_edges`` has no project column, so when
+            ``_apply_token_binding`` resolved a project from verified claims
+            the referenced task ids are looked up in the tasks table and BOTH
+            must belong to that project before the graph is mutated. The
+            refusal message is deliberately non-enumerating: a task in a
+            foreign project and a task that does not exist are
+            indistinguishable. Unbound requests (``project is None``,
+            including every tokenless/standalone call) pass through
+            untouched. Returns ``False`` when the 403 has been written and
+            the caller must return.
+            """
+            if project is None:
+                return True
+            found = runner.run(
+                service.task_projects([from_id, to_id], data_dir=data_dir)
+            )
+            if found.get(from_id) != project or found.get(to_id) != project:
+                self._send_json(
+                    403,
+                    {"error": "registry auth: task not available in the token's project scope"},
+                )
+                return False
+            return True
+
         def _handle_task_add_edge(self, from_id: str) -> None:
             body = self._read_json_body()
             to_id = body.get("to_id")
@@ -1456,6 +1485,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'to_id' (non-empty string) is required")
             if not isinstance(edge_type, str) or not edge_type:
                 raise _BadRequest("'type' (non-empty string) is required")
+            project, ok = self._apply_token_binding(created_by, None)
+            if not ok:
+                return
+            if not self._enforce_edge_project_scope(project, from_id, to_id):
+                return
             try:
                 result = runner.run(
                     service.task_add_edge(
@@ -1475,6 +1509,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'to_id' (non-empty string) is required")
             if not isinstance(edge_type, str) or not edge_type:
                 raise _BadRequest("'type' (non-empty string) is required")
+            project, ok = self._apply_token_binding(None, None)
+            if not ok:
+                return
+            if not self._enforce_edge_project_scope(project, from_id, to_id):
+                return
             try:
                 result = runner.run(
                     service.task_remove_edge(
