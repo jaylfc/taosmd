@@ -11,6 +11,7 @@ from the raw memory store (UserMemoryStore) and ingested content (KnowledgeStore
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import sqlite3
 import time
@@ -65,6 +66,28 @@ MEMORY_TYPES = {
 }
 
 
+def _merge_entity_properties(existing_json: str, new_json: str) -> str:
+    """Additively merge two properties JSON blobs (zero-loss).
+
+    Keys present only in ``new_json`` are added; keys present in both keep
+    the *existing* value so a re-insert can never overwrite an already
+    recorded property. If either side is not a JSON object the existing
+    value is returned unchanged (never lose what is already stored).
+    """
+    try:
+        existing = json.loads(existing_json) if existing_json else {}
+        incoming = json.loads(new_json) if new_json else {}
+    except (ValueError, TypeError):
+        return existing_json
+    if not isinstance(existing, dict) or not isinstance(incoming, dict):
+        return existing_json
+    merged = dict(existing)
+    for key, value in incoming.items():
+        if key not in merged:
+            merged[key] = value
+    return json.dumps(merged)
+
+
 def classify_memory_type(text: str) -> str:
     """Classify text into a memory type based on keyword matching."""
     text_lower = text.lower()
@@ -116,19 +139,67 @@ class TemporalKnowledgeGraph:
         entity_type: str = "unknown",
         properties: str = "{}",
     ) -> str:
-        """Add or update an entity. Returns entity ID."""
+        """Add or enrich an entity. Returns entity ID.
+
+        Non-destructive by design (taOSmd is zero-loss): a re-insert of an
+        existing entity never drops a value that is already recorded. Since
+        ``add_triple`` re-adds every subject/object on each write, the same
+        entity is constantly re-inserted with whatever type the current
+        extraction guessed (frequently the ``unknown`` placeholder), so a
+        last-writer-wins UPSERT would silently clobber prior classifications
+        and properties with no history. Instead, on conflict we:
+
+        * keep the first-seen ``name`` (display casing is stable; the id is
+          already the normalisation key);
+        * keep the first-seen concrete ``type`` and only *upgrade* the
+          ``unknown`` placeholder to a concrete type (enrichment, no loss);
+        * merge ``properties`` additively, existing values winning on a key
+          clash (see :func:`_merge_entity_properties`);
+        * preserve the original ``created_at``.
+
+        Deliberate re-classification with old-value history would need the
+        triple-style ``valid_from``/``valid_to`` treatment; no caller does
+        that today, so the lightweight non-destructive merge is used.
+        """
         eid = self._entity_id(name)
         now = time.time()
-        self._conn.execute(
-            """INSERT INTO kg_entities (id, name, type, properties_json, created_at)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                 name = excluded.name,
-                 type = excluded.type,
-                 properties_json = excluded.properties_json""",
-            (eid, name, entity_type, properties, now),
-        )
-        self._conn.commit()
+        existing = self._conn.execute(
+            "SELECT type, properties_json FROM kg_entities WHERE id = ?",
+            (eid,),
+        ).fetchone()
+        if existing is None:
+            self._conn.execute(
+                """INSERT INTO kg_entities (id, name, type, properties_json, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (eid, name, entity_type, properties, now),
+            )
+            self._conn.commit()
+            return eid
+
+        placeholder = (None, "", "unknown")
+        new_type = existing["type"]
+        if existing["type"] in placeholder and entity_type not in placeholder:
+            new_type = entity_type
+        elif (
+            entity_type not in placeholder
+            and existing["type"] not in placeholder
+            and entity_type != existing["type"]
+        ):
+            # Two different concrete types for one entity id. We keep the
+            # first-seen classification (non-destructive), but the losing type
+            # is not tombstoned anywhere, so log it as a drift signal (mirrors
+            # how add_triple surfaces out-of-vocab predicates).
+            logger.debug(
+                "kg entity %s: keeping first-seen type %r, dropping conflicting %r",
+                eid, existing["type"], entity_type,
+            )
+        merged_props = _merge_entity_properties(existing["properties_json"], properties)
+        if new_type != existing["type"] or merged_props != existing["properties_json"]:
+            self._conn.execute(
+                "UPDATE kg_entities SET type = ?, properties_json = ? WHERE id = ?",
+                (new_type, merged_props, eid),
+            )
+            self._conn.commit()
         return eid
 
     async def get_entity(self, name: str) -> dict | None:
