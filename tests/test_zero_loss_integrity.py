@@ -42,7 +42,7 @@ def _break_embedder(stores: dict) -> None:
     """Simulate an embedder outage.
 
     The real backends (_embed_onnx / _embed_local / _embed_qmd) catch their
-    own exceptions and return [] — that empty vector is exactly what add()
+    own exceptions and return []; that empty vector is exactly what add()
     sees when the embedder is down, so the injection point is embed()
     returning [].
     """
@@ -230,6 +230,45 @@ def test_ingest_batch_extracts_claims_like_single_ingest(isolated):
         backing = set(claim["archive_span_ids"])
         assert backing and backing <= span_ids, (
             "claim must be backed by the batch item's archive span")
+
+
+def test_reconcile_repair_preserves_source_id_so_reimport_dedupes(isolated):
+    """Degraded batch -> reconcile repair -> re-import must not duplicate.
+
+    existing_source_ids() reads meta["metadata"]["source_id"], so a repaired
+    row that loses the nested user metadata becomes invisible to batch dedup
+    and a re-POST of the same batch duplicates every repaired item.
+    """
+    stores = asyncio.run(taosmd_api._ensure_stores(str(isolated)))
+    _break_embedder(stores)
+    agent = "dedup-agent"
+    batch = [
+        {"text": "batch fact alpha", "id": "src-alpha"},
+        {"text": "batch fact beta", "id": "src-beta"},
+    ]
+
+    result = asyncio.run(taosmd.ingest_batch(batch, agent=agent, data_dir=str(isolated)))
+    assert result["ingested"] == 2
+    assert result["vector_failures"] == 2
+    assert _vector_rows(stores) == []
+
+    # Embedder comes back; reconcile repairs the gap.
+    _patch_embedder(stores)
+    repair = asyncio.run(taosmd_api.reconcile(
+        agent=agent, data_dir=str(isolated), repair=True))
+    assert repair["readded"] == 2
+
+    # The repaired rows carry the nested user metadata with source_id.
+    rows = _vector_rows(stores)
+    assert len(rows) == 2
+    sids = {(meta.get("metadata") or {}).get("source_id") for _text, meta in rows}
+    assert sids == {"src-alpha", "src-beta"}
+
+    # Re-POSTing the same batch dedupes instead of duplicating.
+    again = asyncio.run(taosmd.ingest_batch(batch, agent=agent, data_dir=str(isolated)))
+    assert again["ingested"] == 0
+    assert again["skipped"] == 2
+    assert len(_vector_rows(stores)) == 2
 
 
 def test_ingest_batch_prevalidation_still_rejects_before_writing(isolated):

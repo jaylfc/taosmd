@@ -256,7 +256,8 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
     result = {"archived": archived, "agent": agent, "project": project, "data_dir": stores["data_dir"]}
     if vector_failures:
         # Archive-first zero-loss: the archive writes stand and ingest does
-        # not raise, but the caller must be able to SEE that these turns are
+        # not raise on embed failure (sqlite/redaction errors still propagate
+        # by design), but the caller must be able to SEE that these turns are
         # not searchable until reconcile() re-embeds them.
         logger.warning(
             "taosmd ingest: %d/%d vector writes failed (embed backend %s); "
@@ -377,7 +378,8 @@ async def ingest_batch(
     }
     if vector_failures:
         # Archive-first zero-loss: the archive writes stand and the batch does
-        # not raise, but the caller must be able to SEE that these items are
+        # not raise on embed failure (sqlite/redaction errors still propagate
+        # by design), but the caller must be able to SEE that these items are
         # not searchable until reconcile() re-embeds them.
         logger.warning(
             "taosmd ingest_batch: %d/%d vector writes failed (embed backend %s); "
@@ -930,7 +932,10 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
     )
     archive_texts: list[tuple[str, dict, dict]] = []  # (text, data, row) for re-add
     archive_counter: Counter[str] = Counter()
-    for row in rows:
+    # query() returns newest-first; iterate oldest-first so the representative
+    # row kept per text value below is genuinely the first-seen (original)
+    # archive row, matching what the hot ingest path wrote first.
+    for row in reversed(rows):
         try:
             data = _json.loads(row.get("data_json", "{}"))
         except (_json.JSONDecodeError, TypeError):
@@ -973,6 +978,12 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
                 meta["role"] = data["role"]
             if "timestamp" in data:
                 meta["timestamp"] = data["timestamp"]
+            # Carry the archive row's nested user metadata (source_id,
+            # forget_after, ...). Without it a repaired batch row loses its
+            # source_id, so existing_source_ids() no longer sees it and a
+            # re-POST of the same batch duplicates every repaired item.
+            if isinstance(data.get("metadata"), dict) and data["metadata"]:
+                meta["metadata"] = data["metadata"]
             # Repair must carry the same provenance the hot ingest path
             # writes: the project scope (so the row stays visible to
             # project-scoped search) and the archive_span_id (so the claims
