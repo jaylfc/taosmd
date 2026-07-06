@@ -1424,8 +1424,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             assignee = body.get("assignee")
             priority = body.get("priority")
             task_body = body.get("body")
-            _, ok = self._apply_token_binding(assignee, None)
+            project, ok = self._apply_token_binding(assignee, None)
             if not ok:
+                return
+            # Same non-enumerating project scope as the edge handlers: a
+            # token bound to a project may only mutate that project's tasks.
+            if not self._enforce_edge_project_scope(project, task_id, task_id):
                 return
             if priority is not None:
                 try:
