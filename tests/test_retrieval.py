@@ -641,3 +641,152 @@ def test_retrieve_thorough_attaches_neighbours():
     # At least one of the survivors should have neighbours attached
     with_neighbours = [r for r in results if "neighbors" in r]
     assert with_neighbours, "expected at least one hit to gain neighbours"
+
+
+# ---------------------------------------------------------------------------
+# graph_expansion (bi-temporal fact readback, Phase 1) integration tests
+# ---------------------------------------------------------------------------
+
+
+class MockMultiKG:
+    """KG that returns several currently-valid triples for the entity 'Jay'."""
+
+    async def query_entity(self, name, **kwargs):
+        if "jay" in name.lower():
+            return [
+                {"subject_id": "jay", "predicate": "created", "object_id": "taos",
+                 "object_name": "taOS", "subject_name": "Jay", "direction": "outgoing",
+                 "confidence": 1.0, "id": "t1"},
+                {"subject_id": "jay", "predicate": "lives_in", "object_id": "london",
+                 "object_name": "London", "subject_name": "Jay", "direction": "outgoing",
+                 "confidence": 0.9, "id": "t2"},
+                {"subject_id": "jay", "predicate": "works_at", "object_id": "janlabs",
+                 "object_name": "JAN LABS", "subject_name": "Jay", "direction": "outgoing",
+                 "confidence": 0.8, "id": "t3"},
+                {"subject_id": "jay", "predicate": "uses", "object_id": "orangepi",
+                 "object_name": "Orange Pi", "subject_name": "Jay", "direction": "outgoing",
+                 "confidence": 0.7, "id": "t4"},
+            ]
+        return []
+
+
+class MockEmptyKG:
+    async def query_entity(self, name, **kwargs):
+        return []
+
+
+class MockRaisingKG:
+    async def query_entity(self, name, **kwargs):
+        raise RuntimeError("kg unavailable")
+
+
+def test_retrieve_graph_expansion_off_is_noop():
+    """Default-off (and explicit 0) must not append a derived block; the two runs
+    are identical, proving graph_expansion off is byte-for-byte a no-op."""
+    default_run = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=ALL_SOURCES,
+        limit=5,
+    ))
+    explicit_off = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=ALL_SOURCES,
+        limit=5,
+        graph_expansion=0,
+    ))
+    assert default_run == explicit_off
+    assert all(r["source"] != "kg_expansion" for r in default_run)
+
+
+def test_retrieve_graph_expansion_on_appends_derived_block():
+    """With the control on and the KG populated, the assembled context gains one
+    derived-facts block labelled as derived (provenance-honest)."""
+    results = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=ALL_SOURCES,
+        limit=5,
+        graph_expansion=200,
+    ))
+
+    derived = [r for r in results if r["source"] == "kg_expansion"]
+    assert len(derived) == 1, "expected exactly one derived KG-facts block"
+    block = derived[0]
+    assert block["derived"] is True
+    assert block["metadata"]["derived"] is True
+    assert block["text"].startswith("Related facts:")
+    assert "Jay created taOS" in block["text"]
+    # The primary evidence (real turns) is still present and comes first.
+    assert results[0]["source"] != "kg_expansion"
+
+
+def test_retrieve_graph_expansion_empty_kg_is_noop():
+    """A KG with no matching facts is a silent no-op (fail-open)."""
+    sources = dict(ALL_SOURCES, kg=MockEmptyKG())
+    results = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=sources,
+        limit=5,
+        graph_expansion=200,
+    ))
+    assert all(r["source"] != "kg_expansion" for r in results)
+
+
+def test_retrieve_graph_expansion_erroring_kg_is_noop():
+    """A KG that raises must not crash retrieve(); the stage fails open."""
+    sources = dict(ALL_SOURCES, kg=MockRaisingKG())
+    results = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=sources,
+        limit=5,
+        graph_expansion=200,
+    ))
+    assert isinstance(results, list)
+    assert all(r["source"] != "kg_expansion" for r in results)
+
+
+def test_retrieve_graph_expansion_no_kg_source_is_noop():
+    """No 'kg' source present: the stage is a no-op even when enabled."""
+    sources = {"vector": MockVectorMemory()}
+    results = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=sources,
+        limit=5,
+        graph_expansion=200,
+    ))
+    assert all(r["source"] != "kg_expansion" for r in results)
+
+
+def test_retrieve_graph_expansion_respects_token_budget():
+    """The derived block honours the token budget: it stays within max_tokens*4
+    chars and drops facts that do not fit."""
+    budget = 12  # ~48 chars: header + one fact fits, the rest are dropped
+    sources = dict(ALL_SOURCES, kg=MockMultiKG())
+    results = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=sources,
+        limit=5,
+        graph_expansion=budget,
+    ))
+    derived = [r for r in results if r["source"] == "kg_expansion"]
+    assert len(derived) == 1
+    text = derived[0]["text"]
+    assert len(text) <= budget * 4
+    # Fewer than all four facts survive the budget.
+    assert text.count("\n- ") < 4
+    # A generous budget keeps more facts than the tight one.
+    generous = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=sources,
+        limit=5,
+        graph_expansion=200,
+    ))
+    generous_text = [r for r in generous if r["source"] == "kg_expansion"][0]["text"]
+    assert generous_text.count("\n- ") > text.count("\n- ")
