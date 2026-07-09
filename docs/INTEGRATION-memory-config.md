@@ -38,10 +38,10 @@ The cost, pros, and cons for each are in the schema and mirrored in the README C
 | Preset | `reranker` | `prefer_verified` | `fusion` | `adjacent_turns` | For |
 |---|---|---|---|---|---|
 | Minimal | `off` | `off` | `rrf` | 1 | Fastest and lightest; weak hardware or speed-first. |
-| Quality | `bge-v2-m3` | `off` | `rrf` | 2 | Best accuracy where hardware affords (pair with `self_verify` in answer-gen). |
-| Integrity | `bge-v2-m3` | `prefer_verified` | `rrf` | 2 | Auditable, zero-served-hallucination recall. |
+| Quality | `bge-v2-m3` | `prefer_verified` | `rrf` | 2 | Best accuracy with the verified gate on (pair with `self_verify` in answer-gen). |
+| Integrity | `bge-v2-m3` | `strict` | `rrf` | 2 | Maximum purity: strict gate, auditable, zero-served-hallucination recall. |
 
-The recall gate is on globally by default, so Minimal is the preset that turns it off.
+The recall gate is on globally by default; Minimal turns it off, Quality keeps it on, and Integrity uses the strict variant.
 
 ## Install-time profiles vs runtime controls
 

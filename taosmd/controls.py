@@ -150,7 +150,8 @@ CONTROLS: dict[str, Control] = {
 
 
 # Named bundles. Values are {control_id: value}. prefer_verified is on globally
-# by default, so Minimal is the preset that turns it off.
+# by default; Minimal turns it off, Quality keeps it on, and Integrity uses the
+# stricter variant (drops unverified claims for maximum purity).
 PRESETS: dict[str, dict] = {
     "minimal": {
         "label": "Minimal",
@@ -160,15 +161,15 @@ PRESETS: dict[str, dict] = {
     },
     "quality": {
         "label": "Quality",
-        "description": "Best accuracy where hardware affords: reranking on (pair with self-verify in your answer-gen).",
+        "description": "Best accuracy plus the verified-memory gate: reranking on and the recall gate on (pair with self-verify in your answer-gen).",
         "values": {"reranker": "bge-v2-m3",
-                   "prefer_verified": "off", "fusion": "rrf", "adjacent_turns": 2},
+                   "prefer_verified": "prefer_verified", "fusion": "rrf", "adjacent_turns": 2},
     },
     "integrity": {
         "label": "Integrity",
-        "description": "Quality plus the verified-memory gate: auditable, zero-served-hallucination recall.",
+        "description": "Maximum purity: the strict recall gate drops unverified claims (a small recall trade-off) for auditable, zero-served-hallucination recall.",
         "values": {"reranker": "bge-v2-m3",
-                   "prefer_verified": "prefer_verified", "fusion": "rrf", "adjacent_turns": 2},
+                   "prefer_verified": "strict", "fusion": "rrf", "adjacent_turns": 2},
     },
 }
 

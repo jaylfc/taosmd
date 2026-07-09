@@ -71,7 +71,7 @@ SWITCHES = {
         help="Demotes (never deletes) claims verified as unsupported out of default recall. "
              "Eliminates served-hallucination (0.040 -> 0.000) at no measured accuracy cost, "
              "tri-judge confirmed (E-018). Ships on by default because it is a safe no-op until "
-             "the verify-pass is populated; Minimal and Quality turn it off, Integrity keeps it on. "
+             "the verify-pass is populated; Minimal turns it off, Quality keeps it on, and Integrity uses the stricter variant. "
              "Writes the same controls.prefer_verified the runtime recall gate reads.",
     ),
 }
@@ -87,16 +87,18 @@ PROFILES = {
     "quality": Profile(
         id="quality", label="Quality",
         description="Best accuracy on capable hardware: arctic-embed + rerank + "
-                    "self-verify. This is the F-013 configuration.",
+                    "self-verify, plus the verified-memory recall gate on. The F-013 "
+                    "accuracy configuration with the F-011 integrity gate.",
         overrides={"arctic_embed": True, "rerank": True, "self_verify": True,
-                   "prefer_verified": False},
+                   "prefer_verified": True},
     ),
     "integrity": Profile(
         id="integrity", label="Integrity",
-        description="Quality plus the verified-memory recall gate, with provenance and "
-                    "the audit surface. For auditable, zero-served-hallucination memory.",
+        description="Maximum purity: Quality plus the strict recall gate, which drops "
+                    "unverified claims (accepts a small measured recall trade-off) for "
+                    "auditable, zero-served-hallucination memory.",
         overrides={"arctic_embed": True, "rerank": True, "self_verify": True,
-                   "prefer_verified": True},
+                   "prefer_verified": "strict"},
     ),
 }
 
@@ -152,6 +154,15 @@ def resolve_config(profile_id: str, consented_switches: list[str] | None = None)
     out: dict = {}
     for sid, sw in SWITCHES.items():
         wants = prof.overrides.get(sid, sw.default)
+        if isinstance(wants, str):
+            # A profile may pin an explicit value (e.g. prefer_verified="strict")
+            # instead of a bool. Consent-required switches still need consent;
+            # non-consent switches write the pinned value directly.
+            if not sw.requires_consent or sid in consented:
+                out[sw.config_key] = wants
+            elif sw.off_value is not None:
+                out[sw.config_key] = sw.off_value
+            continue
         if sw.requires_consent:
             enabled = sid in consented and wants
         else:

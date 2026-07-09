@@ -432,13 +432,13 @@ The answer generator is selectable by workload, not just by hardware tier. The d
 
 ### Presets
 
-One-tap bundles of the live controls. The recall gate is on globally by default, so Minimal is the preset that turns it off.
+One-tap bundles of the live controls. The recall gate is on globally by default; Minimal turns it off, Quality keeps it on, and Integrity steps up to the strict variant.
 
 | Preset | `reranker` | `prefer_verified` | `fusion` | `adjacent_turns` | For |
 | --- | --- | --- | --- | --- | --- |
 | Minimal | `off` | `off` | `rrf` | 1 | Fastest and lightest: plain retrieval, weak hardware or speed-first. |
-| Quality | `bge-v2-m3` | `off` | `rrf` | 2 | Best accuracy where hardware affords (pair with `self_verify` in your answer-gen). |
-| Integrity | `bge-v2-m3` | `prefer_verified` | `rrf` | 2 | Quality plus the verified-memory gate: auditable, zero-served-hallucination recall. |
+| Quality | `bge-v2-m3` | `prefer_verified` | `rrf` | 2 | Best accuracy with the verified gate on (pair with `self_verify` in your answer-gen). |
+| Integrity | `bge-v2-m3` | `strict` | `rrf` | 2 | Maximum purity: the strict gate drops unverified claims for auditable, zero-served-hallucination recall. |
 
 The numbers above are cross-linked to their measurements in [docs/benchmarks.md](docs/benchmarks.md), and the full method and provenance for each lever are in the [research report](docs/research-report.md) (F-010 embedder, F-011 recall gate, F-013 reranking and self-verification, E-018 the tri-judge gate confirm).
 
