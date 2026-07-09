@@ -160,47 +160,59 @@ class TemporalKnowledgeGraph:
         Deliberate re-classification with old-value history would need the
         triple-style ``valid_from``/``valid_to`` treatment; no caller does
         that today, so the lightweight non-destructive merge is used.
+
+        The SELECT-then-INSERT/UPDATE runs inside a single ``BEGIN IMMEDIATE``
+        transaction so the read-merge-write is atomic: two interleaved
+        add_entity for the same id (a second connection or process) can't lose
+        a merged property. The immediate transaction takes the write lock
+        before the read, and the busy timeout (see :mod:`taosmd._db`) makes a
+        competing writer wait rather than race.
         """
         eid = self._entity_id(name)
         now = time.time()
-        existing = self._conn.execute(
-            "SELECT type, properties_json FROM kg_entities WHERE id = ?",
-            (eid,),
-        ).fetchone()
-        if existing is None:
-            self._conn.execute(
-                """INSERT INTO kg_entities (id, name, type, properties_json, created_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (eid, name, entity_type, properties, now),
-            )
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self._conn.execute(
+                "SELECT type, properties_json FROM kg_entities WHERE id = ?",
+                (eid,),
+            ).fetchone()
+            if existing is None:
+                self._conn.execute(
+                    """INSERT INTO kg_entities (id, name, type, properties_json, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (eid, name, entity_type, properties, now),
+                )
+                self._conn.commit()
+                return eid
+
+            placeholder = (None, "", "unknown")
+            new_type = existing["type"]
+            if existing["type"] in placeholder and entity_type not in placeholder:
+                new_type = entity_type
+            elif (
+                entity_type not in placeholder
+                and existing["type"] not in placeholder
+                and entity_type != existing["type"]
+            ):
+                # Two different concrete types for one entity id. We keep the
+                # first-seen classification (non-destructive), but the losing
+                # type is not tombstoned anywhere, so log it as a drift signal
+                # (mirrors how add_triple surfaces out-of-vocab predicates).
+                logger.debug(
+                    "kg entity %s: keeping first-seen type %r, dropping conflicting %r",
+                    eid, existing["type"], entity_type,
+                )
+            merged_props = _merge_entity_properties(existing["properties_json"], properties)
+            if new_type != existing["type"] or merged_props != existing["properties_json"]:
+                self._conn.execute(
+                    "UPDATE kg_entities SET type = ?, properties_json = ? WHERE id = ?",
+                    (new_type, merged_props, eid),
+                )
             self._conn.commit()
             return eid
-
-        placeholder = (None, "", "unknown")
-        new_type = existing["type"]
-        if existing["type"] in placeholder and entity_type not in placeholder:
-            new_type = entity_type
-        elif (
-            entity_type not in placeholder
-            and existing["type"] not in placeholder
-            and entity_type != existing["type"]
-        ):
-            # Two different concrete types for one entity id. We keep the
-            # first-seen classification (non-destructive), but the losing type
-            # is not tombstoned anywhere, so log it as a drift signal (mirrors
-            # how add_triple surfaces out-of-vocab predicates).
-            logger.debug(
-                "kg entity %s: keeping first-seen type %r, dropping conflicting %r",
-                eid, existing["type"], entity_type,
-            )
-        merged_props = _merge_entity_properties(existing["properties_json"], properties)
-        if new_type != existing["type"] or merged_props != existing["properties_json"]:
-            self._conn.execute(
-                "UPDATE kg_entities SET type = ?, properties_json = ? WHERE id = ?",
-                (new_type, merged_props, eid),
-            )
-            self._conn.commit()
-        return eid
+        except BaseException:
+            self._conn.rollback()
+            raise
 
     async def get_entity(self, name: str) -> dict | None:
         row = self._conn.execute(
