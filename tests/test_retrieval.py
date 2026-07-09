@@ -680,6 +680,18 @@ class MockRaisingKG:
         raise RuntimeError("kg unavailable")
 
 
+class MockNoneConfidenceKG:
+    """KG returning a triple with an explicit ``confidence: None`` — a shape a
+    third-party or mock store can emit that ``float(None)`` would choke on."""
+
+    async def query_entity(self, name, **kwargs):
+        if "jay" in name.lower():
+            return [{"subject_id": "jay", "predicate": "created", "object_id": "taos",
+                     "object_name": "taOS", "subject_name": "Jay", "direction": "outgoing",
+                     "confidence": None, "id": "t1"}]
+        return []
+
+
 def test_retrieve_graph_expansion_off_is_noop():
     """Default-off (and explicit 0) must not append a derived block; the two runs
     are identical, proving graph_expansion off is byte-for-byte a no-op."""
@@ -790,3 +802,38 @@ def test_retrieve_graph_expansion_respects_token_budget():
     ))
     generous_text = [r for r in generous if r["source"] == "kg_expansion"][0]["text"]
     assert generous_text.count("\n- ") > text.count("\n- ")
+
+
+def test_retrieve_graph_expansion_none_confidence_is_fail_open():
+    """A KG triple with confidence=None must not break retrieve(): the stage
+    fails open (never raises), so the caller still gets a list back."""
+    sources = dict(ALL_SOURCES, kg=MockNoneConfidenceKG())
+    results = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="thorough",
+        sources=sources,
+        limit=5,
+        graph_expansion=200,
+    ))
+    assert isinstance(results, list)
+    # The real turns are still served; if a derived block survives, its
+    # confidence-derived source_score is a finite float (None coerced to 0.0),
+    # never an exception.
+    for r in results:
+        assert isinstance(r.get("source_score", 0.0), float)
+
+
+def test_retrieve_graph_expansion_on_appends_derived_block_fast():
+    """The append tail is identical across strategies; lock coverage on a second
+    strategy (fast) so all four tails stay wired, not just thorough."""
+    results = asyncio.run(retrieve(
+        query="Jay taOS memory",
+        strategy="fast",
+        sources=ALL_SOURCES,
+        limit=5,
+        graph_expansion=200,
+    ))
+    derived = [r for r in results if r["source"] == "kg_expansion"]
+    assert len(derived) == 1, "expected exactly one derived KG-facts block in fast mode"
+    assert derived[0]["derived"] is True
+    assert derived[0]["text"].startswith("Related facts:")

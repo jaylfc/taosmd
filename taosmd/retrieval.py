@@ -652,8 +652,10 @@ async def _append_graph_expansion(
     if not block:
         return results
     # Keep confidence: surface the strongest currently-valid triple's score.
+    # ``or 0.0`` also coerces an explicit ``confidence: None`` (which
+    # ``float(None)`` would raise on) so the fail-open contract holds.
     top_confidence = max(
-        (float(e.get("confidence", 0.0)) for e in expanded), default=0.0
+        (float(e.get("confidence") or 0.0) for e in expanded), default=0.0
     )
     derived = {
         "text": block,
