@@ -696,8 +696,16 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             deferred identity-keying work, not this layer.
 
             Returns ``(resolved_project, ok)`` where ``ok=False`` means the
-            response has already been written and the caller must return.
+            response has already been written and the caller must return. The
+            token-derived project (the verified ``project_id`` claim, or
+            ``None`` for a tokenless or global-token request) is also stashed
+            on ``self._token_project`` for handlers that must scope purely on
+            the token, never on the body-supplied project (see
+            ``_handle_task_create``'s ``depends_on`` guard). It is reset to
+            ``None`` on every call so a keep-alive connection cannot leak a
+            prior request's binding.
             """
+            self._token_project = None
             if _registry_verifier is None:
                 return project, True
             auth = self.headers.get("Authorization", "")
@@ -726,6 +734,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 self._send_json(403, {"error": f"registry auth: {exc}"})
                 return None, False
             verified_project = claims.get("project_id")
+            self._token_project = verified_project
             if verified_project is not None:
                 project = verified_project
             # Token proves identity; a grant proves permission. Any verified
@@ -1337,6 +1346,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             project, ok = self._apply_token_binding(created_by, project)
             if not ok:
                 return
+            token_project = self._token_project
             try:
                 priority = int(priority)
             except (TypeError, ValueError) as exc:
@@ -1347,11 +1357,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             # must obey the same non-enumerating project scope as the /edges
             # endpoints: a token bound to a project may only depend on that
             # project's tasks. Foreign and nonexistent ids yield the identical
-            # 403 so task existence cannot be probed. Unbound (tokenless /
-            # standalone) requests pass through untouched.
-            if project is not None and depends_on:
+            # 403 so task existence cannot be probed. The scope keys on the
+            # TOKEN-bound project (like the /edges handlers, which derive scope
+            # purely from the token), NOT the post-binding ``project`` -- for a
+            # tokenless caller that is just the body-supplied tag and must not
+            # restrict anything. Tokenless / standalone / global-token requests
+            # (``token_project is None``) pass through untouched.
+            if token_project is not None and depends_on:
                 for dep_id in depends_on:
-                    if not self._enforce_edge_project_scope(project, dep_id, dep_id):
+                    if not self._enforce_edge_project_scope(token_project, dep_id, dep_id):
                         return
             result = runner.run(
                 service.task_create(

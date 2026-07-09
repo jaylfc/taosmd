@@ -592,8 +592,15 @@ def test_task_create_scoped_token_same_project_depends_on_succeeds(project_serve
 
 
 def test_task_create_tokenless_depends_on_unchanged(project_server):
-    """Without a token, create-with-depends_on works exactly as standalone."""
-    t_blocker = _create_task(project_server, "Plain blocker", project="proj-b")
+    """Without a token, create-with-depends_on works exactly as standalone,
+    even across projects.
+
+    The scope guard keys on the token-bound project, not the body-supplied
+    ``project`` tag: a tokenless caller may tag its own task one project and
+    depend on a task in another, exactly as on the unauthed/standalone path.
+    Using a genuinely CROSS-project dep (blocker in proj-a, new task tagged
+    proj-b) proves tokenless is truly unrestricted, not merely same-project."""
+    t_blocker = _create_task(project_server, "Plain blocker", project="proj-a")
     status, body = _post_json(
         project_server, "/tasks",
         {"title": "plain blocked", "created_by": "setup",
