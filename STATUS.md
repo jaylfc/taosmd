@@ -1,15 +1,21 @@
 # STATUS
 
-## RESTART HANDOFF (read first) - 2026-06-30
+## RESTART HANDOFF (read first) - 2026-07-09
 
-Jay is restarting Claude to pick up the new Sonnet 5 model for subagents. THIS session + its session-only cron DIE. Disk, git, and memory persist; everything is merged and pushed (master clean).
+Identity: this session is @taOSmd-dev (the taOSmd dev agent). Session-only monitor cron dies with the session; disk, git, memory persist. Master clean + fully pushed.
 
-ON THE NEW SESSION (on-arrival checklist):
-1. RE-ARM the hourly monitor cron: CronCreate `13 * * * *`, durable, prompt = run .claude/audit-cron-prompt.md (usage gate, docs freshness, research report, memory, ALL-channel a2a bus sweep, repo PR/issue/bot-review sweep). The old cron id f8c41108 is dead.
-2. Subagents now use SONNET 5 (model:sonnet resolves to it); keep delegating exploration + implementation to Sonnet, reviews to Opus, my context for design + merge.
-3. Check the bus first thing for @taOS-dev's bus-auth ENFORCE-FLIP signal (held until all 4 agents tokened) and any new @taOSmd item. Read this STATUS.
+ON A NEW SESSION (on-arrival checklist):
+1. RE-ARM the hourly monitor cron: CronCreate `13 * * * *`, durable, prompt = run .claude/audit-cron-prompt.md (usage gate, docs freshness, research report, memory, ALL-channel a2a bus sweep, repo PR/issue/bot-review sweep, and the new STEP 6 daily fork-freshness check at 09:xx). The old cron ids are dead.
+2. Check the bus first for @taOS-dev items: the bus-auth ENFORCE-FLIP signal (still held, verify-and-warn is the live default) and any rkllm/NPU follow-up. Read this STATUS.
 
-STATE (all SHIPPED + merged to master this session): #177 task-aware generator profiles, #178 dashboard settability, #179 test hardening, #180 bot-review fixes, #181 A2A verify-and-warn. CANARY DONE: my registry identity taosmd-dev-20260630-120353 is active (consent-minted, @taOS-dev verified); registry_token stored in ~/.taosmd/config.json so my bus posts are signed. BUS-AUTH (#138 Phase 2) verify-and-warn is built (warn default = log+accept; enforce behind config a2a_auth_enforce) and HELD: remaining is OPERATIONAL rollout (Jay/@taOS-dev): activate on the live Pi bus (deploy #181 + set registry_url -> warn mode), then the enforce flip. FEDORA BENCH HOST IS IN WINDOWS now (rebootwin = `sudo efibootmgr -n 0001 && sudo reboot`, Boot0001=Windows). To do any GPU/bench work, reboot it back to Fedora first (`sudo efibootmgr -n 0000 && sudo reboot`, Boot0000=Fedora) and check the bus + nvidia-smi. Open PRs #172/#173 are Jay's pre-existing, untouched. Usage healthy at handoff. .superpowers/ is now gitignored.
+JULY BATCH (all SHIPPED + merged to master):
+- Jul 5 deep audit (8 parallel agents) -> fix wave, all merged: #182 zero-loss integrity (embedder-failure surfacing, archive day-boundary rollover, batch archive/claims linkage, reconcile provenance carry); #183 model-resolution (split_provider strips ollama: at every HTTP boundary) + agent-registry data-dir unification; #186 + #187 SECURITY (token binding + non-enumerating project scoping on all task edge/update endpoints); #188 TTL (forget_after honored via ingest_batch); #189 KG add_entity non-destructive merge (zero-loss). Docs honesty batch (purged the pre-N-017 74.6% everywhere incl the controls.py UI string, tier-table alignment, a2a-comms registry-auth section). research-report rev 1.50.
+- BENCH: granite4.1:8b LME-S full-500 54.8/60.4 = PARITY at 4.9GB Apache-2.0 but FAILED the LoCoMo kill criterion (0.475 vs qwen3.5:9b 0.515, E-024) = factual-recall-only. PR #184 (granite factual-recall) is OPEN + HELD by Jay: balanced default STAYS qwen3.5:9b; 12GB factual-recall STAYS gemma4:12b. lfm2.5:8b rejected (N-018); nemotron-3-nano:4b = viable lenient 3rd judge (F-017).
+- NPU: rkllm runtime 1.3.0 is LIVE on the Pi (@taOS-dev deployed rkllama feat/rknpu-1.3.0 @ dadea41 via a new systemd rkllama.service, boot-persistent; my 2 rerank ABI blockers were folded in first). taosmd embed/rerank/query-expansion NPU models still serving. STILL PENDING: gemma4 + qwen3.5 rkllm weights need x86 RKLLM-Toolkit conversion (zero prep started) before our shipped models run on NPU. 99G of Qwen2.5 conversion cruft cleared from the Pi dev tree (store consolidation half still open). See [[npu-model-watch]].
+
+IN FLIGHT: PR fix/audit-followups (Jul 9 full re-audit on fable found 2 cross-cutting majors: MAJOR 1 batch dedupe reads TTL-filtered rows so expired items re-ingest = archive duplication/zero-loss; MAJOR 2 /tasks create depends_on bypasses the #186/#187 edge project-scope guard = cross-project edge + enumeration). Both TDD-fixed, adversarial review then merge.
+
+HELD: #184 granite (Jay); bus-auth enforce flip (@taOS-dev). Open PRs #172/#173/#184/#185 (#185 external contributor 021-lab, awaiting their rebase). Fedora 3060 bench host reboot: rebootwin -> Windows, WOL -> Fedora (docs/bench-pause-resume.md). GPU is Jay's, check the bus before any claim.
 
 ---
 
