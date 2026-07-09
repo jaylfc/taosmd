@@ -58,9 +58,9 @@ The install picks a profile; the app tunes the live controls afterward. The reca
 |---|---|---|---|
 | 12 GB GPU (RTX 3060 class) | qwen3.5:9b Q4_K_M (best quality) or llama3.1:8b (2.4x faster) | k=20, adj=2, llm-query-expansion, fusion rrf; add bge-v2-m3 MaxSim rerank where affordable | LoCoMo 0.557 strict / 0.748 lenient (tri-judge) |
 | 8 GB GPU | qwen3.5:9b IQ4_XS (4.81 GB), concurrency 1 | same stack as the 12 GB tier | ~0.55 (from the quant-cliff data) |
-| 16 GB Orange Pi 5 Plus (RK3588 NPU) | Qwen3-4B via rkllama on the NPU | adj=2, k=20, llm-exp, RRF; reranker Qwen3-Reranker-0.6B on NPU | LoCoMo 0.490; this is the 97.0% Recall@5 reference stack |
-| 4 GB GPU (GTX 1050 Ti) | qwen3:4b Q4 (~2.5 GB) | adj=2, k=10, RRF; skip llm-query-expansion | LoCoMo 0.530 |
-| Raspberry Pi 4 (CPU only) | qwen3:1.7b or smaller | adj=1, k=10; skip every flag that adds an LLM call | extrapolation; better used as a storage/retrieval node, offload generation to a peer |
+| 16 GB Orange Pi 5 Plus (RK3588 NPU) | retrieval-only by default (the `balanced` profile maps pi-npu to no generator); Qwen3-4B via rkllama on the NPU is the measured benchmark config, opt-in | adj=2, k=20, llm-exp, RRF; reranker Qwen3-Reranker-0.6B on NPU | LoCoMo 0.490; this is the 97.0% Recall@5 reference stack |
+| 4 GB GPU (GTX 1050 Ti) | llama3.1:8b (shipped default at gpu-4gb); qwen3:4b Q4 (~2.5 GB) is the measured on-GPU alternative | adj=2, k=10, RRF; skip llm-query-expansion | LoCoMo 0.530 (qwen3:4b) |
+| Raspberry Pi 4 (CPU only) | retrieval-only by default (the `balanced` profile maps cpu to no generator); qwen3:1.7b or smaller is an extrapolated option | adj=1, k=10; skip every flag that adds an LLM call | better used as a storage/retrieval node, offload generation to a peer |
 
 Embedder, reranker, and judge run as CPU ONNX on every tier; GPU or NPU VRAM is for the generator only. Do not run the judge on the same device as the generator.
 

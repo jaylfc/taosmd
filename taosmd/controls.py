@@ -127,7 +127,7 @@ CONTROLS: dict[str, Control] = {
         category="quality", scope="consumer", type="bool",
         config_key="answer.self_verify", default=False,
         cost="a second LLM pass per answer in your answer-generation",
-        pros="the dominant lever behind the 74.6% end-to-end Judge (a CoVe-style check of the draft against the evidence); +17.8pp on LongMemEval-S",
+        pros="a CoVe-style check of the draft against the evidence; the dominant end-to-end Judge lever on LongMemEval-S (shipped config 42.8% Qwen / 51.2% llama after the N-017 judge-parser correction)",
         cons="applied in your answer-generation, not in taOSmd core (taOSmd serves memory); roughly doubles answer latency",
         description="A recommendation, not a core toggle: pair reranking with a self-verify pass in your answer-gen for the verified-answer config.",
         benchmarks_anchor="end-to-end-judge-on-longmemeval-s-the-generation-side-number",

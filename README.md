@@ -699,7 +699,7 @@ ollama pull qwen3:4b  # Same model as the smaller node, same quality
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
 | `GET` | `/health` | (none) | `{"status": "ok", "version": <str>}` |
-| `POST` | `/ingest` | `{"text": str, "agent": str, "project"?: str}` | `{"archived": int, "agent": str, "project": str\|null, "data_dir": str}` |
+| `POST` | `/ingest` | `{"text": str, "agent": str, "project"?: str}` | `{"archived": int, "agent": str, "project": str\|null, "data_dir": str, ...}` (adds `"vector_failures": int` and `"degraded": true` when the embedder fails) |
 | `POST` | `/ingest/batch` | `{"items": [{"text": str, "id"?: str, "metadata"?: obj}], "agent": str, "project"?: str}` | `{"ingested": int, "skipped": int, ...}` |
 | `POST` | `/search` | `{"query": str, "agent": str, "limit"?: int, "project"?: str, "also_include"?: [str], "mode"?: "bm25"}` | `{"hits": [...]}` |
 | `GET` | `/search` | `?q=<query>&agent=<agent>&limit=<int>&project=<id>&also_include=a,b&mode=bm25` | `{"hits": [...]}` |
