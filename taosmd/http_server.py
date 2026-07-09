@@ -1343,6 +1343,16 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'priority' must be an integer") from exc
             if depends_on is not None and not isinstance(depends_on, list):
                 raise _BadRequest("'depends_on' must be a list of task IDs when provided")
+            # ``depends_on`` becomes a blocks edge (tasks.create_task), so it
+            # must obey the same non-enumerating project scope as the /edges
+            # endpoints: a token bound to a project may only depend on that
+            # project's tasks. Foreign and nonexistent ids yield the identical
+            # 403 so task existence cannot be probed. Unbound (tokenless /
+            # standalone) requests pass through untouched.
+            if project is not None and depends_on:
+                for dep_id in depends_on:
+                    if not self._enforce_edge_project_scope(project, dep_id, dep_id):
+                        return
             result = runner.run(
                 service.task_create(
                     title,
