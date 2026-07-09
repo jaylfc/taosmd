@@ -540,6 +540,75 @@ def test_edge_endpoints_tokenless_on_authed_server_unchanged(project_server):
     assert body["removed_ts"] is not None
 
 
+def test_task_create_scoped_token_cross_project_depends_on_is_403(project_server):
+    """A proj-a token cannot create a task that depends_on a proj-b task.
+
+    ``depends_on`` becomes a blocks edge, so it must obey the same
+    project scope as the /edges endpoints."""
+    t_foreign = _create_task(project_server, "Foreign blocker", project="proj-b")
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    status, _ = _post_json(
+        project_server, "/tasks",
+        {"title": "my proj-a task", "created_by": "agent-1",
+         "depends_on": [t_foreign]},
+        token=tok)
+    assert status == 403
+    # The foreign task must not have been blocked by the phantom edge.
+    assert t_foreign in _ready_ids(project_server)
+
+
+def test_task_create_scoped_token_depends_on_does_not_enumerate(project_server):
+    """A foreign existing depends_on target and a nonexistent one must be
+    indistinguishable (same 403 status, same error body)."""
+    t_foreign = _create_task(project_server, "Foreign target", project="proj-b")
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    s_foreign, b_foreign = _post_json(
+        project_server, "/tasks",
+        {"title": "probe foreign", "created_by": "agent-1",
+         "depends_on": [t_foreign]},
+        token=tok)
+    s_missing, b_missing = _post_json(
+        project_server, "/tasks",
+        {"title": "probe missing", "created_by": "agent-1",
+         "depends_on": ["t-000000000000"]},
+        token=tok)
+    assert s_foreign == s_missing == 403
+    assert b_foreign == b_missing
+
+
+def test_task_create_scoped_token_same_project_depends_on_succeeds(project_server):
+    """A proj-a token can create a task depending on a proj-a task."""
+    t_blocker = _create_task(project_server, "Local blocker", project="proj-a")
+    tok = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
+    status, body = _post_json(
+        project_server, "/tasks",
+        {"title": "local blocked", "created_by": "agent-1",
+         "depends_on": [t_blocker]},
+        token=tok)
+    assert status == 200, body
+    new_id = body["id"]
+    # The blocks edge is real: the new task is not ready while the blocker is open.
+    assert new_id not in _ready_ids(project_server)
+
+
+def test_task_create_tokenless_depends_on_unchanged(project_server):
+    """Without a token, create-with-depends_on works exactly as standalone,
+    even across projects.
+
+    The scope guard keys on the token-bound project, not the body-supplied
+    ``project`` tag: a tokenless caller may tag its own task one project and
+    depend on a task in another, exactly as on the unauthed/standalone path.
+    Using a genuinely CROSS-project dep (blocker in proj-a, new task tagged
+    proj-b) proves tokenless is truly unrestricted, not merely same-project."""
+    t_blocker = _create_task(project_server, "Plain blocker", project="proj-a")
+    status, body = _post_json(
+        project_server, "/tasks",
+        {"title": "plain blocked", "created_by": "setup",
+         "project": "proj-b", "depends_on": [t_blocker]})
+    assert status == 200, body
+    assert body["id"] not in _ready_ids(project_server)
+
+
 def test_task_update_scoped_token_cannot_touch_foreign_project(project_server):
     """A proj-a token must not mutate a proj-b task, and the refusal must
     not reveal whether the foreign task exists."""

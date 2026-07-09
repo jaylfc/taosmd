@@ -286,6 +286,61 @@ def test_ingest_batch_forget_after_expires_via_api(isolated):
     assert total == 3
 
 
+def test_ingest_batch_expired_item_still_dedupes(isolated):
+    """A batch item whose forget_after has passed must still dedupe on re-POST.
+
+    An expired row is only hidden from recall; it is physically present, so a
+    re-import of the same id must be skipped (idempotency) rather than writing
+    a second archive/vector row. Regression guard for the #188 TTL filter
+    leaking into existing_source_ids() and breaking batch dedupe (zero-loss:
+    unbounded archive duplication on every re-POST of an expired id)."""
+    stores = asyncio.run(taosmd_api._ensure_stores(str(isolated)))
+    _patch_embedder(stores)
+    agent = "ttl-dedupe-agent"
+    vmem = stores["vector"]
+
+    past = time.time() - 3600
+    item = [{"text": "stale note", "id": "stale-1",
+             "metadata": {"forget_after": past}}]
+
+    r1 = asyncio.run(taosmd.ingest_batch(item, agent=agent, data_dir=str(isolated)))
+    assert r1["ingested"] == 1 and r1["skipped"] == 0, r1
+
+    r2 = asyncio.run(taosmd.ingest_batch(item, agent=agent, data_dir=str(isolated)))
+    assert r2["ingested"] == 0, "expired item must not re-ingest"
+    assert r2["skipped"] == 1, "expired item id must be deduped on re-POST"
+
+    # Zero-loss / no duplication: exactly one physical row for the id.
+    total = vmem._conn.execute("SELECT COUNT(*) FROM vector_memory").fetchone()[0]
+    assert total == 1, "re-POST of an expired id must not write a second row"
+
+
+def test_existing_source_ids_includes_expired_rows(tmp_path):
+    """existing_source_ids() must report source_ids of expired rows too.
+
+    The set backs batch dedupe; an expired row still exists on disk, so its
+    source_id must dedupe. A non-expired row is reported as before."""
+    vmem = _make_store(tmp_path)
+    try:
+        past = time.time() - 3600
+        future = time.time() + 86400
+        asyncio.run(vmem.add(
+            "expired sourced row",
+            metadata={"agent": "a", "metadata": {"source_id": "expired-sid",
+                                                 "forget_after": past}}))
+        asyncio.run(vmem.add(
+            "active sourced row",
+            metadata={"agent": "a", "metadata": {"source_id": "active-sid",
+                                                 "forget_after": future}}))
+
+        sids = vmem.existing_source_ids(agent="a")
+        assert "active-sid" in sids
+        assert "expired-sid" in sids, (
+            "expired-but-present row must still dedupe in existing_source_ids()")
+    finally:
+        asyncio.run(vmem.close())
+
+
 def test_ttl_filter_uses_now_override(tmp_path):
     """Passing an explicit now value controls which rows are expired."""
     vmem = _make_store(tmp_path)

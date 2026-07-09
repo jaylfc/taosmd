@@ -741,6 +741,7 @@ class VectorMemory:
         project: str | None = None,
         search_agents: list[str] | None = None,
         now: float | None = None,
+        include_expired: bool = False,
     ):
         """Fetch active (non-superseded) rows, scoped by project/agent.
 
@@ -754,6 +755,12 @@ class VectorMemory:
         Non-numeric or missing ``forget_after`` values are silently ignored so
         existing memories are never affected. ``now`` defaults to
         ``time.time()``; pass an explicit float in tests to control the clock.
+
+        ``include_expired=True`` skips the TTL filter only: superseded rows
+        (``valid_to`` set) stay excluded, but rows hidden purely because their
+        ``forget_after`` has passed are returned. Batch dedupe uses this so an
+        expired-but-still-present id is not re-ingested (see
+        ``existing_source_ids``). Recall paths never pass it.
         """
         if now is None:
             now = time.time()
@@ -782,21 +789,22 @@ class VectorMemory:
             # nest the caller's per-item metadata under ``meta["metadata"]``.
             # Tolerating both shapes makes forget_after expire identically no
             # matter which ingest path wrote the row. Top level wins if set.
-            fa = meta.get("forget_after")
-            if fa is None:
-                inner = meta.get("metadata")
-                if isinstance(inner, dict):
-                    fa = inner.get("forget_after")
-            if fa is not None:
-                try:
-                    if float(fa) < now:
-                        continue
-                except (TypeError, ValueError):
-                    logger.debug(
-                        "ignore non-numeric forget_after=%r on row id=%s",
-                        fa,
-                        row["id"],
-                    )
+            if not include_expired:
+                fa = meta.get("forget_after")
+                if fa is None:
+                    inner = meta.get("metadata")
+                    if isinstance(inner, dict):
+                        fa = inner.get("forget_after")
+                if fa is not None:
+                    try:
+                        if float(fa) < now:
+                            continue
+                    except (TypeError, ValueError):
+                        logger.debug(
+                            "ignore non-numeric forget_after=%r on row id=%s",
+                            fa,
+                            row["id"],
+                        )
 
             if project is not None or search_agents is not None:
                 # Project filter: skip rows positively tagged with a different
@@ -821,9 +829,18 @@ class VectorMemory:
         whose ``id`` is already present are skipped instead of duplicated.
         Rows tagged with a different agent are excluded when ``agent`` is set;
         untagged rows are included, matching the search-scoping rules.
+
+        Dedup must consider every physically-present row, including rows whose
+        ``forget_after`` has passed (``include_expired=True``): a TTL-expired
+        row is only hidden from recall, it still exists on disk, so re-ingesting
+        its id would write a second archive/vector row every re-POST (zero-loss
+        violation). Superseded rows (``valid_to`` set) are genuinely removed and
+        stay excluded, so re-importing intentionally-cleared content re-adds it.
         """
         out: set[str] = set()
-        for row in self._load_active_rows(search_agents=[agent] if agent else None):
+        for row in self._load_active_rows(
+            search_agents=[agent] if agent else None, include_expired=True
+        ):
             try:
                 meta = json.loads(row["metadata_json"])
             except (json.JSONDecodeError, TypeError):
