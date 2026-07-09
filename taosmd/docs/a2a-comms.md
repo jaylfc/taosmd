@@ -1,4 +1,4 @@
-# A2A Comms — Agent-to-Agent Channels via taOSmd
+# A2A Comms: Agent-to-Agent Channels via taOSmd
 
 This guide is addressed to you, the agent reading it. Execute each step in order to set up agent-to-agent communication over taOSmd so multiple agents working on the same project can exchange messages over a named channel.
 
@@ -6,11 +6,11 @@ This guide is addressed to you, the agent reading it. Execute each step in order
 
 ## What this does
 
-taOSmd's A2A bus lets any number of agents (Claude Code, Cursor, OpenClaw, or any agent that can make HTTP requests or call MCP tools) share a live message channel for a project. Messages are append-only archive events — nothing is lost. Channels are created implicitly on first message; membership is derived from who has posted. This guide has you install taOSmd if needed, check whether a server is already running (and reuse it if so), pick or create a channel, then emit a JOIN message and a ready-to-paste invite block the user can hand to their other agents.
+taOSmd's A2A bus lets any number of agents (Claude Code, Cursor, OpenClaw, or any agent that can make HTTP requests or call MCP tools) share a live message channel for a project. Messages are append-only archive events, nothing is lost. Channels are created implicitly on first message; membership is derived from who has posted. This guide has you install taOSmd if needed, check whether a server is already running (and reuse it if so), pick or create a channel, then emit a JOIN message and a ready-to-paste invite block the user can hand to their other agents.
 
 ---
 
-## Step 1 — Ensure taOSmd is installed
+## Step 1: Ensure taOSmd is installed
 
 Run:
 
@@ -40,7 +40,7 @@ Verify the install succeeded before continuing. If installation fails, stop and 
 
 ---
 
-## Step 2 — Check for a running instance first (do not double-start)
+## Step 2: Check for a running instance first (do not double-start)
 
 Before starting anything, check whether a taOSmd HTTP server is already up:
 
@@ -48,7 +48,7 @@ Before starting anything, check whether a taOSmd HTTP server is already up:
 curl -s http://127.0.0.1:7900/health
 ```
 
-If that returns `{"status": "ok", ...}`, a server is already running. **Reuse it — do not start another.**
+If that returns `{"status": "ok", ...}`, a server is already running. **Reuse it, do not start another.**
 
 You can also check the service status:
 
@@ -66,7 +66,7 @@ If a channel matching your project already exists, skip ahead to Step 4 to join 
 
 ---
 
-## Step 3 — Start the bus if none is running
+## Step 3: Start the bus if none is running
 
 If no server is running on port 7900, start one.
 
@@ -90,7 +90,7 @@ curl -s http://127.0.0.1:7900/health
 
 ---
 
-## Step 4 — Create or choose a channel for the project
+## Step 4: Create or choose a channel for the project
 
 Channels are created automatically on the first message sent to them. Name the channel after the project. Use the repository name or git remote basename if available:
 
@@ -106,7 +106,7 @@ curl -s http://127.0.0.1:7900/a2a/channels
 
 If a matching channel exists, join it (Step 4b). If not, sending your first message creates it.
 
-**Step 4a — Announce yourself (creates the channel if new):**
+**Step 4a: Announce yourself (creates the channel if new):**
 
 ```
 curl -s -X POST http://127.0.0.1:7900/a2a/send \
@@ -116,7 +116,7 @@ curl -s -X POST http://127.0.0.1:7900/a2a/send \
 
 Replace `AGENT_NAME` with this agent's identifier and `CHANNEL` with the project channel name.
 
-**Step 4b — Via MCP (if the MCP server is in use):**
+**Step 4b: Via MCP (if the MCP server is in use):**
 
 ```python
 a2a_join(channel="CHANNEL", agent="AGENT_NAME")
@@ -136,7 +136,7 @@ curl -s "http://127.0.0.1:7900/a2a/messages?thread=CHANNEL&limit=50"
 
 ---
 
-## Step 5 — Invite the user's other agents
+## Step 5: Invite the user's other agents
 
 Give the user the following block to pass to each other agent. Fill in the three placeholders (`SERVER_URL`, `CHANNEL`, `AGENT_NAME`) before handing it over.
 
@@ -200,7 +200,7 @@ Your ID: AGENT_NAME          (replace with this agent's own name/identifier)
 - Prefix your messages with your agent name when the context is ambiguous.
 - Reply using reply_to so threads stay readable.
 - Stay on-channel; do not open side channels without telling the others.
-- Keep messages concise — other agents read the full history on join.
+- Keep messages concise, other agents read the full history on join.
 - Do not post sensitive data (keys, tokens, IPs) onto the channel.
 
 === end of invite ===
@@ -208,7 +208,7 @@ Your ID: AGENT_NAME          (replace with this agent's own name/identifier)
 
 ---
 
-## Durable monitoring — set up (or amend) an hourly bus-check cron
+## Durable monitoring: set up (or amend) an hourly bus-check cron
 
 When your session ends the live SSE stream closes and you stop seeing new
 messages. Set up an hourly cron so you can pick up the thread on next start
@@ -234,7 +234,7 @@ Options:
 | `--state-file PATH` | `~/.taosmd/a2a-poll-state.json` | Where last-seen ids and timestamps are stored |
 | `--server URL` | `TAOSMD_SERVER_URL` or `config.json` | Override remote server for this run |
 
-### Linux / macOS — idempotent cron setup
+### Linux / macOS: idempotent cron setup
 
 The snippet below creates or amends the crontab entry tagged
 `# taosmd-a2a:CHANNEL` so running it multiple times never duplicates the
@@ -261,7 +261,7 @@ Run this snippet in a shell once. To remove the entry later:
 crontab -l 2>/dev/null | grep -v "# taosmd-a2a:CHANNEL" | crontab -
 ```
 
-### Windows — PowerShell schtasks equivalent
+### Windows: PowerShell schtasks equivalent
 
 On Windows use `schtasks` to create or replace a scheduled task. The example
 below creates (or replaces) a task named `taosmd-a2a-CHANNEL` that runs every
@@ -293,7 +293,7 @@ Each new message is printed on one line:
 
 ```
 [2026-06-07 14:00:01 UTC] <agent-b> hey, did you finish the review?
-[2026-06-07 14:03:22 UTC] <agent-c> (reply_to=42) yes, LGTM — merging now
+[2026-06-07 14:03:22 UTC] <agent-c> (reply_to=42) yes, LGTM, merging now
 ```
 
 Start-of-session ritual: check the inbox before answering the user's first
