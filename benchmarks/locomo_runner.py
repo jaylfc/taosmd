@@ -268,10 +268,11 @@ async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
                            prompt: str, temperature: float = 0.2,
                            thinking_mode: bool = False,
                            no_think_prefix: bool = False,
+                           force_empty_think: bool = False,
                            repeat_penalty: float | None = None,
                            num_predict: int | None = None,
                            stop: list[str] | None = None) -> str:
-    # Three thinking-suppression modes — choose one per generator:
+    # Four thinking-suppression modes — choose one per generator:
     #
     #   default (no flag): passes think=false in JSON. Works on qwen3.5:9b
     #     (20x speedup, response is the answer only). BROKEN on qwen3:4b /
@@ -284,9 +285,23 @@ async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
     #     Slower than think=false on qwen3.5:9b but still produces a clean
     #     answer; use only when the default is broken on the target model.
     #
+    #   --force-empty-think: prepends a *closed empty* reasoning block
+    #     "<think>\n\n</think>\n\n" AND passes think=false. The empty block
+    #     signals "thinking already complete" directly to the chat template,
+    #     which reliably suppresses reasoning where the "/no_think" token is
+    #     flaky across Qwen builds; think=false doubles down. This is the
+    #     "real" thinking-off --no-think-prefix fails to deliver (the latter
+    #     never sets think=false). Fast, like the base think=false path.
+    #     Takes precedence over --no-think-prefix if both are set.
+    #
     #   --thinking-mode: neither — model emits reasoning in the response.
     #     Slow; tests whether chain-of-thought changes answer quality.
-    payload_prompt = ("/no_think\n\n" + prompt) if no_think_prefix else prompt
+    if force_empty_think:
+        payload_prompt = "<think>\n\n</think>\n\n" + prompt
+    elif no_think_prefix:
+        payload_prompt = "/no_think\n\n" + prompt
+    else:
+        payload_prompt = prompt
     # Options default to just temperature (byte-identical to legacy runs); the
     # decoding levers below are only injected when their CLI flag is set.
     options: dict = {"temperature": temperature}
@@ -298,7 +313,7 @@ async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
         options["stop"] = stop
     payload = {"model": model, "prompt": payload_prompt, "stream": False,
                "options": options}
-    if not thinking_mode and not no_think_prefix:
+    if force_empty_think or (not thinking_mode and not no_think_prefix):
         payload["think"] = False
     resp = await client.post(f"{url}/api/generate", json=payload)
     resp.raise_for_status()
@@ -309,6 +324,7 @@ async def _llama_server_generate(client: httpx.AsyncClient, url: str, model: str
                                  prompt: str, temperature: float = 0.2,
                                  thinking_mode: bool = False,
                                  no_think_prefix: bool = False,
+                                 force_empty_think: bool = False,
                                  repeat_penalty: float | None = None,
                                  num_predict: int | None = None,
                                  stop: list[str] | None = None) -> str:
@@ -320,9 +336,17 @@ async def _llama_server_generate(client: httpx.AsyncClient, url: str, model: str
     KV-cache offload). ``thinking_mode`` and ``no_think_prefix`` keep their
     semantics: with ``no_think_prefix`` we prepend ``/no_think`` so the
     chat template can suppress reasoning tokens; with ``thinking_mode`` we
-    leave both off and let the generator emit CoT.
+    leave both off and let the generator emit CoT. ``force_empty_think``
+    prepends the closed empty reasoning block (precedence over
+    ``no_think_prefix``); there is no ``think`` field on this endpoint, so
+    the prompt-side block is the suppression signal here.
     """
-    payload_prompt = ("/no_think\n\n" + prompt) if no_think_prefix else prompt
+    if force_empty_think:
+        payload_prompt = "<think>\n\n</think>\n\n" + prompt
+    elif no_think_prefix:
+        payload_prompt = "/no_think\n\n" + prompt
+    else:
+        payload_prompt = prompt
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": payload_prompt}],
@@ -353,6 +377,7 @@ async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: st
                     prompt: str, temperature: float = 0.2,
                     thinking_mode: bool = False,
                     no_think_prefix: bool = False,
+                    force_empty_think: bool = False,
                     repeat_penalty: float | None = None,
                     num_predict: int | None = None,
                     stop: list[str] | None = None) -> str:
@@ -363,6 +388,8 @@ async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: st
     Caller supplies the right URL for the chosen backend; the runner picks
     one based on ``args.llm_backend`` plus the matching URL flag.
 
+    ``force_empty_think`` is the empty-reasoning-block thinking-off lever
+    (see ``_ollama_generate``); it takes precedence over ``no_think_prefix``.
     ``repeat_penalty`` / ``num_predict`` / ``stop`` are optional decoding levers
     (all None -> untouched backend defaults) forwarded to whichever backend runs.
     """
@@ -372,6 +399,7 @@ async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: st
             temperature=temperature,
             thinking_mode=thinking_mode,
             no_think_prefix=no_think_prefix,
+            force_empty_think=force_empty_think,
             repeat_penalty=repeat_penalty,
             num_predict=num_predict,
             stop=stop,
@@ -381,6 +409,7 @@ async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: st
         temperature=temperature,
         thinking_mode=thinking_mode,
         no_think_prefix=no_think_prefix,
+        force_empty_think=force_empty_think,
         repeat_penalty=repeat_penalty,
         num_predict=num_predict,
         stop=stop,
@@ -744,11 +773,43 @@ def _build_adjacent_map(
     return adj_map
 
 
+# LoCoMo session timestamps look like "1:56 pm on 8 May, 2023". Parse into a
+# datetime for chronological sorting + an ISO date for the timeline prefix.
+_LOCOMO_DT_FORMATS = (
+    "%I:%M %p on %d %B, %Y",   # "1:56 pm on 8 May, 2023"
+    "%I:%M %p on %d %B %Y",    # same, no comma
+    "%d %B, %Y",               # date-only fallback
+    "%d %B %Y",
+)
+
+
+def _parse_locomo_dt(dt: str):
+    """Return a datetime for a LoCoMo timestamp string, or None if unparseable.
+
+    Conservative: only the known LoCoMo formats are attempted; anything else
+    (empty, summary/event pseudo-dates) returns None so the caller can keep the
+    turn's existing rendering rather than guess a date.
+    """
+    if not dt:
+        return None
+    s = dt.strip()
+    for fmt in _LOCOMO_DT_FORMATS:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def _build_context(
     hits: list[dict],
     context_format: str = "plain",
     adjacent_turns_map: dict[str, list[str]] | None = None,
+    timeline_format: bool = False,
 ) -> str:
+    if timeline_format:
+        return _build_context_timeline(hits, adjacent_turns_map)
+
     lines = []
     for hit in hits:
         meta = hit.get("metadata", {}) or {}
@@ -768,6 +829,63 @@ def _build_context(
         if adjacent_turns_map and turn_idx in adjacent_turns_map:
             for neighbour_text in adjacent_turns_map[turn_idx]:
                 lines.append(neighbour_text)
+
+    return "\n".join(lines)
+
+
+def _build_context_timeline(
+    hits: list[dict],
+    adjacent_turns_map: dict[str, list[str]] | None = None,
+) -> str:
+    """Chronological, inline-ISO-date context string (--timeline-format).
+
+    Sorts retrieved hits oldest-to-newest by their parsed timestamp and renders
+    each as ``[YYYY-MM-DD] speaker: text``. Hits with no parseable timestamp
+    keep their existing (plain) rendering and are placed AFTER the dated block.
+    Retrieval is untouched — this only reshapes the {context} string. Adjacent
+    turns (which carry no timestamp of their own) are injected immediately after
+    their parent hit, exactly as in the plain path.
+    """
+    dated: list[tuple[datetime, int, dict]] = []
+    undated: list[dict] = []
+    for order, hit in enumerate(hits):
+        meta = hit.get("metadata", {}) or {}
+        parsed = _parse_locomo_dt(meta.get("datetime", ""))
+        if parsed is None:
+            undated.append(hit)
+        else:
+            # ``order`` keeps the sort stable for hits sharing a timestamp.
+            dated.append((parsed, order, hit))
+    dated.sort(key=lambda t: (t[0], t[1]))
+
+    lines = ["Memories below are in chronological order."]
+
+    def _emit(hit: dict, iso: str | None) -> None:
+        meta = hit.get("metadata", {}) or {}
+        turn_idx = str(meta.get("turn_idx", ""))
+        text = hit.get("text", "")
+        speaker = meta.get("speaker", "")
+        if iso is not None:
+            # Reshape "[speaker] text" -> "speaker: text" when the speaker is
+            # known and prefixes the text; otherwise keep the raw text body.
+            body = text
+            sp_tag = f"[{speaker}] "
+            if speaker and text.startswith(sp_tag):
+                body = f"{speaker}: {text[len(sp_tag):]}"
+            lines.append(f"[{iso}] {body}")
+        else:
+            # Undated: keep the plain rendering (raw datetime string prefix).
+            dt = meta.get("datetime", "")
+            prefix = f"[{dt}] " if dt else ""
+            lines.append(f"{prefix}{text}")
+        if adjacent_turns_map and turn_idx in adjacent_turns_map:
+            for neighbour_text in adjacent_turns_map[turn_idx]:
+                lines.append(neighbour_text)
+
+    for parsed, _order, hit in dated:
+        _emit(hit, parsed.strftime("%Y-%m-%d"))
+    for hit in undated:
+        _emit(hit, None)
 
     return "\n".join(lines)
 
@@ -956,6 +1074,8 @@ async def _process_qa(
     stop: list[str] | None = None,
     anti_hedge: bool = False,
     empty_retry: bool = False,
+    force_empty_think: bool = False,
+    timeline_format: bool = False,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -1029,6 +1149,7 @@ async def _process_qa(
                     temperature=0.3,
                     thinking_mode=thinking_mode,
                     no_think_prefix=no_think_prefix,
+                    force_empty_think=force_empty_think,
                 )
                 hypothetical = hypothetical.strip()
                 if hypothetical:
@@ -1099,7 +1220,8 @@ async def _process_qa(
         adj_map = _build_adjacent_map(hits, turn_index, adjacent_turns)
 
     context = _build_context(hits, context_format=context_format,
-                             adjacent_turns_map=adj_map if adj_map else None)
+                             adjacent_turns_map=adj_map if adj_map else None,
+                             timeline_format=timeline_format)
 
     t1 = time.time()
     retry_fired = False
@@ -1115,6 +1237,7 @@ async def _process_qa(
             temperature=gen_temp,
             thinking_mode=thinking_mode,
             no_think_prefix=no_think_prefix,
+            force_empty_think=force_empty_think,
             repeat_penalty=repeat_penalty,
             num_predict=num_predict,
             stop=stop,
@@ -1130,6 +1253,7 @@ async def _process_qa(
                     llm_backend, client, gen_url, model, plan_prompt,
                     temperature=gen_temp,
                     thinking_mode=thinking_mode, no_think_prefix=no_think_prefix,
+                    force_empty_think=force_empty_think,
                 )
                 # parse verification questions: one per line, drop empties
                 verify_qs = [
@@ -1151,6 +1275,7 @@ async def _process_qa(
                             temperature=gen_temp,
                             thinking_mode=thinking_mode,
                             no_think_prefix=no_think_prefix,
+                            force_empty_think=force_empty_think,
                         )
                         for vq in verify_qs
                     ]
@@ -1168,6 +1293,7 @@ async def _process_qa(
                         temperature=gen_temp,
                         thinking_mode=thinking_mode,
                         no_think_prefix=no_think_prefix,
+                        force_empty_think=force_empty_think,
                     )
             except Exception as cove_exc:
                 # if any verification step fails, fall back to draft
@@ -1416,6 +1542,8 @@ async def run(args: argparse.Namespace) -> int:
         "stop": stop_list,
         "anti_hedge_prompt": args.anti_hedge_prompt,
         "empty_retry": args.empty_retry,
+        "force_empty_think": args.force_empty_think,
+        "timeline_format": args.timeline_format,
         "emem_edu": args.emem_edu,
         "emem_edu_extract_model": args.emem_edu_extract_model if args.emem_edu else "",
         "emem_edu_filter": (args.emem_edu and not args.emem_edu_no_filter),
@@ -1514,6 +1642,8 @@ async def run(args: argparse.Namespace) -> int:
                     stop=stop_list,
                     anti_hedge=args.anti_hedge_prompt,
                     empty_retry=args.empty_retry,
+                    force_empty_think=args.force_empty_think,
+                    timeline_format=args.timeline_format,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -1656,6 +1786,8 @@ async def run(args: argparse.Namespace) -> int:
         "stop": meta_for_hash["stop"],
         "anti_hedge_prompt": meta_for_hash["anti_hedge_prompt"],
         "empty_retry": meta_for_hash["empty_retry"],
+        "force_empty_think": meta_for_hash["force_empty_think"],
+        "timeline_format": meta_for_hash["timeline_format"],
         "emem_edu": meta_for_hash["emem_edu"],
         "emem_edu_extract_model": meta_for_hash["emem_edu_extract_model"],
         "emem_edu_filter": meta_for_hash["emem_edu_filter"],
@@ -1918,6 +2050,28 @@ def _build_parser() -> argparse.ArgumentParser:
                         "Asymmetric fallback: --no-think-prefix for the "
                         "commit gain, think-on rescue for the refusals. "
                         "Prints a fired/still-empty counter at the end. "
+                        "Default off.")
+    p.add_argument("--force-empty-think", action="store_true",
+                   help="Suppress reasoning by prepending a CLOSED EMPTY "
+                        "thinking block '<think>\\n\\n</think>\\n\\n' to the "
+                        "generator prompt AND passing think=false. The empty "
+                        "block signals 'thinking already complete' to the chat "
+                        "template — reliable where the flaky '/no_think' token "
+                        "is not — and think=false doubles down. Unlike "
+                        "--no-think-prefix (which never sets think=false), this "
+                        "forces thinking off BOTH ways, so it is fast like the "
+                        "base path. Takes precedence over --no-think-prefix if "
+                        "both are set. Applies to the generator (draft/HyDE/"
+                        "CoVe), not the self-judge. Default off.")
+    p.add_argument("--timeline-format", action="store_true",
+                   help="Reformat the retrieved context as a chronological "
+                        "timeline: sort hits oldest-to-newest by their parsed "
+                        "timestamp, render each as '[YYYY-MM-DD] speaker: text', "
+                        "and prepend one line 'Memories below are in "
+                        "chronological order.'. Hits with no parseable timestamp "
+                        "keep their plain rendering and are placed after the "
+                        "dated ones. Retrieval is unchanged — only the context "
+                        "string formatting. Targets Temporal + MultiHop. "
                         "Default off.")
     p.add_argument("--emem-edu", action="store_true",
                    help="EMem-style EDU ingest (arXiv:2511.17208, vector-only "
