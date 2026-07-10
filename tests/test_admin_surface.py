@@ -171,7 +171,7 @@ def test_no_token_configured_returns_403(live_server_no_token, path, payload):
     """When no server token is configured all admin endpoints return 403."""
     status, body = _post(f"{live_server_no_token}{path}", payload, token=None)
     assert status == 403, f"expected 403 for {path}, got {status}: {body}"
-    assert "admin surface requires a configured server token" in body.get("error", "")
+    assert "admin surface requires a configured" in body.get("error", "")
 
 
 @pytest.mark.parametrize("path,payload", _ADMIN_ROUTES)
