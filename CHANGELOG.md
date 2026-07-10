@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Concurrency fix: config and generator-profile writes are serialized through the service loop. `POST /config` and `POST /generator-profile` (global and per-agent) read-modify-wrote the JSON config file directly on the request thread, so two overlapping POSTs could interleave their read and write and drop one update (last-writer-wins on the whole file). Both handlers now marshal the read-merge-write onto the single service loop so writes are applied one at a time and no concurrent update is lost.
+Concurrency fix: config and generator-profile writes are serialized through the service loop. `POST /controls` and `POST /generator-profile` (global and per-agent) read-modify-wrote the JSON config file directly on the request thread, so two overlapping POSTs could interleave their read and write and drop one update (last-writer-wins on the whole file). Both handlers now marshal the read-merge-write onto the single service loop so writes are applied one at a time and no concurrent update is lost.
 
 Concurrency fix: `TemporalKnowledgeGraph.add_entity` performs its read-merge-write atomically under `BEGIN IMMEDIATE`. The non-destructive merge (keep first-seen name and concrete type, upgrade only the `unknown` placeholder, merge properties additively) read the existing row and wrote the merged row in separate statements, so two writers racing on the same entity could each read the pre-merge state and the second write could clobber the first's merge. The read and the write now run inside one immediate transaction, so concurrent `add_entity` calls on the same id serialize and every merge is preserved.
 
