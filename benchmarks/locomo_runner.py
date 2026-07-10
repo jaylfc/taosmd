@@ -88,6 +88,36 @@ Context:
 Question: {question}
 Answer:"""
 
+# Anti-hedge answer prompt — commit-focused variant selected by --anti-hedge-prompt.
+# Same {context}/{question} placeholders as ANSWER_PROMPT; swaps the "best
+# inference / I don't know" framing for an explicit "commit to a specific answer,
+# only say unknown after checking every memory" instruction. Paired with
+# --no-think-prefix it targets the temporal-hedging that costs LoCoMo Judge.
+ANTI_HEDGE_ANSWER_PROMPT = """You are answering a question using retrieved conversation memory. Answer directly and commit to a specific answer taken from the context. For date and time questions, always give an explicit absolute date (for example "7 May 2023" or "June 2023"), never a relative reference like "last Saturday". Do not say the information is unavailable, unspecified, or not mentioned if any memory below contains it. Reply "unknown" only if you have checked every memory and none contains the answer. Keep your answer to one short sentence.
+
+Context:
+{context}
+
+Question: {question}
+Answer:"""
+
+# Abstention detector for --empty-retry. An empty/whitespace answer OR a match
+# here triggers the one-shot thinking-on rescue. Case-insensitive.
+_ABSTENTION_RE = re.compile(
+    r"\b(i don'?t know|no (specific )?(information|dates?|details?)|"
+    r"not (mentioned|specified|available|stated)|"
+    r"cannot (determine|find)|unknown)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_abstention(text: str) -> bool:
+    """True when an answer is empty/whitespace-only or matches _ABSTENTION_RE."""
+    if not text or not text.strip():
+        return True
+    return _ABSTENTION_RE.search(text) is not None
+
+
 JUDGE_PROMPT = """You are grading a predicted answer against a reference answer.
 Reply with a single token: YES if the predicted answer matches the reference
 (same facts, minor wording differences are fine), otherwise NO.
@@ -237,7 +267,10 @@ def _bleu1(pred: str, ref: str) -> float:
 async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
                            prompt: str, temperature: float = 0.2,
                            thinking_mode: bool = False,
-                           no_think_prefix: bool = False) -> str:
+                           no_think_prefix: bool = False,
+                           repeat_penalty: float | None = None,
+                           num_predict: int | None = None,
+                           stop: list[str] | None = None) -> str:
     # Three thinking-suppression modes — choose one per generator:
     #
     #   default (no flag): passes think=false in JSON. Works on qwen3.5:9b
@@ -254,8 +287,17 @@ async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
     #   --thinking-mode: neither — model emits reasoning in the response.
     #     Slow; tests whether chain-of-thought changes answer quality.
     payload_prompt = ("/no_think\n\n" + prompt) if no_think_prefix else prompt
+    # Options default to just temperature (byte-identical to legacy runs); the
+    # decoding levers below are only injected when their CLI flag is set.
+    options: dict = {"temperature": temperature}
+    if repeat_penalty is not None:
+        options["repeat_penalty"] = repeat_penalty
+    if num_predict is not None:
+        options["num_predict"] = num_predict
+    if stop:
+        options["stop"] = stop
     payload = {"model": model, "prompt": payload_prompt, "stream": False,
-               "options": {"temperature": temperature}}
+               "options": options}
     if not thinking_mode and not no_think_prefix:
         payload["think"] = False
     resp = await client.post(f"{url}/api/generate", json=payload)
@@ -266,7 +308,10 @@ async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
 async def _llama_server_generate(client: httpx.AsyncClient, url: str, model: str,
                                  prompt: str, temperature: float = 0.2,
                                  thinking_mode: bool = False,
-                                 no_think_prefix: bool = False) -> str:
+                                 no_think_prefix: bool = False,
+                                 repeat_penalty: float | None = None,
+                                 num_predict: int | None = None,
+                                 stop: list[str] | None = None) -> str:
     """OpenAI-compatible generator for llama-server (TurboQuant fork).
 
     Used when ``--llm-backend llama-server`` is set so Qwen3.6-35B-A3B can
@@ -284,6 +329,16 @@ async def _llama_server_generate(client: httpx.AsyncClient, url: str, model: str
         "temperature": temperature,
         "stream": False,
     }
+    # Decoding levers map onto the OpenAI-compatible endpoint where the field
+    # name is standard (stop, max_tokens); repeat_penalty is a llama.cpp
+    # extension that its /v1/chat/completions accepts as a top-level field.
+    # Only added when the CLI flag is set — absent -> byte-identical payload.
+    if stop:
+        payload["stop"] = stop
+    if num_predict is not None:
+        payload["max_tokens"] = num_predict
+    if repeat_penalty is not None:
+        payload["repeat_penalty"] = repeat_penalty
     resp = await client.post(f"{url}/v1/chat/completions", json=payload)
     resp.raise_for_status()
     body = resp.json()
@@ -297,13 +352,19 @@ async def _llama_server_generate(client: httpx.AsyncClient, url: str, model: str
 async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: str,
                     prompt: str, temperature: float = 0.2,
                     thinking_mode: bool = False,
-                    no_think_prefix: bool = False) -> str:
+                    no_think_prefix: bool = False,
+                    repeat_penalty: float | None = None,
+                    num_predict: int | None = None,
+                    stop: list[str] | None = None) -> str:
     """Dispatch a generation call to the configured backend.
 
     ``backend`` is either ``"ollama"`` (default — POSTs to ``{url}/api/generate``)
     or ``"llama-server"`` (TurboQuant fork — POSTs to ``{url}/v1/chat/completions``).
     Caller supplies the right URL for the chosen backend; the runner picks
     one based on ``args.llm_backend`` plus the matching URL flag.
+
+    ``repeat_penalty`` / ``num_predict`` / ``stop`` are optional decoding levers
+    (all None -> untouched backend defaults) forwarded to whichever backend runs.
     """
     if backend == "llama-server":
         return await _llama_server_generate(
@@ -311,12 +372,18 @@ async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: st
             temperature=temperature,
             thinking_mode=thinking_mode,
             no_think_prefix=no_think_prefix,
+            repeat_penalty=repeat_penalty,
+            num_predict=num_predict,
+            stop=stop,
         )
     return await _ollama_generate(
         client, url, model, prompt,
         temperature=temperature,
         thinking_mode=thinking_mode,
         no_think_prefix=no_think_prefix,
+        repeat_penalty=repeat_penalty,
+        num_predict=num_predict,
+        stop=stop,
     )
 
 
@@ -884,6 +951,11 @@ async def _process_qa(
     emem_edu_filter: bool = False,
     emem_edu_filter_model: str = "",
     inline_judge: bool = True,
+    repeat_penalty: float | None = None,
+    num_predict: int | None = None,
+    stop: list[str] | None = None,
+    anti_hedge: bool = False,
+    empty_retry: bool = False,
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -1030,8 +1102,11 @@ async def _process_qa(
                              adjacent_turns_map=adj_map if adj_map else None)
 
     t1 = time.time()
+    retry_fired = False
+    retry_still_empty = False
     try:
-        answer_prompt = ANSWER_PROMPT.format(context=context, question=question)
+        template = ANTI_HEDGE_ANSWER_PROMPT if anti_hedge else ANSWER_PROMPT
+        answer_prompt = template.format(context=context, question=question)
         if few_shot:
             answer_prompt = FEW_SHOT_EXAMPLES + answer_prompt
         draft = await _generate(
@@ -1040,6 +1115,9 @@ async def _process_qa(
             temperature=gen_temp,
             thinking_mode=thinking_mode,
             no_think_prefix=no_think_prefix,
+            repeat_penalty=repeat_penalty,
+            num_predict=num_predict,
+            stop=stop,
         )
         if cove:
             # Chain-of-Verification: plan verification questions, answer them
@@ -1096,6 +1174,28 @@ async def _process_qa(
                 predicted = draft
         else:
             predicted = draft
+
+        # Asymmetric fallback: --no-think-prefix buys the commit gain but costs
+        # a slice of empty/hedged answers. When --empty-retry is set and the
+        # answer is empty or matches the abstention regex, re-run the SAME
+        # answer prompt ONCE on the reasoning-ON path (thinking_mode=True, and
+        # the no-think prefix flipped OFF for this one call) and take that
+        # answer instead. Decoding levers are kept identical to the first call.
+        if empty_retry and _is_abstention(predicted):
+            retry_fired = True
+            rescued = await _generate(
+                llm_backend, client, gen_url, model,
+                answer_prompt,
+                temperature=gen_temp,
+                thinking_mode=True,
+                no_think_prefix=False,
+                repeat_penalty=repeat_penalty,
+                num_predict=num_predict,
+                stop=stop,
+            )
+            predicted = rescued
+            if _is_abstention(predicted):
+                retry_still_empty = True
     except Exception:
         # A QA without a real prediction is a FAILED QA, not a 0-scoring row.
         # Swallowing the error here once turned a missing Ollama model into
@@ -1127,6 +1227,8 @@ async def _process_qa(
         "context_chars": len(context),
         "evidence_hits": _evidence_hits(hits, evidence),
         "evidence_total": len(evidence),
+        "empty_retry_fired": 1 if retry_fired else 0,
+        "empty_retry_still_empty": 1 if retry_still_empty else 0,
     }
 
 
@@ -1256,6 +1358,11 @@ async def run(args: argparse.Namespace) -> int:
     # Resolve retrieval_top_k: falls back to top_k if not explicitly set.
     retrieval_top_k = args.retrieval_top_k if args.retrieval_top_k is not None else args.top_k
 
+    # Parse --stop "s1|||s2" into a list once; None (flag absent) leaves the
+    # backend's default stop behaviour untouched. '|||' is the literal
+    # delimiter so newline content inside a stop string survives intact.
+    stop_list = args.stop.split("|||") if args.stop else None
+
     # Initialise reranker once (shared across all QAs).
     try:
         reranker = _load_reranker(args.reranker)
@@ -1304,6 +1411,11 @@ async def run(args: argparse.Namespace) -> int:
         "hyde": args.hyde,
         "no_think_prefix": args.no_think_prefix,
         "few_shot": args.few_shot,
+        "repeat_penalty": args.repeat_penalty,
+        "num_predict": args.num_predict,
+        "stop": stop_list,
+        "anti_hedge_prompt": args.anti_hedge_prompt,
+        "empty_retry": args.empty_retry,
         "emem_edu": args.emem_edu,
         "emem_edu_extract_model": args.emem_edu_extract_model if args.emem_edu else "",
         "emem_edu_filter": (args.emem_edu and not args.emem_edu_no_filter),
@@ -1397,6 +1509,11 @@ async def run(args: argparse.Namespace) -> int:
                     emem_edu_filter=(args.emem_edu and not args.emem_edu_no_filter),
                     emem_edu_filter_model=args.emem_edu_filter_model or args.emem_edu_extract_model,
                     inline_judge=not args.no_inline_judge,
+                    repeat_penalty=args.repeat_penalty,
+                    num_predict=args.num_predict,
+                    stop=stop_list,
+                    anti_hedge=args.anti_hedge_prompt,
+                    empty_retry=args.empty_retry,
                 )
             except Exception as e:
                 async with progress_lock:
@@ -1534,6 +1651,11 @@ async def run(args: argparse.Namespace) -> int:
         "hyde": meta_for_hash["hyde"],
         "no_think_prefix": meta_for_hash["no_think_prefix"],
         "few_shot": meta_for_hash["few_shot"],
+        "repeat_penalty": meta_for_hash["repeat_penalty"],
+        "num_predict": meta_for_hash["num_predict"],
+        "stop": meta_for_hash["stop"],
+        "anti_hedge_prompt": meta_for_hash["anti_hedge_prompt"],
+        "empty_retry": meta_for_hash["empty_retry"],
         "emem_edu": meta_for_hash["emem_edu"],
         "emem_edu_extract_model": meta_for_hash["emem_edu_extract_model"],
         "emem_edu_filter": meta_for_hash["emem_edu_filter"],
@@ -1558,6 +1680,19 @@ async def run(args: argparse.Namespace) -> int:
         os.unlink(sidecar_path)
 
     _print_summary(meta, by_category, overall)
+
+    # --empty-retry accounting: how many answers triggered the thinking-on
+    # rescue and how many were still empty/abstaining after it. Only printed
+    # when the flag actually fired so non-retry runs stay quiet.
+    if args.empty_retry:
+        retries_fired = sum(r.get("empty_retry_fired", 0) for r in results)
+        still_empty = sum(r.get("empty_retry_still_empty", 0) for r in results)
+        print(
+            f"Empty-retry: {retries_fired} rescues fired "
+            f"({still_empty} still empty/abstaining after retry) "
+            f"out of {len(results)} answers"
+        )
+
     print(f"\nwrote {out_path}")
 
     # A run where every QA errored must not look like a successful 0.000
@@ -1743,6 +1878,47 @@ def _build_parser() -> argparse.ArgumentParser:
                         "CoVe verification calls). Default 0.2 — the value "
                         "every prior LoCoMo cell ran at; sweep 0.0 / 0.5 / "
                         "0.8 to test sampling sensitivity.")
+    p.add_argument("--repeat-penalty", type=float, default=None,
+                   metavar="FLOAT",
+                   help="Ollama options.repeat_penalty on the answer step. "
+                        "Default unset — leaves the backend default untouched "
+                        "(byte-identical to legacy runs). 1.0 disables the "
+                        "penalty entirely; use to stop the generator dropping "
+                        "into hedged/repetitive refusals. Also forwarded to "
+                        "llama-server as a top-level repeat_penalty field.")
+    p.add_argument("--num-predict", type=int, default=None,
+                   metavar="INT",
+                   help="Ollama options.num_predict — cap the generated token "
+                        "count on the answer step. Default unset (unbounded / "
+                        "current behaviour). Forwarded to llama-server as "
+                        "max_tokens. Note: on the --empty-retry thinking-on "
+                        "rescue this cap also bounds the reasoning tokens, so a "
+                        "very small value can truncate a rescued answer.")
+    p.add_argument("--stop", default=None,
+                   metavar='"s1|||s2"',
+                   help="Ollama options.stop (and llama-server stop). Split on "
+                        "the literal delimiter '|||' into a list of stop "
+                        "strings. '|||' is used instead of newline so a stop "
+                        "sequence can itself contain newlines. Default unset "
+                        "(no explicit stop sequences).")
+    p.add_argument("--anti-hedge-prompt", action="store_true",
+                   help="Replace the answer prompt with the commit-focused "
+                        "anti-hedge template: 'commit to a specific answer "
+                        "from the context, give absolute dates, only say "
+                        "unknown after checking every memory.' Targets the "
+                        "temporal-hedging failure mode that costs LoCoMo "
+                        "Judge under --no-think-prefix. Default off (uses the "
+                        "standard best-inference template).")
+    p.add_argument("--empty-retry", action="store_true",
+                   help="After generating an answer, if it is empty/"
+                        "whitespace-only or matches the abstention regex, "
+                        "re-run the SAME question ONCE on the reasoning-ON "
+                        "path (thinking mode on, no-think prefix flipped off "
+                        "for that one call) and take the second answer. "
+                        "Asymmetric fallback: --no-think-prefix for the "
+                        "commit gain, think-on rescue for the refusals. "
+                        "Prints a fired/still-empty counter at the end. "
+                        "Default off.")
     p.add_argument("--emem-edu", action="store_true",
                    help="EMem-style EDU ingest (arXiv:2511.17208, vector-only "
                         "variant). Replaces raw-turn ingest with one LLM call "
