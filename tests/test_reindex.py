@@ -233,6 +233,71 @@ def test_reindex_empty_agent_is_consistent(isolated):
     assert result["reindexed_ok"] is True
 
 
+def test_reindex_preserves_project_and_provenance(isolated):
+    """A reindexed row must carry the same scope + provenance the hot path
+    wrote: the project scope, the archive_span_id of the row it backs, and the
+    nested user metadata (source_id/forget_after). Without the project tag the
+    rebuilt row falls out of project-scoped search and, worse, becomes visible
+    to a DIFFERENT project's search for the same agent -- a cross-project scope
+    leak. Mirrors reconcile()'s metadata reconstruction.
+    """
+    import json as _json
+
+    data_dir = isolated
+    stores = _setup(data_dir)
+    agent = "scope-agent"
+    project = "proj-scope-abc"
+    other_project = "proj-other-xyz"
+    source_id = "content-hash-42"
+
+    scoped_text = "the project scoped turn that must not leak"
+    asyncio.run(taosmd.ingest_batch(
+        [{"text": scoped_text, "id": source_id, "metadata": {"forget_after": 999.0}}],
+        agent=agent,
+        project=project,
+        data_dir=str(data_dir),
+    ))
+
+    # The archive row id is the span the rebuilt vector row must point at.
+    from taosmd.archive import EVENT_CONVERSATION
+    archive_rows = asyncio.run(stores["archive"].query(
+        event_type=EVENT_CONVERSATION, agent_name=agent))
+    assert len(archive_rows) == 1
+    span_id = archive_rows[0]["id"]
+
+    result = asyncio.run(
+        taosmd_api.reindex(agent=agent, data_dir=str(data_dir), check=False)
+    )
+    assert result["readded"] == 1
+    assert result["reindexed_ok"] is True
+
+    # The rebuilt row must keep project, archive_span_id and nested metadata.
+    vmem = stores["vector"]
+    rows = vmem._conn.execute(
+        "SELECT metadata_json FROM vector_memory WHERE text = ?", (scoped_text,)
+    ).fetchall()
+    assert len(rows) == 1
+    meta = _json.loads(rows[0][0])
+    assert meta.get("project") == project, "reindex must preserve the project scope"
+    assert meta.get("archive_span_id") == span_id, (
+        "reindex must re-link the rebuilt row to its archive span")
+    assert isinstance(meta.get("metadata"), dict), "reindex must carry nested metadata"
+    assert meta["metadata"].get("source_id") == source_id
+    assert meta["metadata"].get("forget_after") == 999.0
+
+    # Scope behaviour: findable under project P ...
+    hits = asyncio.run(taosmd.search(
+        scoped_text, agent=agent, project=project, data_dir=str(data_dir), limit=5))
+    assert scoped_text in {h["text"] for h in hits}, (
+        "reindexed row must stay visible to its own project's search")
+
+    # ... and INVISIBLE to a different project's search for the same agent.
+    leak = asyncio.run(taosmd.search(
+        scoped_text, agent=agent, project=other_project, data_dir=str(data_dir), limit=5))
+    assert scoped_text not in {h["text"] for h in leak}, (
+        "reindexed row must not leak into a different project's search")
+
+
 # ---------------------------------------------------------------------------
 # service wrapper
 # ---------------------------------------------------------------------------
