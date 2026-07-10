@@ -1025,14 +1025,22 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 self._send_json(400, {
                     "error": "body must be {control_id: value}, {values: {...}}, or {preset: id}"})
                 return
-            errors = {}
-            for cid, val in updates.items():
-                try:
-                    _config.set_control(cid, val, data_dir=data_dir)
-                except ValueError as exc:
-                    errors[cid] = str(exc)
+            # Route the read-modify-write through the single service loop so it
+            # serialises with ensure_agent (and every other config writer),
+            # closing the lost-update race that direct request-thread mutation
+            # left open (audit M3).
+            async def _apply_controls():
+                errs = {}
+                for cid, val in updates.items():
+                    try:
+                        _config.set_control(cid, val, data_dir=data_dir)
+                    except ValueError as exc:
+                        errs[cid] = str(exc)
+                return errs, _config.get_controls(data_dir=data_dir)
+
+            errors, settings = runner.run(_apply_controls())
             self._send_json(400 if errors else 200, {
-                "settings": _config.get_controls(data_dir=data_dir),
+                "settings": settings,
                 "errors": errors,
             })
 
@@ -1064,11 +1072,17 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             if not pid or _gp.get_profile(pid) is None:
                 self._send_json(400, {"error": f"unknown profile: {pid!r}"})
                 return
-            try:
+            # Serialise the write on the service loop so a per-agent profile
+            # write and a concurrent ensure_agent (on /ingest) can't lose each
+            # other's update (audit M3).
+            async def _apply_profile():
                 if agent:
                     _agents.set_agent_generator_profile(agent, pid, data_dir=data_dir)
                 else:
                     _cfg.set_generator_profile(pid, data_dir=data_dir)
+
+            try:
+                runner.run(_apply_profile())
             except (_agents.AgentNotFoundError, ValueError) as exc:
                 self._send_json(400, {"error": str(exc)})
                 return

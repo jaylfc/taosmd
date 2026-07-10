@@ -177,3 +177,113 @@ async def test_add_entity_conflicting_concrete_type_keeps_first_and_logs(tmp_pat
     assert ent["type"] == "organization"  # first-seen concrete type wins
     assert any("dropping conflicting" in r.message for r in caplog.records)
     await kg.close()
+
+
+# ---------------------------------------------------------------------------
+# Atomicity: the read-merge-write must run inside one transaction so two
+# interleaved add_entity for the same id cannot lose a merged property
+# (audit nit). Single-connection SQLite makes this low-risk today, but the
+# SELECT-then-UPDATE is hardened with BEGIN IMMEDIATE.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_add_entity_read_modify_write_wrapped_in_immediate_transaction(tmp_path):
+    """The SELECT and the UPDATE run inside a single BEGIN IMMEDIATE tx."""
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_entity("Jay", "person", '{"city": "London"}')
+
+    stmts: list[str] = []
+    real_conn = kg._conn
+
+    class _RecordingConn:
+        """Delegates to the real connection, logging each executed statement."""
+
+        def execute(self, sql, *args, **kwargs):
+            stmts.append(" ".join(sql.split()).upper())
+            return real_conn.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(real_conn, name)
+
+    kg._conn = _RecordingConn()  # type: ignore[assignment]
+    try:
+        # An enriching re-add: a new property key forces the UPDATE branch.
+        await kg.add_entity("Jay", "person", '{"role": "founder"}')
+    finally:
+        kg._conn = real_conn
+
+    begins = [i for i, s in enumerate(stmts) if s.startswith("BEGIN IMMEDIATE")]
+    selects = [i for i, s in enumerate(stmts) if s.startswith("SELECT")]
+    updates = [i for i, s in enumerate(stmts) if s.startswith("UPDATE")]
+    assert begins, f"no BEGIN IMMEDIATE issued: {stmts}"
+    assert selects, f"no SELECT issued: {stmts}"
+    assert updates, f"no UPDATE issued (merge should have changed props): {stmts}"
+    # The write lock is taken before the read, and the read + write are in the
+    # same transaction: BEGIN IMMEDIATE < SELECT < UPDATE.
+    assert begins[0] < selects[0] < updates[0], stmts
+
+    import json
+    ent = await kg.get_entity("Jay")
+    props = json.loads(ent["properties_json"])
+    assert props == {"city": "London", "role": "founder"}
+    await kg.close()
+
+
+def test_add_entity_concurrent_property_merges_lose_nothing(tmp_path):
+    """Concurrent enrichments from separate connections must all survive.
+
+    Each thread opens its own graph on the same db file and merges a
+    distinct property key onto the same entity. A non-atomic read-merge-write
+    would drop keys under interleave; BEGIN IMMEDIATE + the busy timeout make
+    the writers serialise so every key lands.
+    """
+    import asyncio
+    import threading
+
+    db_path = str(tmp_path / "kg.db")
+
+    async def _seed():
+        kg = TemporalKnowledgeGraph(db_path=db_path)
+        await kg.init()
+        await kg.add_entity("Jay", "person")
+        await kg.close()
+
+    asyncio.run(_seed())
+
+    n = 24
+    errors: list[BaseException] = []
+
+    def worker(i: int):
+        async def _run():
+            kg = TemporalKnowledgeGraph(db_path=db_path)
+            await kg.init()
+            try:
+                await kg.add_entity("Jay", "person", f'{{"k{i}": {i}}}')
+            finally:
+                await kg.close()
+        try:
+            asyncio.run(_run())
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, errors
+
+    async def _read():
+        kg = TemporalKnowledgeGraph(db_path=db_path)
+        await kg.init()
+        ent = await kg.get_entity("Jay")
+        await kg.close()
+        return ent
+
+    import json
+    ent = asyncio.run(_read())
+    props = json.loads(ent["properties_json"])
+    missing = {f"k{i}" for i in range(n)} - set(props)
+    assert not missing, f"lost merged properties: {sorted(missing)}"

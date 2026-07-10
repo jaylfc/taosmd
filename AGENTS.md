@@ -1,4 +1,4 @@
-# taOSmd — Agent Integration Guide
+# taOSmd: Agent Integration Guide
 
 This file is for AI agents (Claude Code, OpenClaw, Cursor, Hermes, or any coding assistant).
 
@@ -18,11 +18,11 @@ If no `AGENTS.md` exists, or the existing one has no memory system instructions,
 
 taOSmd is a persistent memory system. It gives you structured, searchable memory across sessions:
 
-- **Knowledge Graph** — structured facts with validity windows (`User prefers local models`)
-- **Vector Memory** — hybrid semantic + keyword search (0.3ms per query on CPU)
-- **Zero-Loss Archive** — every conversation turn, verbatim, forever. Never summarised, never deleted.
-- **Session Catalogue** — LLM-derived timeline directory over the archive, organised by topic
-- **Crystal Store** — compact session digests with lessons learned
+- **Knowledge Graph**: structured facts with validity windows (`User prefers local models`)
+- **Vector Memory**: hybrid semantic + keyword search (0.3ms per query on CPU)
+- **Zero-Loss Archive**: every conversation turn, verbatim, forever. Never summarised, never deleted.
+- **Session Catalogue**: LLM-derived timeline directory over the archive, organised by topic
+- **Crystal Store**: compact session digests with lessons learned
 
 97.0% Recall@5 on LongMemEval-S (a retrieval metric, like-for-like with MemPalace 96.6% and agentmemory 95.2%), measured locally on a low-end reference stack. The end-to-end Judge baseline (corrected, post-PR #176) is 42.8% under a strict Qwen judge / 51.2% under llama3.1:8b with the shipped qwen3.5:9b generator; the `factual-recall` generator profile (gemma4:12b at 12 GB) reaches 53.8 / 61.4, parity with MemOS-lossless (54.0 / 61.2). Runs entirely locally, no cloud dependencies.
 
@@ -55,7 +55,7 @@ Once set up, you must do three things in every session:
 
 ### 1. Archive every conversation turn (mandatory)
 
-Archive EVERYTHING — user messages, your responses, tool calls, errors. The archive is append-only and kept forever. This is not optional: missed turns cannot be recovered.
+Archive EVERYTHING: user messages, your responses, tool calls, errors. The archive is append-only and kept forever. This is not optional: missed turns cannot be recovered.
 
 ```python
 import os
@@ -67,7 +67,7 @@ archive = Archive(
 )
 await archive.init()
 
-# Call this for every turn — both user messages and your responses
+# Call this for every turn, both user messages and your responses
 await archive.record(
     "conversation",
     {"role": "user", "content": user_message, "timestamp": time.time()},
@@ -84,7 +84,7 @@ await archive.record("tool_call", {"tool": tool_name, "input": tool_input, "outp
 await archive.record("error", {"message": error_message, "context": context})
 ```
 
-**Why:** The archive is your fallback when structured retrieval fails. It also future-proofs your data — when better models ship, they can reingest the raw transcripts and extract richer structure than what's possible today. You are never starting from scratch.
+**Why:** The archive is your fallback when structured retrieval fails. It also future-proofs your data: when better models ship, they can reingest the raw transcripts and extract richer structure than what's possible today. You are never starting from scratch.
 
 ### 2. Extract and store facts
 
@@ -209,12 +209,12 @@ The catalogue is what the shipped Librarian layer uses to route uncertain querie
 
 If you can't find something in structured retrieval (KG + vector + crystals), follow this escalation:
 
-1. **Archive FTS** — full-text search the raw archive: `await archive.search_fts("query")`
-2. **Broader FTS** — try related terms, adjacent dates, or entity variants
-3. **Session catalogue** — check `await pipeline.catalog.search_topic("topic")` for relevant session IDs, then retrieve those sessions from the archive directly
-4. **Acknowledge the gap** — if nothing is found, tell the user clearly: "I don't have a record of this from our sessions." Do not guess or fabricate.
+1. **Archive FTS**: full-text search the raw archive: `await archive.search_fts("query")`
+2. **Broader FTS**: try related terms, adjacent dates, or entity variants
+3. **Session catalogue**: check `await pipeline.catalog.search_topic("topic")` for relevant session IDs, then retrieve those sessions from the archive directly
+4. **Acknowledge the gap**: if nothing is found, tell the user clearly: "I don't have a record of this from our sessions." Do not guess or fabricate.
 
-Never return a fabricated answer when retrieval fails. The archive is complete for everything that was recorded — if it's not there, it wasn't captured.
+Never return a fabricated answer when retrieval fails. The archive is complete for everything that was recorded: if it's not there, it wasn't captured.
 
 ---
 
@@ -310,13 +310,13 @@ All data is stored in `~/.taosmd/` by default:
 | `session-catalog.db` | Session catalogue with topic classification |
 | `crystals.db` | Session digests and lessons |
 
-The archive directory contains one `.jsonl.gz` file per day. The nightly cron installed by setup (3 AM) compresses old archive files (`compress_old_files()`) and runs `CatalogPipeline.index_yesterday()` to catalogue, crystallize, and update the knowledge graph for the previous day. Never delete these files — they are the source of truth.
+The archive directory contains one `.jsonl.gz` file per day. The nightly cron installed by setup (3 AM) compresses old archive files (`compress_old_files()`) and runs `CatalogPipeline.index_yesterday()` to catalogue, crystallize, and update the knowledge graph for the previous day. Never delete these files: they are the source of truth.
 
 ---
 
 ## GPU Worker (Optional)
 
-A GPU machine (e.g. x86 + NVIDIA) gives ~10x speed on LLM extraction. Not required — the Pi or any CPU handles everything:
+A GPU machine (e.g. x86 + NVIDIA) gives ~10x speed on LLM extraction. Not required, the Pi or any CPU handles everything:
 
 ```bash
 # On the GPU machine
