@@ -1061,7 +1061,7 @@ async def reindex(*, agent: str, data_dir=None, check: bool = False) -> dict:
         agent_name=agent,
         limit=1_000_000,
     )
-    archive_turns: list[dict] = []
+    archive_turns: list[tuple[dict, dict]] = []  # (data, row) for re-embed
     for row in rows:
         try:
             data = _json.loads(row.get("data_json", "{}"))
@@ -1070,7 +1070,10 @@ async def reindex(*, agent: str, data_dir=None, check: bool = False) -> dict:
         text = str(data.get("content", "")).strip()
         if not text:
             continue
-        archive_turns.append(data)
+        # Keep the index row alongside the parsed data: the project scope and
+        # archive span id live on the row, not in data_json, and both must be
+        # carried onto the rebuilt vector row (mirrors reconcile()).
+        archive_turns.append((data, row))
 
     archive_count = len(archive_turns)
 
@@ -1093,7 +1096,7 @@ async def reindex(*, agent: str, data_dir=None, check: bool = False) -> dict:
     cleared = await vmem.clear(agent=agent)
 
     readded = 0
-    for data in archive_turns:
+    for data, row in archive_turns:
         text = str(data.get("content", "")).strip()
         meta: dict = {"agent": agent}
         # Propagate role and timestamp from the archive entry where available,
@@ -1102,6 +1105,22 @@ async def reindex(*, agent: str, data_dir=None, check: bool = False) -> dict:
             meta["role"] = data["role"]
         if "timestamp" in data:
             meta["timestamp"] = data["timestamp"]
+        # Carry the archive row's nested user metadata (source_id, forget_after,
+        # ...). Without it a rebuilt row loses its source_id, so
+        # existing_source_ids() no longer sees it and a re-POST of the same
+        # batch duplicates every reindexed item (same reason #182 fixed reconcile).
+        if isinstance(data.get("metadata"), dict) and data["metadata"]:
+            meta["metadata"] = data["metadata"]
+        # Rebuild must carry the same provenance the hot ingest path writes: the
+        # project scope (so the row stays visible to project-scoped search and,
+        # crucially, does NOT leak into a different project's search for the same
+        # agent) and the archive_span_id (so the claims gate can look up the
+        # verification status of its backing span).
+        if row.get("project"):
+            meta["project"] = row["project"]
+        span_id = row.get("id")
+        if isinstance(span_id, int) and span_id >= 0:
+            meta["archive_span_id"] = span_id
         added_id = await vmem.add(text, metadata=meta)
         if added_id != -1:
             readded += 1
