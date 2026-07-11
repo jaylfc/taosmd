@@ -107,6 +107,14 @@ html, body, #root {
   padding: 0;
 }
 
+/* Root shell fills the visual viewport robustly: 100dvh tracks the real
+   available height when a mobile browser URL bar shows/hides, where a plain
+   height:100% chain collapses. 100vh is the fallback for older engines. */
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
 body {
   background: var(--bg);
   color: var(--ink);

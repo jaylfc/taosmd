@@ -7,7 +7,7 @@ import { SettingsView } from "./views/SettingsView";
 import { OverviewView } from "./views/OverviewView";
 import { ExplorerView } from "./views/ExplorerView";
 import { getHealth } from "./api";
-import { initTheme, setScheme, type Scheme } from "./theme";
+import { readAppliedScheme, setScheme, type Scheme } from "./theme";
 import type { View, HealthInfo } from "./types";
 
 interface NavItemProps {
@@ -33,6 +33,45 @@ function NavItem({ id, label, active, onClick }: NavItemProps) {
     >
       {label}
     </button>
+  );
+}
+
+// Inline theme icons: currentColor-driven, sized to the toggle button, no icon
+// library (offline constraint). aria-hidden — the button carries the label.
+function SunIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2.5M12 19.5V22M4.22 4.22l1.77 1.77M18.01 18.01l1.77 1.77M2 12h2.5M19.5 12H22M4.22 19.78l1.77-1.77M18.01 5.99l1.77-1.77" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20.5 14.2A8 8 0 0 1 9.8 3.5a7 7 0 1 0 10.7 10.7Z" />
+    </svg>
   );
 }
 
@@ -73,16 +112,14 @@ export function App() {
   const [view, setView] = useState<View>("home");
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [scheme, setSchemeState] = useState<Scheme>("dark");
+  // The blocking bootstrap in index.html has already applied the correct scheme
+  // to <html> before first paint; read it so React hydrates without re-flashing.
+  const [scheme, setSchemeState] = useState<Scheme>(readAppliedScheme);
 
   useEffect(() => {
     getHealth()
       .then(setHealth)
       .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    setSchemeState(initTheme());
   }, []);
 
   // Keyboard nav for tabs
@@ -143,12 +180,12 @@ export function App() {
               setScheme(next);
               setSchemeState(next);
             }}
-            className="rounded p-1.5 text-sm transition-colors duration-150"
+            className="inline-flex items-center justify-center rounded p-1.5 transition-colors duration-150"
             style={{ color: "var(--muted)" }}
             aria-label={scheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
             aria-pressed={scheme === "light"}
           >
-            {scheme === "dark" ? "☀" : "☾"}
+            {scheme === "dark" ? <SunIcon /> : <MoonIcon />}
           </button>
           <HealthChip info={health} />
         </div>
