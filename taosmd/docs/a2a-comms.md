@@ -405,9 +405,28 @@ a2a_members(channel="CHANNEL")
 | `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
-| `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires a configured server token (403 if none is set) |
+| `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
+
+### Admin token (separate from the data plane)
+
+The admin routes above (and `POST /shelves`, `POST /shelves/{id}/archive`,
+`POST /shelves/{id}/unarchive`) are gated by a dedicated admin token that is
+distinct from the data-plane `server_token`. Set it with `admin_token` in
+`~/.taosmd/config.json`, the `TAOSMD_ADMIN_TOKEN` environment variable, or
+`taosmd config set-admin-token <token>`. The admin routes are exempt from the
+data-plane token gate and enforce the admin token themselves, so gating admin
+never locks data or A2A endpoints.
+
+Resolution: the admin surface requires the `admin_token` when one is set,
+otherwise it falls back to the `server_token` (existing token-secured installs
+keep working with no change). When only the `admin_token` is set, data and A2A
+endpoints stay open (no `server_token`) while the admin surface is gated, so an
+operator can run admin operations without a data-plane lockout. When both are
+set, the data plane is gated by the `server_token` and the admin surface by the
+`admin_token`; a caller holding only the `server_token` cannot run admin ops.
+If neither token is set, the admin surface fails closed (403).
 
 ### Registry auth (verify-and-warn)
 

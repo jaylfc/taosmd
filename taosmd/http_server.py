@@ -16,7 +16,10 @@ Design choices (matching the project's local-first, offline, additive vision):
   Python API). When binding to a routable address, set a bearer token
   (``TAOSMD_TOKEN`` or ``taosmd config set-token``) so every data and A2A
   endpoint requires ``Authorization: Bearer``, and put the port behind your
-  own network controls as defense in depth.
+  own network controls as defense in depth. Admin operations use a separate
+  ``admin_token`` (``TAOSMD_ADMIN_TOKEN`` or ``taosmd config set-admin-token``)
+  that gates the admin surface only; it falls back to the server token when
+  unset, so gating admin never has to lock the data plane (#154).
 
 Security note
 -------------
@@ -527,6 +530,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
     # This is the token the *server* checks (not the client's outbound token).
     _server_token: str | None = _config.get_server_token(data_dir)
 
+    # Dedicated admin token (#154). When set it gates the admin surface ONLY,
+    # independently of the data-plane server token, so an operator can authorize
+    # admin ops without locking data/A2A endpoints behind a server token. When
+    # unset, the admin surface falls back to the server token (back-compat).
+    _admin_token: str | None = _config.get_admin_token(data_dir)
+
     # Whether to serve the web dashboard (/ /ui static assets SPA fallback).
     # Defaults True for standalone installs; False when managed_by=taos (taOS
     # apps render everything). Overridable via config/env.
@@ -542,15 +551,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             from . import registry_auth  # noqa: PLC0415 - optional path
             # The revoked and grants feeds are admin-gated (#710/#719): send the
             # configured taOS local token on them; pin the issuer.
-            _admin_token = _config.get_registry_token(data_dir)
+            _registry_admin_token = _config.get_registry_token(data_dir)
             _registry_verifier = registry_auth.verifier_from_url(
                 _registry_url,
-                revoked_token=_admin_token,
+                revoked_token=_registry_admin_token,
                 expected_iss=registry_auth.REGISTRY_ISS,
             )
             _grants_verifier = registry_auth.grants_verifier_from_url(
                 _registry_url,
-                grants_token=_admin_token,
+                grants_token=_registry_admin_token,
             )
 
     # Paths that are always public regardless of the token setting.
@@ -648,24 +657,52 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return auth[len("Bearer "):].strip() == _server_token
             return False
 
+        @staticmethod
+        def _is_admin_route(method: str, path: str) -> bool:
+            """Return True for admin write routes (#154).
+
+            These are gated exclusively by :meth:`_check_admin_token` (the
+            dedicated admin token, or the server token as a fallback) and are
+            deliberately exempt from the data-plane :meth:`_check_token` gate so
+            that gating the admin surface never locks the data plane.
+            ``path`` has already had any trailing slash stripped by the caller.
+            """
+            if method != "POST":
+                return False
+            if path == "/shelves" or path.startswith("/shelves/"):
+                return True
+            return path in (
+                "/a2a/admin/delete-channel",
+                "/a2a/admin/rename-channel",
+                "/a2a/admin/supersede-message",
+            )
+
         def _check_admin_token(self) -> bool:
             """Return True when the request carries the correct admin token.
 
-            Admin endpoints FAIL CLOSED: if no server token is configured, all
+            The expected admin token is the dedicated ``admin_token`` when set,
+            otherwise it falls back to the data-plane ``server_token`` (#154
+            migration path). This keeps the admin surface independent of the
+            data plane: an operator can gate admin (via ``admin_token``) while
+            leaving data/A2A endpoints open, and a data-plane-only caller
+            (holding only the server token) cannot run admin ops once an admin
+            token is configured.
+
+            Admin endpoints FAIL CLOSED: if neither token is configured, all
             admin requests return 403. This is the inverse of ``_check_token``
             which passes everything through when no token is configured.
-            If a token is configured the Bearer must match it exactly.
             Returns False and writes the error response when auth fails; the
             caller must return immediately in that case.
             """
-            if not _server_token:
+            expected = _admin_token or _server_token
+            if not expected:
                 self._send_json(
                     403,
-                    {"error": "admin surface requires a configured server token"},
+                    {"error": "admin surface requires a configured admin or server token"},
                 )
                 return False
             auth = self.headers.get("Authorization", "")
-            if auth.startswith("Bearer ") and auth[len("Bearer "):].strip() == _server_token:
+            if auth.startswith("Bearer ") and auth[len("Bearer "):].strip() == expected:
                 return True
             self._send_json(401, {"error": "Unauthorized"})
             return False
@@ -773,8 +810,13 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             path = parts.path.rstrip("/") or "/"
             query = parse_qs(parts.query)
             # Token gate: check before routing so even unknown paths are
-            # protected (prevents enumeration without a token).
-            if not self._check_token(path):
+            # protected (prevents enumeration without a token). Admin write
+            # routes are exempt here (#154): they enforce their own, stricter
+            # ``_check_admin_token`` (fail-closed) using the dedicated admin
+            # token, so they must NOT also require the data-plane server token
+            # -- that coupling is what previously forced a data-plane lockout
+            # to run an admin op.
+            if not self._is_admin_route(method, path) and not self._check_token(path):
                 self._send_json(401, {"error": "Unauthorized"})
                 return
             try:
@@ -1744,7 +1786,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
           "GET /a2a/channels, GET /a2a/members, "
           "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
           "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove")
-    print("Admin (token required): POST /shelves, POST /shelves/{id}/archive, "
+    print("Admin (admin token required): POST /shelves, POST /shelves/{id}/archive, "
           "POST /shelves/{id}/unarchive, "
           "POST /a2a/admin/delete-channel, POST /a2a/admin/rename-channel, "
           "POST /a2a/admin/supersede-message")

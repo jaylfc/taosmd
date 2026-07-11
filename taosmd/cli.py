@@ -221,14 +221,34 @@ def _config_set_token(token: str | None, clear: bool) -> int:
     return 0
 
 
+def _config_set_admin_token(token: str | None, clear: bool) -> int:
+    from . import config  # noqa: PLC0415
+
+    if not clear and not token:
+        print("error: provide <token> or --clear", file=sys.stderr)
+        return 2
+    try:
+        config.set_admin_token(token or "", clear=clear)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if clear:
+        print("Admin token cleared.")
+    else:
+        print("Admin token stored.")
+    return 0
+
+
 def _config_show() -> int:
     from . import config  # noqa: PLC0415
 
     url = config.get_server_url()
     token = config.get_server_token()
+    admin_token = config.get_admin_token()
     model = config.get_memory_model()
     print(f"server_url   : {url or '(unset, local mode)'}")
     print(f"server_token : {'(set)' if token else '(unset)'}")
+    print(f"admin_token  : {'(set)' if admin_token else '(unset, falls back to server_token)'}")
     print(f"memory_model : {model or '(default)'}")
     return 0
 
@@ -1359,6 +1379,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     st_p.add_argument("--clear", action="store_true", help="Unset the token")
 
+    # config set-admin-token
+    sat_p = cfg_sub.add_parser(
+        "set-admin-token",
+        help="Set or clear the admin bearer token (gates admin ops only, #154)",
+    )
+    sat_p.add_argument(
+        "token", nargs="?", default=None,
+        help="Bearer token for the admin surface. Distinct from the server "
+             "token: gating admin with this leaves data/A2A endpoints open. "
+             "Stored in config.json; use TAOSMD_ADMIN_TOKEN env var to avoid "
+             "on-disk storage.",
+    )
+    sat_p.add_argument("--clear", action="store_true", help="Unset the admin token")
+
     # config show
     cfg_sub.add_parser("show", help="Print the resolved server_url and whether a token is set")
 
@@ -1675,6 +1709,8 @@ def main(argv: list[str] | None = None) -> int:
             return _config_set_server(args.url, args.clear)
         if args.config_cmd == "set-token":
             return _config_set_token(args.token, args.clear)
+        if args.config_cmd == "set-admin-token":
+            return _config_set_admin_token(args.token, args.clear)
         if args.config_cmd == "show":
             return _config_show()
 

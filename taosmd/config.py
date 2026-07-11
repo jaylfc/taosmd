@@ -32,6 +32,10 @@ _MEMORY_MODEL_KEY = "memory_model"
 _SERVER_URL_KEY = "server_url"
 # Key under which the optional remote server bearer token is stored.
 _SERVER_TOKEN_KEY = "server_token"
+# Key under which the optional admin bearer token is stored. Distinct from the
+# data-plane server token (#154): gates the admin surface only, so admin can be
+# authorized without locking data/A2A endpoints behind a server token.
+_ADMIN_TOKEN_KEY = "admin_token"
 # Key under which the global default recipe id is stored.
 _DEFAULT_RECIPE_KEY = "default_recipe"
 _REGISTRY_URL_KEY = "registry_url"
@@ -451,6 +455,51 @@ def set_server_token(token: str, clear: bool = False, data_dir=None) -> None:
     _write(data, data_dir)
 
 
+def get_admin_token(data_dir=None) -> str | None:
+    """Return the configured admin bearer token, or ``None`` if unset.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_ADMIN_TOKEN`` environment variable
+    2. ``admin_token`` key in ``~/.taosmd/config.json``
+
+    This token gates the admin surface only. It is DISTINCT from the data-plane
+    :func:`get_server_token`: when an admin token is set the admin endpoints
+    require it, while data and A2A endpoints remain governed by (and only by)
+    the server token. When no admin token is configured, the admin surface
+    falls back to the server token for backward compatibility (#154). The token
+    is never logged or printed.
+    """
+    env = os.environ.get("TAOSMD_ADMIN_TOKEN")
+    if env and env.strip():
+        return env.strip()
+    token = _read(data_dir).get(_ADMIN_TOKEN_KEY)
+    if isinstance(token, str) and token.strip():
+        return token.strip()
+    return None
+
+
+def set_admin_token(token: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the admin bearer token.
+
+    Args:
+        token: Bearer token string.  Ignored when ``clear`` is True.
+        clear: when True, remove the setting.
+
+    Raises:
+        ValueError: when ``clear`` is False and ``token`` is not a
+            non-empty string.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_ADMIN_TOKEN_KEY, None)
+    else:
+        if not isinstance(token, str) or not token.strip():
+            raise ValueError("token must be a non-empty string (or pass clear=True)")
+        data[_ADMIN_TOKEN_KEY] = token.strip()
+    _write(data, data_dir)
+
+
 def get_managed_by(data_dir=None) -> str:
     """Return the managed_by value: ``"standalone"`` (default) or ``"taos"``.
 
@@ -558,6 +607,8 @@ __all__ = [
     "set_server_url",
     "get_server_token",
     "set_server_token",
+    "get_admin_token",
+    "set_admin_token",
     "get_registry_url",
     "set_registry_url",
     "get_registry_token",
