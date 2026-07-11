@@ -670,6 +670,11 @@ async def dashboard_stats(*, scope: str | None = None, data_dir=None) -> dict:
 
     projects = await list_projects(data_dir=data_dir)
 
+    # Temporal extent of the knowledge graph, so the Explorer's time-travel
+    # scrubber knows its [earliest, now] range without a second round trip.
+    kg = stores.get("kg")
+    span = await kg.time_span() if kg is not None else {"earliest": None, "now": time.time()}
+
     # Semantic categories of the memories in scope. upgrade-path: classify at
     # ingest (librarian LLM when enriched, KG types where the graph is rich) and
     # GROUP BY a stored category; for now classify recent texts at read time,
@@ -686,6 +691,8 @@ async def dashboard_stats(*, scope: str | None = None, data_dir=None) -> dict:
         },
         "agents": agents_n,
         "projects": len(projects),
+        "earliest": span["earliest"],
+        "now": span["now"],
         "growth": growth,
         "verification": {
             "supported": supported,
@@ -710,10 +717,14 @@ async def list_memories(*, scope: str | None = None, limit: int = 50, data_dir=N
     return await stores["archive"].list_memories(agent=_scope_agent(scope), limit=limit)
 
 
-async def graph(*, limit: int = 300, data_dir=None) -> dict:
-    """The knowledge-graph nodes and edges for the Explorer view (read-only)."""
+async def graph(*, limit: int = 300, as_of: float | None = None, data_dir=None) -> dict:
+    """The knowledge-graph nodes and edges for the Explorer view (read-only).
+
+    ``as_of`` (unix seconds) reconstructs the graph as it stood at that instant
+    for the time-travel scrubber; ``None`` (default) returns the current graph.
+    """
     stores = await _ensure_stores(data_dir)
-    return await stores["kg"].graph(limit=limit)
+    return await stores["kg"].graph(limit=limit, as_of=as_of)
 
 
 async def graph_activations(*, since: float | None = None, window: float = 60.0,

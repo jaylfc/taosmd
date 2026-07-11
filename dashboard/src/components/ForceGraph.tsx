@@ -36,6 +36,7 @@ export function ForceGraph({
   selectedId,
   activatedIds,
   height = 480,
+  asOfLabel,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -43,6 +44,8 @@ export function ForceGraph({
   selectedId?: string | null;
   activatedIds?: Set<string>;
   height?: number;
+  /** When set (history view), names the point in time the graph is drawn as of. */
+  asOfLabel?: string | null;
 }) {
   const H = height;
 
@@ -105,7 +108,8 @@ export function ForceGraph({
     pan.current = null;
   };
 
-  const label = `Knowledge graph with ${layout.simNodes.length} entities and ${layout.renderEdges.length} relations`;
+  const asOfSuffix = asOfLabel ? ` as of ${asOfLabel}` : "";
+  const label = `Knowledge graph${asOfSuffix} with ${layout.simNodes.length} entities and ${layout.renderEdges.length} relations`;
 
   return (
     <div

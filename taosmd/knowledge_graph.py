@@ -604,7 +604,7 @@ class TemporalKnowledgeGraph:
         active = self._conn.execute("SELECT COUNT(*) as n FROM kg_triples WHERE valid_to IS NULL").fetchone()["n"]
         return {"entities": entities, "triples": triples, "active_triples": active}
 
-    async def graph(self, limit: int = 300) -> dict:
+    async def graph(self, limit: int = 300, as_of: float | None = None) -> dict:
         """Return the graph as ``{nodes, edges, capped, total_nodes, total_edges}``.
 
         Nodes are entities sized by ``degree`` (triples touching them) and the
@@ -612,19 +612,46 @@ class TemporalKnowledgeGraph:
         large graph stays responsive. Each edge carries ``active`` (the fact is
         current: no ``valid_to`` and not superseded) so the view can fade the
         rest. Read-only.
+
+        When ``as_of`` (unix time) is given, the graph is reconstructed as it
+        stood at that instant: only triples valid then are counted, ranked and
+        returned, using the temporal-validity window
+        ``valid_from <= as_of AND (valid_to IS NULL OR valid_to >= as_of)`` (the
+        same predicate :meth:`query_entity` uses). Entities with no edge active
+        at ``as_of`` are dropped, and every returned edge is ``active`` because
+        it was the live fact then, so a triple superseded *after* ``as_of``
+        still shows as active. ``as_of=None`` (the default) is unchanged.
         """
         total_nodes = self._conn.execute("SELECT COUNT(*) AS n FROM kg_entities").fetchone()["n"]
         total_edges = self._conn.execute("SELECT COUNT(*) AS n FROM kg_triples").fetchone()["n"]
 
-        deg_rows = self._conn.execute(
-            """SELECT eid, COUNT(*) AS d FROM (
-                  SELECT subject_id AS eid FROM kg_triples
-                  UNION ALL SELECT object_id AS eid FROM kg_triples
-               ) GROUP BY eid"""
-        ).fetchall()
+        if as_of is None:
+            deg_rows = self._conn.execute(
+                """SELECT eid, COUNT(*) AS d FROM (
+                      SELECT subject_id AS eid FROM kg_triples
+                      UNION ALL SELECT object_id AS eid FROM kg_triples
+                   ) GROUP BY eid"""
+            ).fetchall()
+        else:
+            deg_rows = self._conn.execute(
+                """SELECT eid, COUNT(*) AS d FROM (
+                      SELECT subject_id AS eid FROM kg_triples
+                          WHERE valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
+                      UNION ALL SELECT object_id AS eid FROM kg_triples
+                          WHERE valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
+                   ) GROUP BY eid""",
+                (as_of, as_of, as_of, as_of),
+            ).fetchall()
         degree = {r["eid"]: r["d"] for r in deg_rows}
 
         if not degree:
+            # No edges active at this time: the as-of view is genuinely empty
+            # (every entity was dropped for lacking an active edge). The default
+            # view instead lists bare entities, so a graph with entities but no
+            # triples still renders.
+            if as_of is not None:
+                return {"nodes": [], "edges": [], "capped": total_nodes > limit,
+                        "total_nodes": total_nodes, "total_edges": total_edges}
             ents = self._conn.execute(
                 "SELECT id, name, type FROM kg_entities LIMIT ?", (limit,)
             ).fetchall()
@@ -641,24 +668,42 @@ class TemporalKnowledgeGraph:
             {"id": e["id"], "name": e["name"], "type": e["type"], "degree": degree.get(e["id"], 0)}
             for e in ent_rows
         ]
-        edge_rows = self._conn.execute(
-            f"""SELECT subject_id, predicate, object_id, confidence, valid_to, superseded_by
-                FROM kg_triples
-                WHERE subject_id IN ({ph}) AND object_id IN ({ph})""",
-            top_ids + top_ids,
-        ).fetchall()
+        edge_sql = (
+            "SELECT subject_id, predicate, object_id, confidence, valid_to, superseded_by "
+            f"FROM kg_triples WHERE subject_id IN ({ph}) AND object_id IN ({ph})"
+        )
+        edge_params = top_ids + top_ids
+        if as_of is not None:
+            edge_sql += " AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)"
+            edge_params = edge_params + [as_of, as_of]
+        edge_rows = self._conn.execute(edge_sql, edge_params).fetchall()
         edges = [
             {
                 "source": r["subject_id"],
                 "target": r["object_id"],
                 "predicate": r["predicate"],
                 "confidence": r["confidence"],
-                "active": r["valid_to"] is None and r["superseded_by"] is None,
+                # As-of edges are all live at that instant; the default view
+                # marks only facts current *now* (no valid_to, not superseded).
+                "active": True if as_of is not None
+                else (r["valid_to"] is None and r["superseded_by"] is None),
             }
             for r in edge_rows
         ]
         return {"nodes": nodes, "edges": edges, "capped": total_nodes > limit,
                 "total_nodes": total_nodes, "total_edges": total_edges}
+
+    async def time_span(self) -> dict:
+        """Temporal extent of the graph, for the Explorer's time-travel scrubber.
+
+        Returns ``{earliest, now}`` where ``earliest`` is the oldest triple's
+        ``valid_from`` (unix seconds, or ``None`` on an empty graph) and ``now``
+        is the current time. The scrubber spans ``[earliest, now]``. Read-only.
+        """
+        row = self._conn.execute(
+            "SELECT MIN(valid_from) AS earliest FROM kg_triples"
+        ).fetchone()
+        return {"earliest": row["earliest"], "now": time.time()}
 
     async def activations(self, since: float, limit: int = 100) -> list[dict]:
         """Entities touched by retrieval since ``since`` (unix time), newest first.

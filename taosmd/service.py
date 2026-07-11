@@ -166,16 +166,19 @@ async def list_memories(*, scope: str | None = None, limit: int = 50, data_dir=N
     return await _api.list_memories(scope=scope, limit=limit, data_dir=data_dir)
 
 
-async def graph(*, limit: int = 300, data_dir=None) -> dict:
+async def graph(*, limit: int = 300, as_of: float | None = None, data_dir=None) -> dict:
     """Knowledge-graph nodes and edges for the Explorer view.
+
+    ``as_of`` (unix seconds) reconstructs the graph as of that instant for the
+    time-travel scrubber; ``None`` (default) returns the current graph.
 
     Thin wrapper over :func:`taosmd.api.graph`. Forwarded to
     :class:`~taosmd.remote.RemoteClient` when a server URL is configured.
     """
     remote = _get_remote(data_dir)
     if remote is not None:
-        return await remote.graph(limit=limit)
-    return await _api.graph(limit=limit, data_dir=data_dir)
+        return await remote.graph(limit=limit, as_of=as_of)
+    return await _api.graph(limit=limit, as_of=as_of, data_dir=data_dir)
 
 
 async def graph_activations(*, since: float | None = None, window: float = 60.0,
