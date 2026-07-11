@@ -34,3 +34,13 @@ export function initTheme(): Scheme {
   applyScheme(s);
   return s;
 }
+
+// Reads the scheme already applied to the document by the blocking inline
+// bootstrap in index.html (which mirrors getScheme's logic under the same KEY),
+// so React's first render matches the pre-painted DOM and does not re-flash.
+// Falls back to getScheme if the attribute is somehow absent.
+export function readAppliedScheme(): Scheme {
+  const applied = document.documentElement.dataset.scheme;
+  if (applied === "dark" || applied === "light") return applied;
+  return getScheme();
+}

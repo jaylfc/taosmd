@@ -5,8 +5,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="taOSmd — local memory inspector and A2A channel monitor" />
     <title>taOSmd</title>
-    <script type="module" crossorigin src="./assets/index-BYD--bJq.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-C48QvJab.css">
+    <!--
+      Blocking theme bootstrap: applies the saved/OS scheme to <html> before the
+      bundle paints, so a light user never sees a dark flash on cold start.
+      Mirrors getScheme() in src/theme.ts under the same "taosmd-scheme" key.
+      Keep this logic in sync with src/theme.ts::getScheme.
+    -->
+    <script>
+      (function () {
+        var scheme;
+        try {
+          var saved = localStorage.getItem("taosmd-scheme");
+          if (saved === "dark" || saved === "light") scheme = saved;
+        } catch (e) {}
+        if (!scheme) {
+          scheme =
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: light)").matches
+              ? "light"
+              : "dark";
+        }
+        document.documentElement.setAttribute("data-scheme", scheme);
+      })();
+    </script>
+    <script type="module" crossorigin src="./assets/index-v__qsgIK.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-C689CGbs.css">
   </head>
   <body>
     <div id="root"></div>
