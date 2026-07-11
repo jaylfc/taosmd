@@ -155,9 +155,15 @@ class RemoteClient:
         resp = await self._run("GET", "/memories", params=params)
         return resp.get("memories", [])
 
-    async def graph(self, *, limit: int = 300, **_opts) -> dict:
-        """GET /graph: the knowledge-graph nodes and edges from the server."""
-        return await self._run("GET", "/graph", params={"limit": limit})
+    async def graph(self, *, limit: int = 300, as_of: float | None = None, **_opts) -> dict:
+        """GET /graph: the knowledge-graph nodes and edges from the server.
+
+        ``as_of`` (unix seconds) reconstructs the graph as of that instant.
+        """
+        params: dict = {"limit": limit}
+        if as_of is not None:
+            params["as_of"] = as_of
+        return await self._run("GET", "/graph", params=params)
 
     async def graph_activations(self, *, since: float | None = None, window: float = 60.0,
                                 limit: int = 100, **_opts) -> dict:

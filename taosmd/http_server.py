@@ -1119,7 +1119,19 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
-            result = runner.run(service.graph(limit=limit_i, data_dir=data_dir))
+            # Optional time-travel: ?as_of=<float epoch> reconstructs the graph
+            # as it stood then. A non-numeric value is ignored (current graph),
+            # so a malformed scrubber value degrades gracefully rather than 400s.
+            as_of_raw = (qs.get("as_of") or [None])[0]
+            as_of_f: float | None = None
+            if as_of_raw is not None:
+                try:
+                    as_of_f = float(as_of_raw)
+                except (TypeError, ValueError):
+                    as_of_f = None
+            result = runner.run(
+                service.graph(limit=limit_i, as_of=as_of_f, data_dir=data_dir)
+            )
             self._send_json(200, result)
 
         def _handle_graph_activations(self, qs: dict) -> None:

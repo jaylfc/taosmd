@@ -42,6 +42,11 @@ export interface Stats {
   memories: { total: number; disk_mb: number };
   agents: number;
   projects: number;
+  // Temporal extent of the knowledge graph, for the Explorer time-travel
+  // scrubber. `earliest` is the oldest triple's valid_from (epoch seconds), or
+  // null on an empty graph; `now` is the server's current time.
+  earliest: number | null;
+  now: number;
   growth: { date: string; count: number }[];
   verification: {
     supported: number;

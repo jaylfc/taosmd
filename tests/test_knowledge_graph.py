@@ -51,6 +51,98 @@ async def test_activations_after_query(tmp_path):
 
 
 # ----------------------------------------------------------------------
+# Time-travel: graph(as_of=...) reconstructs the graph as it stood at a past
+# instant, using the temporal-validity window. as_of=None is unchanged.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_graph_as_of_past_returns_older_state(tmp_path):
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    # ProjectA edge exists from t=1000; ProjectB edge only appears at t=2000.
+    await kg.add_triple("Jay", "works on", "ProjectA", valid_from=1000.0)
+    await kg.add_triple("Jay", "works on", "ProjectB", valid_from=2000.0)
+
+    g = await kg.graph(as_of=1500.0)
+    names = {n["name"] for n in g["nodes"]}
+    assert "Jay" in names
+    assert "ProjectA" in names
+    # ProjectB's only edge is not yet valid at 1500, so the entity is dropped.
+    assert "ProjectB" not in names
+    assert len(g["edges"]) == 1
+    assert set(g) == {"nodes", "edges", "capped", "total_nodes", "total_edges"}
+
+
+@pytest.mark.asyncio
+async def test_graph_as_of_now_matches_default(tmp_path):
+    import time
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_triple("Jay", "prefers", "dark mode")
+    await kg.add_triple("Jay", "works on", "taosmd")
+
+    default = await kg.graph()
+    asof = await kg.graph(as_of=time.time())
+    assert {n["id"] for n in default["nodes"]} == {n["id"] for n in asof["nodes"]}
+    assert (
+        {(e["source"], e["target"], e["predicate"]) for e in default["edges"]}
+        == {(e["source"], e["target"], e["predicate"]) for e in asof["edges"]}
+    )
+    assert all(e["active"] for e in asof["edges"])
+
+
+@pytest.mark.asyncio
+async def test_graph_as_of_shows_superseded_edge_as_active(tmp_path):
+    import time
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    # A fact valid 1000..2000, then replaced by a newer fact from 2000 on.
+    tid = await kg.add_triple("Jay", "works on", "ProjectA", valid_from=1000.0)
+    await kg.invalidate(tid, ended_at=2000.0)
+    await kg.add_triple("Jay", "works on", "ProjectB", valid_from=2000.0)
+
+    # As of 1500 (before valid_to), the old edge was the live fact.
+    past = await kg.graph(as_of=1500.0)
+    past_names = {n["name"] for n in past["nodes"]}
+    assert "ProjectA" in past_names
+    assert "ProjectB" not in past_names
+    assert len(past["edges"]) == 1
+    assert past["edges"][0]["active"] is True
+
+    # As of now, the old fact is gone and the replacement is live.
+    present = await kg.graph(as_of=time.time())
+    present_names = {n["name"] for n in present["nodes"]}
+    assert "ProjectB" in present_names
+    assert "ProjectA" not in present_names
+
+
+@pytest.mark.asyncio
+async def test_graph_as_of_before_history_is_empty(tmp_path):
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    await kg.add_triple("Jay", "works on", "taosmd", valid_from=1000.0)
+    g = await kg.graph(as_of=500.0)
+    assert g["nodes"] == [] and g["edges"] == []
+
+
+@pytest.mark.asyncio
+async def test_time_span_reports_earliest_and_now(tmp_path):
+    import time
+    kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
+    await kg.init()
+    empty = await kg.time_span()
+    assert empty["earliest"] is None
+    assert empty["now"] <= time.time() + 1
+
+    await kg.add_triple("Jay", "works on", "ProjectA", valid_from=1000.0)
+    await kg.add_triple("Jay", "works on", "ProjectB", valid_from=2000.0)
+    span = await kg.time_span()
+    assert span["earliest"] == 1000.0
+    assert span["now"] >= span["earliest"]
+
+
+# ----------------------------------------------------------------------
 # add_entity zero-loss: re-adding an entity must never silently drop a
 # recorded type/property. add_entity is called once per subject/object on
 # every add_triple, so the same entity is re-inserted constantly with
