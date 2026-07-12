@@ -465,6 +465,8 @@ def _apply_runtime_overrides(recipe_retrieval: dict, overrides: dict) -> dict:
         rc["fusion"] = overrides["fusion"]
     if "adjacent_turns" in overrides:
         rc["adjacent_neighbors"] = int(overrides["adjacent_turns"])
+    if "graph_expansion" in overrides:
+        rc["graph_expansion"] = int(overrides["graph_expansion"])
     return rc
 
 
@@ -591,6 +593,7 @@ async def search(
         limit=effective_limit,
         reranker=reranker,
         adjacent_neighbors=rc.get("adjacent_neighbors", 0),
+        graph_expansion=rc.get("graph_expansion", 0),
         fusion=rc.get("fusion", "boost"),
         candidate_top_k=rc.get("candidate_top_k"),
         project=project,

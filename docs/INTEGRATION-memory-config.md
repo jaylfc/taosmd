@@ -18,6 +18,7 @@ Every control is defined once in `taosmd/controls.py`. The standalone dashboard,
 | `reranker` | runtime (live) | `controls.reranker` | `off` | Cross-encoder re-scoring before serving. `off` / `bge-v2-m3`. Overrides the recipe per query. |
 | `fusion` | runtime (live) | `controls.fusion` | `rrf` | How dense and lexical hits combine. `rrf` / `mem0_additive` / `boost`. Overrides the recipe per query. |
 | `adjacent_turns` | runtime (live) | `controls.adjacent_turns` | `2` (0 to 4) | Positional neighbours included around each hit. Overrides the recipe per query. |
+| `graph_expansion` | runtime (live) | `controls.graph_expansion` | `0` (off; 0 to 2000) | Bi-temporal fact readback (Phase 1): appends a derived block of currently-valid KG facts connected to the served hits. The int is the block's token budget; `0` is off. Valid-time only, no `as-of` surface yet (Phase 2). Default off pending EventQA validation (E-025). |
 | `embedder` | store (re-index) | `vector_memory.embed_model` | `arctic-embed-s` | Dense ONNX embedder, set at setup. `arctic-embed-s` / `minilm-onnx`. |
 | `binary_quant` | store (re-index) | `vector_memory.binary_quant` | `off` | 1 bit per dimension, 32x smaller vectors, recall-neutral. |
 | `late_interaction` | store (re-index) | `vector_memory.late_interaction` | `off` | Token-level MaxSim; per-token vectors are written at ingest. |
