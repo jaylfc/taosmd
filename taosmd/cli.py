@@ -991,6 +991,106 @@ def _projects_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _collections_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd collections``: collection lifecycle + access control."""
+    import asyncio  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+    from .collections import CollectionNotFoundError  # noqa: PLC0415
+
+    data_dir = args.data_dir
+
+    def _fmt(col: dict) -> str:
+        stats = col.get("stats") or {}
+        chunks = stats.get("chunks_ingested", 0)
+        return (
+            f"{col['id']}  {col['status']:<9} kind={col['kind']:<8} "
+            f"name={col['name']!r} files={stats.get('files_total', 0)} "
+            f"chunks={chunks} grants={len(col.get('grants') or [])}"
+        )
+
+    try:
+        if args.collections_cmd == "list":
+            cols = asyncio.run(
+                service.collections_list(project=args.project, data_dir=data_dir)
+            )
+            if not cols:
+                print("No collections. Create one with `taosmd collections create`.")
+                return 0
+            for col in cols:
+                print(_fmt(col))
+            return 0
+
+        if args.collections_cmd == "create":
+            col = asyncio.run(
+                service.collections_create(
+                    name=args.name, kind=args.kind, source_path=args.source,
+                    embedder=args.embedder, data_dir=data_dir,
+                )
+            )
+            print(_fmt(col))
+            return 0
+
+        if args.collections_cmd == "index":
+            # The CLI runs the walk synchronously (unlike the HTTP 202 path)
+            # so the caller sees the final stats on exit.
+            asyncio.run(
+                service.collections_index_start(args.collection_id, data_dir=data_dir)
+            )
+            stats = asyncio.run(
+                service.collections_index_run(args.collection_id, data_dir=data_dir)
+            )
+            print(
+                f"{args.collection_id}: files_indexed={stats['files_indexed']} "
+                f"unchanged={stats['files_unchanged']} deleted={stats['files_deleted']} "
+                f"chunks_ingested={stats['chunks_ingested']} "
+                f"superseded={stats['chunks_superseded']} errors={len(stats['errors'])}"
+            )
+            if stats.get("degraded"):
+                print(
+                    "warning: embedder unavailable for some chunks; content is "
+                    "archived but not searchable until reconcile",
+                    file=sys.stderr,
+                )
+            return 0
+
+        if args.collections_cmd in ("link", "unlink"):
+            fn = (
+                service.collections_link
+                if args.collections_cmd == "link"
+                else service.collections_unlink
+            )
+            col = asyncio.run(
+                fn(args.collection_id, args.link_type, args.ext_id, data_dir=data_dir)
+            )
+            links = ", ".join(f"{ln['type']}:{ln['id']}" for ln in col["links"]) or "(none)"
+            print(f"{col['id']} links: {links}")
+            return 0
+
+        if args.collections_cmd == "grant":
+            col = asyncio.run(
+                service.collections_grant(args.collection_id, args.agent, data_dir=data_dir)
+            )
+            print(f"{col['id']} grants: {', '.join(col['grants']) or '(none)'}")
+            return 0
+
+        if args.collections_cmd == "revoke":
+            col = asyncio.run(
+                service.collections_revoke(args.collection_id, args.agent, data_dir=data_dir)
+            )
+            print(f"{col['id']} grants: {', '.join(col['grants']) or '(none)'}")
+            return 0
+    except CollectionNotFoundError as exc:
+        # KeyError str() wraps the message in quotes; unwrap for readability.
+        print(f"error: {exc.args[0] if exc.args else exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    return 1
+
+
 def _reconcile_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd reconcile``: compare archive to vector store and repair gaps."""
     import asyncio  # noqa: PLC0415
@@ -1597,6 +1697,47 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Project id (from `taosmd projects` or taosmd.get_project_id())",
     )
 
+    # ----- collections subcommand group ---------------------------------
+    collections_p = sub.add_parser(
+        "collections",
+        help="Manage collections: indexed folders agents can query (grant-gated)",
+    )
+    collections_sub = collections_p.add_subparsers(dest="collections_cmd", required=True)
+    c_list_p = collections_sub.add_parser("list", help="List collections")
+    c_list_p.add_argument("--project", help="Only collections linked to this project id")
+    c_create_p = collections_sub.add_parser(
+        "create", help="Create a collection (source must be inside an allowed root)"
+    )
+    c_create_p.add_argument("--name", required=True, help="Human-readable name")
+    c_create_p.add_argument(
+        "--kind", required=True, choices=["docs", "codebase", "mixed"],
+        help="Collection kind (Phase 1 indexes docs-shaped files only)",
+    )
+    c_create_p.add_argument("--source", required=True, help="Source folder path")
+    c_create_p.add_argument(
+        "--embedder", help="Per-collection embedder id (stored; Phase 1 indexes with the global default)"
+    )
+    c_index_p = collections_sub.add_parser(
+        "index", help="Index (or re-index) a collection's source folder"
+    )
+    c_index_p.add_argument("collection_id", help="Collection id (col-...)")
+    c_link_p = collections_sub.add_parser("link", help="Link a collection to a project")
+    c_link_p.add_argument("collection_id")
+    c_link_p.add_argument("--type", required=True, choices=["taos", "git"], dest="link_type")
+    c_link_p.add_argument("--id", required=True, dest="ext_id", help="Project id")
+    c_unlink_p = collections_sub.add_parser("unlink", help="Remove a project link")
+    c_unlink_p.add_argument("collection_id")
+    c_unlink_p.add_argument("--type", required=True, choices=["taos", "git"], dest="link_type")
+    c_unlink_p.add_argument("--id", required=True, dest="ext_id", help="Project id")
+    c_grant_p = collections_sub.add_parser(
+        "grant", help="Grant an agent query access to a collection"
+    )
+    c_grant_p.add_argument("collection_id")
+    c_grant_p.add_argument("agent")
+    c_revoke_p = collections_sub.add_parser("revoke", help="Revoke an agent's access")
+    c_revoke_p.add_argument("collection_id")
+    c_revoke_p.add_argument("agent")
+
     # ----- tasks subcommand group ---------------------------------------
     tasks_p = sub.add_parser(
         "tasks",
@@ -1772,6 +1913,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd in ("projects", "shelves"):
         return _projects_cmd(args)
+
+    if args.cmd == "collections":
+        return _collections_cmd(args)
 
     if args.cmd == "claims":
         return _claims_cmd(args)

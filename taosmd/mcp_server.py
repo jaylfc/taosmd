@@ -109,6 +109,7 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
         limit: int = 5,
         project: str | None = None,
         also_include: list[str] | None = None,
+        collection: str | None = None,
     ) -> list[dict]:
         """Search an agent's memory for passages relevant to ``query``.
 
@@ -117,12 +118,17 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
         to ``agent``. Optional ``project`` scopes the search to one project;
         ``also_include`` (a list of agent names, only honoured with ``project``)
         adds those agents' memories within the project (cross-agent reads).
+        Optional ``collection`` (an id from ``memory_list_collections``) adds
+        that collection's indexed content when the agent holds a grant for
+        it; collection hits carry ``file_path`` metadata.
         """
         opts: dict = {}
         if project:
             opts["project"] = project
         if also_include:
             opts["also_include"] = also_include
+        if collection:
+            opts["collections"] = [collection]
         return await _dispatch(
             service.search(query, agent=agent, data_dir=data_dir, limit=limit, **opts)
         )
@@ -136,6 +142,20 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
         ``project`` / ``also_include`` on ``memory_search``.
         """
         return await _dispatch(service.list_projects(data_dir=data_dir))
+
+    @mcp.tool()
+    async def memory_list_collections(project: str | None = None) -> list[dict]:
+        """List collections: indexed folders agents can query when granted.
+
+        Returns each collection's ``id``, ``name``, ``kind``, ``status``,
+        ``stats``, ``links``, and ``grants``. Optional ``project`` filters to
+        collections linked to that project id (taOS or git fingerprint). Pass
+        a collection ``id`` to ``memory_search``'s ``collection`` parameter
+        to search its content (requires a grant for the calling agent).
+        """
+        return await _dispatch(
+            service.collections_list(project=project, data_dir=data_dir)
+        )
 
     @mcp.tool()
     async def memory_list_shelves(project: str) -> list[dict]:

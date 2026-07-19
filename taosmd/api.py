@@ -425,8 +425,15 @@ def _format_hit(hit: dict) -> dict:
     underlying row's ``created_at`` / ``timestamp`` field.
     """
     md = hit.get("metadata", {}) or {}
-    inner = md.get("metadata") if isinstance(md, dict) else None
-    user_md = inner if isinstance(inner, dict) else md
+    # Unwrap to the innermost user metadata. Depending on the path a hit's
+    # metadata is nested differently: the BM25 path passes the row metadata
+    # (one ``metadata`` level for batch rows), while the full retrieval path
+    # wraps the row metadata in a result envelope (two levels). Descending
+    # until there is no further ``metadata`` dict gives both paths the same
+    # user-metadata contract (e.g. collection hits expose ``file_path``).
+    user_md = md
+    while isinstance(user_md, dict) and isinstance(user_md.get("metadata"), dict):
+        user_md = user_md["metadata"]
 
     confidence = (
         md.get("similarity")
