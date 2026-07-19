@@ -134,3 +134,17 @@ Retrieval quality on a real repo, judged-free, before any default surface ships.
 3. **Ship Phase 1 alone first?** Docs collections are useful on their own (index a project's docs folder, grant it to the agents). Shipping it before the code path exists gets real usage feedback on the container model early. My lean is yes.
 4. **Code-embedder bake-off timing.** Follow-up experiment after Phase 2 lands, or run it in parallel with Phase 2 so the per-collection embedder mechanism is designed in from the start?
 5. **taOS UI ownership.** Section 4 puts the Collections panel in the taOS Projects app and keeps only a minimal view in the standalone dashboard. If you want the standalone dashboard to be feature-complete for non-taOS users, that roughly doubles the UI work and should be scoped now, not discovered later.
+
+## 9. Decisions (2026-07-19)
+
+Settled with Jay and @taOS-dev; these bind the Phase 1 build.
+
+1. **tree-sitter: no.** No new dependencies anywhere in this workstream. Phase 1 is docs-only (`DocLoader` md/txt/markdown/rst plus whatever the other registered loaders claim); chunking is the zero-dep paragraph packer with an `# upgrade-path:` comment. The Phase 2 code splitter starts zero-dep too, and only the pre-registered eval can argue for the dep later.
+2. **Admin gating: yes, on create and index.** `POST /collections` and `POST /collections/{id}/index` require the admin token (fail closed, same as shelves). `DELETE /collections/{id}` (archive) is admin too. The data plane (list, get, link, unlink, grants, query) uses the normal server token plus grants.
+3. **Ship Phase 1 alone: yes.** Docs collections ship first to get real usage on the container model before the code path exists.
+4. **Per-collection embedder: mechanism now, minimal.** Collections carry an `embedder` field (default = global embedder), stored at create, returned in GET, and read by the index path. Phase 1 always indexes with the global default; the field exists so the code-embedder bake-off can use it without a schema change.
+5. **taOS owns the Collections panel.** The standalone dashboard gets at most a minimal read view later; nothing UI ships in Phase 1.
+
+**Links and grants verdict.** Link rows are typed `{type: "taos" | "git", id}`, multiple per collection, metadata only, and strictly non-transitive: a project link never grants query access. Grants are their own table, `(canonical_id, scope, collection_id)` UNIQUE together with `scope='collection'`, stored in taosmd, enforced on search per requesting agent.
+
+**Safety and zero-loss (confirmed).** `collections.allowed_roots` defaults to EMPTY (feature off); `source_path` must `resolve_within` an allowed root at create and at every index, symlink escapes rejected, `check_size` per file. DELETE archives (reversible status change); re-index supersedes changed-file rows via the existing supersede machinery; destruction stays exclusive to wipe.
