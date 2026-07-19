@@ -26,10 +26,13 @@ server, and Python API all go remote transparently.
 from __future__ import annotations
 
 import json
+import logging
 
 from . import api as _api
 from . import config as _config
 from .archive import EVENT_A2A
+
+logger = logging.getLogger(__name__)
 
 # Cache of RemoteClient instances keyed by (base_url, token) so we don't
 # create a fresh object on every call.  Access from async coroutines is safe
@@ -851,10 +854,155 @@ async def admin_a2a_supersede_message(msg_id: int, *, data_dir=None) -> dict:
     return await a2a_admin_supersede_message(msg_id, data_dir=data_dir, stores=stores)
 
 
+# ---------------------------------------------------------------------------
+# Collections service wrappers
+# ---------------------------------------------------------------------------
+#
+# Like the shelf admin wrappers these are local-only (no remote forwarding):
+# the server that owns the filesystem being indexed is the server that runs
+# the collection ops. All wrappers open the store against the resolved data
+# dir and close it, so no sqlite connection outlives a call.
+
+def _collection_store(data_dir):
+    from .collections import CollectionStore  # noqa: PLC0415
+    return CollectionStore(_api._resolve_data_dir(data_dir))
+
+
+async def collections_create(
+    *,
+    name: str,
+    kind: str,
+    source_path: str,
+    embedder: str | None = None,
+    data_dir=None,
+) -> dict:
+    """Create a collection row (admin operation). Returns the collection."""
+    store = _collection_store(data_dir)
+    try:
+        return store.create(
+            name=name, kind=kind, source_path=source_path, embedder=embedder,
+        )
+    finally:
+        store.close()
+
+
+async def collections_list(*, project: str | None = None, data_dir=None) -> list[dict]:
+    """List collections, optionally filtered to one project's links."""
+    store = _collection_store(data_dir)
+    try:
+        return store.list(project=project)
+    finally:
+        store.close()
+
+
+async def collections_get(collection_id: str, *, data_dir=None) -> dict:
+    """Return one collection with full stats, links, and grants."""
+    store = _collection_store(data_dir)
+    try:
+        return store.get(collection_id)
+    finally:
+        store.close()
+
+
+async def collections_index_start(collection_id: str, *, data_dir=None) -> dict:
+    """Validate and mark a collection ``indexing``; the walk runs separately.
+
+    Raises ``CollectionNotFoundError`` (404) for an unknown id and
+    ``ValueError`` (400) for an archived collection or a source path that no
+    longer resolves inside an allowed root, so callers get a synchronous
+    error before the background job is spawned.
+    """
+    store = _collection_store(data_dir)
+    try:
+        col = store.get(collection_id)
+        if col["status"] == "archived":
+            raise ValueError(
+                f"collection {collection_id!r} is archived; unarchive before indexing"
+            )
+        store.resolve_source_path(col["source_path"])
+        store.set_status(collection_id, "indexing")
+    finally:
+        store.close()
+    return {"status": "indexing", "job": collection_id}
+
+
+async def collections_index_run(collection_id: str, *, data_dir=None) -> dict:
+    """Run the folder walk + ingest for one collection (blocking variant)."""
+    from .collections import ingest_folder  # noqa: PLC0415
+    return await ingest_folder(collection_id, data_dir=data_dir)
+
+
+async def collections_index_background(collection_id: str, *, data_dir=None) -> None:
+    """Background wrapper for the HTTP 202 path: never raises, only logs.
+
+    ``ingest_folder`` records failures on the collection row
+    (status='error' + message) so pollers see them; this wrapper keeps the
+    fire-and-forget future from warning about an unobserved exception.
+    """
+    try:
+        await collections_index_run(collection_id, data_dir=data_dir)
+    except Exception:  # noqa: BLE001 - surfaced via the collection row
+        logger.exception("collections: background index failed for %s", collection_id)
+
+
+async def collections_link(
+    collection_id: str, link_type: str, ext_id: str, *, data_dir=None
+) -> dict:
+    """Attach a typed project link ({taos|git, id}). Metadata only."""
+    store = _collection_store(data_dir)
+    try:
+        return store.link(collection_id, link_type, ext_id)
+    finally:
+        store.close()
+
+
+async def collections_unlink(
+    collection_id: str, link_type: str, ext_id: str, *, data_dir=None
+) -> dict:
+    """Remove a typed project link. Metadata only, content untouched."""
+    store = _collection_store(data_dir)
+    try:
+        return store.unlink(collection_id, link_type, ext_id)
+    finally:
+        store.close()
+
+
+async def collections_grant(collection_id: str, agent: str, *, data_dir=None) -> dict:
+    """Grant ``agent`` query access to the collection."""
+    store = _collection_store(data_dir)
+    try:
+        return store.grant(collection_id, agent)
+    finally:
+        store.close()
+
+
+async def collections_revoke(collection_id: str, agent: str, *, data_dir=None) -> dict:
+    """Revoke ``agent``'s query access."""
+    store = _collection_store(data_dir)
+    try:
+        return store.revoke(collection_id, agent)
+    finally:
+        store.close()
+
+
+async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
+    """Archive a collection (the DELETE alias). Reversible; nothing destroyed."""
+    store = _collection_store(data_dir)
+    try:
+        return store.archive(collection_id)
+    finally:
+        store.close()
+
+
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
            "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
            "admin_a2a_delete_channel", "admin_a2a_rename_channel",
-           "admin_a2a_supersede_message"]
+           "admin_a2a_supersede_message",
+           "collections_create", "collections_list", "collections_get",
+           "collections_index_start", "collections_index_run",
+           "collections_index_background", "collections_link",
+           "collections_unlink", "collections_grant", "collections_revoke",
+           "collections_archive"]
