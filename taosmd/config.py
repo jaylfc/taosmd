@@ -50,6 +50,11 @@ _SERVE_DASHBOARD_KEY = "serve_dashboard"
 _GENERATOR_PROFILE_KEY = "generator_profile"
 # Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
 _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
+# Section under which collections settings live. ``allowed_roots`` is the
+# safety line of the collections contract: source paths must resolve inside
+# one of these directories. Empty (the default) means collections are off.
+_COLLECTIONS_SECTION_KEY = "collections"
+_COLLECTIONS_ALLOWED_ROOTS_KEY = "allowed_roots"
 
 MANAGED_BY_STANDALONE = "standalone"
 MANAGED_BY_TAOS = "taos"
@@ -597,6 +602,71 @@ def set_a2a_auth_enforce(value: bool, data_dir=None) -> None:
     _write(data, data_dir)
 
 
+# ---------------------------------------------------------------------------
+# Collections: allowed roots
+# ---------------------------------------------------------------------------
+
+def get_collections_allowed_roots(data_dir=None) -> list[str]:
+    """Return the configured collections allowed-roots list (default empty).
+
+    The allowed-roots list is the single most important safety line in the
+    collections contract: a collection's ``source_path`` must resolve inside
+    one of these directories or collection creation and indexing are refused.
+    The default is an EMPTY list, which means the collections feature is
+    effectively off until an operator opts in.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_COLLECTIONS_ALLOWED_ROOTS`` env var (``os.pathsep``-separated)
+    2. ``collections.allowed_roots`` list in ``~/.taosmd/config.json``
+    3. ``[]`` (collections off)
+
+    Blank entries are dropped; a corrupt config section reads as empty.
+    """
+    env = os.environ.get("TAOSMD_COLLECTIONS_ALLOWED_ROOTS")
+    if env is not None and env.strip():
+        return [p.strip() for p in env.split(os.pathsep) if p.strip()]
+    section = _read(data_dir).get(_COLLECTIONS_SECTION_KEY)
+    if not isinstance(section, dict):
+        return []
+    roots = section.get(_COLLECTIONS_ALLOWED_ROOTS_KEY)
+    if not isinstance(roots, list):
+        return []
+    return [r.strip() for r in roots if isinstance(r, str) and r.strip()]
+
+
+def set_collections_allowed_roots(roots, clear: bool = False, data_dir=None) -> None:
+    """Persist the collections allowed-roots list (or clear it).
+
+    Args:
+        roots: List of directory paths. Blank entries are dropped. Ignored
+            when ``clear`` is True.
+        clear: when True, remove the setting (collections revert to off).
+
+    Raises:
+        ValueError: when ``clear`` is False and ``roots`` is not a list of
+            strings.
+    """
+    data = _read(data_dir)
+    section = data.get(_COLLECTIONS_SECTION_KEY)
+    if not isinstance(section, dict):
+        section = {}
+    if clear:
+        section.pop(_COLLECTIONS_ALLOWED_ROOTS_KEY, None)
+    else:
+        if not isinstance(roots, list):
+            raise ValueError("roots must be a list of strings (or pass clear=True)")
+        cleaned = []
+        for r in roots:
+            if not isinstance(r, str):
+                raise ValueError(f"allowed root must be a string, got {type(r).__name__}")
+            if r.strip():
+                cleaned.append(r.strip())
+        section[_COLLECTIONS_ALLOWED_ROOTS_KEY] = cleaned
+    data[_COLLECTIONS_SECTION_KEY] = section
+    _write(data, data_dir)
+
+
 __all__ = [
     "get_memory_model",
     "set_memory_model",
@@ -623,4 +693,6 @@ __all__ = [
     "MANAGED_BY_TAOS",
     "get_generator_profile",
     "set_generator_profile",
+    "get_collections_allowed_roots",
+    "set_collections_allowed_roots",
 ]
