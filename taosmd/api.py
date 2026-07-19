@@ -477,6 +477,8 @@ async def search(
     limit: int = 5,
     mode: str | None = None,
     prefer_verified: str | None = None,
+    collections: list[str] | None = None,
+    collections_only: bool = False,
     data_dir=None,
 ) -> list[dict]:
     """Search the librarian's shelves for passages relevant to ``query``.
@@ -500,6 +502,15 @@ async def search(
             recipe resolution entirely and returns BM25-only hits (the #25
             user-memory contract: keyword search-as-you-type, sub-300ms).
             Default ``None`` is the full recipe-driven retrieval path.
+        collections: Optional list of collection ids whose indexed content
+            should be searched alongside conversation memory. Grants are
+            enforced per requesting agent: a collection the agent holds no
+            grant for (or that is archived) contributes no hits. Collection
+            hits carry ``collection_id``, ``file_path``, and ``source`` in
+            their metadata.
+        collections_only: When True (with ``collections``), restrict the
+            search to the granted collections and exclude conversation
+            memory. Returns ``[]`` when no requested collection is granted.
         data_dir: Optional taosmd data dir (see :func:`ingest`).
     """
     if not agent:
@@ -534,6 +545,39 @@ async def search(
         for name in also_include:
             if name != agent:
                 search_agents.append(name)
+
+    # Collection scoping: content rows live under the collection id as their
+    # agent namespace, so granting search access is just extending the
+    # search_agents list. Grants are enforced here (per requesting agent);
+    # unknown, archived, or ungranted collections are silently skipped so a
+    # caller cannot probe for their existence.
+    if collections:
+        from taosmd.collections import CollectionNotFoundError, CollectionStore  # noqa: PLC0415
+        cstore = CollectionStore(_resolve_data_dir(data_dir))
+        try:
+            granted: list[str] = []
+            for cid in collections:
+                if not isinstance(cid, str) or not cid:
+                    continue
+                try:
+                    col = cstore.get(cid)
+                except CollectionNotFoundError:
+                    continue
+                if col["status"] == "archived":
+                    continue
+                if not cstore.has_grant(agent, cid):
+                    continue
+                granted.append(cid)
+        finally:
+            cstore.close()
+        if collections_only:
+            if not granted:
+                return []
+            search_agents = granted
+        else:
+            search_agents.extend(granted)
+    elif collections_only:
+        return []
 
     if mode == "bm25":
         # BM25-only path: no embed call, no recipe/reranker resolution. Hits

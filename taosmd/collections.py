@@ -399,3 +399,395 @@ class CollectionStore:
             (collection_id, file_path),
         )
         self._conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Folder walker (gitignore-aware, stdlib only)
+# ---------------------------------------------------------------------------
+
+def _parse_gitignore(path: Path) -> list[tuple[str, bool, bool]]:
+    """Parse one .gitignore into ``(pattern, negate, dir_only)`` rules.
+
+    Simplified gitwildmatch: comments and blanks dropped, ``!`` negation,
+    trailing ``/`` marks dir-only, leading ``/`` anchors to the .gitignore's
+    own directory, patterns without ``/`` match the basename at any depth,
+    patterns with ``/`` are fnmatch-ed against the path relative to the
+    .gitignore's directory.
+    # upgrade-path: full gitwildmatch (``**`` semantics, escaped chars) if the
+    # simplified rules ever mis-walk a real repo.
+    """
+    rules: list[tuple[str, bool, bool]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return rules
+    for line in lines:
+        line = line.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        negate = line.startswith("!")
+        if negate:
+            line = line[1:]
+        dir_only = line.endswith("/")
+        pattern = line.rstrip("/")
+        if pattern:
+            rules.append((pattern, negate, dir_only))
+    return rules
+
+
+def _match_one(pattern: str, rel: str, name: str) -> bool:
+    if pattern.startswith("/"):
+        return fnmatch.fnmatch(rel, pattern[1:])
+    if "/" in pattern:
+        return fnmatch.fnmatch(rel, pattern)
+    return fnmatch.fnmatch(name, pattern)
+
+
+def _is_ignored(
+    rel_posix: str,
+    name: str,
+    is_dir: bool,
+    rule_sets: list[tuple[str, list[tuple[str, bool, bool]]]],
+) -> bool:
+    """Apply the collected .gitignore rule sets to one path.
+
+    ``rule_sets`` is ``[(prefix, rules)]`` where ``prefix`` is the rule
+    file's directory relative to the source root (``""`` for the root).
+    Later-matching rules win, mirroring git's last-match-wins semantics.
+    """
+    ignored = False
+    for prefix, rules in rule_sets:
+        if prefix:
+            if not rel_posix.startswith(prefix + "/"):
+                continue
+            sub = rel_posix[len(prefix) + 1:]
+        else:
+            sub = rel_posix
+        for pattern, negate, dir_only in rules:
+            if dir_only and not is_dir:
+                continue
+            if _match_one(pattern, sub, name):
+                ignored = not negate
+    return ignored
+
+
+def _loader_for(path: Path):
+    """Return an instance of the loader that explicitly claims ``path``,
+    or ``None`` when no registered loader does.
+
+    This deliberately does NOT use ``pick_loader``'s catch-all fallback:
+    the walker only ingests files a loader positively claims (DocLoader
+    md/txt/markdown/rst, ChatLoader *.chat.json, ...), so arbitrary source
+    files are skipped rather than mangled through the doc path.
+    """
+    import mimetypes  # noqa: PLC0415
+
+    ext = _path_to_extension(path)
+    mime, _ = mimetypes.guess_type(str(path))
+    for loader_cls in _LOADER_REGISTRY:
+        if loader_cls.can_handle(extension=ext, mime_type=mime or ""):
+            return loader_cls()
+    return None
+
+
+def collect_files(
+    source_root: Path | str,
+    *,
+    max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+) -> tuple[list[tuple[Path, str]], dict]:
+    """Walk ``source_root`` and return ``([(abs_path, rel_posix)], skips)``.
+
+    Gitignore-aware (root and nested .gitignore files), skips VCS/dependency
+    directories and hidden directories, binary files (by extension and by a
+    null-byte sniff), files over ``max_file_bytes``, symlinks that escape the
+    root, and files no registered loader claims. ``skips`` counts each skip
+    reason so ingest stats can surface them.
+    """
+    root = Path(source_root).resolve()
+    skips = {
+        "skipped_ignored": 0,
+        "skipped_binary": 0,
+        "skipped_size": 0,
+        "skipped_symlink": 0,
+        "skipped_unclaimed": 0,
+    }
+    files: list[tuple[Path, str]] = []
+    rule_sets: list[tuple[str, list[tuple[str, bool, bool]]]] = []
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dpath = Path(dirpath)
+        rel_dir = "" if dpath == root else dpath.relative_to(root).as_posix()
+
+        gi = dpath / ".gitignore"
+        if gi.is_file():
+            rules = _parse_gitignore(gi)
+            if rules:
+                rule_sets.append((rel_dir, rules))
+
+        keep_dirs = []
+        for d in sorted(dirnames):
+            rel_d = f"{rel_dir}/{d}" if rel_dir else d
+            if d in _SKIP_DIRS or d.startswith("."):
+                continue
+            if _is_ignored(rel_d, d, True, rule_sets):
+                skips["skipped_ignored"] += 1
+                continue
+            keep_dirs.append(d)
+        dirnames[:] = keep_dirs
+
+        for fname in sorted(filenames):
+            fpath = dpath / fname
+            rel_f = f"{rel_dir}/{fname}" if rel_dir else fname
+            if _is_ignored(rel_f, fname, False, rule_sets):
+                skips["skipped_ignored"] += 1
+                continue
+            try:
+                resolve_within(fpath, root)
+            except ValueError:
+                skips["skipped_symlink"] += 1
+                continue
+            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+            if ext in _BINARY_EXTS:
+                skips["skipped_binary"] += 1
+                continue
+            try:
+                check_size(fpath, max_file_bytes)
+            except ValueError:
+                skips["skipped_size"] += 1
+                continue
+            except OSError:
+                skips["skipped_symlink"] += 1
+                continue
+            if _loader_for(fpath) is None:
+                skips["skipped_unclaimed"] += 1
+                continue
+            try:
+                with open(fpath, "rb") as fh:
+                    head = fh.read(1024)
+            except OSError:
+                skips["skipped_symlink"] += 1
+                continue
+            if b"\x00" in head:
+                skips["skipped_binary"] += 1
+                continue
+            files.append((fpath, rel_f))
+    return files, skips
+
+
+# ---------------------------------------------------------------------------
+# Chunker (zero-dep)
+# ---------------------------------------------------------------------------
+
+def chunk_text(text: str, max_chars: int = 2000) -> list[str]:
+    """Split ``text`` into chunks of at most ``max_chars`` characters.
+
+    Greedy paragraph packing: paragraphs (blank-line separated) are packed
+    into chunks until the cap; a paragraph longer than the cap is hard-split
+    at the nearest space. Zero-loss: concatenating the chunks preserves every
+    paragraph's content.
+    # upgrade-path: heading/structure-aware chunking (keep md sections whole)
+    # and token-based budgets once the Phase-1 eval says boundaries matter.
+    """
+    import re  # noqa: PLC0415
+
+    text = text.strip()
+    if not text:
+        return []
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    chunks: list[str] = []
+    cur = ""
+    for para in paras:
+        while len(para) > max_chars:
+            cut = para.rfind(" ", 1, max_chars)
+            if cut <= 0:
+                cut = max_chars
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.append(para[:cut].strip())
+            para = para[cut:].strip()
+        if not para:
+            continue
+        if not cur:
+            cur = para
+        elif len(cur) + 2 + len(para) <= max_chars:
+            cur = f"{cur}\n\n{para}"
+        else:
+            chunks.append(cur)
+            cur = para
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+# ---------------------------------------------------------------------------
+# Ingest pipeline
+# ---------------------------------------------------------------------------
+
+def _supersede_collection_rows(vmem, collection_id: str, file_path: str) -> int:
+    """Soft-supersede the active vector rows of one collection file.
+
+    Zero-loss: rows are stamped ``valid_to`` (the existing supersede
+    machinery) with a ``hidden_by: collection-reindex:<ts>`` marker in their
+    metadata; nothing is deleted and the archive rows are untouched. Used on
+    re-index for changed and deleted files, mirroring the shelf-archive
+    pattern in :mod:`taosmd.admin`.
+    """
+    ts = time.time()
+    marker = f"collection-reindex:{ts}"
+    rows = vmem._conn.execute(
+        "SELECT id, metadata_json FROM vector_memory WHERE valid_to IS NULL"
+    ).fetchall()
+    superseded = 0
+    for row in rows:
+        try:
+            meta = json.loads(row["metadata_json"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        user_md = meta.get("metadata") if isinstance(meta, dict) else None
+        if not isinstance(user_md, dict):
+            continue
+        if user_md.get("collection_id") != collection_id:
+            continue
+        if user_md.get("file_path") != file_path:
+            continue
+        meta["hidden_by"] = marker
+        vmem._conn.execute(
+            "UPDATE vector_memory SET valid_to = ?, metadata_json = ? "
+            "WHERE id = ? AND valid_to IS NULL",
+            (ts, json.dumps(meta), row["id"]),
+        )
+        superseded += 1
+    if superseded:
+        vmem._conn.commit()
+        vmem._bm25_dirty = True
+    return superseded
+
+
+async def ingest_folder(
+    collection_id: str,
+    *,
+    data_dir=None,
+    max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    chunk_chars: int = 2000,
+) -> dict:
+    """Walk a collection's source folder and index its documents.
+
+    Incremental by content hash: files whose hash matches the stored state
+    are skipped; changed files get their old rows superseded (never deleted)
+    and their new chunks ingested; files that disappeared from the source
+    are superseded too. Chunks route through :func:`taosmd.api.ingest_batch`
+    under the collection id as the agent namespace, so the batch dedup and
+    metadata preservation come for free and every chunk lands in the
+    zero-loss archive.
+
+    Sets the collection status to ``indexing`` for the duration, then
+    ``ready`` (stats updated, ``last_indexed`` stamped) or ``error`` (the
+    failure recorded on the row). Raises on validation errors so a caller
+    driving it synchronously still sees them.
+    """
+    from . import api as _api  # noqa: PLC0415 - avoid import cycle at module load
+
+    resolved_dir = _api._resolve_data_dir(data_dir)
+    store = CollectionStore(resolved_dir)
+    col = store.get(collection_id)
+    if col["status"] == "archived":
+        raise ValueError(f"collection {collection_id!r} is archived; unarchive before indexing")
+    if col["embedder"]:
+        # Per-collection embedder is stored and returned now (the mechanism);
+        # Phase 1 indexes with the global default regardless.
+        logger.info(
+            "collection %s requests embedder %r; Phase 1 indexes with the "
+            "global default embedder", collection_id, col["embedder"],
+        )
+    store.set_status(collection_id, "indexing")
+    try:
+        source_root = store.resolve_source_path(col["source_path"])
+        prior = store.file_states(collection_id)
+        files, skips = collect_files(source_root, max_file_bytes=max_file_bytes)
+
+        stores = await _api._ensure_stores(data_dir)
+        vmem = stores["vector"]
+
+        items: list[dict] = []
+        indexed: list[tuple[str, str]] = []
+        changed: list[str] = []
+        unchanged = 0
+        errors: list[str] = []
+        seen: set[str] = set()
+
+        for abs_path, rel in files:
+            seen.add(rel)
+            loader = _loader_for(abs_path)
+            if loader is None:  # pragma: no cover - collect_files already filtered
+                continue
+            try:
+                blob = await loader.load(
+                    abs_path, max_bytes=max_file_bytes, base_dir=source_root
+                )
+            except Exception as exc:  # noqa: BLE001 - per-file failures are non-fatal
+                errors.append(f"{rel}: {type(exc).__name__}: {exc}")
+                continue
+            text = blob.raw_text or getattr(blob, "content", "") or ""
+            if not text.strip():
+                continue
+            file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            if prior.get(rel) == file_hash:
+                unchanged += 1
+                continue
+            if rel in prior:
+                changed.append(rel)
+            for i, chunk in enumerate(chunk_text(text, max_chars=chunk_chars)):
+                chunk_id = hashlib.sha256(
+                    f"{collection_id}:{rel}:{file_hash}:{i}".encode("utf-8")
+                ).hexdigest()
+                items.append({
+                    "text": chunk,
+                    "id": chunk_id,
+                    "metadata": {
+                        "collection_id": collection_id,
+                        "file_path": rel,
+                        "source": "collection",
+                        "chunk_index": i,
+                        "file_hash": file_hash,
+                    },
+                })
+            indexed.append((rel, file_hash))
+
+        deleted = sorted(set(prior) - seen)
+
+        chunks_superseded = 0
+        for rel in [*changed, *deleted]:
+            chunks_superseded += _supersede_collection_rows(vmem, collection_id, rel)
+
+        if items:
+            result = await _api.ingest_batch(items, agent=collection_id, data_dir=data_dir)
+        else:
+            result = {"ingested": 0, "skipped": 0}
+
+        for rel, file_hash in indexed:
+            store.set_file_state(collection_id, rel, file_hash)
+        for rel in deleted:
+            store.remove_file_state(collection_id, rel)
+
+        now = time.time()
+        stats = {
+            "files_indexed": len(indexed),
+            "files_unchanged": unchanged,
+            "files_deleted": len(deleted),
+            "files_total": len(store.file_states(collection_id)),
+            "chunks_ingested": result.get("ingested", 0),
+            "chunks_skipped": result.get("skipped", 0),
+            "chunks_superseded": chunks_superseded,
+            "errors": errors[:20],
+            **skips,
+        }
+        if result.get("vector_failures"):
+            stats["vector_failures"] = result["vector_failures"]
+            stats["degraded"] = True
+        store.set_stats(collection_id, stats)
+        store.set_status(collection_id, "ready", last_indexed=now)
+        return stats
+    except Exception as exc:
+        store.set_status(collection_id, "error", error=f"{type(exc).__name__}: {exc}")
+        raise
