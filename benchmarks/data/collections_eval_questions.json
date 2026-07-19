@@ -1,0 +1,25 @@
+{
+  "description": "Phase 1 collections eval: 20 questions over the taosmd repo's own docs/ folder, written before the index was built. Gold labels are file paths relative to docs/. Metric: file-level Recall@5 (a question scores 1 if any of the top-5 results' file_path is in answer_files). No LLM judge.",
+  "questions": [
+    {"question": "How do I pause a long benchmark run, reboot the machine, and resume it later without repeating work?", "answer_files": ["bench-pause-resume.md"]},
+    {"question": "Can several agents share a single taosmd install while keeping their memories isolated?", "answer_files": ["multi-agent.md"]},
+    {"question": "How do I keep the taosmd HTTP server running in the background so it survives logout and starts at login?", "answer_files": ["serve-service.md"]},
+    {"question": "Which memory controls should the taOS settings UI expose and what scope does each control have?", "answer_files": ["INTEGRATION-memory-config.md"]},
+    {"question": "How do agent trace events and memory operations map onto OpenTelemetry GenAI spans and attributes?", "answer_files": ["otel-genai-mapping.md"]},
+    {"question": "What prompt do I paste into a tool-capable agent to install taosmd for me?", "answer_files": ["INSTALL-AGENT-PROMPT.md"]},
+    {"question": "What Recall@5 and judge scores has taosmd published on LongMemEval?", "answer_files": ["benchmarks.md", "research-report.md"]},
+    {"question": "Where are negative experiment results and methodology notes recorded?", "answer_files": ["research-report.md"]},
+    {"question": "What is the design for feeding codebases and folders into named collections agents can query?", "answer_files": ["specs/codebase-indexing-collections-design.md", "collections.md"]},
+    {"question": "What is the proposal for routing retrieval by semantic category?", "answer_files": ["specs/category-routed-retrieval-design.md"]},
+    {"question": "How does the nightly session catalog pipeline enrich and crystallize conversations?", "answer_files": ["specs/session-catalog-pipeline.md", "plans/session-catalog-pipeline.md"]},
+    {"question": "What is the librarian and how does it decide what to enrich at ingest time?", "answer_files": ["specs/2026-04-15-librarian-design.md"]},
+    {"question": "What was the plan for running retrieval sources in parallel and reranking their results?", "answer_files": ["specs/parallel-retrieval-reranking.md", "plans/parallel-retrieval-reranking.md"]},
+    {"question": "What is the spec for the memory management app?", "answer_files": ["specs/memory-management-app.md", "plans/memory-management-app.md"]},
+    {"question": "How are tasks, edges, and the ready queue designed in the task graph?", "answer_files": ["superpowers/specs/2026-06-10-task-graph-design.md"]},
+    {"question": "What is the long-term vision for the memory cockpit dashboard?", "answer_files": ["superpowers/specs/2026-06-21-memory-cockpit-vision.md"]},
+    {"question": "How does the smart installer pick what to install for a machine?", "answer_files": ["superpowers/specs/2026-06-16-smart-installer-design.md", "superpowers/plans/2026-06-17-smart-installer.md"]},
+    {"question": "What were the LoCoMo scorecard results per conversation?", "answer_files": ["specs/2026-04-19-locomo-scorecards.md"]},
+    {"question": "What went wrong with the cross-encoder model path and how was it fixed?", "answer_files": ["agent-jobs/job-002-cross-encoder-path-fix.md"]},
+    {"question": "How do grants control which agents may query an indexed folder collection?", "answer_files": ["collections.md", "specs/codebase-indexing-collections-design.md"]}
+  ]
+}
