@@ -8,6 +8,8 @@ data/
 !benchmarks/data/
 benchmarks/data/*
 !benchmarks/data/README.md
+# tiny pre-registered eval sets are tracked (not datasets)
+!benchmarks/data/collections_eval_questions.json
 *.rknn
 *.rkllm
 models/minilm-onnx/model.onnx

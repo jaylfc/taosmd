@@ -76,8 +76,12 @@ Endpoints
                            Adds ``"vector_failures": int`` and ``"degraded": true`` to the
                            result when embedding failed for one or more items (archived,
                            repairable via reconcile), same as single ingest.
-``POST /search``           ``{"query", "agent", "limit"?, "project"?, "also_include"?, "mode"?}`` -> ``{"hits": [...]}``
-``GET  /search?q=&agent=&limit=&project=&also_include=a,b&mode=bm25``  -> ``{"hits": [...]}``
+``POST /search``           ``{"query", "agent", "limit"?, "project"?, "also_include"?, "mode"?, "collection"?, "collections"?: [...], "collections_only"?: bool}`` -> ``{"hits": [...]}``
+                           ``collection``/``collections`` add granted collections' indexed
+                           content to the search (grants enforced per requesting agent;
+                           collection hits carry ``collection_id``/``file_path``/``source``
+                           metadata); ``collections_only`` restricts to them.
+``GET  /search?q=&agent=&limit=&project=&also_include=a,b&mode=bm25&collection=&collections=a,b&collections_only=true``  -> ``{"hits": [...]}``
 ``GET  /projects``                                         -> ``{"projects": [...]}``
 ``GET  /shelves?project=``                                 -> ``{"shelves": [...]}``
 ``GET  /pending?agent=``                                   -> ``{"pending": [...]}``
@@ -95,7 +99,31 @@ Endpoints
 ``POST /tasks/{id}/edges`` ``{"to_id", "type", "created_by"}``     -> edge record
 ``POST /tasks/{id}/edges/remove`` ``{"to_id", "type"}``   -> edge record with removed_ts
 
+Collections (data plane; create/index/delete are admin, see below)
+``GET  /collections [?project=]``              -> ``{"collections": [...]}`` (project matches links of either type)
+``GET  /collections/{id}``                     -> ``{"collection": {...}}`` with status/stats/links/grants
+                                               stats: files_indexed/files_unchanged/files_deleted/
+                                               files_emptied/files_total, chunks_ingested/skipped/
+                                               superseded, errors. files_deleted is files gone from
+                                               disk, files_emptied is files still there but now empty
+                                               (disjoint; both always present, 0 when none).
+``POST /collections/{id}/link``                ``{"type": "taos"|"git", "id"}`` -> ``{"collection": {...}}``
+``POST /collections/{id}/unlink``              same body; metadata only, never touches content
+``POST /collections/{id}/grants``              ``{"agent"}`` -> grant query access -> ``{"collection": {...}}``
+``DELETE /collections/{id}/grants/{agent}``    -> revoke -> ``{"collection": {...}}``
+
 Admin endpoints (all require a configured server token; 403 if none is set)
+``POST /collections``                          ``{"name", "kind": docs|codebase|mixed, "source_path", "embedder"?}``
+                                               -> ``{"collection": {...}, "created": true}``
+                                               source_path must resolve inside a configured
+                                               collections.allowed_roots directory (400 otherwise;
+                                               empty roots = collections off)
+``POST /collections/{id}/index``               -> 202 ``{"status": "indexing", "job": <id>}``
+                                               async; poll GET /collections/{id} until status is
+                                               "ready" or "error"; stats update on completion;
+                                               409 while an index is already running
+``DELETE /collections/{id}``                   -> archive (reversible; content hidden from query,
+                                               nothing destroyed; destruction only via wipe)
 ``POST /shelves``                              ``{"shelf_id", "project_id"?, "display_name"?}`` -> ``{"shelf": {...}, "created": bool}``
 ``POST /shelves/{id}/archive``                 ``?expect_empty=true``  -> ``{"archived": true, "rows_hidden": int}``
 ``POST /shelves/{id}/unarchive``               -> ``{"archived": false, "rows_restored": int}``
@@ -507,6 +535,19 @@ class _ServiceLoop:
             raise
         return future.result()
 
+    def spawn(self, coro) -> None:
+        """Fire-and-forget: schedule ``coro`` on the loop without blocking.
+
+        Used for background jobs (collection indexing) that outlive the HTTP
+        request. The coroutine must handle its own exceptions (the returned
+        future is intentionally not awaited).
+        """
+        try:
+            asyncio.run_coroutine_threadsafe(coro, self._loop)
+        except RuntimeError:
+            coro.close()
+            raise
+
     def close(self) -> None:
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=5)
@@ -667,9 +708,19 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             that gating the admin surface never locks the data plane.
             ``path`` has already had any trailing slash stripped by the caller.
             """
+            if method == "DELETE" and path.startswith("/collections/"):
+                # DELETE /collections/{id} (archive) is admin; the grants
+                # revoke sub-path (DELETE /collections/{id}/grants/{agent})
+                # stays on the data plane.
+                rest = path[len("/collections/"):]
+                return bool(rest) and "/" not in rest
             if method != "POST":
                 return False
             if path == "/shelves" or path.startswith("/shelves/"):
+                return True
+            if path == "/collections":
+                return True
+            if path.startswith("/collections/") and path.endswith("/index"):
                 return True
             return path in (
                 "/a2a/admin/delete-channel",
@@ -805,6 +856,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def do_POST(self) -> None:  # noqa: N802
             self._dispatch("POST")
 
+        def do_DELETE(self) -> None:  # noqa: N802
+            self._dispatch("DELETE")
+
         def _dispatch(self, method: str) -> None:
             parts = urlsplit(self.path)
             path = parts.path.rstrip("/") or "/"
@@ -919,6 +973,41 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                             self._handle_admin_shelf_unarchive(shelf_id)
                     else:
                         self._send_json(404, {"error": f"unknown shelf action: {rest}"})
+                # ----- collections ----------------------------------------
+                elif method == "GET" and path == "/collections":
+                    self._handle_collections_list(query)
+                elif method == "GET" and path.startswith("/collections/"):
+                    cid = path[len("/collections/"):]
+                    if not cid or "/" in cid:
+                        self._send_json(404, {"error": "collection id required"})
+                    else:
+                        self._handle_collections_get(cid)
+                elif method == "POST" and path == "/collections":
+                    self._handle_collections_create()
+                elif method == "POST" and path.startswith("/collections/"):
+                    rest = path[len("/collections/"):]
+                    if rest.endswith("/index"):
+                        self._handle_collections_index(rest[: -len("/index")])
+                    elif rest.endswith("/link"):
+                        self._handle_collections_link(rest[: -len("/link")], unlink=False)
+                    elif rest.endswith("/unlink"):
+                        self._handle_collections_link(rest[: -len("/unlink")], unlink=True)
+                    elif rest.endswith("/grants"):
+                        self._handle_collections_grant(rest[: -len("/grants")])
+                    else:
+                        self._send_json(404, {"error": f"unknown collection action: {rest}"})
+                elif method == "DELETE" and path.startswith("/collections/"):
+                    rest = path[len("/collections/"):]
+                    if "/grants/" in rest:
+                        cid, _, agent = rest.partition("/grants/")
+                        if not cid or not agent:
+                            self._send_json(404, {"error": "collection id and agent required"})
+                        else:
+                            self._handle_collections_revoke(cid, agent)
+                    elif rest and "/" not in rest:
+                        self._handle_collections_delete(rest)
+                    else:
+                        self._send_json(404, {"error": f"unknown collection action: {rest}"})
                 # ----- admin surface: A2A channel admin -------------------
                 elif method == "POST" and path == "/a2a/admin/delete-channel":
                     self._handle_admin_a2a_delete_channel()
@@ -991,10 +1080,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             project = body.get("project")
             also_include = body.get("also_include")
             mode = body.get("mode")
+            collections = body.get("collections")
+            collection = body.get("collection")
+            collections_only = body.get("collections_only", False)
             project, ok = self._apply_token_binding(agent, project)
             if not ok:
                 return
-            self._do_search(query, agent, limit, project, also_include, mode)
+            self._do_search(query, agent, limit, project, also_include, mode,
+                            collections, collection, collections_only)
 
         def _handle_search_get(self, qs: dict) -> None:
             query = (qs.get("q") or qs.get("query") or [None])[0]
@@ -1005,12 +1098,21 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             ai_raw = (qs.get("also_include") or [None])[0]
             also_include = [s for s in ai_raw.split(",") if s] if ai_raw else None
             mode = (qs.get("mode") or [None])[0]
+            # Collection scoping: ?collection=<id> or ?collections=a,b, plus
+            # ?collections_only=true to exclude conversation memory.
+            col_raw = (qs.get("collections") or [None])[0]
+            collections = [s for s in col_raw.split(",") if s] if col_raw else None
+            collection = (qs.get("collection") or [None])[0]
+            co_raw = (qs.get("collections_only") or [None])[0]
+            collections_only = co_raw is not None and co_raw.lower() == "true"
             project, ok = self._apply_token_binding(agent, project)
             if not ok:
                 return
-            self._do_search(query, agent, limit, project, also_include, mode)
+            self._do_search(query, agent, limit, project, also_include, mode,
+                            collections, collection, collections_only)
 
-        def _do_search(self, query, agent, limit, project=None, also_include=None, mode=None) -> None:
+        def _do_search(self, query, agent, limit, project=None, also_include=None, mode=None,
+                       collections=None, collection=None, collections_only=False) -> None:
             if not isinstance(query, str) or not query:
                 raise _BadRequest("'query' (non-empty string) is required")
             if not isinstance(agent, str) or not agent:
@@ -1027,6 +1129,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'limit' must be an integer") from exc
             if mode is not None and not isinstance(mode, str):
                 raise _BadRequest("'mode' must be a string when provided")
+            if collection is not None and not isinstance(collection, str):
+                raise _BadRequest("'collection' must be a string when provided")
+            if collections is not None and not (
+                isinstance(collections, list) and all(isinstance(s, str) for s in collections)
+            ):
+                raise _BadRequest("'collections' must be a list of strings when provided")
+            all_collections = list(collections or [])
+            if collection and collection not in all_collections:
+                all_collections.append(collection)
             opts: dict = {}
             if project:
                 opts["project"] = project
@@ -1034,6 +1145,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 opts["also_include"] = also_include
             if mode:
                 opts["mode"] = mode
+            if all_collections:
+                opts["collections"] = all_collections
+            if collections_only:
+                opts["collections_only"] = True
             hits = runner.run(
                 service.search(query, agent=agent, data_dir=data_dir, limit=limit_i, **opts)
             )
@@ -1686,6 +1801,134 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return
             self._send_json(200, result)
 
+        # ----- collections ------------------------------------------------
+
+        def _handle_collections_create(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            name = body.get("name")
+            kind = body.get("kind")
+            source_path = body.get("source_path")
+            embedder = body.get("embedder")
+            if not isinstance(name, str) or not name:
+                raise _BadRequest("'name' (non-empty string) is required")
+            if not isinstance(kind, str) or not kind:
+                raise _BadRequest("'kind' (non-empty string) is required")
+            if not isinstance(source_path, str) or not source_path:
+                raise _BadRequest("'source_path' (non-empty string) is required")
+            if embedder is not None and not isinstance(embedder, str):
+                raise _BadRequest("'embedder' must be a string when provided")
+            result = runner.run(
+                service.collections_create(
+                    name=name, kind=kind, source_path=source_path,
+                    embedder=embedder, data_dir=data_dir,
+                )
+            )
+            self._send_json(200, {"collection": result, "created": True})
+
+        def _handle_collections_list(self, qs: dict) -> None:
+            project = (qs.get("project") or [None])[0]
+            cols = runner.run(
+                service.collections_list(project=project, data_dir=data_dir)
+            )
+            self._send_json(200, {"collections": cols})
+
+        def _handle_collections_get(self, collection_id: str) -> None:
+            from .collections import CollectionNotFoundError  # noqa: PLC0415
+            try:
+                col = runner.run(
+                    service.collections_get(collection_id, data_dir=data_dir)
+                )
+            except CollectionNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            self._send_json(200, {"collection": col})
+
+        def _handle_collections_index(self, collection_id: str) -> None:
+            if not self._check_admin_token():
+                return
+            from .collections import (  # noqa: PLC0415
+                CollectionBusyError,
+                CollectionNotFoundError,
+            )
+            try:
+                receipt = runner.run(
+                    service.collections_index_start(collection_id, data_dir=data_dir)
+                )
+            except CollectionNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            except CollectionBusyError as exc:
+                # Concurrent-index guard: one index per collection at a time.
+                self._send_json(409, {"error": str(exc)})
+                return
+            # Async by contract: 202 now, poll GET /collections/{id} until the
+            # status is ready|error. The walk runs on the service loop so all
+            # store access stays in the single-threaded context.
+            runner.spawn(
+                service.collections_index_background(collection_id, data_dir=data_dir)
+            )
+            self._send_json(202, receipt)
+
+        def _handle_collections_link(self, collection_id: str, *, unlink: bool) -> None:
+            from .collections import CollectionNotFoundError  # noqa: PLC0415
+            body = self._read_json_body()
+            link_type = body.get("type")
+            ext_id = body.get("id")
+            if not isinstance(link_type, str) or not link_type:
+                raise _BadRequest("'type' (\"taos\" or \"git\") is required")
+            if not isinstance(ext_id, str) or not ext_id:
+                raise _BadRequest("'id' (non-empty string) is required")
+            fn = service.collections_unlink if unlink else service.collections_link
+            try:
+                col = runner.run(
+                    fn(collection_id, link_type, ext_id, data_dir=data_dir)
+                )
+            except CollectionNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            self._send_json(200, {"collection": col})
+
+        def _handle_collections_grant(self, collection_id: str) -> None:
+            from .collections import CollectionNotFoundError  # noqa: PLC0415
+            body = self._read_json_body()
+            agent = body.get("agent")
+            if not isinstance(agent, str) or not agent:
+                raise _BadRequest("'agent' (non-empty string) is required")
+            try:
+                col = runner.run(
+                    service.collections_grant(collection_id, agent, data_dir=data_dir)
+                )
+            except CollectionNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            self._send_json(200, {"collection": col})
+
+        def _handle_collections_revoke(self, collection_id: str, agent: str) -> None:
+            from .collections import CollectionNotFoundError  # noqa: PLC0415
+            try:
+                col = runner.run(
+                    service.collections_revoke(collection_id, agent, data_dir=data_dir)
+                )
+            except CollectionNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            self._send_json(200, {"collection": col})
+
+        def _handle_collections_delete(self, collection_id: str) -> None:
+            if not self._check_admin_token():
+                return
+            from .collections import CollectionNotFoundError  # noqa: PLC0415
+            try:
+                col = runner.run(
+                    service.collections_archive(collection_id, data_dir=data_dir)
+                )
+            except CollectionNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            self._send_json(200, {"collection": col})
+
         # ----- admin: A2A channel admin ----------------------------------
 
         def _handle_admin_a2a_delete_channel(self) -> None:
@@ -1785,8 +2028,13 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
           "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "
           "GET /a2a/channels, GET /a2a/members, "
           "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
-          "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove")
-    print("Admin (admin token required): POST /shelves, POST /shelves/{id}/archive, "
+          "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove, "
+          "GET /collections, GET /collections/{id}, POST /collections/{id}/link, "
+          "POST /collections/{id}/unlink, POST /collections/{id}/grants, "
+          "DELETE /collections/{id}/grants/{agent}")
+    print("Admin (admin token required): POST /collections, POST /collections/{id}/index, "
+          "DELETE /collections/{id}, "
+          "POST /shelves, POST /shelves/{id}/archive, "
           "POST /shelves/{id}/unarchive, "
           "POST /a2a/admin/delete-channel, POST /a2a/admin/rename-channel, "
           "POST /a2a/admin/supersede-message")

@@ -425,8 +425,30 @@ def _format_hit(hit: dict) -> dict:
     underlying row's ``created_at`` / ``timestamp`` field.
     """
     md = hit.get("metadata", {}) or {}
-    inner = md.get("metadata") if isinstance(md, dict) else None
-    user_md = inner if isinstance(inner, dict) else md
+    # Unwrap to the innermost user metadata. Depending on the path a hit's
+    # metadata is nested differently: the BM25 path passes the row metadata
+    # (one ``metadata`` level for batch rows), while the full retrieval path
+    # wraps the row metadata in a result envelope (two levels). Descending
+    # until there is no further ``metadata`` dict gives both paths the same
+    # user-metadata contract (e.g. collection hits expose ``file_path``).
+    #
+    # Provenance fields live on the envelope levels, not in the user metadata,
+    # so they are captured on the way down and re-attached to the formatted
+    # hit: the prefer_verified claims gate reads ``archive_span_id`` off the
+    # formatted metadata, and stripping it would blind the gate for batch
+    # rows (a contradicted-claim row would survive recall). Innermost
+    # envelope wins; an explicit user key of the same name is never clobbered.
+    preserved: dict = {}
+    user_md = md
+    while isinstance(user_md, dict) and isinstance(user_md.get("metadata"), dict):
+        for key in ("archive_span_id", "agent", "project"):
+            if key in user_md:
+                preserved[key] = user_md[key]
+        user_md = user_md["metadata"]
+    if isinstance(user_md, dict):
+        user_md = dict(user_md)  # copy: never mutate the stored row metadata
+        for key, value in preserved.items():
+            user_md.setdefault(key, value)
 
     confidence = (
         md.get("similarity")
@@ -477,6 +499,8 @@ async def search(
     limit: int = 5,
     mode: str | None = None,
     prefer_verified: str | None = None,
+    collections: list[str] | None = None,
+    collections_only: bool = False,
     data_dir=None,
 ) -> list[dict]:
     """Search the librarian's shelves for passages relevant to ``query``.
@@ -500,6 +524,15 @@ async def search(
             recipe resolution entirely and returns BM25-only hits (the #25
             user-memory contract: keyword search-as-you-type, sub-300ms).
             Default ``None`` is the full recipe-driven retrieval path.
+        collections: Optional list of collection ids whose indexed content
+            should be searched alongside conversation memory. Grants are
+            enforced per requesting agent: a collection the agent holds no
+            grant for (or that is archived) contributes no hits. Collection
+            hits carry ``collection_id``, ``file_path``, and ``source`` in
+            their metadata.
+        collections_only: When True (with ``collections``), restrict the
+            search to the granted collections and exclude conversation
+            memory. Returns ``[]`` when no requested collection is granted.
         data_dir: Optional taosmd data dir (see :func:`ingest`).
     """
     if not agent:
@@ -534,6 +567,39 @@ async def search(
         for name in also_include:
             if name != agent:
                 search_agents.append(name)
+
+    # Collection scoping: content rows live under the collection id as their
+    # agent namespace, so granting search access is just extending the
+    # search_agents list. Grants are enforced here (per requesting agent);
+    # unknown, archived, or ungranted collections are silently skipped so a
+    # caller cannot probe for their existence.
+    if collections:
+        from taosmd.collections import CollectionNotFoundError, CollectionStore  # noqa: PLC0415
+        cstore = CollectionStore(_resolve_data_dir(data_dir))
+        try:
+            granted: list[str] = []
+            for cid in collections:
+                if not isinstance(cid, str) or not cid:
+                    continue
+                try:
+                    col = cstore.get(cid)
+                except CollectionNotFoundError:
+                    continue
+                if col["status"] == "archived":
+                    continue
+                if not cstore.has_grant(agent, cid):
+                    continue
+                granted.append(cid)
+        finally:
+            cstore.close()
+        if collections_only:
+            if not granted:
+                return []
+            search_agents = granted
+        else:
+            search_agents.extend(granted)
+    elif collections_only:
+        return []
 
     if mode == "bm25":
         # BM25-only path: no embed call, no recipe/reranker resolution. Hits

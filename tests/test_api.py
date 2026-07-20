@@ -392,6 +392,111 @@ def test_bm25_python_rank_orders_by_relevance():
     assert ranked[-1][1] == 0.0, "no-overlap doc should score zero"
 
 
+# ---------------------------------------------------------------------------
+# Claims-gate provenance must survive _format_hit's metadata unwrap
+# ---------------------------------------------------------------------------
+
+def _batch_row_span(stores, text: str) -> int:
+    """Read a batch row's archive_span_id straight off the raw vector row."""
+    rows = stores["vector"]._conn.execute(
+        "SELECT text, metadata_json FROM vector_memory"
+    ).fetchall()
+    for r in rows:
+        if r["text"] == text:
+            meta = json.loads(r["metadata_json"])
+            span = meta.get("archive_span_id")
+            assert isinstance(span, int), "batch row lost its archive_span_id at write time"
+            return span
+    raise AssertionError(f"no vector row stored for {text!r}")
+
+
+def test_semantic_search_batch_row_keeps_archive_span_id(isolated_data_dir):
+    """Regression: _format_hit's unwrap-to-innermost loop must not strip the
+    provenance envelope. Batch rows are double-wrapped on the semantic path
+    (retrieval envelope -> row meta -> user metadata); descending all the way
+    down dropped archive_span_id, blinding the prefer_verified claims gate.
+    The formatted hit must expose BOTH the user metadata (e.g. file_path for
+    collection hits) and the archive span the gate reads."""
+    stores = _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest_batch(
+        [{"text": "The rack in bay four is painted teal.",
+          "id": "hash-rack",
+          "metadata": {"file_path": "docs/rack.md"}}],
+        agent="batch-agent", data_dir=str(isolated_data_dir),
+    ))
+    span = _batch_row_span(stores, "The rack in bay four is painted teal.")
+
+    hits = asyncio.run(taosmd.search(
+        "The rack in bay four is painted teal.",
+        agent="batch-agent",
+        prefer_verified="off",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert hits, "expected a semantic hit for an exact-content query"
+    top = hits[0]
+    assert top["metadata"].get("file_path") == "docs/rack.md"   # client-facing win stays
+    assert top["metadata"].get("archive_span_id") == span       # gate input preserved
+
+
+def test_bm25_search_batch_row_keeps_archive_span_id(isolated_data_dir):
+    """Same contract on the BM25 path: row meta is one level shallower there,
+    but the formatted hit must still carry the provenance span."""
+    stores = _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest_batch(
+        [{"text": "The quarterly review moved to Friday morning.",
+          "id": "hash-review",
+          "metadata": {"file_path": "notes/review.md"}}],
+        agent="batch-agent", data_dir=str(isolated_data_dir),
+    ))
+    span = _batch_row_span(stores, "The quarterly review moved to Friday morning.")
+    hits = asyncio.run(taosmd.search(
+        "quarterly review Friday",
+        agent="batch-agent",
+        mode="bm25",
+        prefer_verified="off",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert hits
+    assert hits[0]["metadata"].get("file_path") == "notes/review.md"
+    assert hits[0]["metadata"].get("archive_span_id") == span
+
+
+def test_prefer_verified_drops_contradicted_batch_row(isolated_data_dir):
+    """Regression: with a batch row's backing claim contradicted, the
+    prefer_verified gate must drop the row from semantic recall. This is the
+    master behaviour the metadata unwrap regressed (gate went blind because
+    the formatted hit no longer carried archive_span_id)."""
+    stores = _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest_batch(
+        [{"text": "The rack in bay four is painted teal.",
+          "id": "hash-rack",
+          "metadata": {"file_path": "docs/rack.md"}}],
+        agent="batch-agent", data_dir=str(isolated_data_dir),
+    ))
+    span = _batch_row_span(stores, "The rack in bay four is painted teal.")
+
+    # Sanity: without the gate the row is recalled.
+    ungated = asyncio.run(taosmd.search(
+        "The rack in bay four is painted teal.",
+        agent="batch-agent", prefer_verified="off",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert any("teal" in h["text"] for h in ungated)
+
+    # Contradict the claim backing that span; the gate must now drop the row.
+    cs = stores["claims"]
+    cid = asyncio.run(cs.add_claim("rack colour", [span], source_extractor="test"))
+    asyncio.run(cs.set_status(cid, "contradicted", verifier_model="m", now=1.0))
+    gated = asyncio.run(taosmd.search(
+        "The rack in bay four is painted teal.",
+        agent="batch-agent", prefer_verified="prefer_verified",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert not any("teal" in h["text"] for h in gated), (
+        "contradicted-claim row survived: the claims gate is blind to batch rows"
+    )
+
+
 def test_search_prefer_verified_resolves_from_config():
     """Provable memory ships on by default: search()'s prefer_verified param is a
     sentinel (None) that resolves from the persisted controls at call time, and
