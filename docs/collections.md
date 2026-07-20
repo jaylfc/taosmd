@@ -44,7 +44,28 @@ taosmd collections list
 Statuses: `created -> indexing -> ready | error` (and `archived` after a
 delete). Re-indexing is incremental: unchanged files are skipped by content
 hash, changed and deleted files have their old rows superseded (hidden from
-recall, never destroyed; the archive keeps every version).
+recall, never destroyed; the archive keeps every version). A file that still
+exists but whose content has been emptied is retired the same way, and
+reported separately as `files_emptied` rather than `files_deleted`, so a
+blanked file is never mistaken for one that vanished from disk.
+
+Index stats (on the collection row, and in the `GET /collections/{id}`
+response) always carry the same keys:
+
+```text
+files_indexed      files whose content was chunked and ingested this pass
+files_unchanged    files skipped because their content hash matched
+files_deleted      previously-indexed files no longer present on disk
+files_emptied      previously-indexed files still present but now empty
+files_total        files currently tracked in the collection's hash state
+chunks_ingested    chunks written this pass
+chunks_skipped     chunks the batch deduped away
+chunks_superseded  active rows retired this pass (never destroyed)
+errors             up to 20 per-file failure strings
+```
+
+`files_deleted` and `files_emptied` count disjoint sets, and both are
+present (as `0`) when nothing was retired.
 
 The walker respects `.gitignore` files (simplified rules), skips VCS and
 dependency directories, hidden directories, binaries, and oversized files.

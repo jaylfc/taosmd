@@ -1043,6 +1043,7 @@ def _collections_cmd(args: argparse.Namespace) -> int:
             print(
                 f"{args.collection_id}: files_indexed={stats['files_indexed']} "
                 f"unchanged={stats['files_unchanged']} deleted={stats['files_deleted']} "
+                f"emptied={stats['files_emptied']} "
                 f"chunks_ingested={stats['chunks_ingested']} "
                 f"superseded={stats['chunks_superseded']} errors={len(stats['errors'])}"
             )

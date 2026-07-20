@@ -716,7 +716,10 @@ async def ingest_folder(
     Incremental by content hash: files whose hash matches the stored state
     are skipped; changed files get their old rows superseded (never deleted)
     and their new chunks ingested; files that disappeared from the source,
-    or whose content was emptied, are superseded too. Chunks route through :func:`taosmd.api.ingest_batch`
+    or whose content was emptied, are superseded too (and reported apart, as
+    ``files_deleted`` and ``files_emptied``, because a vanished file and a
+    blanked one call for different responses).
+    Chunks route through :func:`taosmd.api.ingest_batch`
     under the collection id as the agent namespace, so the batch dedup and
     metadata preservation come for free and every chunk lands in the
     zero-loss archive.
@@ -765,6 +768,7 @@ async def ingest_folder(
             items: list[dict] = []
             indexed: list[tuple[str, str]] = []
             changed: list[str] = []
+            emptied: set[str] = set()
             unchanged = 0
             errors: list[str] = []
             seen: set[str] = set()
@@ -791,6 +795,11 @@ async def ingest_folder(
                     # hash state. A file that was already blank is absent from
                     # ``prior`` too, so this stays a no-op for it.
                     seen.discard(rel)
+                    if rel in prior:
+                        # Same retirement, different report: a file that still
+                        # exists but has been emptied is not a file that
+                        # vanished, and clients show the two separately.
+                        emptied.add(rel)
                     continue
                 # Hashing + chunking are CPU-bound; off-loop like the walk above.
                 file_hash, chunks = await asyncio.to_thread(
@@ -818,10 +827,15 @@ async def ingest_folder(
                     })
                 indexed.append((rel, file_hash))
 
-            deleted = sorted(set(prior) - seen)
+            # Everything that has to be retired this pass: files gone from
+            # disk plus files still on disk whose content is now empty. They
+            # are superseded and have their hash state cleared identically;
+            # only the stats split them apart.
+            retired = sorted(set(prior) - seen)
+            removed = [rel for rel in retired if rel not in emptied]
 
             chunks_superseded = 0
-            for rel in [*changed, *deleted]:
+            for rel in [*changed, *retired]:
                 chunks_superseded += _supersede_collection_rows(vmem, collection_id, rel)
 
             if items:
@@ -831,14 +845,15 @@ async def ingest_folder(
 
             for rel, file_hash in indexed:
                 store.set_file_state(collection_id, rel, file_hash)
-            for rel in deleted:
+            for rel in retired:
                 store.remove_file_state(collection_id, rel)
 
             now = time.time()
             stats = {
                 "files_indexed": len(indexed),
                 "files_unchanged": unchanged,
-                "files_deleted": len(deleted),
+                "files_deleted": len(removed),
+                "files_emptied": len(emptied),
                 "files_total": len(store.file_states(collection_id)),
                 "chunks_ingested": result.get("ingested", 0),
                 "chunks_skipped": result.get("skipped", 0),

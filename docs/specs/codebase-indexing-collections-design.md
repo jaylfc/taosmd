@@ -69,7 +69,12 @@ POST   /collections                        (admin) {"name", "kind", "source_path
 GET    /collections [?project=<id>]        -> {"collections": [ {id, name, kind, source_path,
                                               project_id, status, stats, last_indexed, links, grants} ]}
 GET    /collections/{id}                   -> {"collection": {...}} with full stats
-                                              (file_count, chunk_count, last_indexed, errors: [...])
+                                              (files_indexed, files_unchanged, files_deleted,
+                                              files_emptied, files_total, chunks_ingested,
+                                              chunks_skipped, chunks_superseded, errors: [...])
+                                              files_deleted counts files gone from disk;
+                                              files_emptied counts files still present whose
+                                              content is now empty. Disjoint, always present.
 POST   /collections/{id}/index             (admin) -> {"status": "indexing", "job": "<id>"}
                                               async; poll GET /collections/{id} until status
                                               is "ready" or "error"; stats update live

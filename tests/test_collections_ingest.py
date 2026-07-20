@@ -10,6 +10,7 @@ content hashes and changed/deleted files are superseded, never destroyed.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 
@@ -281,6 +282,8 @@ def test_reindex_deleted_file_supersedes_rows(data_dir, source_dir):
     (source_dir / "guide.txt").unlink()
     stats2 = asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
     assert stats2["files_deleted"] == 1
+    # A file gone from disk is not an emptied file.
+    assert stats2["files_emptied"] == 0
     hits = asyncio.run(
         taosmd_api.search(
             "flux capacitor", agent="dev", mode="bm25",
@@ -318,6 +321,9 @@ def test_reindex_emptied_file_supersedes_rows(data_dir, source_dir):
     (source_dir / "readme.md").write_text("   \n\n  \n")
     stats2 = asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
     assert stats2["chunks_superseded"] >= 1
+    # An emptied file is not a deleted file: it reports under its own counter.
+    assert stats2["files_emptied"] == 1
+    assert stats2["files_deleted"] == 0
 
     # The stale content is out of active recall.
     assert not any("frobnicates" in h["text"] for h in _search("frobnicates sprocket"))
@@ -341,7 +347,62 @@ def test_reindex_already_empty_file_is_a_no_op(data_dir, source_dir):
     stats2 = asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
     assert stats2["chunks_superseded"] == 0
     assert stats2["files_deleted"] == 0
+    assert stats2["files_emptied"] == 0
     assert stats2["files_indexed"] == 0
+
+
+def test_emptied_and_deleted_files_report_under_separate_counters(data_dir, source_dir):
+    """``files_emptied`` and ``files_deleted`` describe two different events.
+
+    A UI showing index stats needs to tell "the file is gone from disk" apart
+    from "the file is still there but has no content left" - they call for
+    different operator responses. Both retire their old rows the same way
+    (superseded, never destroyed), so the split is purely about reporting.
+    """
+    _patch_embedder(data_dir)
+    store, col = _make_collection(data_dir, source_dir)
+    store.grant(col["id"], "dev")
+    stats1 = asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+    # The counter is always present, so clients can rely on the shape.
+    assert stats1["files_emptied"] == 0
+
+    # One file emptied in place, one removed from disk, in the same pass.
+    (source_dir / "readme.md").write_text("   \n\n  \n")
+    (source_dir / "guide.txt").unlink()
+    stats2 = asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+    assert stats2["files_emptied"] == 1
+    assert stats2["files_deleted"] == 1
+
+    def _search(q):
+        return asyncio.run(
+            taosmd_api.search(
+                q, agent="dev", mode="bm25",
+                collections=[col["id"]], collections_only=True, data_dir=data_dir,
+            )
+        )
+
+    # Both leave active recall, and both clear their hash state.
+    assert not any("frobnicates" in h["text"] for h in _search("frobnicates sprocket"))
+    assert not any("flux capacitor" in h["text"] for h in _search("flux capacitor"))
+    states = store.file_states(col["id"])
+    assert "readme.md" not in states
+    assert "guide.txt" not in states
+
+    # Zero-loss: the emptied file's rows survive as superseded history.
+    stores = asyncio.run(taosmd_api._ensure_stores(data_dir))
+    rows = stores["vector"]._conn.execute(
+        "SELECT metadata_json, valid_to FROM vector_memory WHERE valid_to IS NOT NULL"
+    ).fetchall()
+    emptied_rows = [
+        json.loads(r["metadata_json"])
+        for r in rows
+        if "readme.md" in (r["metadata_json"] or "")
+    ]
+    assert emptied_rows
+    assert all(
+        str(meta.get("hidden_by", "")).startswith("collection-reindex:")
+        for meta in emptied_rows
+    )
 
 
 def _closing_store_spy(monkeypatch):

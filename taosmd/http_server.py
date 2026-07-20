@@ -102,6 +102,11 @@ Endpoints
 Collections (data plane; create/index/delete are admin, see below)
 ``GET  /collections [?project=]``              -> ``{"collections": [...]}`` (project matches links of either type)
 ``GET  /collections/{id}``                     -> ``{"collection": {...}}`` with status/stats/links/grants
+                                               stats: files_indexed/files_unchanged/files_deleted/
+                                               files_emptied/files_total, chunks_ingested/skipped/
+                                               superseded, errors. files_deleted is files gone from
+                                               disk, files_emptied is files still there but now empty
+                                               (disjoint; both always present, 0 when none).
 ``POST /collections/{id}/link``                ``{"type": "taos"|"git", "id"}`` -> ``{"collection": {...}}``
 ``POST /collections/{id}/unlink``              same body; metadata only, never touches content
 ``POST /collections/{id}/grants``              ``{"agent"}`` -> grant query access -> ``{"collection": {...}}``
