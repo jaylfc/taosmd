@@ -730,122 +730,130 @@ async def ingest_folder(
 
     resolved_dir = _api._resolve_data_dir(data_dir)
     store = CollectionStore(resolved_dir)
-    col = store.get(collection_id)
-    if col["status"] == "archived":
-        raise ValueError(f"collection {collection_id!r} is archived; unarchive before indexing")
-    if col["embedder"]:
-        # Per-collection embedder is stored and returned now (the mechanism);
-        # Phase 1 indexes with the global default regardless.
-        logger.info(
-            "collection %s requests embedder %r; Phase 1 indexes with the "
-            "global default embedder", collection_id, col["embedder"],
-        )
-    store.set_status(collection_id, "indexing")
+    # One sqlite connection per index run: without the finally below, a
+    # server re-indexing on a timer leaks a file handle every pass. The
+    # service wrappers already close theirs; this path was the outlier.
     try:
-        source_root = store.resolve_source_path(col["source_path"])
-        prior = store.file_states(collection_id)
-        # The walk (os.walk + per-file stat + null-byte sniff over every
-        # candidate) is blocking filesystem work; run it on a worker thread so
-        # the 202+poll contract holds and the single service loop keeps
-        # serving /search and /ingest while a collection indexes.
-        files, skips = await asyncio.to_thread(
-            collect_files, source_root,
-            max_file_bytes=max_file_bytes, max_files=max_files,
-        )
-
-        stores = await _api._ensure_stores(data_dir)
-        vmem = stores["vector"]
-
-        items: list[dict] = []
-        indexed: list[tuple[str, str]] = []
-        changed: list[str] = []
-        unchanged = 0
-        errors: list[str] = []
-        seen: set[str] = set()
-
-        for abs_path, rel in files:
-            seen.add(rel)
-            loader = _loader_for(abs_path)
-            if loader is None:  # pragma: no cover - collect_files already filtered
-                continue
-            try:
-                blob = await loader.load(
-                    abs_path, max_bytes=max_file_bytes, base_dir=source_root
-                )
-            except Exception as exc:  # noqa: BLE001 - per-file failures are non-fatal
-                errors.append(f"{rel}: {type(exc).__name__}: {exc}")
-                continue
-            text = blob.raw_text or getattr(blob, "content", "") or ""
-            if not text.strip():
-                # A file with no content contributes nothing, but if we had
-                # indexed it before, leaving it in ``seen`` would strand its
-                # old rows in active recall forever (the file still exists,
-                # so the deleted set never catches it). Drop it from ``seen``
-                # and let the deleted path supersede its rows and clear its
-                # hash state. A file that was already blank is absent from
-                # ``prior`` too, so this stays a no-op for it.
-                seen.discard(rel)
-                continue
-            # Hashing + chunking are CPU-bound; off-loop like the walk above.
-            file_hash, chunks = await asyncio.to_thread(
-                _hash_and_chunk, text, chunk_chars, prior.get(rel)
+        col = store.get(collection_id)
+        if col["status"] == "archived":
+            raise ValueError(
+                f"collection {collection_id!r} is archived; unarchive before indexing"
             )
-            if chunks is None:
-                unchanged += 1
-                continue
-            if rel in prior:
-                changed.append(rel)
-            for i, chunk in enumerate(chunks):
-                chunk_id = hashlib.sha256(
-                    f"{collection_id}:{rel}:{file_hash}:{i}".encode("utf-8")
-                ).hexdigest()
-                items.append({
-                    "text": chunk,
-                    "id": chunk_id,
-                    "metadata": {
-                        "collection_id": collection_id,
-                        "file_path": rel,
-                        "source": "collection",
-                        "chunk_index": i,
-                        "file_hash": file_hash,
-                    },
-                })
-            indexed.append((rel, file_hash))
+        if col["embedder"]:
+            # Per-collection embedder is stored and returned now (the mechanism);
+            # Phase 1 indexes with the global default regardless.
+            logger.info(
+                "collection %s requests embedder %r; Phase 1 indexes with the "
+                "global default embedder", collection_id, col["embedder"],
+            )
+        store.set_status(collection_id, "indexing")
+        try:
+            source_root = store.resolve_source_path(col["source_path"])
+            prior = store.file_states(collection_id)
+            # The walk (os.walk + per-file stat + null-byte sniff over every
+            # candidate) is blocking filesystem work; run it on a worker thread so
+            # the 202+poll contract holds and the single service loop keeps
+            # serving /search and /ingest while a collection indexes.
+            files, skips = await asyncio.to_thread(
+                collect_files, source_root,
+                max_file_bytes=max_file_bytes, max_files=max_files,
+            )
 
-        deleted = sorted(set(prior) - seen)
+            stores = await _api._ensure_stores(data_dir)
+            vmem = stores["vector"]
 
-        chunks_superseded = 0
-        for rel in [*changed, *deleted]:
-            chunks_superseded += _supersede_collection_rows(vmem, collection_id, rel)
+            items: list[dict] = []
+            indexed: list[tuple[str, str]] = []
+            changed: list[str] = []
+            unchanged = 0
+            errors: list[str] = []
+            seen: set[str] = set()
 
-        if items:
-            result = await _api.ingest_batch(items, agent=collection_id, data_dir=data_dir)
-        else:
-            result = {"ingested": 0, "skipped": 0}
+            for abs_path, rel in files:
+                seen.add(rel)
+                loader = _loader_for(abs_path)
+                if loader is None:  # pragma: no cover - collect_files already filtered
+                    continue
+                try:
+                    blob = await loader.load(
+                        abs_path, max_bytes=max_file_bytes, base_dir=source_root
+                    )
+                except Exception as exc:  # noqa: BLE001 - per-file failures are non-fatal
+                    errors.append(f"{rel}: {type(exc).__name__}: {exc}")
+                    continue
+                text = blob.raw_text or getattr(blob, "content", "") or ""
+                if not text.strip():
+                    # A file with no content contributes nothing, but if we had
+                    # indexed it before, leaving it in ``seen`` would strand its
+                    # old rows in active recall forever (the file still exists,
+                    # so the deleted set never catches it). Drop it from ``seen``
+                    # and let the deleted path supersede its rows and clear its
+                    # hash state. A file that was already blank is absent from
+                    # ``prior`` too, so this stays a no-op for it.
+                    seen.discard(rel)
+                    continue
+                # Hashing + chunking are CPU-bound; off-loop like the walk above.
+                file_hash, chunks = await asyncio.to_thread(
+                    _hash_and_chunk, text, chunk_chars, prior.get(rel)
+                )
+                if chunks is None:
+                    unchanged += 1
+                    continue
+                if rel in prior:
+                    changed.append(rel)
+                for i, chunk in enumerate(chunks):
+                    chunk_id = hashlib.sha256(
+                        f"{collection_id}:{rel}:{file_hash}:{i}".encode("utf-8")
+                    ).hexdigest()
+                    items.append({
+                        "text": chunk,
+                        "id": chunk_id,
+                        "metadata": {
+                            "collection_id": collection_id,
+                            "file_path": rel,
+                            "source": "collection",
+                            "chunk_index": i,
+                            "file_hash": file_hash,
+                        },
+                    })
+                indexed.append((rel, file_hash))
 
-        for rel, file_hash in indexed:
-            store.set_file_state(collection_id, rel, file_hash)
-        for rel in deleted:
-            store.remove_file_state(collection_id, rel)
+            deleted = sorted(set(prior) - seen)
 
-        now = time.time()
-        stats = {
-            "files_indexed": len(indexed),
-            "files_unchanged": unchanged,
-            "files_deleted": len(deleted),
-            "files_total": len(store.file_states(collection_id)),
-            "chunks_ingested": result.get("ingested", 0),
-            "chunks_skipped": result.get("skipped", 0),
-            "chunks_superseded": chunks_superseded,
-            "errors": errors[:20],
-            **skips,
-        }
-        if result.get("vector_failures"):
-            stats["vector_failures"] = result["vector_failures"]
-            stats["degraded"] = True
-        store.set_stats(collection_id, stats)
-        store.set_status(collection_id, "ready", last_indexed=now)
-        return stats
-    except Exception as exc:
-        store.set_status(collection_id, "error", error=f"{type(exc).__name__}: {exc}")
-        raise
+            chunks_superseded = 0
+            for rel in [*changed, *deleted]:
+                chunks_superseded += _supersede_collection_rows(vmem, collection_id, rel)
+
+            if items:
+                result = await _api.ingest_batch(items, agent=collection_id, data_dir=data_dir)
+            else:
+                result = {"ingested": 0, "skipped": 0}
+
+            for rel, file_hash in indexed:
+                store.set_file_state(collection_id, rel, file_hash)
+            for rel in deleted:
+                store.remove_file_state(collection_id, rel)
+
+            now = time.time()
+            stats = {
+                "files_indexed": len(indexed),
+                "files_unchanged": unchanged,
+                "files_deleted": len(deleted),
+                "files_total": len(store.file_states(collection_id)),
+                "chunks_ingested": result.get("ingested", 0),
+                "chunks_skipped": result.get("skipped", 0),
+                "chunks_superseded": chunks_superseded,
+                "errors": errors[:20],
+                **skips,
+            }
+            if result.get("vector_failures"):
+                stats["vector_failures"] = result["vector_failures"]
+                stats["degraded"] = True
+            store.set_stats(collection_id, stats)
+            store.set_status(collection_id, "ready", last_indexed=now)
+            return stats
+        except Exception as exc:
+            store.set_status(collection_id, "error", error=f"{type(exc).__name__}: {exc}")
+            raise
+    finally:
+        store.close()

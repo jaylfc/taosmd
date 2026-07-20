@@ -344,6 +344,63 @@ def test_reindex_already_empty_file_is_a_no_op(data_dir, source_dir):
     assert stats2["files_indexed"] == 0
 
 
+def _closing_store_spy(monkeypatch):
+    """Patch CollectionStore so every instance records whether it was closed."""
+    from taosmd import collections as collections_mod
+
+    real = collections_mod.CollectionStore
+    made: list = []
+
+    class _Spy(real):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.closed = False
+            made.append(self)
+
+        def close(self) -> None:
+            super().close()
+            self.closed = True
+
+    monkeypatch.setattr(collections_mod, "CollectionStore", _Spy)
+    return made
+
+
+def test_ingest_folder_closes_the_store_on_success(data_dir, source_dir, monkeypatch):
+    """ingest_folder opens its own CollectionStore; a server that re-indexes
+    on a timer would leak one sqlite connection per run if it never closed."""
+    _patch_embedder(data_dir)
+    _store, col = _make_collection(data_dir, source_dir)
+    made = _closing_store_spy(monkeypatch)
+
+    asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+
+    assert made, "ingest_folder did not open a CollectionStore"
+    assert all(s.closed for s in made)
+    for s in made:
+        with pytest.raises(Exception):
+            s._conn.execute("SELECT 1")
+
+
+def test_ingest_folder_closes_the_store_on_error(data_dir, source_dir, monkeypatch):
+    """The failure path (status=error) must close the connection too."""
+    from taosmd import collections as collections_mod
+
+    _patch_embedder(data_dir)
+    _store, col = _make_collection(data_dir, source_dir)
+    made = _closing_store_spy(monkeypatch)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("walk exploded")
+
+    monkeypatch.setattr(collections_mod, "collect_files", _boom)
+
+    with pytest.raises(RuntimeError, match="walk exploded"):
+        asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+
+    assert made, "ingest_folder did not open a CollectionStore"
+    assert all(s.closed for s in made)
+
+
 def test_ingest_folder_walks_off_the_event_loop(data_dir, source_dir, monkeypatch):
     """The 202+poll contract promises a responsive server during an index:
     the filesystem walk (os.walk + per-file stat + null-byte sniff) must run
