@@ -32,6 +32,7 @@ collection scoping mechanism with no new query machinery.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import hashlib
 import json
@@ -664,6 +665,20 @@ def _supersede_collection_rows(vmem, collection_id: str, file_path: str) -> int:
     return superseded
 
 
+def _hash_and_chunk(
+    text: str, chunk_chars: int, prior_hash: str | None
+) -> tuple[str, list[str] | None]:
+    """CPU-bound half of the per-file ingest step, run off the event loop.
+
+    Returns ``(file_hash, chunks)``; ``chunks`` is ``None`` when the hash
+    matches ``prior_hash`` (unchanged file, nothing to chunk).
+    """
+    file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if prior_hash == file_hash:
+        return file_hash, None
+    return file_hash, chunk_text(text, max_chars=chunk_chars)
+
+
 async def ingest_folder(
     collection_id: str,
     *,
@@ -704,7 +719,13 @@ async def ingest_folder(
     try:
         source_root = store.resolve_source_path(col["source_path"])
         prior = store.file_states(collection_id)
-        files, skips = collect_files(source_root, max_file_bytes=max_file_bytes)
+        # The walk (os.walk + per-file stat + null-byte sniff over every
+        # candidate) is blocking filesystem work; run it on a worker thread so
+        # the 202+poll contract holds and the single service loop keeps
+        # serving /search and /ingest while a collection indexes.
+        files, skips = await asyncio.to_thread(
+            collect_files, source_root, max_file_bytes=max_file_bytes,
+        )
 
         stores = await _api._ensure_stores(data_dir)
         vmem = stores["vector"]
@@ -731,13 +752,16 @@ async def ingest_folder(
             text = blob.raw_text or getattr(blob, "content", "") or ""
             if not text.strip():
                 continue
-            file_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            if prior.get(rel) == file_hash:
+            # Hashing + chunking are CPU-bound; off-loop like the walk above.
+            file_hash, chunks = await asyncio.to_thread(
+                _hash_and_chunk, text, chunk_chars, prior.get(rel)
+            )
+            if chunks is None:
                 unchanged += 1
                 continue
             if rel in prior:
                 changed.append(rel)
-            for i, chunk in enumerate(chunk_text(text, max_chars=chunk_chars)):
+            for i, chunk in enumerate(chunks):
                 chunk_id = hashlib.sha256(
                     f"{collection_id}:{rel}:{file_hash}:{i}".encode("utf-8")
                 ).hexdigest()

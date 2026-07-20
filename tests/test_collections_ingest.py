@@ -271,6 +271,42 @@ def test_reindex_deleted_file_supersedes_rows(data_dir, source_dir):
     assert "guide.txt" not in store.file_states(col["id"])
 
 
+def test_ingest_folder_walks_off_the_event_loop(data_dir, source_dir, monkeypatch):
+    """The 202+poll contract promises a responsive server during an index:
+    the filesystem walk (os.walk + per-file stat + null-byte sniff) must run
+    on a worker thread, not on the single service loop thread where it would
+    block /search and /ingest for the duration."""
+    import threading
+
+    from taosmd import collections as collections_mod
+
+    _patch_embedder(data_dir)
+    store, col = _make_collection(data_dir, source_dir)
+
+    seen: dict = {}
+    real_collect = collections_mod.collect_files
+
+    def _spy(*args, **kwargs):
+        seen["thread"] = threading.current_thread()
+        return real_collect(*args, **kwargs)
+
+    monkeypatch.setattr(collections_mod, "collect_files", _spy)
+
+    async def _run():
+        seen["loop_thread"] = threading.current_thread()
+        return await ingest_folder(col["id"], data_dir=data_dir)
+
+    stats = asyncio.run(_run())
+    # The pipeline still completes correctly end to end.
+    assert stats["files_indexed"] == 4
+    assert store.get(col["id"])["status"] == "ready"
+    # And the walk ran off the loop thread.
+    assert "thread" in seen
+    assert seen["thread"] is not seen["loop_thread"], (
+        "collect_files ran on the event loop thread; the async index blocks the server"
+    )
+
+
 def test_ingest_folder_archived_collection_refused(data_dir, source_dir):
     store, col = _make_collection(data_dir, source_dir)
     store.archive(col["id"])
