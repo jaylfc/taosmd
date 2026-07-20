@@ -147,6 +147,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import mimetypes
 import threading
 import time
@@ -1276,16 +1277,20 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
-            # Optional time-travel: ?as_of=<float epoch> reconstructs the graph
-            # as it stood then. A non-numeric value is ignored (current graph),
-            # so a malformed scrubber value degrades gracefully rather than 400s.
+            # Optional time-travel: ?as_of=<finite float epoch> reconstructs the
+            # graph as it stood then. Any value that is not a finite number is
+            # ignored (current graph), so a malformed scrubber value degrades
+            # gracefully rather than 400s. That includes "nan"/"inf"/"-inf",
+            # which float() accepts but which would otherwise reach the SQL
+            # comparison and silently yield an empty or unfiltered graph.
             as_of_raw = (qs.get("as_of") or [None])[0]
             as_of_f: float | None = None
             if as_of_raw is not None:
                 try:
-                    as_of_f = float(as_of_raw)
+                    parsed = float(as_of_raw)
                 except (TypeError, ValueError):
-                    as_of_f = None
+                    parsed = float("nan")
+                as_of_f = parsed if math.isfinite(parsed) else None
             result = runner.run(
                 service.graph(limit=limit_i, as_of=as_of_f, data_dir=data_dir)
             )

@@ -31,12 +31,26 @@ def _patch_embedder(stores: dict) -> None:
     vmem.embed = _fake_embed  # type: ignore[assignment]
 
 
+class _ServerCtx:
+    """Handle on a running test server: base URL plus its stores and loop."""
+
+    def __init__(self, url, httpd, stores):
+        self.url = url
+        self.httpd = httpd
+        self.stores = stores
+
+    def run(self, coro):
+        """Run a coroutine on the server's thread-affine service loop."""
+        return self.httpd.service_loop.run(coro)
+
+
 @pytest.fixture
-def live_server(tmp_path, monkeypatch):
+def live_server_ctx(tmp_path, monkeypatch):
     """Start the HTTP server on an ephemeral port against an isolated data dir.
 
-    Yields the base URL (e.g. ``http://127.0.0.1:54321``). Tears the server
-    and the cached SQLite stores down cleanly afterwards.
+    Yields a :class:`_ServerCtx` so tests that need to seed the stores directly
+    can do so on the server's own loop thread. Tears the server and the cached
+    SQLite stores down cleanly afterwards.
     """
     data_dir = tmp_path / "taosmd-data"
     data_dir.mkdir()
@@ -54,7 +68,7 @@ def live_server(tmp_path, monkeypatch):
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://{host}:{port}"
+        yield _ServerCtx(f"http://{host}:{port}", httpd, stores)
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -67,6 +81,12 @@ def live_server(tmp_path, monkeypatch):
                     except Exception:
                         pass
         httpd.service_loop.close()
+
+
+@pytest.fixture
+def live_server(live_server_ctx):
+    """Base URL of a running test server (e.g. ``http://127.0.0.1:54321``)."""
+    return live_server_ctx.url
 
 
 def _post(url: str, payload) -> tuple[int, dict]:
@@ -726,6 +746,52 @@ def test_graph_endpoint(live_server):
     assert status == 200, body
     assert set(body) >= {"nodes", "edges", "total_nodes", "total_edges"}
     assert isinstance(body["nodes"], list) and isinstance(body["edges"], list)
+
+
+def _graph_shape(body: dict) -> tuple[set, set]:
+    """Comparable identity of a /graph response: node names and edge triples."""
+    return (
+        {n["name"] for n in body["nodes"]},
+        {(e["source"], e["target"], e["predicate"]) for e in body["edges"]},
+    )
+
+
+@pytest.fixture
+def graph_server(live_server_ctx):
+    """A live server whose KG holds one known edge, valid from t=1000."""
+    kg = live_server_ctx.stores["kg"]
+    live_server_ctx.run(kg.add_triple("Jay", "works on", "taosmd", valid_from=1000.0))
+    return live_server_ctx.url
+
+
+@pytest.mark.parametrize("as_of", ["nan", "NaN", "inf", "-inf", "Infinity", "abc", ""])
+def test_graph_non_finite_as_of_falls_back_to_live_graph(graph_server, as_of):
+    """Non-finite as_of values degrade to the live graph, like a bad string.
+
+    ``float()`` accepts "nan"/"inf", so without an explicit finite check these
+    reach the SQL comparison and silently return an empty (nan) or unfiltered
+    (inf) graph instead of the documented fallback.
+    """
+    status, live = _get(f"{graph_server}/graph")
+    assert status == 200, live
+    assert live["nodes"], "fixture should have seeded at least one node"
+
+    status, body = _get(f"{graph_server}/graph?as_of={as_of}")
+    assert status == 200, body
+    assert _graph_shape(body) == _graph_shape(live)
+
+
+def test_graph_valid_as_of_still_time_travels(graph_server):
+    """A finite as_of before the edge existed still returns the past snapshot."""
+    _, live = _get(f"{graph_server}/graph")
+    assert live["nodes"]
+
+    status, past = _get(f"{graph_server}/graph?as_of=500")
+    assert status == 200, past
+    assert past["nodes"] == [] and past["edges"] == []
+
+    _, present = _get(f"{graph_server}/graph?as_of=2000")
+    assert _graph_shape(present) == _graph_shape(live)
 
 
 def test_graph_activations_endpoint(live_server):
