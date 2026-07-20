@@ -330,6 +330,32 @@ def test_index_flow_and_search_grant_enforcement(live_server):
     assert body["hits"]
 
 
+def test_index_409_while_already_indexing(live_server):
+    """Concurrent-index guard: a second index start while the collection is
+    already ``indexing`` is rejected with 409; ready re-arms it."""
+    from taosmd.collections import CollectionStore
+
+    base, data_dir, source_dir = live_server
+    col = _create(base, source_dir)
+    store = CollectionStore(data_dir)
+    try:
+        store.set_status(col["id"], "indexing")
+        status, body = _req(
+            "POST", f"{base}/collections/{col['id']}/index", token=_TOKEN,
+        )
+        assert status == 409
+        assert "indexing" in body["error"]
+        # Back to a settled state: indexing is allowed again.
+        store.set_status(col["id"], "ready")
+    finally:
+        store.close()
+    status, _ = _req(
+        "POST", f"{base}/collections/{col['id']}/index", token=_TOKEN,
+    )
+    assert status == 202
+    _wait_ready(base, col["id"])
+
+
 def test_index_unknown_404(live_server):
     base, _, _ = live_server
     status, _ = _req(

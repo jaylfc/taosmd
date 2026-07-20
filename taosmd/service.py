@@ -907,17 +907,24 @@ async def collections_get(collection_id: str, *, data_dir=None) -> dict:
 async def collections_index_start(collection_id: str, *, data_dir=None) -> dict:
     """Validate and mark a collection ``indexing``; the walk runs separately.
 
-    Raises ``CollectionNotFoundError`` (404) for an unknown id and
+    Raises ``CollectionNotFoundError`` (404) for an unknown id,
+    ``CollectionBusyError`` (409) when an index is already running, and
     ``ValueError`` (400) for an archived collection or a source path that no
     longer resolves inside an allowed root, so callers get a synchronous
     error before the background job is spawned.
     """
+    from .collections import CollectionBusyError  # noqa: PLC0415
     store = _collection_store(data_dir)
     try:
         col = store.get(collection_id)
         if col["status"] == "archived":
             raise ValueError(
                 f"collection {collection_id!r} is archived; unarchive before indexing"
+            )
+        if col["status"] == "indexing":
+            raise CollectionBusyError(
+                f"collection {collection_id!r} is already indexing; "
+                f"poll GET /collections/{collection_id} until it settles"
             )
         store.resolve_source_path(col["source_path"])
         store.set_status(collection_id, "indexing")

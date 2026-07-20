@@ -115,7 +115,8 @@ Admin endpoints (all require a configured server token; 403 if none is set)
                                                empty roots = collections off)
 ``POST /collections/{id}/index``               -> 202 ``{"status": "indexing", "job": <id>}``
                                                async; poll GET /collections/{id} until status is
-                                               "ready" or "error"; stats update on completion
+                                               "ready" or "error"; stats update on completion;
+                                               409 while an index is already running
 ``DELETE /collections/{id}``                   -> archive (reversible; content hidden from query,
                                                nothing destroyed; destruction only via wipe)
 ``POST /shelves``                              ``{"shelf_id", "project_id"?, "display_name"?}`` -> ``{"shelf": {...}, "created": bool}``
@@ -1842,13 +1843,20 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_collections_index(self, collection_id: str) -> None:
             if not self._check_admin_token():
                 return
-            from .collections import CollectionNotFoundError  # noqa: PLC0415
+            from .collections import (  # noqa: PLC0415
+                CollectionBusyError,
+                CollectionNotFoundError,
+            )
             try:
                 receipt = runner.run(
                     service.collections_index_start(collection_id, data_dir=data_dir)
                 )
             except CollectionNotFoundError as exc:
                 self._send_json(404, {"error": str(exc)})
+                return
+            except CollectionBusyError as exc:
+                # Concurrent-index guard: one index per collection at a time.
+                self._send_json(409, {"error": str(exc)})
                 return
             # Async by contract: 202 now, poll GET /collections/{id} until the
             # status is ready|error. The walk runs on the service loop so all

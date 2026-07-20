@@ -322,6 +322,30 @@ def test_ingest_folder_root_removed_from_config_refused(data_dir, source_dir):
     assert store.get(col["id"])["status"] == "error"
 
 
+def test_index_start_rejects_concurrent_index(data_dir, source_dir):
+    """collections_index_start must refuse to double-start: a second start
+    while the collection is already ``indexing`` raises CollectionBusyError
+    (409 over HTTP); ready and error states re-arm it."""
+    from taosmd import service
+    from taosmd.collections import CollectionBusyError
+
+    store, col = _make_collection(data_dir, source_dir)
+    receipt = asyncio.run(service.collections_index_start(col["id"], data_dir=data_dir))
+    assert receipt["status"] == "indexing"
+    with pytest.raises(CollectionBusyError):
+        asyncio.run(service.collections_index_start(col["id"], data_dir=data_dir))
+
+    # A finished index (ready) re-arms the start.
+    store.set_status(col["id"], "ready")
+    receipt = asyncio.run(service.collections_index_start(col["id"], data_dir=data_dir))
+    assert receipt["status"] == "indexing"
+
+    # So does a failed one (error): retries stay possible.
+    store.set_status(col["id"], "error", error="boom")
+    receipt = asyncio.run(service.collections_index_start(col["id"], data_dir=data_dir))
+    assert receipt["status"] == "indexing"
+
+
 # ---------------------------------------------------------------------------
 # Search integration
 # ---------------------------------------------------------------------------

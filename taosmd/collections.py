@@ -80,6 +80,11 @@ class CollectionNotFoundError(KeyError):
     """Raised when referencing a collection id that does not exist."""
 
 
+class CollectionBusyError(RuntimeError):
+    """Raised when starting an index on a collection that is already
+    ``indexing`` (mapped to HTTP 409 by the endpoint)."""
+
+
 def _new_collection_id() -> str:
     """``col-`` + 12 lowercase hex. Matches the agent-name grammar
     (``^[a-z][a-z0-9_-]{0,62}$``) so the id can double as the agent name
