@@ -48,6 +48,13 @@ recall, never destroyed; the archive keeps every version).
 
 The walker respects `.gitignore` files (simplified rules), skips VCS and
 dependency directories, hidden directories, binaries, and oversized files.
+A tree with more than 20000 ingestable files errors the index with a clear
+message instead of grinding through it; point the collection at a smaller
+folder (a `docs/` directory, not a monorepo root).
+
+One index runs per collection at a time: starting an index while one is
+already running returns `409` (poll `GET /collections/{id}` until the
+status settles at `ready` or `error`, then retry).
 
 ## Querying
 
@@ -68,6 +75,15 @@ curl -s localhost:7900/search -d '{
   grant for contributes nothing (and its existence is not revealed).
 - Collection hits carry `collection_id`, `file_path` (relative to the
   source root), and `source: "collection"` in their metadata.
+
+Trust model: grants protect collections from ungranted *agents*, not from
+holders of the server token. Grant and revoke live on the data plane, so
+anyone presenting the server's bearer token can manage grants (and could
+grant themselves access); collection access is therefore exactly as strong
+as the server token. Treat the token as the security boundary and grants
+as the per-agent scoping mechanism inside it. Only create/index/delete sit
+behind the separate admin token, because those touch the server's
+filesystem.
 
 Over MCP: `memory_list_collections` lists them; `memory_search` takes a
 `collection` parameter.
