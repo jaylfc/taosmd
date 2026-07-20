@@ -431,9 +431,24 @@ def _format_hit(hit: dict) -> dict:
     # wraps the row metadata in a result envelope (two levels). Descending
     # until there is no further ``metadata`` dict gives both paths the same
     # user-metadata contract (e.g. collection hits expose ``file_path``).
+    #
+    # Provenance fields live on the envelope levels, not in the user metadata,
+    # so they are captured on the way down and re-attached to the formatted
+    # hit: the prefer_verified claims gate reads ``archive_span_id`` off the
+    # formatted metadata, and stripping it would blind the gate for batch
+    # rows (a contradicted-claim row would survive recall). Innermost
+    # envelope wins; an explicit user key of the same name is never clobbered.
+    preserved: dict = {}
     user_md = md
     while isinstance(user_md, dict) and isinstance(user_md.get("metadata"), dict):
+        for key in ("archive_span_id", "agent", "project"):
+            if key in user_md:
+                preserved[key] = user_md[key]
         user_md = user_md["metadata"]
+    if isinstance(user_md, dict):
+        user_md = dict(user_md)  # copy: never mutate the stored row metadata
+        for key, value in preserved.items():
+            user_md.setdefault(key, value)
 
     confidence = (
         md.get("similarity")
