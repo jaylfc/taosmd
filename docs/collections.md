@@ -92,7 +92,7 @@ Over MCP: `memory_list_collections` lists them; `memory_search` takes a
 
 Data plane (bearer token when one is configured):
 
-```
+```text
 GET    /collections [?project=<id>]
 GET    /collections/{id}
 POST   /collections/{id}/link      {"type": "taos"|"git", "id": "..."}
@@ -104,7 +104,7 @@ POST   /search                     with collection/collections/collections_only
 
 Admin (dedicated admin token, fail-closed):
 
-```
+```text
 POST   /collections                {"name", "kind", "source_path", "embedder"?}
 POST   /collections/{id}/index     -> 202; poll GET /collections/{id}
 DELETE /collections/{id}           -> archive (reversible)
