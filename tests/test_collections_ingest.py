@@ -291,6 +291,59 @@ def test_reindex_deleted_file_supersedes_rows(data_dir, source_dir):
     assert "guide.txt" not in store.file_states(col["id"])
 
 
+def test_reindex_emptied_file_supersedes_rows(data_dir, source_dir):
+    """A previously-indexed file whose content is emptied must lose its rows.
+
+    Zero-loss cuts both ways: the old text has to leave active recall (it no
+    longer exists in the source) while the physical rows survive as
+    superseded history. Skipping blank files outright left the stale content
+    searchable forever and the hash state pointing at content that is gone.
+    """
+    _patch_embedder(data_dir)
+    store, col = _make_collection(data_dir, source_dir)
+    store.grant(col["id"], "dev")
+    asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+
+    def _search(q):
+        return asyncio.run(
+            taosmd_api.search(
+                q, agent="dev", mode="bm25",
+                collections=[col["id"]], collections_only=True, data_dir=data_dir,
+            )
+        )
+
+    assert any("frobnicates" in h["text"] for h in _search("frobnicates sprocket"))
+
+    # Truncate to whitespace: the file still exists, but has no content.
+    (source_dir / "readme.md").write_text("   \n\n  \n")
+    stats2 = asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+    assert stats2["chunks_superseded"] >= 1
+
+    # The stale content is out of active recall.
+    assert not any("frobnicates" in h["text"] for h in _search("frobnicates sprocket"))
+    # And its hash state is cleared, so a later refill re-indexes cleanly.
+    assert "readme.md" not in store.file_states(col["id"])
+    # Zero-loss: superseded, not hard-deleted.
+    stores = asyncio.run(taosmd_api._ensure_stores(data_dir))
+    rows = stores["vector"]._conn.execute(
+        "SELECT metadata_json FROM vector_memory WHERE valid_to IS NOT NULL"
+    ).fetchall()
+    assert rows
+    assert any("collection-reindex:" in (r["metadata_json"] or "") for r in rows)
+
+
+def test_reindex_already_empty_file_is_a_no_op(data_dir, source_dir):
+    """A file that was blank and is still blank must not churn on re-index."""
+    _patch_embedder(data_dir)
+    (source_dir / "blank.md").write_text("\n\n   \n")
+    store, col = _make_collection(data_dir, source_dir)
+    asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+    stats2 = asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+    assert stats2["chunks_superseded"] == 0
+    assert stats2["files_deleted"] == 0
+    assert stats2["files_indexed"] == 0
+
+
 def test_ingest_folder_walks_off_the_event_loop(data_dir, source_dir, monkeypatch):
     """The 202+poll contract promises a responsive server during an index:
     the filesystem walk (os.walk + per-file stat + null-byte sniff) must run

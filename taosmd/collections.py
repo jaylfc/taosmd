@@ -715,8 +715,8 @@ async def ingest_folder(
 
     Incremental by content hash: files whose hash matches the stored state
     are skipped; changed files get their old rows superseded (never deleted)
-    and their new chunks ingested; files that disappeared from the source
-    are superseded too. Chunks route through :func:`taosmd.api.ingest_batch`
+    and their new chunks ingested; files that disappeared from the source,
+    or whose content was emptied, are superseded too. Chunks route through :func:`taosmd.api.ingest_batch`
     under the collection id as the agent namespace, so the batch dedup and
     metadata preservation come for free and every chunk lands in the
     zero-loss archive.
@@ -777,6 +777,14 @@ async def ingest_folder(
                 continue
             text = blob.raw_text or getattr(blob, "content", "") or ""
             if not text.strip():
+                # A file with no content contributes nothing, but if we had
+                # indexed it before, leaving it in ``seen`` would strand its
+                # old rows in active recall forever (the file still exists,
+                # so the deleted set never catches it). Drop it from ``seen``
+                # and let the deleted path supersede its rows and clear its
+                # hash state. A file that was already blank is absent from
+                # ``prior`` too, so this stays a no-op for it.
+                seen.discard(rel)
                 continue
             # Hashing + chunking are CPU-bound; off-loop like the walk above.
             file_hash, chunks = await asyncio.to_thread(
