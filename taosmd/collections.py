@@ -60,6 +60,14 @@ GRANT_SCOPE = "collection"
 #: index. Overridable per ingest_folder call.
 DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
 
+#: Tree-wide file-count cap for one collection walk. A docs folder should be
+#: nowhere near this; hitting it means the collection points at something too
+#: big (a whole home dir, a monorepo root) and the index errors cleanly with
+#: a message instead of grinding through the tree.
+# upgrade-path: make configurable (collections.max_files) when a legitimate
+# corpus needs more than this.
+DEFAULT_MAX_FILES = 20000
+
 #: Directory names never descended into, regardless of gitignore rules.
 _SKIP_DIRS = frozenset({
     ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
@@ -500,6 +508,7 @@ def collect_files(
     source_root: Path | str,
     *,
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    max_files: int = DEFAULT_MAX_FILES,
 ) -> tuple[list[tuple[Path, str]], dict]:
     """Walk ``source_root`` and return ``([(abs_path, rel_posix)], skips)``.
 
@@ -508,6 +517,10 @@ def collect_files(
     null-byte sniff), files over ``max_file_bytes``, symlinks that escape the
     root, and files no registered loader claims. ``skips`` counts each skip
     reason so ingest stats can surface them.
+
+    Raises ``ValueError`` when the tree holds more than ``max_files``
+    ingestable files: the walk stops instead of grinding through a tree far
+    bigger than any docs collection should be, and the index errors cleanly.
     """
     root = Path(source_root).resolve()
     skips = {
@@ -577,6 +590,12 @@ def collect_files(
                 skips["skipped_binary"] += 1
                 continue
             files.append((fpath, rel_f))
+            if len(files) > max_files:
+                raise ValueError(
+                    f"collection walk exceeded the {max_files}-file cap at "
+                    f"{rel_f!r}; point the collection at a smaller folder "
+                    f"(or tighten .gitignore rules)"
+                )
     return files, skips
 
 
@@ -689,6 +708,7 @@ async def ingest_folder(
     *,
     data_dir=None,
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    max_files: int = DEFAULT_MAX_FILES,
     chunk_chars: int = 2000,
 ) -> dict:
     """Walk a collection's source folder and index its documents.
@@ -729,7 +749,8 @@ async def ingest_folder(
         # the 202+poll contract holds and the single service loop keeps
         # serving /search and /ingest while a collection indexes.
         files, skips = await asyncio.to_thread(
-            collect_files, source_root, max_file_bytes=max_file_bytes,
+            collect_files, source_root,
+            max_file_bytes=max_file_bytes, max_files=max_files,
         )
 
         stores = await _api._ensure_stores(data_dir)

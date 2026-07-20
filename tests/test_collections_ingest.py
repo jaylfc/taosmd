@@ -130,6 +130,26 @@ def test_collect_files_skips_binary_and_oversized(source_dir):
     assert skips["skipped_size"] == 1
 
 
+def test_collect_files_rejects_trees_over_the_file_cap(source_dir):
+    """The walker has a per-file size cap but also needs a tree cap: pointing
+    a collection at a huge tree must fail fast with a clear message instead
+    of grinding through it."""
+    with pytest.raises(ValueError, match="file cap"):
+        collect_files(source_dir, max_files=2)
+    # At or under the cap is fine (the fixture tree has 4 claimed files).
+    files, _ = collect_files(source_dir, max_files=4)
+    assert len(files) == 4
+
+
+def test_ingest_folder_errors_cleanly_over_file_cap(data_dir, source_dir):
+    store, col = _make_collection(data_dir, source_dir)
+    with pytest.raises(ValueError, match="file cap"):
+        asyncio.run(ingest_folder(col["id"], data_dir=data_dir, max_files=2))
+    got = store.get(col["id"])
+    assert got["status"] == "error"
+    assert "file cap" in (got["error"] or "")
+
+
 def test_collect_files_skips_symlink_escape(source_dir, tmp_path):
     outside = tmp_path / "outside.md"
     outside.write_text("# outside the root")
