@@ -1,5 +1,9 @@
 # JOB-001: Replace every em dash in docs/benchmarks.md
 
+**Status: OPEN (verified 2026-07-21).** `grep -c "—" docs/benchmarks.md`
+prints 120 on current master, so the sweep has not been done. The count below
+says "roughly 121"; 120 is the current number and is what you should expect.
+
 Read docs/agent-jobs/README.md first and follow its absolute rules.
 
 - Branch: `docs/benchmarks-em-dash-sweep` (from `origin/master`)

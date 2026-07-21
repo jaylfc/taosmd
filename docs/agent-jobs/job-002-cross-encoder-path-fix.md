@@ -1,5 +1,33 @@
 # JOB-002: Make CrossEncoderReranker's default model path cwd-independent
 
+**Status: ON HOLD (verified 2026-07-21). DO NOT START THIS JOB.**
+
+The bug this job describes is still real: `taosmd/cross_encoder.py` line 21
+still defaults `onnx_path` to the relative `"models/cross-encoder-onnx"`.
+The fix written below is what has gone stale, and applying it as written
+would make things worse. Issue #199 covers the same ground and supersedes
+this job.
+
+Two reasons this is no longer a self-contained job:
+
+1. The read path and the download path have SEPARATE defaults.
+   `taosmd/api.py` line 635 builds `CrossEncoderReranker()` with no argument,
+   and line 641 calls `_recipes.ensure_reranker_model(block=False)`, which
+   has its own default of `"models/cross-encoder-onnx"` at
+   `taosmd/recipes.py` line 457. The steps below change only the first one.
+   That would leave the downloader writing to `$CWD/models/` while the
+   reranker looks in the repo root, so `available` would never become true
+   and a fresh deployment would re-fire a roughly 600MB download on every
+   single search. That is a regression, not a fix.
+2. Resolving against the repo root is itself the wrong answer for a wheel
+   install, where the repo root is site-packages and is not writable. Issue
+   #199 asks for the reranker path to go through the same mechanism as the
+   embedder (`_resolve_onnx_path(data_dir, ...)` in `taosmd/api.py`) or an
+   env override, and separately asks whether a live search should be pulling
+   600MB at all. Choosing between those is a design decision.
+
+Leave this to the primary session. The file is kept for history.
+
 Read docs/agent-jobs/README.md first and follow its absolute rules.
 
 - Branch: `fix/cross-encoder-cwd-path` (from `origin/master`)
