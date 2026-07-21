@@ -111,6 +111,39 @@ Over MCP: `memory_list_collections` lists them; `memory_search` takes a
 
 ## HTTP surface
 
+### Check the server actually speaks collections first
+
+Collections landed after several releases of `taosmd serve`, so an integrator
+pointing at an existing deployment cannot assume the routes are there. Do not
+check by requesting `/collections` and looking at the status code: the server
+answers unknown non-API paths with the dashboard SPA, so `GET /collections`
+returns `200 text/html` on a build with no collections code at all. That check
+has already sent one integration to the wrong service.
+
+Ask `GET /version` (public, no token needed) and test capability membership:
+
+```bash
+curl -s http://127.0.0.1:7900/version | jq -r '.capabilities[]'
+# a2a.v1
+# collections.v1
+# grants.v1
+# ...
+```
+
+```python
+caps = set(httpx.get(f"{base}/version").json()["capabilities"])
+if "collections.v1" not in caps:
+    raise RuntimeError("server does not speak collections.v1")
+if "grants.v1" not in caps:
+    raise RuntimeError("server cannot grant collection access")
+```
+
+`collections.v1` covers list/get/create/index/link/unlink/archive; `grants.v1`
+covers the per-agent grant and revoke routes. The identifiers are derived from
+the running build, so a server cannot advertise a capability it lacks, and a
+breaking change to the collections wire contract will appear as
+`collections.v2` rather than silently redefining `collections.v1`.
+
 Data plane (bearer token when one is configured):
 
 ```text

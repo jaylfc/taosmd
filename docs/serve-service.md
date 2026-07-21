@@ -170,8 +170,9 @@ the same machine can reach the API. Authentication is **off by default**, but
 a bearer token is available: when `server_token` is set in the server config
 (via `taosmd config set-token`) or the `TAOSMD_TOKEN` environment variable is
 set, every data and A2A endpoint requires an `Authorization: Bearer <token>`
-header and returns `401` otherwise. The `/health`, `/`, and `/ui` endpoints
-always stay public so monitoring probes and the browser dashboard keep working.
+header and returns `401` otherwise. The `/health`, `/version`, `/`, and `/ui`
+endpoints always stay public so monitoring probes, capability probes, and the
+browser dashboard keep working.
 
 On a trusted private network (a home LAN, a Tailscale network), the network
 boundary is typically sufficient as the access control. For any public-facing or
@@ -188,7 +189,23 @@ whether you run `taosmd serve` in the foreground or as a background service.
 
 ```bash
 curl http://127.0.0.1:7900/health
-# Expected: {"status": "ok", "version": "..."}
+# Expected: {"status": "ok", "version": "...", "capabilities": [...]}
 ```
+
+To check which build is running and what it actually supports (useful for
+spotting a box left on a stale build):
+
+```bash
+curl http://127.0.0.1:7900/version
+# {"version": "...", "commit": "...", "commit_source": "git",
+#  "built_at": "...", "built_at_source": "install",
+#  "capabilities": ["a2a.v1", "collections.v1", ...]}
+```
+
+`capabilities` holds stable contract identifiers derived from what the running
+build implements. Test membership (`"collections.v1" in capabilities`) rather
+than probing a route's status code: unknown non-API paths serve the dashboard
+SPA, so a `200` there says nothing about what the server supports. See the
+"Version and capability discovery" section of the README for the `.vN` contract.
 
 The read-only inspection UI is at `http://127.0.0.1:7900/` in your browser.

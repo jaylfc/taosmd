@@ -560,7 +560,7 @@ taosmd config set-token <your-secret-token>
 export TAOSMD_TOKEN=<your-secret-token>
 ```
 
-The token is sent as `Authorization: Bearer <token>` on every request. `GET /health` and the web inspector (`GET /`) are always public so monitoring probes keep working. Never commit the token to version control.
+The token is sent as `Authorization: Bearer <token>` on every request. `GET /health`, `GET /version`, and the web inspector (`GET /`) are always public so monitoring and capability probes keep working. Never commit the token to version control.
 
 ### How the Python API and MCP server interact with remote mode
 
@@ -698,7 +698,8 @@ ollama pull qwen3:4b  # Same model as the smaller node, same quality
 
 | Method | Path | Request | Response |
 |--------|------|---------|----------|
-| `GET` | `/health` | (none) | `{"status": "ok", "version": <str>}` |
+| `GET` | `/health` | (none) | `{"status": "ok", "version": <str>, "capabilities": [<str>]}` |
+| `GET` | `/version` | (none) | `{"version", "commit", "commit_source", "built_at", "built_at_source", "capabilities"}` |
 | `POST` | `/ingest` | `{"text": str, "agent": str, "project"?: str}` | `{"archived": int, "agent": str, "project": str\|null, "data_dir": str, ...}` (adds `"vector_failures": int` and `"degraded": true` when the embedder fails) |
 | `POST` | `/ingest/batch` | `{"items": [{"text": str, "id"?: str, "metadata"?: obj}], "agent": str, "project"?: str}` | `{"ingested": int, "skipped": int, ...}` |
 | `POST` | `/search` | `{"query": str, "agent": str, "limit"?: int, "project"?: str, "also_include"?: [str], "mode"?: "bm25"}` | `{"hits": [...]}` |
@@ -717,6 +718,47 @@ ollama pull qwen3:4b  # Same model as the smaller node, same quality
 Each hit in `/search` results has the agent-rules contract shape: `{text, source, timestamp, confidence, metadata}`.
 
 `/ingest/batch` is the bulk-import path: each item can carry a stable `id` (your content hash), preserved as `source_id` and used to skip already-imported items, so the whole batch can be re-POSTed safely after a partial migration. `mode=bm25` on `/search` skips query embedding entirely and returns keyword-ranked hits in about 10ms, built for search-as-you-type UIs over short-form memory; the default mode remains the full recipe-driven retrieval.
+
+### Version and capability discovery
+
+Do not probe for a feature with a status code. `taosmd serve` answers unknown non-API paths with the dashboard SPA, so `GET /collections` returns `200 text/html` even on a build that has no collections code at all. Ask `GET /version` instead:
+
+```bash
+curl -s http://127.0.0.1:7900/version
+```
+
+```json
+{
+  "version": "0.4.0",
+  "commit": "76f72ffef139a9cc08c76d7348b9b25849c845a6",
+  "commit_source": "git",
+  "built_at": "2026-07-21T11:38:52Z",
+  "built_at_source": "install",
+  "capabilities": [
+    "a2a.v1", "collections.v1", "grants.v1", "graph.v1",
+    "ingest.v1", "search.v1", "shelves.v1", "tasks.v1", "temporal.v1"
+  ]
+}
+```
+
+`capabilities` is a list of **stable contract identifiers**, not feature names. The `.vN` suffix is the contract: when a wire contract changes in a way that breaks existing callers, the identifier becomes `collections.v2`, so a client pinned to `collections.v1` sees the capability disappear (a visible break it can act on) instead of `collections` quietly meaning something new. Additive changes keep the same identifier. The right client check is membership:
+
+```python
+caps = set(requests.get(f"{base}/version").json()["capabilities"])
+if "collections.v1" not in caps:
+    raise RuntimeError("this taOSmd build does not speak collections.v1")
+```
+
+The list is derived at runtime by probing the running build (see `taosmd/capabilities.py`), so it cannot advertise a feature whose code is absent. `commit` and `built_at` are best-effort and may be `null` (see the table below); they are there so an operator can spot a box running a stale build. `/version` is unauthenticated and cheap, like `/health`, and exposes nothing beyond build identity and capability identifiers (no paths, no tokens, no configuration).
+
+`GET /health` returns the same `capabilities` list alongside its existing `{"status", "version"}` keys, which are unchanged.
+
+| Field | Meaning |
+|-------|---------|
+| `commit` | 40-char sha of the build, or `null` |
+| `commit_source` | `"git"` (resolved from the checkout), `"build-stamp"` (packaged `taosmd/_build_info.py`), or `null` |
+| `built_at` | ISO 8601 UTC build or install time, or `null` |
+| `built_at_source` | `"build-stamp"`, `"install"` (dist-info mtime), or `null` |
 
 ### Agent-to-agent (A2A) bus
 
