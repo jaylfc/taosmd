@@ -62,7 +62,22 @@ Endpoints
 ---------
 ``GET  /``                 -> the read-only inspection UI (``text/html``)
 ``GET  /ui``               -> alias of ``GET /``
-``GET  /health``           -> ``{"status": "ok", "version": <str>}``
+``GET  /health``           -> ``{"status": "ok", "version": <str>, "capabilities": [<str>]}``
+                           ``status`` and ``version`` are the long-standing contract
+                           (taOS and the dashboard consume both); ``capabilities`` is
+                           additive, the same list ``GET /version`` returns.
+``GET  /version``          -> ``{"version", "commit", "commit_source", "built_at",
+                           "built_at_source", "capabilities"}``
+                           Public (like ``/health``), cheap, cacheable. ``capabilities``
+                           is a list of stable contract identifiers (``collections.v1``,
+                           ``grants.v1``, ``temporal.v1``, ``a2a.v1``, ``tasks.v1``, ...),
+                           derived by probing the running build so it cannot claim a
+                           feature the build lacks. A breaking change to a contract
+                           becomes ``<name>.v2``, never a silent redefinition of ``.v1``.
+                           Use it instead of status-code probing: unknown non-API paths
+                           serve the dashboard SPA, so a 200 proves nothing.
+                           ``commit``/``built_at`` are best-effort and may be ``null``.
+                           See :mod:`taosmd.capabilities`.
 ``POST /ingest``           ``{"text", "agent", "project"?}`` -> ingest result
                            (does not accept per-turn user metadata; use ``/ingest/batch``
                            for ``forget_after`` and other metadata).
@@ -156,7 +171,7 @@ from importlib.resources import files as _pkg_files
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, config as _config, service
+from . import __version__, capabilities, config as _config, service
 
 # ---------------------------------------------------------------------------
 # Static webui helpers
@@ -565,8 +580,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
     If the server has ``server_token`` set in its own config (or the
     ``TAOSMD_TOKEN`` env var), every data/A2A JSON endpoint requires a
     matching ``Authorization: Bearer <token>`` header and returns ``401``
-    otherwise. ``GET /health``, ``GET /``, ``GET /ui``, and static assets
-    are always open so monitoring probes and the inspection UI keep working.
+    otherwise. ``GET /health``, ``GET /version``, ``GET /``, ``GET /ui``, and
+    static assets are always open so monitoring probes, capability/drift probes,
+    and the inspection UI keep working.
     """
     # Read the server-side expected token once at handler-class creation time.
     # This is the token the *server* checks (not the client's outbound token).
@@ -605,7 +621,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             )
 
     # Paths that are always public regardless of the token setting.
-    _PUBLIC_PATHS = frozenset({"/", "/ui", "/health"})
+    _PUBLIC_PATHS = frozenset({"/", "/ui", "/health", "/version"})
 
     class TaosmdHandler(BaseHTTPRequestHandler):
         server_version = f"taosmd/{__version__}"
@@ -881,7 +897,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     else:
                         self._send_json(404, {"error": "dashboard disabled (managed_by=taos)"})
                 elif method == "GET" and path == "/health":
-                    self._send_json(200, {"status": "ok", "version": __version__})
+                    # "status" and "version" are the existing contract (taOS and
+                    # the dashboard consume both); "capabilities" is additive.
+                    self._send_json(200, {
+                        "status": "ok",
+                        "version": __version__,
+                        "capabilities": capabilities.capabilities(),
+                    })
+                elif method == "GET" and path == "/version":
+                    self._send_json(200, capabilities.version_payload())
                 elif method == "GET" and path == "/controls":
                     self._handle_controls_get()
                 elif method == "POST" and path == "/controls":
@@ -2027,7 +2051,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     where = "localhost only" if bound_host in {"127.0.0.1", "::1"} else "LAN-reachable (no auth)"
     print(f"taosmd HTTP API listening on http://{bound_host}:{bound_port} ({where})")
     print(f"Inspection UI (read-only): http://{bound_host}:{bound_port}/")
-    print("Endpoints: GET /health, POST /ingest, POST /ingest/batch, GET|POST /search, "
+    print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, "
           "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
           "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "
