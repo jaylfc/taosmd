@@ -131,8 +131,13 @@ def test_zero_graph_expansion_never_probes(runner, monkeypatch):
     monkeypatch.setattr(runner, "load_eventqa_rows", lambda tier, contexts: [])
 
     # Still aborts, but on the empty dataset, not on the probe.
-    with pytest.raises(SystemExit):
+    # Assert the CODE, not just that SystemExit was raised: this whole job
+    # exists because a refusal exited 0, and a bare pytest.raises(SystemExit)
+    # passes on sys.exit(0) too. A test that cannot fail on the original bug
+    # is not evidence.
+    with pytest.raises(SystemExit) as exc:
         asyncio.run(runner.run(_args(graph_expansion=0)))
+    assert exc.value.code != 0
 ```
 
 5. Run just the new tests and watch them FAIL:

@@ -40,7 +40,7 @@ find otherwise, that changes the job: STOP per the STOP conditions below.
 3. Confirm for yourself that nothing depends on the journal mode:
 
 ```
-grep -n "journal\|VACUUM\|ATTACH\|isolation_level\|backup" taosmd/collections.py
+grep -E -n "journal|VACUUM|ATTACH|isolation_level|backup" taosmd/collections.py
 ```
 
    This must print nothing. If it prints anything, STOP.
