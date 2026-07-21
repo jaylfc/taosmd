@@ -1175,10 +1175,14 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
         if args.check:
             pending = [r for r in rows if r["exists"] and not r["current"]]
             if pending:
-                print(
-                    f"{len(pending)} database(s) have pending migrations; "
-                    "run `taosmd migrate` to apply them."
-                )
+                if not args.json:
+                    # The JSON payload already carries the pending state; a
+                    # trailing plain-text line would corrupt the stream for
+                    # anything piping this into jq.
+                    print(
+                        f"{len(pending)} database(s) have pending migrations; "
+                        "run `taosmd migrate` to apply them."
+                    )
                 return 1
         return 0
 

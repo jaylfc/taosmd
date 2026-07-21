@@ -665,3 +665,52 @@ def test_cli_status_json_lists_every_database(tmp_path, capsys):
     assert by_db["archive_index"]["exists"] is True
     assert by_db["archive_index"]["current"] is False
     assert by_db["claims"]["exists"] is False
+
+
+def test_cli_check_json_stays_parseable_when_databases_are_behind(tmp_path, capsys):
+    """--check --json must emit JSON and nothing else.
+
+    The pending branch also prints a human-readable hint. Printed
+    unconditionally it lands after the JSON payload on the same stream, so a
+    caller piping this into jq gets a parse error on an otherwise correct
+    non-zero exit. The exit code still has to signal pending work.
+    """
+    from taosmd.cli import main
+
+    _seed_legacy_archive(tmp_path)
+
+    rc = main(["--data-dir", str(tmp_path), "migrate", "--check", "--json"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    payload = json.loads(out)  # fails if the hint line is appended
+    by_db = {r["db"]: r for r in payload["databases"]}
+    assert by_db["archive_index"]["current"] is False
+    assert "run `taosmd migrate`" not in out
+
+
+def test_registry_validation_rejects_a_noncontiguous_version():
+    """An authoring slip must fail loudly at import, not stamp a wrong version.
+
+    The baseline walk indexes steps by position and _start_version resolves a
+    version by name, so a mistyped version or a duplicated name would silently
+    stamp the wrong number against a real store.
+    """
+    noop = migrations.Migration(1, "a", lambda c: None, lambda c: True)
+    gap = migrations.Migration(3, "b", lambda c: None, lambda c: True)
+
+    with pytest.raises(AssertionError, match="contiguous"):
+        migrations._validate_registry("demo", (noop, gap))
+
+
+def test_registry_validation_rejects_a_duplicate_name():
+    first = migrations.Migration(1, "dupe", lambda c: None, lambda c: True)
+    second = migrations.Migration(2, "dupe", lambda c: None, lambda c: True)
+
+    with pytest.raises(AssertionError, match="duplicate migration name"):
+        migrations._validate_registry("demo", (first, second))
+
+
+def test_shipped_registry_passes_its_own_validation():
+    """The invariant holds for what we actually ship, not just for fixtures."""
+    for db, migs in migrations.REGISTRY.items():
+        migrations._validate_registry(db, migs)

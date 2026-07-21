@@ -365,6 +365,33 @@ REGISTRY: dict[str, tuple[Migration, ...]] = {
     "vector_memory": _VECTOR_MEMORY,
 }
 
+
+def _validate_registry(db: str, migs: Sequence[Migration]) -> None:
+    """Reject a malformed migration list at import time rather than in the field.
+
+    Both the baseline walk and ``_start_version`` assume each database's steps
+    are contiguous from 1 and uniquely named: the walk indexes into the list by
+    position, and ``_start_version`` resolves a version by name lookup. A
+    mistyped version or a duplicated name would not raise, it would stamp the
+    wrong number against a real store, which is the exact silent-corruption
+    failure this module exists to prevent. Checking here costs one pass at
+    import and turns an authoring slip into an immediate, obvious error.
+    """
+    seen: set[str] = set()
+    for expected, mig in enumerate(migs, start=1):
+        if mig.version != expected:
+            raise AssertionError(
+                f"{db}: migration {mig.name!r} declares version {mig.version}, "
+                f"expected {expected} (versions must be contiguous from 1)"
+            )
+        if mig.name in seen:
+            raise AssertionError(f"{db}: duplicate migration name {mig.name!r}")
+        seen.add(mig.name)
+
+
+for _db_name, _db_migs in REGISTRY.items():
+    _validate_registry(_db_name, _db_migs)
+
 #: Logical database name -> filename inside the data directory.
 DB_FILES: dict[str, str] = {
     "archive_index": "archive-index.db",
