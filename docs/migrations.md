@@ -116,7 +116,7 @@ taosmd migrate              # apply pending migrations to the data dir
 taosmd migrate --status --json
 ```
 
-`--check` is the deploy pre-flight: it writes nothing and exits non-zero when
+`--status` runs the same detect walk the runner would, so an unstamped store whose schema is already complete is reported as needing only a stamp, with an empty pending list, rather than appearing to face a replay of every step. `--check` is the deploy pre-flight: it writes nothing and exits non-zero when
 any database in the data directory is behind, so a rollout can refuse to start
 against a store it would silently need to upgrade. Databases that do not exist
 yet are reported as absent and are not treated as pending work by `--check`,

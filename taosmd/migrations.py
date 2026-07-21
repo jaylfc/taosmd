@@ -504,14 +504,26 @@ def status(
     *,
     migrations_list: Sequence[Migration] | None = None,
 ) -> dict:
-    """Report ``db``'s version and what is still pending. Read-only."""
+    """Report ``db``'s version and what is still pending. Read-only.
+
+    On an unstamped database the report runs the same detect walk
+    :func:`migrate` would, so ``pending`` lists only the steps that would
+    actually execute rather than every step below the latest version.
+    ``detected_baseline`` is the version it would be stamped to for free.
+
+    ``current`` stays keyed on the stored version: a legacy store whose schema
+    is already complete still needs its stamp written, so a deploy pre-flight
+    should see it as work to do.
+    """
     migs = _resolve(db, migrations_list)
     version = _read_version(conn)
     target = latest_version(db, migs)
-    pending = [m.name for m in migs if m.version > version]
+    detected = _detect_baseline(conn, migs) if version == 0 else version
+    pending = [m.name for m in migs if m.version > max(version, detected)]
     return {
         "db": db,
         "user_version": version,
+        "detected_baseline": detected,
         "latest": target,
         "current": version >= target,
         "pending": pending,
@@ -537,6 +549,7 @@ def status_all(data_dir: Union[str, Path]) -> list[dict]:
                 "path": str(path),
                 "exists": False,
                 "user_version": None,
+                "detected_baseline": None,
                 "latest": latest_version(db),
                 "current": False,
                 "pending": [m.name for m in REGISTRY[db]],

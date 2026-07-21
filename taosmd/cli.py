@@ -1166,7 +1166,11 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
                     version = str(r["user_version"])
                 line = f"  {r['db']:<{width}}  version {version:>3}  of {r['latest']:<3} {state}"
                 if r["exists"] and r["pending"]:
-                    line += "  (" + ", ".join(r["pending"]) + ")"
+                    line += "  apply: " + ", ".join(r["pending"])
+                elif r["exists"] and not r["current"]:
+                    # Unstamped but the schema is already there: the runner
+                    # will stamp it and execute nothing.
+                    line += f"  stamp only, schema already at {r['detected_baseline']}"
                 print(line)
         if args.check:
             pending = [r for r in rows if r["exists"] and not r["current"]]

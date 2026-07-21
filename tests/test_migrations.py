@@ -418,12 +418,31 @@ def test_status_reports_pending_for_an_unstamped_legacy_store(tmp_path):
     assert st["user_version"] == 0
     assert st["latest"] == migrations.latest_version("archive_index")
     assert st["current"] is False
-    assert st["pending"]
+    # The baseline is already present, so it is reported as detected rather
+    # than as a step that would run.
+    assert st["detected_baseline"] == 1
+    assert st["pending"] == ["archive_index_project"]
 
     migrations.migrate(conn, "archive_index")
     st = migrations.status(conn, "archive_index")
     assert st["current"] is True
     assert st["pending"] == []
+    conn.close()
+
+
+def test_status_of_a_complete_legacy_store_reports_stamp_only_work(tmp_path):
+    """Schema already modern, version 0: nothing to apply, stamp still needed."""
+    from taosmd.archive import INDEX_SCHEMA
+
+    conn = _db.connect(tmp_path / "archive-index.db")
+    conn.executescript(INDEX_SCHEMA)
+    conn.commit()
+
+    st = migrations.status(conn, "archive_index")
+    assert st["user_version"] == 0
+    assert st["detected_baseline"] == migrations.latest_version("archive_index")
+    assert st["pending"] == [], "a fully present schema has no step to execute"
+    assert st["current"] is False, "the stamp itself is still outstanding"
     conn.close()
 
 
