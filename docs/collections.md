@@ -49,6 +49,36 @@ exists but whose content has been emptied is retired the same way, and
 reported separately as `files_emptied` rather than `files_deleted`, so a
 blanked file is never mistaken for one that vanished from disk.
 
+## Response shapes
+
+Every collection endpoint wraps its payload in an envelope. Read the inner
+object, not the top level: a client that parses `GET /collections/{id}` as a
+bare collection sees an empty status, so a poll loop never observes `ready`
+or `error` and stalls until it times out on a collection that indexed fine.
+
+```text
+GET    /collections [?project=]            -> {"collections": [ {...}, ... ]}
+GET    /collections/{id}                   -> {"collection": {...}}
+POST   /collections                        -> {"collection": {...}, "created": true}
+POST   /collections/{id}/index             -> 202, then poll GET /collections/{id}
+POST   /collections/{id}/link | /unlink    -> {"collection": {...}}
+POST   /collections/{id}/grants            -> {"collection": {...}}
+DELETE /collections/{id}/grants/{agent}    -> {"collection": {...}}
+DELETE /collections/{id}                   -> {"collection": {...}}  (archived)
+```
+
+The collection object carries `id`, `name`, `kind`, `source_path`,
+`embedder`, `status`, `created_at`, `last_indexed`, `stats`, `links`,
+`grants` and `error`.
+
+One more integration note, because a status code alone will mislead you:
+unknown non-API paths fall through to the dashboard single-page app, which
+answers `200 text/html`. Probing whether a build supports collections by
+requesting `/collections` and checking for `200` therefore succeeds even on
+a build with no collections code at all. Check the content type is
+`application/json`, or ask `GET /version` and look for `collections.v1` in
+its capabilities list.
+
 Index stats (on the collection row, and in the `GET /collections/{id}`
 response) always carry the same keys:
 
