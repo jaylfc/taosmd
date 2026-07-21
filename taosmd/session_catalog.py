@@ -28,7 +28,7 @@ from pathlib import Path
 
 import httpx
 
-from taosmd import _db, prompts
+from taosmd import _db, migrations, prompts
 
 logger = logging.getLogger(__name__)
 
@@ -147,34 +147,10 @@ class SessionCatalog:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()
-        # Taxonomy columns: safe no-op if already present
-        _taxonomy_cols = [
-            "ALTER TABLE sessions ADD COLUMN primary_project TEXT DEFAULT ''",
-            "ALTER TABLE sessions ADD COLUMN primary_topic TEXT DEFAULT ''",
-            "ALTER TABLE sessions ADD COLUMN primary_subtopic TEXT DEFAULT ''",
-            "ALTER TABLE sessions ADD COLUMN labels_json TEXT DEFAULT '[]'",
-            "ALTER TABLE sessions ADD COLUMN classified_at REAL DEFAULT 0",
-        ]
-        for _sql in _taxonomy_cols:
-            try:
-                self._conn.execute(_sql)
-            except Exception:
-                pass  # column already exists
-        # agent_name column: safe no-op if already present
-        try:
-            self._conn.execute(
-                "ALTER TABLE sessions ADD COLUMN agent_name TEXT DEFAULT ''"
-            )
-        except Exception:
-            pass
-        try:
-            self._conn.execute(
-                'CREATE INDEX IF NOT EXISTS idx_sessions_path '
-                'ON sessions(primary_project, primary_topic, primary_subtopic)'
-            )
-        except Exception:
-            pass
-        self._conn.commit()
+        # Schema versioning and upgrades. Subsumes the former try/except
+        # ALTER guards for the taxonomy columns, the agent_name column, and
+        # the taxonomy index (which must be created after its columns exist).
+        migrations.migrate(self._conn, "session_catalog")
 
     async def close(self) -> None:
         if self._conn:

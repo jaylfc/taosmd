@@ -17,7 +17,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from . import _db
+from . import _db, migrations
 from .predicate_vocab import SINGULAR_PREDICATES
 
 logger = logging.getLogger(__name__)
@@ -113,6 +113,7 @@ class TemporalKnowledgeGraph:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()
+        migrations.migrate(self._conn, "knowledge_graph")
 
     async def close(self) -> None:
         if self._conn:
