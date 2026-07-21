@@ -43,7 +43,46 @@ import sqlite3
 import time
 from pathlib import Path
 
-from . import config as _config
+from . import config as _config, migrations
+
+#: Phase 1 schema, migration version 1. Adding a whole new table here is safe
+#: (CREATE TABLE IF NOT EXISTS reaches existing databases); changing an
+#: existing table is not, and must be a step in taosmd.migrations instead.
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS collections (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    embedder TEXT,
+    status TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    last_indexed REAL,
+    stats_json TEXT NOT NULL DEFAULT '{}',
+    error TEXT
+);
+CREATE TABLE IF NOT EXISTS collection_links (
+    collection_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    ext_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    UNIQUE(collection_id, type, ext_id)
+);
+CREATE TABLE IF NOT EXISTS collection_grants (
+    canonical_id TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'collection',
+    collection_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    UNIQUE(canonical_id, scope, collection_id)
+);
+CREATE TABLE IF NOT EXISTS collection_files (
+    collection_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(collection_id, file_path)
+);
+"""
 from .loaders import check_size, resolve_within
 from .loaders.registry import REGISTRY as _LOADER_REGISTRY, _path_to_extension
 
@@ -118,44 +157,13 @@ class CollectionStore:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        self._conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS collections (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                source_path TEXT NOT NULL,
-                embedder TEXT,
-                status TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                last_indexed REAL,
-                stats_json TEXT NOT NULL DEFAULT '{}',
-                error TEXT
-            );
-            CREATE TABLE IF NOT EXISTS collection_links (
-                collection_id TEXT NOT NULL,
-                type TEXT NOT NULL,
-                ext_id TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                UNIQUE(collection_id, type, ext_id)
-            );
-            CREATE TABLE IF NOT EXISTS collection_grants (
-                canonical_id TEXT NOT NULL,
-                scope TEXT NOT NULL DEFAULT 'collection',
-                collection_id TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                UNIQUE(canonical_id, scope, collection_id)
-            );
-            CREATE TABLE IF NOT EXISTS collection_files (
-                collection_id TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                updated_at REAL NOT NULL,
-                UNIQUE(collection_id, file_path)
-            );
-            """
-        )
+        self._conn.executescript(SCHEMA)
         self._conn.commit()
+        # Schema versioning. collections.db shipped in Phase 1 with no
+        # migration path at all, so the first column added to any of its
+        # tables would have silently missed every database already in the
+        # field. Phase 1 is version 1; append steps from there.
+        migrations.migrate(self._conn, "collections")
 
     def close(self) -> None:
         self._conn.close()
