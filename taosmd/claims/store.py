@@ -11,7 +11,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from taosmd import _db
+from taosmd import _db, migrations
 
 VALID_STATUSES = ("unverified", "supported", "partial", "unsupported", "contradicted")
 # What counts as a hallucination for the live rate (checked but not supported).
@@ -43,6 +43,7 @@ class ClaimStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        migrations.migrate(self._conn, "claims")
 
     async def close(self) -> None:
         if self._conn:
