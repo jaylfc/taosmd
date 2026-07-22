@@ -1,5 +1,10 @@
 # JOB-003: Remove the dead importlib block in _webui_dir
 
+**Status: OPEN (verified 2026-07-21).** The dead try block is still in
+`taosmd/http_server.py`, now at `_webui_dir()` around line 165 rather than
+112. `_pkg_files` (imported at line 155) still has exactly one user, the dead
+block itself, so step 4 will tell you to remove that import too.
+
 Read docs/agent-jobs/README.md first and follow its absolute rules.
 
 - Branch: `chore/http-server-dead-import` (from `origin/master`)
