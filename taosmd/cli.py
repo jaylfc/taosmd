@@ -1138,6 +1138,74 @@ def _reconcile_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _migrate_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd migrate``: report or apply pending schema migrations.
+
+    ``--status`` prints each database's ``user_version`` against the latest
+    known version. ``--check`` is the deploy pre-flight: it changes nothing and
+    exits non-zero when any database has pending work, so a rollout can refuse
+    to start against a store it would silently need to upgrade.
+    """
+    from . import migrations  # noqa: PLC0415
+
+    data_dir = args.data_dir
+    rows = migrations.status_all(data_dir)
+
+    if args.status or args.check:
+        if args.json:
+            print(json.dumps({"data_dir": str(data_dir), "databases": rows}, indent=2))
+        else:
+            print(f"data dir: {data_dir}")
+            width = max(len(r["db"]) for r in rows)
+            for r in rows:
+                if not r["exists"]:
+                    state = "absent"
+                    version = "-"
+                else:
+                    state = "current" if r["current"] else "PENDING"
+                    version = str(r["user_version"])
+                line = f"  {r['db']:<{width}}  version {version:>3}  of {r['latest']:<3} {state}"
+                if r["exists"] and r["pending"]:
+                    line += "  apply: " + ", ".join(r["pending"])
+                elif r["exists"] and not r["current"]:
+                    # Unstamped but the schema is already there: the runner
+                    # will stamp it and execute nothing.
+                    line += f"  stamp only, schema already at {r['detected_baseline']}"
+                print(line)
+        if args.check:
+            pending = [r for r in rows if r["exists"] and not r["current"]]
+            if pending:
+                if not args.json:
+                    # The JSON payload already carries the pending state; a
+                    # trailing plain-text line would corrupt the stream for
+                    # anything piping this into jq.
+                    print(
+                        f"{len(pending)} database(s) have pending migrations; "
+                        "run `taosmd migrate` to apply them."
+                    )
+                return 1
+        return 0
+
+    results = migrations.migrate_all(data_dir)
+    if not results:
+        print(f"no databases found in {data_dir}; nothing to migrate")
+        return 0
+    for res in results:
+        if res.applied:
+            print(
+                f"  {res.db}: {res.from_version} -> {res.to_version} "
+                f"({', '.join(res.applied)})"
+            )
+        elif res.stamped_baseline:
+            print(
+                f"  {res.db}: stamped existing schema at version "
+                f"{res.to_version} (nothing re-applied)"
+            )
+        else:
+            print(f"  {res.db}: already at version {res.to_version}")
+    return 0
+
+
 def _reindex_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd reindex``: rebuild an agent's vector store from the archive.
 
@@ -1666,6 +1734,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Dry-run: report missing counts without modifying the vector store.",
     )
 
+    # ----- migrate subcommand ------------------------------------------
+    migrate_p = sub.add_parser(
+        "migrate",
+        help="Apply or inspect SQLite schema migrations for the data dir's "
+             "databases. Stores migrate themselves on open, so this is for "
+             "deploy pre-flight and for upgrading a store without starting it.",
+    )
+    migrate_p.add_argument(
+        "--status", action="store_true",
+        help="Print each database's schema version and whether it is current.",
+    )
+    migrate_p.add_argument(
+        "--check", action="store_true",
+        help="Dry-run pre-flight: print status, change nothing, and exit "
+             "non-zero if any database has pending migrations.",
+    )
+    migrate_p.add_argument(
+        "--json", action="store_true",
+        help="With --status/--check, emit machine-readable JSON.",
+    )
+
     # ----- reindex subcommand ------------------------------------------
     reindex_p = sub.add_parser(
         "reindex",
@@ -1911,6 +2000,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "reindex":
         return _reindex_cmd(args)
+
+    if args.cmd == "migrate":
+        return _migrate_cmd(args)
 
     if args.cmd in ("projects", "shelves"):
         return _projects_cmd(args)

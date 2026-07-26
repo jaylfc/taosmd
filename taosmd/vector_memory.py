@@ -16,7 +16,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from . import _db
+from . import _db, migrations
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +234,11 @@ class VectorMemory:
         self._conn = _db.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
-        self._migrate()
+        self._conn.commit()
+        # Schema versioning and upgrades. Runs before _check_store_mode and
+        # before any query, so a legacy table has gained `valid_to` (and its
+        # index) by the time the first SELECT touches it.
+        migrations.migrate(self._conn, "vector_memory")
         self._check_store_mode()
         self._conn.commit()
         self._http = http_client
@@ -337,23 +341,6 @@ class VectorMemory:
                     model_dir, e,
                 )
                 self._embed_mode = "qmd"
-
-    def _migrate(self) -> None:
-        """Bring an existing DB up to the current schema without data loss.
-
-        Adds the nullable ``valid_to`` column to stores created before the
-        correction-supersede feature. ``ALTER TABLE ... ADD COLUMN`` only
-        appends a NULL-defaulted column; no rows are rewritten or dropped, so
-        every existing vector survives and stays active (valid_to IS NULL).
-        """
-        cols = {row["name"] for row in self._conn.execute("PRAGMA table_info(vector_memory)")}
-        if "valid_to" not in cols:
-            self._conn.execute("ALTER TABLE vector_memory ADD COLUMN valid_to REAL")
-        # Index creation is deferred to here (not in SCHEMA) so it runs *after*
-        # the column is guaranteed to exist; a legacy table only gains the
-        # column via the ALTER above, and CREATE INDEX in SCHEMA would fire
-        # before that on the no-op CREATE TABLE IF NOT EXISTS path.
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_vm_valid ON vector_memory(valid_to)")
 
     def _store_mode_signature(self) -> str:
         """The storage-format and vector-space mode of this instance.

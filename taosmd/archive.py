@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import _db
+from . import _db, migrations
 
 logger = logging.getLogger(__name__)
 
@@ -107,12 +107,10 @@ class ArchiveStore:
         self._conn = _db.connect(self._index_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(INDEX_SCHEMA)
-        # Back-fill: add project column to existing installs
-        try:
-            self._conn.execute("SELECT project FROM archive_index LIMIT 1")
-        except Exception:
-            self._conn.execute("ALTER TABLE archive_index ADD COLUMN project TEXT")
         self._conn.commit()
+        # Schema versioning and upgrades (subsumes the old hand-rolled
+        # `project` back-fill). Must complete before the first SELECT below.
+        migrations.migrate(self._conn, "archive_index")
         # Load user tracking preference
         row = self._conn.execute(
             "SELECT value FROM archive_settings WHERE key = 'user_tracking_enabled'"
