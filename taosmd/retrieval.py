@@ -611,6 +611,63 @@ async def _attach_neighbors(
     return hits
 
 
+async def _append_graph_expansion(
+    results: list[dict],
+    kg: object | None,
+    max_tokens: int,
+) -> list[dict]:
+    """Append a derived knowledge-graph fact block to *results* (fail-open).
+
+    Bi-temporal fact readback (Phase 1). Reads the already-populated fact store
+    back into the answer context: entities are extracted from the served hits,
+    the KG is queried for their currently-valid facts (valid-time only;
+    ``query_entity`` defaults to ``as_of=now``), and the formatted triples are
+    appended as ONE synthetic result. The block is labelled derived
+    (``source == "kg_expansion"``, ``derived == True``) so provenance stays
+    honest: the underlying turns remain the primary evidence, and the block is
+    additional context, not one of the ``limit`` served turns.
+
+    Fail-open: a missing/None KG, an empty budget, no entities, an empty KG, or
+    any error is a silent no-op returning *results* unchanged. No ``as_of`` query
+    surface is exposed here (that is Phase 2).
+
+    Args:
+        results: The served (post-truncation) hits to read entities from.
+        kg: The knowledge graph source (``sources["kg"]``), or None.
+        max_tokens: Token budget for the derived block (also the enable flag;
+            <= 0 is off).
+    """
+    if kg is None or max_tokens <= 0 or not results:
+        return results
+    try:
+        from taosmd.graph_expansion import (  # noqa: PLC0415
+            expand_from_results,
+            format_expanded_context,
+        )
+        expanded = await expand_from_results(kg, results, as_of=None)
+        block = format_expanded_context(expanded, max_tokens=max_tokens)
+    except Exception as exc:
+        logger.debug("graph_expansion stage skipped: %s", exc)
+        return results
+    if not block:
+        return results
+    # Keep confidence: surface the strongest currently-valid triple's score.
+    # ``or 0.0`` also coerces an explicit ``confidence: None`` (which
+    # ``float(None)`` would raise on) so the fail-open contract holds.
+    top_confidence = max(
+        (float(e.get("confidence") or 0.0) for e in expanded), default=0.0
+    )
+    derived = {
+        "text": block,
+        "source": "kg_expansion",
+        "source_id": "kg_expansion",
+        "rank": len(results),
+        "source_score": top_confidence,
+        "derived": True,
+        "metadata": {"derived": True, "kind": "kg_facts", "triples": expanded},
+    }
+    return [*results, derived]
+
 
 def _filter_project_scope(
     results: list[dict],
@@ -678,6 +735,7 @@ async def retrieve(
     project: str | None = None,
     search_agents: list[str] | None = None,
     temporal: dict | None = None,
+    graph_expansion: int = 0,
 ) -> list[dict]:
     """Retrieve relevant results from available memory sources.
 
@@ -771,6 +829,22 @@ async def retrieve(
             **Default is off**: full-scale validation on LoCoMo-1540 is
             still pending.  Enabling this without benchmarking on your data
             is discouraged.
+        graph_expansion: Bi-temporal fact readback (Phase 1). When > 0, read
+            the already-populated knowledge graph back into the served context:
+            the currently-valid facts (``query_entity`` defaults to
+            ``as_of=now``) connected to entities in the served hits are formatted
+            into ONE additional derived-facts block and appended to the results.
+            The int value is the block's token budget (``max_tokens`` passed to
+            ``graph_expansion.format_expanded_context``). Requires a ``"kg"``
+            source; a missing, empty, or erroring KG is a silent no-op
+            (fail-open). The appended block is labelled derived
+            (``source == "kg_expansion"``, ``derived == True``) so provenance
+            stays honest: the underlying turns remain the primary evidence and
+            the block is additional, not counted against ``limit``.
+
+            Phase 1 is valid-time only; no ``as_of`` query surface is exposed
+            (that is Phase 2). Default 0 (off): EventQA validation (E-025) is
+            pending, so enabling it without benchmarking is discouraged.
 
     Returns:
         List of normalised result dicts, sorted by relevance, length <= limit.
@@ -830,6 +904,10 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
+        if graph_expansion:
+            results = await _append_graph_expansion(
+                results, sources.get("kg"), graph_expansion,
+            )
         return _filter_project_scope(results, project, search_agents)
 
     elif strategy == "fast":
@@ -863,6 +941,10 @@ async def retrieve(
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
             )
+        if graph_expansion:
+            results = await _append_graph_expansion(
+                results, sources.get("kg"), graph_expansion,
+            )
         return _filter_project_scope(results, project, search_agents)
 
     elif strategy == "minimal":
@@ -887,6 +969,10 @@ async def retrieve(
         if adjacent_neighbors > 0:
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
+            )
+        if graph_expansion:
+            results = await _append_graph_expansion(
+                results, sources.get("kg"), graph_expansion,
             )
         return _filter_project_scope(results, project, search_agents)
 
@@ -928,6 +1014,10 @@ async def retrieve(
         if adjacent_neighbors > 0:
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
+            )
+        if graph_expansion:
+            results = await _append_graph_expansion(
+                results, sources.get("kg"), graph_expansion,
             )
         return _filter_project_scope(results, project, search_agents)
 

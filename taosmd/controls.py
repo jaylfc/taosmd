@@ -101,6 +101,16 @@ CONTROLS: dict[str, Control] = {
         description="Include N positional neighbours around each retrieved hit. Overrides the recipe per query.",
         benchmarks_anchor="locomo--multi-session-conversational-memory-1540-qas",
     ),
+    "graph_expansion": Control(
+        id="graph_expansion", label="Graph-expansion fact readback",
+        category="quality", scope="runtime", type="int",
+        config_key="controls.graph_expansion", default=0, int_range=(0, 2000),
+        cost="one KG read over the served hits' entities plus the added context tokens; the value is the derived block's token budget",
+        pros="reads currently-valid bi-temporal facts from the populated KG back into the answer context (Phase 1, valid-time only); aimed at the LoCoMo temporal / open-domain weak spot (E-024)",
+        cons="pending EventQA validation (E-025); injects derived (not verbatim-turn) facts and extra context tokens, so it ships default-off until measured",
+        description="Append a derived knowledge-graph fact block (currently-valid facts) to retrieval. The int value is the block's token budget; 0 is off. Default off (bi-temporal Phase 1, valid-time only).",
+        benchmarks_anchor="",
+    ),
     "embedder": Control(
         id="embedder", label="Dense embedder",
         category="hardware", scope="store", type="choice",
