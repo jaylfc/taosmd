@@ -18,3 +18,23 @@ models/cross-encoder-onnx/
 *.log
 eval/reports/
 .superpowers/
+
+# Secret material: PATTERN-based, not a per-file allowlist.
+# A per-file list cannot stop a NEW file, which is exactly how a fresh
+# data/hub/identity.json with plaintext signing_private and encryption_private
+# walked into jaylfc/taOS PR #2043 (commit 42422c3b). It was removed before
+# merge, but the blob stays reachable from refs/pull/2043/head, so treat it as
+# public. Verified before adding: zero currently-tracked files match these
+# patterns, so nothing working was un-tracked. Keep them NARROW for that reason
+# (a broad *credential* glob would silently eat source and test files).
+*.key
+*.pem
+*.p8
+*_private*
+*private_key*
+identity.json
+*credentials.json
+creds*.json
+.env.*
+id_rsa
+id_ed25519
