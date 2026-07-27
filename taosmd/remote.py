@@ -210,15 +210,22 @@ class RemoteClient:
         *,
         thread: str = "general",
         reply_to: str | None = None,
+        refs: list | None = None,
+        blocks: list | None = None,
         **_opts,
     ) -> dict:
         """POST /a2a/send: post a message to the remote A2A bus.
 
-        Returns the send receipt ``{"id", "from", "thread", "reply_to"}``.
+        Returns the send receipt ``{"id", "from", "thread", "reply_to"}``
+        plus ``refs``/``blocks`` when supplied (taOSmd #211).
         """
         payload: dict = {"from": sender, "body": body, "thread": thread}
         if reply_to is not None:
             payload["reply_to"] = reply_to
+        if refs is not None:
+            payload["refs"] = refs
+        if blocks is not None:
+            payload["blocks"] = blocks
         return await self._run("POST", "/a2a/send", payload)
 
     async def a2a_feed(

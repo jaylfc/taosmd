@@ -86,7 +86,9 @@ Endpoints
 ``GET  /shelves?project=``                                 -> ``{"shelves": [...]}``
 ``GET  /pending?agent=``                                   -> ``{"pending": [...]}``
 ``POST /pending/resolve``  ``{"id", "decision", "note"?}`` -> resolve result
-``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?}`` -> send receipt
+``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?, "refs"?, "blocks"?}`` -> send receipt
+                           ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
+                           ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
 ``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line)
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
@@ -206,6 +208,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7900
+
+# A2A envelope field limits (taOSmd #211)
+_A2A_REF_KINDS = frozenset({"doc", "report", "spec", "log"})
+_A2A_MAX_REFS = 8
+_A2A_MAX_MESSAGE_BYTES = 64 * 1024  # 64 KB total (body+refs+blocks)
 
 
 # A single self-contained page: one inline <style> and one inline vanilla
@@ -1363,10 +1370,52 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             body_text = body.get("body")
             thread = body.get("thread", "general") or "general"
             reply_to = body.get("reply_to")
+            refs = body.get("refs")
+            blocks = body.get("blocks")
             if not isinstance(from_, str) or not from_:
                 raise _BadRequest("'from' (non-empty string) is required")
-            if not isinstance(body_text, str) or not body_text:
-                raise _BadRequest("'body' (non-empty string) is required")
+            # --- Envelope field validation (taOSmd #211) ---
+            # refs: optional list of dicts, <=8 items, kind in the enum.
+            if refs is not None:
+                if not isinstance(refs, list):
+                    raise _BadRequest("'refs' must be a list")
+                if len(refs) > _A2A_MAX_REFS:
+                    raise _BadRequest(f"'refs' must have at most {_A2A_MAX_REFS} items")
+                for i, ref in enumerate(refs):
+                    if not isinstance(ref, dict):
+                        raise _BadRequest(f"'refs[{i}]' must be an object")
+                    kind = ref.get("kind")
+                    if kind not in _A2A_REF_KINDS:
+                        raise _BadRequest(
+                            f"'refs[{i}].kind' must be one of {sorted(_A2A_REF_KINDS)}"
+                        )
+            # blocks: optional list of dicts; no inner schema validation.
+            if blocks is not None:
+                if not isinstance(blocks, list):
+                    raise _BadRequest("'blocks' must be a list")
+                for i, block in enumerate(blocks):
+                    if not isinstance(block, dict):
+                        raise _BadRequest(f"'blocks[{i}]' must be an object")
+            # Total serialized message (body+refs+blocks) <= 64KB.
+            serialized = json.dumps(
+                {"body": body_text, "refs": refs, "blocks": blocks}
+            )
+            if len(serialized.encode("utf-8")) > _A2A_MAX_MESSAGE_BYTES:
+                raise _BadRequest(
+                    "message (body+refs+blocks) exceeds 64KB limit"
+                )
+            # Body validation: required when blocks is absent (existing behaviour).
+            # Invariant: blocks present => body must be non-empty (body is ALWAYS
+            # the flattened plain-text rendering; an empty body with blocks would
+            # blind every text consumer including memory/embedding/Librarian).
+            if not blocks:
+                if not isinstance(body_text, str) or not body_text:
+                    raise _BadRequest("'body' (non-empty string) is required")
+            else:
+                if not isinstance(body_text, str) or not body_text:
+                    raise _BadRequest(
+                        "'body' (non-empty string) is required when 'blocks' is present"
+                    )
             # Registry auth (opt-in): when a verifier is configured, run the
             # identity + grant checks and collect any failure reason.
             # In enforce mode (a2a_auth_enforce=true) failures are rejected with
@@ -1422,6 +1471,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 service.a2a_send(
                     sender=from_, body=body_text,
                     thread=thread, reply_to=reply_to,
+                    refs=refs, blocks=blocks,
                     data_dir=data_dir,
                 )
             )
