@@ -99,7 +99,7 @@ def test_remote_pending_list(client):
 
 
 def test_remote_a2a_send_and_feed(client):
-    """a2a_send → a2a_feed returns the sent message."""
+    """a2a_send -> a2a_feed returns the sent message."""
     receipt = asyncio.run(
         client.a2a_send("agent-alpha", "Hello from remote!", thread="test-chan")
     )
@@ -108,6 +108,35 @@ def test_remote_a2a_send_and_feed(client):
 
     msgs = asyncio.run(client.a2a_feed(thread="test-chan", limit=10))
     assert any(m["from"] == "agent-alpha" and "Hello from remote!" in m["body"] for m in msgs)
+
+
+def test_remote_a2a_send_with_refs_and_blocks(client):
+    """a2a_send with refs+blocks -> a2a_feed returns them verbatim."""
+    refs = [
+        {"kind": "doc", "title": "Spec", "uri": "https://example.com/spec",
+         "sha256": "deadbeef", "doc_id": "spec-1", "version": 2, "for": ["agentA"],
+         "summary": "API spec"},
+        {"kind": "log", "title": "CI Log", "uri": "https://example.com/log",
+         "sha256": None, "doc_id": None, "version": None, "for": None,
+         "summary": None},
+    ]
+    blocks = [
+        {"kind": "tool_call", "tool": "search", "args": {"query": "hello"}},
+        {"kind": "tool_result", "result": "found 3 items"},
+    ]
+    receipt = asyncio.run(
+        client.a2a_send(
+            "agent-alpha", "remote envelope msg", thread="remote-env",
+            refs=refs, blocks=blocks,
+        )
+    )
+    assert receipt["refs"] == refs
+    assert receipt["blocks"] == blocks
+
+    msgs = asyncio.run(client.a2a_feed(thread="remote-env", limit=10))
+    assert len(msgs) == 1
+    assert msgs[0]["refs"] == refs
+    assert msgs[0]["blocks"] == blocks
 
 
 def test_remote_a2a_channels(client):

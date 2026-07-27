@@ -436,3 +436,257 @@ def test_http_a2a_messages_bad_format_returns_400(live_server):
     status, body = _get(f"{live_server}/a2a/messages?format=xml")
     assert status == 400
     assert "format" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# Envelope fields: refs + blocks (taOSmd #211)
+# ---------------------------------------------------------------------------
+
+def _sample_refs():
+    return [
+        {"kind": "doc", "title": "Design Doc", "uri": "https://example.com/doc",
+         "sha256": "abc123", "doc_id": "doc-1", "version": 1, "for": ["agentA"],
+         "summary": "A design document"},
+        {"kind": "log", "title": "Build Log", "uri": "https://example.com/log",
+         "sha256": None, "doc_id": None, "version": None, "for": None,
+         "summary": None},
+    ]
+
+
+def _sample_blocks():
+    return [
+        {"kind": "tool_call", "tool": "search", "args": {"query": "hello"}},
+        {"kind": "tool_result", "result": "found 3 items"},
+    ]
+
+
+def _assert_thread_empty(live_server, thread):
+    """GET /a2a/messages?thread=<thread> and assert no messages were stored."""
+    status, body = _get(f"{live_server}/a2a/messages?thread={thread}")
+    assert status == 200
+    assert body["messages"] == [], f"expected no messages, got {body['messages']}"
+
+
+# --- Service-layer round-trip ------------------------------------------------
+
+def test_a2a_send_with_refs_and_blocks_roundtrip(isolated_data_dir):
+    """send with refs+blocks -> feed returns both verbatim."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+    refs = _sample_refs()
+    blocks = _sample_blocks()
+
+    receipt = asyncio.run(service.a2a_send(
+        "taOSmd", "message with envelope fields",
+        thread="env", data_dir=dd, refs=refs, blocks=blocks,
+    ))
+    assert receipt["refs"] == refs
+    assert receipt["blocks"] == blocks
+
+    msgs = asyncio.run(service.a2a_feed(thread="env", data_dir=dd))
+    assert len(msgs) == 1
+    m = msgs[0]
+    assert m["refs"] == refs
+    assert m["blocks"] == blocks
+
+
+def test_a2a_send_without_refs_blocks_omits_keys(isolated_data_dir):
+    """send without refs/blocks -> feed output has no refs/blocks keys."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+
+    receipt = asyncio.run(service.a2a_send(
+        "taOSmd", "plain message", thread="plain", data_dir=dd,
+    ))
+    assert "refs" not in receipt
+    assert "blocks" not in receipt
+
+    msgs = asyncio.run(service.a2a_feed(thread="plain", data_dir=dd))
+    assert len(msgs) == 1
+    assert "refs" not in msgs[0]
+    assert "blocks" not in msgs[0]
+
+
+# --- HTTP-layer round-trip ---------------------------------------------------
+
+def test_http_a2a_send_refs_blocks_roundtrip(live_server):
+    """POST /a2a/send with refs+blocks -> GET /a2a/messages returns them verbatim."""
+    refs = _sample_refs()
+    blocks = _sample_blocks()
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "taOSmd", "body": "http envelope test", "thread": "http-env",
+         "refs": refs, "blocks": blocks},
+    )
+    assert status == 200, body
+    assert body["refs"] == refs
+    assert body["blocks"] == blocks
+
+    status, body = _get(f"{live_server}/a2a/messages?thread=http-env")
+    assert status == 200, body
+    msgs = body["messages"]
+    assert len(msgs) == 1
+    assert msgs[0]["refs"] == refs
+    assert msgs[0]["blocks"] == blocks
+
+
+def test_http_a2a_send_without_refs_blocks_omits_keys(live_server):
+    """POST without refs/blocks -> GET output has no refs/blocks keys."""
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "taOSmd", "body": "no envelope", "thread": "http-plain"},
+    )
+    assert status == 200, body
+    assert "refs" not in body
+    assert "blocks" not in body
+
+    status, body = _get(f"{live_server}/a2a/messages?thread=http-plain")
+    assert status == 200, body
+    msgs = body["messages"]
+    assert len(msgs) == 1
+    assert "refs" not in msgs[0]
+    assert "blocks" not in msgs[0]
+
+
+# --- SSE round-trip ----------------------------------------------------------
+
+def test_http_a2a_sse_with_refs_and_blocks(live_server):
+    """SSE frame includes refs and blocks verbatim."""
+    parsed = urllib.parse.urlsplit(live_server)
+    host = parsed.hostname
+    port = parsed.port
+    thread = "sse-env"
+    refs = _sample_refs()
+    blocks = _sample_blocks()
+
+    frames_received = []
+    error_holder = []
+
+    def _stream_reader():
+        try:
+            result = _read_sse_frames(
+                host, port,
+                f"/a2a/stream?thread={thread}",
+                timeout=8.0,
+            )
+            frames_received.extend(result)
+        except Exception as exc:
+            error_holder.append(exc)
+
+    reader = threading.Thread(target=_stream_reader, daemon=True)
+    reader.start()
+    time.sleep(1.5)
+
+    status, body = _post(
+        live_server + "/a2a/send",
+        {"from": "sse-env-sender", "body": "sse envelope payload",
+         "thread": thread, "refs": refs, "blocks": blocks},
+    )
+    assert status == 200, f"send failed: {body}"
+
+    reader.join(timeout=10)
+    assert not error_holder, f"SSE reader raised: {error_holder[0]}"
+    assert frames_received, "expected at least one SSE data: frame"
+    payloads = [json.loads(f) for f in frames_received]
+    matching = [p for p in payloads if p.get("body") == "sse envelope payload"]
+    assert matching, "expected the posted message in SSE frames"
+    msg = matching[0]
+    assert msg["refs"] == refs
+    assert msg["blocks"] == blocks
+
+
+# --- Validation tests: each asserts 400 AND nothing stored -------------------
+
+def test_http_a2a_refs_not_list_returns_400(live_server):
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": "msg", "thread": "v-refs-not-list",
+         "refs": "not a list"},
+    )
+    assert status == 400
+    assert "refs" in body["error"]
+    _assert_thread_empty(live_server, "v-refs-not-list")
+
+
+def test_http_a2a_refs_too_many_returns_400(live_server):
+    refs = [{"kind": "doc", "title": f"ref{i}", "uri": f"u{i}"} for i in range(9)]
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": "msg", "thread": "v-refs-too-many",
+         "refs": refs},
+    )
+    assert status == 400
+    assert "refs" in body["error"]
+    _assert_thread_empty(live_server, "v-refs-too-many")
+
+
+def test_http_a2a_refs_item_not_dict_returns_400(live_server):
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": "msg", "thread": "v-refs-not-dict",
+         "refs": ["not a dict"]},
+    )
+    assert status == 400
+    assert "refs" in body["error"]
+    _assert_thread_empty(live_server, "v-refs-not-dict")
+
+
+def test_http_a2a_refs_bad_kind_returns_400(live_server):
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": "msg", "thread": "v-refs-bad-kind",
+         "refs": [{"kind": "invalid", "title": "x", "uri": "u"}]},
+    )
+    assert status == 400
+    assert "kind" in body["error"]
+    _assert_thread_empty(live_server, "v-refs-bad-kind")
+
+
+def test_http_a2a_blocks_not_list_returns_400(live_server):
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": "msg", "thread": "v-blocks-not-list",
+         "blocks": "not a list"},
+    )
+    assert status == 400
+    assert "blocks" in body["error"]
+    _assert_thread_empty(live_server, "v-blocks-not-list")
+
+
+def test_http_a2a_blocks_item_not_dict_returns_400(live_server):
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": "msg", "thread": "v-blocks-not-dict",
+         "blocks": ["not a dict"]},
+    )
+    assert status == 400
+    assert "blocks" in body["error"]
+    _assert_thread_empty(live_server, "v-blocks-not-dict")
+
+
+def test_http_a2a_message_too_large_returns_400(live_server):
+    big_body = "x" * (65 * 1024)
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": big_body, "thread": "v-too-large"},
+    )
+    assert status == 400
+    assert "64KB" in body["error"] or "exceeds" in body["error"]
+    _assert_thread_empty(live_server, "v-too-large")
+
+
+def test_http_a2a_blocks_without_body_returns_400(live_server):
+    """Invariant: blocks present => body must be non-empty.
+
+    This test FAILS if the invariant check in the HTTP handler is removed,
+    because the service layer would still reject empty body with a
+    ValueError whose message does not mention 'blocks'.
+    """
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "thread": "v-blocks-no-body",
+         "blocks": [{"kind": "tool_call", "tool": "search"}]},
+    )
+    assert status == 400
+    assert "blocks" in body["error"]
+    _assert_thread_empty(live_server, "v-blocks-no-body")

@@ -137,3 +137,36 @@ def test_stats_reports_count(server):
 def test_pending_list_empty(server):
     out = asyncio.run(_call(server, "memory_pending_list", {"agent": "mcp-test"}))
     assert out == []
+
+
+def test_a2a_send_with_refs_and_blocks(server):
+    """a2a_send with refs+blocks -> a2a_read returns them verbatim (taOSmd #211)."""
+    refs = [
+        {"kind": "doc", "title": "Spec", "uri": "https://example.com/spec",
+         "sha256": "deadbeef", "doc_id": "spec-1", "version": 2, "for": ["agentA"],
+         "summary": "API spec"},
+        {"kind": "log", "title": "CI Log", "uri": "https://example.com/log",
+         "sha256": None, "doc_id": None, "version": None, "for": None,
+         "summary": None},
+    ]
+    blocks = [
+        {"kind": "tool_call", "tool": "search", "args": {"query": "hello"}},
+        {"kind": "tool_result", "result": "found 3 items"},
+    ]
+    receipt = asyncio.run(_call(
+        server,
+        "a2a_send",
+        {"channel": "mcp-env", "sender": "mcp-agent", "body": "mcp envelope msg",
+         "refs": refs, "blocks": blocks},
+    ))
+    assert receipt["refs"] == refs
+    assert receipt["blocks"] == blocks
+
+    msgs = asyncio.run(_call(
+        server,
+        "a2a_read",
+        {"channel": "mcp-env"},
+    ))
+    assert len(msgs) == 1
+    assert msgs[0]["refs"] == refs
+    assert msgs[0]["blocks"] == blocks

@@ -347,6 +347,8 @@ async def a2a_send(
     *,
     thread: str = "general",
     reply_to: str | None = None,
+    refs: list | None = None,
+    blocks: list | None = None,
     data_dir=None,
 ) -> dict:
     """Post a message onto the agent-to-agent bus.
@@ -357,7 +359,13 @@ async def a2a_send(
     ``thread`` defaults to ``"general"``; ``reply_to`` is optional and
     should be the string ID of the message being replied to.
 
-    Returns ``{"id", "from", "thread", "reply_to"}``.
+    ``refs`` and ``blocks`` are optional first-class envelope fields
+    (taOSmd #211). When provided they are stored verbatim in the archive
+    payload and echoed back in the receipt and on feed/SSE reads. When
+    absent they are omitted from output entirely (no null noise).
+
+    Returns ``{"id", "from", "thread", "reply_to"}`` plus ``refs`` and/or
+    ``blocks`` when those were supplied.
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
@@ -368,7 +376,10 @@ async def a2a_send(
         raise ValueError("body must be a non-empty string")
     remote = _get_remote(data_dir)
     if remote is not None:
-        return await remote.a2a_send(sender, body, thread=thread, reply_to=reply_to)
+        return await remote.a2a_send(
+            sender, body, thread=thread, reply_to=reply_to,
+            refs=refs, blocks=blocks,
+        )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
     # Redirect sends to renamed channels: if the target thread has been aliased
@@ -377,14 +388,24 @@ async def a2a_send(
         from .admin import A2AAdminState  # noqa: PLC0415
         _admin = A2AAdminState(data_dir)
         thread = _admin.resolve_channel(thread)
+    data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to}
+    if refs is not None:
+        data["refs"] = refs
+    if blocks is not None:
+        data["blocks"] = blocks
     row_id = await archive.record(
         event_type=EVENT_A2A,
-        data={"from": sender, "body": body, "thread": thread, "reply_to": reply_to},
+        data=data,
         agent_name=sender,
         app_id=thread,
         summary=body[:200],
     )
-    return {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to}
+    receipt = {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to}
+    if refs is not None:
+        receipt["refs"] = refs
+    if blocks is not None:
+        receipt["blocks"] = blocks
+    return receipt
 
 
 async def a2a_feed(
@@ -403,7 +424,8 @@ async def a2a_feed(
     first) suitable for chat-style display.
 
     Each item has shape ``{"id", "ts", "from", "body", "thread",
-    "reply_to"}``.
+    "reply_to"}`` plus ``refs`` and/or ``blocks`` when those were
+    supplied on send (taOSmd #211).
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
@@ -473,14 +495,21 @@ async def a2a_feed(
         # Skip admin-action rows (they have no "from" field)
         if data.get("admin_action"):
             continue
-        result.append({
+        msg = {
             "id": row_id,
             "ts": row["timestamp"],
             "from": data.get("from"),
             "body": data.get("body"),
             "thread": msg_thread,
             "reply_to": data.get("reply_to"),
-        })
+        }
+        # First-class envelope fields (taOSmd #211): stored verbatim,
+        # omitted from output when absent (no null noise).
+        if "refs" in data:
+            msg["refs"] = data["refs"]
+        if "blocks" in data:
+            msg["blocks"] = data["blocks"]
+        result.append(msg)
     return result
 
 

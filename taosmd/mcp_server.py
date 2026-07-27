@@ -215,11 +215,19 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
 
     @mcp.tool()
     async def a2a_send(
-        channel: str, sender: str, body: str, reply_to: str | None = None
+        channel: str, sender: str, body: str, reply_to: str | None = None,
+        refs: list | None = None, blocks: list | None = None,
     ) -> dict:
-        """Post a message to ``channel`` from ``sender``."""
+        """Post a message to ``channel`` from ``sender``.
+
+        ``refs`` and ``blocks`` are optional first-class envelope fields
+        (taOSmd #211); when omitted they are not stored or returned.
+        """
         return await _dispatch(
-            service.a2a_send(sender, body, thread=channel, reply_to=reply_to, data_dir=data_dir)
+            service.a2a_send(
+                sender, body, thread=channel, reply_to=reply_to,
+                refs=refs, blocks=blocks, data_dir=data_dir,
+            )
         )
 
     @mcp.tool()
