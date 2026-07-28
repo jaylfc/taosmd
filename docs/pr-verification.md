@@ -59,6 +59,38 @@ Every script prints `SUCCESS:` or `FAILED:` as its first line and uses a distinc
 exit code per failure class. A timeout or a killed process yields no output and a generic
 non-zero status, and the gate must be able to tell that apart from a real failure.
 
+### Two ways the anchoring check gets built wrong
+
+Both of these were found within hours by leads who had just built this gate, and neither was
+caught by the gate's own unit tests. They are part of the acceptance contract for
+`tsk-zgbkal`.
+
+**GitHub rewrites `commit_id` on review comments.** For a pull-request review comment,
+`.commit_id` is updated to the newest commit the comment still applies to. `.original_commit_id`
+is where the bot actually looked. So `commit_id == head` is **true for stale reviews**, and a
+check built on it reports "reviewed at head" for a review that happened several commits ago.
+That is the exact failure the check exists to prevent, reimplemented as the check itself.
+
+- Review **objects**: use `commit_id`. It is not rewritten. This is the primary signal.
+- Inline **comments**: use `original_commit_id` only.
+
+**The rate-limit marker is an HTML comment, not a status description.** CodeRabbit writes
+`<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->` into the PR
+comment body. A detector looking only for a commit status described "Review rate limited"
+matches nothing on a rate-limited PR and reports a clean sweep. Match the HTML-comment
+string; that is the marker verified against real taOSmd data on PR #212.
+
+### Prove the negative
+
+Run the finished gate against PRs you already know are unreviewed, not only against ones you
+expect to pass. Measured 2026-07-28: **9 of taOSmd's 15 most recently merged PRs were
+CodeRabbit rate-limit-only at their merged head** (#212, #207, #196, #195, #193, #192, #191,
+#190, #189). The gate must print `FAILED:` on every one of them. If it passes any, the gate is
+wrong, not the PR.
+
+Bot review coverage is a property to **measure per repo**, not to assume from a bot's presence
+in the checks list.
+
 ## Local preconditions
 
 `uv sync` installs the dev and test dependencies by default since PR #219 (PEP 735
