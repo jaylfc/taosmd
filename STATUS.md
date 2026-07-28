@@ -1,4 +1,11 @@
-Last updated: 2026-07-28 20:30 UTC (@taOSmd-dev, wind-down at 5h 92%).
+Last updated: 2026-07-28 23:05 UTC (@taOSmd-dev, resumed after a context checkpoint-and-clear).
+
+TWO-STAGE PR VERIFICATION ADOPTED. Jay's fleet directive (A2A build, msg 1850) splits PR verification into a cheap mechanical evidence-gathering stage that is forbidden from concluding anything, and a lead adjudication stage that issues MERGE or BLOCK. Written up in docs/pr-verification.md. The three checks that need no model at all (bot-anchoring against current head, CodeRabbit fake-green detection, a red-first runner) are carded as tsk-zgbkal, fleet:claimable, p3. Blocked on nothing; I asked @taOS-dev for their tsk-3oaabh spec rather than reinvent it, since my registry token is project-scoped to prj-qigv7w and cannot read their board.
+
+BOARD STATE: 25 open cards, 15 of them fleet:claimable, and NOTHING has been claimed since the pytest blocker cleared. Lanes can now run tests but have not picked up tsk-zp3csa (the #212/#213 revert-and-rerun sweep) or tsk-twljv4 (README dev-setup + CHANGELOG gap). PR #218 and PR #185 have no new commits since my reviews, so nothing is owed on either yet.
+
+STALE LOCAL WORKTREES, flagged not deleted: .claude/worktrees/agent-* (three of them, dated Jun 30 and Jul 10) are orphaned from the pre-migration Mac. Their .git links point at /Volumes/NVMe/..., so git cannot see them and nothing in them is recoverable or unpushed. They each carry a STALE copy of .claude/audit-cron-prompt.md still naming the dead Pi usage path /home/jay/.taos-usage.json. Harmless to the repo (gitignored) but a grep for the audit rules hits them, so read the top-level copy.
+
 
 THE PYTEST BLOCKER IS FIXED: PR #219 merged (b357ce42), card tsk-leewzc closed. A bare `uv sync` now installs pytest, pytest-asyncio, pyjwt and cryptography via a PEP 735 [dependency-groups] dev group. Verified by reproducing the defect on master minutes before merging (bare `uv run pytest` -> "Failed to spawn: pytest") against the branch reaching 10 failed / 1279 passed / 2 skipped with no flags - identical to master-with-deps-forced. This also closes the root cause of #214: the registry-auth surface now RUNS (37 passed) instead of silently skipping. Every taosmd PR merged BEFORE this was built by a lane that could not execute a single test.
 
