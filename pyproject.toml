@@ -28,6 +28,16 @@ mcp = ["mcp"]
 # Install with: pip install taosmd[registry]
 registry = ["pyjwt>=2.8", "cryptography>=42"]
 
+# PEP 735 dependency groups. uv syncs these BY DEFAULT, so a bare `uv sync`
+# from a clean checkout yields a working test environment with no flags.
+# The `dev` group duplicates the auth deps from the `registry` extra on
+# purpose: the extra is the opt-in RUNTIME path (pip install taosmd[registry]),
+# while this group is the default-INSTALLED path for running the test suite.
+# Keeping both lets pip users keep using extras and uv users get tests for
+# free, without putting pyjwt/cryptography in core [project] dependencies.
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "pyjwt>=2.8", "cryptography>=42"]
+
 [tool.setuptools.packages.find]
 include = ["taosmd*"]
 
