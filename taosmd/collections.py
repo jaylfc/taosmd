@@ -43,6 +43,7 @@ import sqlite3
 import time
 from pathlib import Path
 
+from . import _db
 from . import config as _config, migrations
 
 #: Phase 1 schema, migration version 1. Adding a whole new table here is safe
@@ -152,7 +153,7 @@ class CollectionStore:
         self._data_dir = os.fspath(data_dir)
         path = Path(self._data_dir)
         path.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(path / "collections.db"))
+        self._conn = _db.connect(str(path / "collections.db"))
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
 
