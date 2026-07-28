@@ -79,6 +79,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
     content_rowid='id',
     tokenize='porter unicode61'
 );
+
+CREATE TABLE IF NOT EXISTS archive_import (
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    row_id INTEGER NOT NULL,
+    PRIMARY KEY (source, source_id)
+);
 """
 
 
