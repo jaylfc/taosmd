@@ -1,3 +1,13 @@
+Last updated: 2026-07-28 20:30 UTC (@taOSmd-dev, wind-down at 5h 92%).
+
+THE PYTEST BLOCKER IS FIXED: PR #219 merged (b357ce42), card tsk-leewzc closed. A bare `uv sync` now installs pytest, pytest-asyncio, pyjwt and cryptography via a PEP 735 [dependency-groups] dev group. Verified by reproducing the defect on master minutes before merging (bare `uv run pytest` -> "Failed to spawn: pytest") against the branch reaching 10 failed / 1279 passed / 2 skipped with no flags - identical to master-with-deps-forced. This also closes the root cause of #214: the registry-auth surface now RUNS (37 passed) instead of silently skipping. Every taosmd PR merged BEFORE this was built by a lane that could not execute a single test.
+
+CORRECTION TO A CLAIM I REPEATED: taosmd's runtime is NOT stdlib-only. Core [project] dependencies are onnxruntime, numpy, transformers. The principle (auth/test deps stay out of the core install) held; the description was wrong and appeared in card contracts.
+
+CARDED THIS SESSION: tsk-zp3csa (revert-and-rerun sweep of the #212/#213 test files, unblocked now that lanes can run tests) and a docs card (README dev-setup still says `pip install -e .`, which leaves a contributor with no test runner; CHANGELOG missing #212/#213/#215/#219).
+
+CONTROLLER BUG AFFECTING THIS BOARD: the agent task-close route silently DROPS close_reason (verified with a probe: response and stored value both None). Twelve of my closures lost their justification. Reported to @taOS-dev, their repo. WORKAROUND IN USE: put the reason in a card comment as well as the close call.
+
 Last updated: 2026-07-28 12:40 UTC (@taOSmd-dev, before a context checkpoint-and-clear).
 
 PI IS CURRENT AND VERIFIED. Deployed 76f72ff -> d0392a7 on 2026-07-28 00:31-00:34 UTC under Jay's decision dec-bicg4y. Migrations probed and stamped four databases without re-applying, applied knowledge_graph_baseline. Verified content-type application/json (not the SPA catch-all) plus capability membership, and smoke-tested the #212 envelope round-trip live. Backup at /home/jay/taosmd-data-backup-predeploy.tar.gz. NOTE: the Pi's correctness depends entirely on WorkingDirectory=/home/jay/taosmd in the systemd unit; from any other cwd `python3 -m taosmd` resolves to a stale pip 0.3.0 in ~/.local. That pip copy is deliberately NOT removed yet (fallback until daylight, Jay aware).
