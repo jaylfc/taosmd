@@ -1,3 +1,17 @@
+Last updated: 2026-07-28 12:40 UTC (@taOSmd-dev, before a context checkpoint-and-clear).
+
+PI IS CURRENT AND VERIFIED. Deployed 76f72ff -> d0392a7 on 2026-07-28 00:31-00:34 UTC under Jay's decision dec-bicg4y. Migrations probed and stamped four databases without re-applying, applied knowledge_graph_baseline. Verified content-type application/json (not the SPA catch-all) plus capability membership, and smoke-tested the #212 envelope round-trip live. Backup at /home/jay/taosmd-data-backup-predeploy.tar.gz. NOTE: the Pi's correctness depends entirely on WorkingDirectory=/home/jay/taosmd in the systemd unit; from any other cwd `python3 -m taosmd` resolves to a stale pip 0.3.0 in ~/.local. That pip copy is deliberately NOT removed yet (fallback until daylight, Jay aware).
+
+MERGED SINCE JUL 26: #201 migrations (84d40bb), #191 graph-expansion default-off (427edb2), #173 preset ladder (82ffb10), #184 granite factual-recall (03c5e09), #207 agent-job pack (1cdfaca), #212 envelope refs+blocks (98b13dd), #213 /version + capabilities (5b024fe), #215 CollectionStore WAL (b1e56b4). #200 closed superseded by #213.
+
+OPEN PRs: #204 (LongMemEval retrieve wiring, held), #185 (external contributor task-edge endpoint, my security review still owed), #218 (a2a/import - CHANGES REQUESTED, see below).
+
+THE WEEK'S THROUGH-LINE, and it is the thing a resuming session most needs: a long catalogue of checks whose failure mode is indistinguishable from success. Filed as issues #197 #199 #205 #206 #208 #214 #216 #217. Highlights: the registry-auth test surface SILENTLY SKIPS without pyjwt/cryptography so every suite comparison I ran was blind to it (#214); a merged test asserting `busy_timeout > 0` can never fail because SQLite's default is already 5000 (#217); a bare GET /a2a/messages returns only ~50 and looks complete (rulebook v1.20); bot verdicts can predate the head commit and read as corroboration (v1.29). ALWAYS pass limit=500 on bus reads and install pyjwt+cryptography in BOTH sides of any suite comparison.
+
+ROOT CAUSE FOUND JUL 28, FLEET-WIDE: pyproject declares dev and registry deps under [project.optional-dependencies], and `uv sync` installs NO extras. So lanes across taOS, taosmd and taOSc have NEVER been able to run pytest, and the auth test surface never ran. One defect, two symptoms I had been treating as unrelated. Fix carded as tsk-leewzc (p3, PEP 735 [dependency-groups], keeps the extras).
+
+DEFERRED DELIBERATELY: the revert-and-rerun sweep of #212/#213 test files waits for tsk-leewzc. Handing a red-before-green card to a builder who cannot run tests asks for proof written blind, which is the condition that produced these defects. Technique: worktree at master, revert the BEHAVIOUR (not the whole diff - a full revert breaks collection when a PR adds symbols its tests import), run only that PR's new tests, assert red.
+
 # STATUS
 
 ## RESTART HANDOFF (read first) - 2026-07-09
