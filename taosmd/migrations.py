@@ -398,6 +398,7 @@ DB_FILES: dict[str, str] = {
     "claims": "claims.db",
     "collections": "collections.db",
     "knowledge_graph": "knowledge-graph.db",
+    "receipts": "receipts.db",
     "session_catalog": "session-catalog.db",
     "vector_memory": "vector-memory.db",
 }
