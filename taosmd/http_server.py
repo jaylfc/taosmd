@@ -953,9 +953,17 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_a2a_members(query)
                 elif method == "GET" and path == "/a2a/messages":
                     self._handle_a2a_messages(query)
+                elif method == "GET" and path == "/a2a/threads":
+                    self._handle_a2a_threads(query)
+                elif method == "GET" and path.startswith("/a2a/threads/") and "/messages" in path:
+                    self._handle_a2a_thread_messages(query)
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
+                elif method == "GET" and path == "/a2a/threads":
+                    self._handle_a2a_threads(query)
+                elif method == "GET" and path.startswith("/a2a/threads/") and "/messages" in path:
+                    self._handle_a2a_thread_messages(query)
                 # Task graph endpoints — prefix matching for /tasks/{id} paths
                 elif method == "POST" and path == "/tasks":
                     self._handle_task_create()
