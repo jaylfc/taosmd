@@ -867,7 +867,7 @@ Free to use, fork, modify, and embed. You may not sell taOSmd itself as a hosted
 
 | Component | Source | Notes |
 |-----------|--------|-------|
-| QMD (embedding / reranking / query expansion) | [jaylfc/qmd](https://github.com/jaylfc/qmd) (fork, on npm as `@jaylfc/qmd`) | Tracks upstream [tobi/qmd](https://github.com/tobi/qmd) v2.5.3 and adds a pluggable model backend: `qmd serve` (HTTP model server) plus remote / Ollama-compatible backends (`--server`, `--backend ollama`) so embeddings, reranking and expansion can be served by an Ollama or NPU host. |
+| QMD (embedding / reranking / query expansion) | [jaylfc/qmd](https://github.com/jaylfc/qmd) (fork, on npm as `@jaylfc/qmd`) | Forked from [tobi/qmd](https://github.com/tobi/qmd), published as `@jaylfc/qmd` (currently 2.6.1). Adds a pluggable model backend: `qmd serve` (HTTP model server) plus remote / Ollama-compatible backends (`--server`, `--backend ollama`) so embeddings, reranking and expansion can be served by an Ollama or NPU host. |
 | rkllama (NPU model serving) | [NotPunchnox/rkllama](https://github.com/NotPunchnox/rkllama) | Upstream with minor patches for rerank endpoint |
 | ONNX MiniLM | [onnx-models/all-MiniLM-L6-v2-onnx](https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx) | Standard pre-exported model |
 | Qwen3-4B RKLLM | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) | Community RK3588 conversion |
