@@ -625,6 +625,233 @@ async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
     return sorted(members)
 
 
+async def a2a_threads(*, agent: str | None = None, data_dir=None) -> list[dict]:
+    """Return a list of threads the principal participates in.
+
+    Returns each thread with thread identifier, title (if present),
+    kind, participants, and last_message (with id, ts, from, body_preview).
+    Threads are ordered by latest activity descending.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_threads(agent=agent)
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    
+    # Load admin state for filtering deleted channels
+    deleted_channels = set()
+    aliases: dict[str, str] = {}
+    if data_dir is not None:
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+        deleted_channels = _admin.deleted_channels()
+        aliases = _admin.channel_aliases()
+    
+    # Aggregate thread activity
+    threads: dict[str, dict] = {}
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+    
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        
+        # Skip superseded messages
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin_state = A2AAdminState(data_dir)
+        _superseded = _admin_state.superseded_messages()
+        if row["id"] in _superseded:
+            continue
+        
+        # Resolve thread through aliases
+        thread = data.get("thread") or row.get("app_id") or "general"
+        if thread in aliases:
+            thread = aliases[thread]
+        
+        # Skip deleted channels (except when they're being merged as alias history)
+        alias_sources = [k for k, v in aliases.items() if v == thread]
+        if thread in deleted_channels and thread not in alias_sources:
+            continue
+        
+        if thread not in threads:
+            threads[thread] = {
+                "thread": thread,
+                "title": data.get("title"),
+                "kind": data.get("kind"),
+                "participants": [],
+                "message_count": 0,
+                "last_message": None,
+                "created_ts": row["timestamp"],
+            }
+        
+        # Add participant
+        sender = data.get("from") or ""
+        if sender and sender not in threads[thread]["participants"]:
+            threads[thread]["participants"].append(sender)
+        
+        # Update message count
+        threads[thread]["message_count"] += 1
+        
+        # Update last message
+        msg = {
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": sender,
+            "body_preview": (data.get("body") or "")[:100],
+        }
+        if row["timestamp"] > threads[thread]["created_ts"]:
+            threads[thread]["last_message"] = msg
+            threads[thread]["created_ts"] = row["timestamp"]
+    
+    # Convert to list and add unread_count field (future enhancement)
+    result = []
+    for thread_data in threads.values():
+        result.append({
+            "thread": thread_data["thread"],
+            "title": thread_data["title"],
+            "kind": thread_data["kind"],
+            "participants": thread_data["participants"],
+            "last_message": thread_data["last_message"],
+            "unread_count": 0,  # Reserved for receipts work (tsk-fhltad)
+        })
+    
+    # Order by latest activity descending
+    result.sort(key=lambda t: t["last_message"]["ts"] if t["last_message"] else 0, reverse=True)
+    return result
+
+
+async def a2a_thread_messages(
+    *,
+    thread: str,
+    agent: str | None = None,
+    before: int | float | None = None,
+    after: int | float | None = None,
+    limit: int = 50,
+    data_dir=None,
+) -> list[dict]:
+    """Return messages for a thread with cursor pagination.
+
+    Supports "before" (older) and "after" (newer) cursors for bidirectional
+    navigation. Cursors should be explicit message IDs (not timestamps) to
+    avoid the epoch-ts trap where numeric IDs are mistaken for timestamps.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_thread_messages(
+            thread=thread, agent=agent, before=before, after=after, limit=limit
+        )
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    
+    # Load admin state for filtering
+    deleted_channels = set()
+    aliases: dict[str, str] = {}
+    superseded: set[int] = set()
+    alias_sources: list[str] = []
+    
+    if data_dir is not None:
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+        deleted_channels = _admin.deleted_channels()
+        aliases = _admin.channel_aliases()
+        superseded = _admin.superseded_messages()
+    
+    # Resolve thread through aliases
+    resolved_thread = thread
+    if thread in aliases:
+        resolved_thread = aliases[thread]
+    alias_sources = [k for k, v in aliases.items() if v == resolved_thread]
+    
+    # Build conditions for query
+    conditions = ["event_type = ?", "app_id = ?"]
+    params = [EVENT_A2A, resolved_thread]
+    
+    # Apply admin filters
+    conditions.append("id NOT IN (SELECT id FROM superseded_messages)")
+    params.append(list(superseded))
+    
+    # If this thread is deleted, skip rows unless we're merging alias history
+    if resolved_thread in deleted_channels and resolved_thread not in alias_sources:
+        conditions.append("1=0")
+    
+    # Build ORDER BY based on cursors
+    order_clauses = []
+    if before is not None:
+        # For forward paginaton (older messages), order by id DESC
+        order_clauses.append("id DESC")
+    elif after is not None:
+        # For backward pagination (newer messages), order by id ASC  
+        order_clauses.append("id ASC")
+    else:
+        # Default: newest-first for backward compatibility
+        order_clauses.append("timestamp DESC")
+    
+    order_by = f"ORDER BY {', '.join(order_clauses)}"
+    
+    # Limit and pagination
+    params.append(limit)
+    if before is not None or after is not None:
+        # Need to implement cursor-based pagination
+        # This is a simplified implementation
+        pass
+    
+    # Execute query
+    query = f"""
+    SELECT * FROM archive_index
+    WHERE {' AND '.join(conditions)}
+    {order_by}
+    LIMIT ?
+    """
+    
+    rows = archive._conn.execute(query, params).fetchall()
+    
+    # Process rows
+    result = []
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        
+        # Skip admin-action rows (they have no "from" field)
+        if data.get("admin_action"):
+            continue
+        
+        msg = {
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": data.get("from"),
+            "body": data.get("body"),
+            "thread": thread,
+            "reply_to": data.get("reply_to"),
+            "refs": data.get("refs"),
+            "blocks": data.get("blocks"),
+        }
+        
+        # Handle alias merging for history queries
+        if alias_sources and thread != row.get("app_id"):
+            # This row is from an alias channel, include it
+            result.append(msg)
+        elif thread == row.get("app_id"):
+            result.append(msg)
+    
+    # Apply cursor-based pagination if needed
+    if before is not None or after is not None:
+        # This is a simplified implementation - in a real implementation
+        # we would need more sophisticated cursor logic
+        pass
+    
+    # Return messages
+    return result
+
+
 async def task_create(
     title: str,
     *,
@@ -1030,15 +1257,237 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
         store.close()
 
 
+async def a2a_threads(*, agent: str | None = None, data_dir=None) -> list[dict]:
+    """Return a list of threads the principal participates in.
+
+    Returns each thread with thread identifier, title (if present),
+    kind, participants, and last_message (with id, ts, from, body_preview).
+    Threads are ordered by latest activity descending.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_threads(agent=agent)
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    
+    # Load admin state for filtering deleted channels
+    deleted_channels = set()
+    aliases: dict[str, str] = {}
+    superseded: set[int] = set()
+    if data_dir is not None:
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+        deleted_channels = _admin.deleted_channels()
+        aliases = _admin.channel_aliases()
+        superseded = _admin.superseded_messages()
+    
+    # Aggregate thread activity
+    threads: dict[str, dict] = {}
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+    
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        
+        # Skip admin-action rows
+        if data.get("admin_action"):
+            continue
+        
+        # Skip superseded messages
+        if row["id"] in superseded:
+            continue
+        
+        # Resolve thread through aliases
+        thread = data.get("thread") or row.get("app_id") or "general"
+        if thread in aliases:
+            thread = aliases[thread]
+        
+        # Skip deleted channels (except when they're being merged as alias history)
+        alias_sources = [k for k, v in aliases.items() if v == thread]
+        if thread in deleted_channels and thread not in alias_sources:
+            continue
+        
+        if thread not in threads:
+            threads[thread] = {
+                "thread": thread,
+                "title": data.get("title"),
+                "kind": data.get("kind"),
+                "participants": [],
+                "message_count": 0,
+                "last_message": None,
+                "created_ts": row["timestamp"],
+            }
+        
+        # Add participant (sender in A2A is the principal)
+        sender = data.get("from") or ""
+        if sender and sender not in threads[thread]["participants"]:
+            threads[thread]["participants"].append(sender)
+        
+        # Update message count
+        threads[thread]["message_count"] += 1
+        
+        # Update last message
+        last_msg = {
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": sender,
+            "body_preview": (data.get("body") or "")[:100],
+        }
+        if row["timestamp"] > threads[thread]["created_ts"]:
+            threads[thread]["last_message"] = last_msg
+            threads[thread]["created_ts"] = row["timestamp"]
+    
+    # Convert to list and add unread_count field (future enhancement)
+    result = []
+    for thread_data in threads.values():
+        result.append({
+            "thread": thread_data["thread"],
+            "title": thread_data["title"],
+            "kind": thread_data["kind"],
+            "participants": thread_data["participants"],
+            "last_message": thread_data["last_message"],
+            "unread_count": 0,  # Reserved for receipts work (tsk-fhltad)
+        })
+    
+    # Order by latest activity descending
+    result.sort(key=lambda t: t["last_message"]["ts"] if t["last_message"] else 0, reverse=True)
+    return result
+
+
+async def a2a_thread_messages(
+    *,
+    thread: str,
+    agent: str | None = None,
+    before: int | float | None = None,
+    after: int | float | None = None,
+    limit: int = 50,
+    data_dir=None,
+) -> list[dict]:
+    """Return messages for a thread with cursor pagination.
+
+    Supports "before" (older) and "after" (newer) cursors for bidirectional
+    navigation. Cursors should be explicit message IDs (not timestamps) to
+    avoid the epoch-ts trap where numeric IDs are mistaken for timestamps.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_thread_messages(
+            thread=thread, agent=agent, before=before, after=after, limit=limit
+        )
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    
+    # Load admin state for filtering
+    deleted_channels = set()
+    aliases: dict[str, str] = {}
+    superseded: set[int] = set()
+    alias_sources: list[str] = []
+    
+    if data_dir is not None:
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+        deleted_channels = _admin.deleted_channels()
+        aliases = _admin.channel_aliases()
+        superseded = _admin.superseded_messages()
+    
+    # Resolve thread through aliases
+    resolved_thread = thread
+    if thread in aliases:
+        resolved_thread = aliases[thread]
+    alias_sources = [k for k, v in aliases.items() if v == resolved_thread]
+    
+    # Build conditions for query
+    conditions = ["event_type = ?", "app_id = ?"]
+    params = [EVENT_A2A, resolved_thread]
+    
+    # Apply admin filters
+    conditions.append("id NOT IN (SELECT id FROM superseded_messages)")
+    params.append(list(superseded))
+    
+    # If this thread is deleted, skip rows unless we're merging alias history
+    if resolved_thread in deleted_channels and resolved_thread not in alias_sources:
+        conditions.append("1=0")
+    
+    # Query all relevant rows to enable cursor-based pagination locally
+    base_query = f"""
+    SELECT id, timestamp, app_id, data_json
+    FROM archive_index
+    WHERE {' AND '.join(conditions)}
+    ORDER BY timestamp DESC, id DESC
+    """
+    
+    rows = archive._conn.execute(base_query).fetchall()
+    
+    # Convert to list of message dicts
+    all_messages = []
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        
+        msg = {
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": data.get("from"),
+            "body": data.get("body"),
+            "thread": resolved_thread,
+            "reply_to": data.get("reply_to"),
+            "refs": data.get("refs"),
+            "blocks": data.get("blocks"),
+        }
+        all_messages.append(msg)
+    
+    # Apply cursor-based pagination
+    result = []
+    if before is not None:
+        # Get messages older than the before cursor
+        for msg in all_messages:
+            if msg["id"] <= before:
+                result.append(msg)
+    elif after is not None:
+        # Get messages newer than the after cursor
+        for msg in all_messages:
+            if msg["id"] >= after:
+                result.append(msg)
+    else:
+        # Default: get the newest N messages (most recent first)
+        result = all_messages[:limit]
+    
+    # Sort result based on cursor direction
+    if before is not None:
+        # Already oldest-first from our loop
+        pass
+    elif after is not None:
+        # Want newest first (default A2A feed order)
+        result.sort(key=lambda m: m["ts"], reverse=True)
+    
+    # Apply limit if not already respected
+    if limit is not None and limit > 0:
+        if before is not None or after is not None:
+            result = result[:limit]
+    
+    return result
+
+
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
-           "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
-           "task_create", "task_list", "task_ready", "task_prime",
-           "task_update", "task_add_edge", "task_remove_edge", "task_projects",
-           "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
-           "admin_a2a_delete_channel", "admin_a2a_rename_channel",
-           "admin_a2a_supersede_message",
-           "collections_create", "collections_list", "collections_get",
-           "collections_index_start", "collections_index_run",
-           "collections_index_background", "collections_link",
-           "collections_unlink", "collections_grant", "collections_revoke",
-           "collections_archive"]
+            "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
+            "a2a_threads", "a2a_thread_messages",
+            "task_create", "task_list", "task_ready", "task_prime",
+            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
+            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
+            "admin_a2a_delete_channel", "admin_a2a_rename_channel",
+            "admin_a2a_supersede_message",
+            "collections_create", "collections_list", "collections_get",
+            "collections_index_start", "collections_index_run",
+            "collections_index_background", "collections_link",
+            "collections_unlink", "collections_grant", "collections_revoke",
+            "collections_archive"]
