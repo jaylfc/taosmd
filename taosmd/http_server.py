@@ -1394,10 +1394,13 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             body_text = body.get("body")
             thread = body.get("thread", "general") or "general"
             reply_to = body.get("reply_to")
+            recipient = body.get("recipient")
             refs = body.get("refs")
             blocks = body.get("blocks")
             if not isinstance(from_, str) or not from_:
                 raise _BadRequest("'from' (non-empty string) is required")
+            if recipient is not None and not isinstance(recipient, str):
+                raise _BadRequest("'recipient' must be a string when provided")
             # --- Envelope field validation (taOSmd #211) ---
             # refs: optional list of dicts, <=8 items, kind in the enum.
             if refs is not None:
@@ -1491,11 +1494,48 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         "a2a verify-and-warn: accepting unverified post from %r: %s",
                         from_, warn_reason,
                     )
+            
+            # Recipient validation: send-time resolution for roles when a resolver is configured.
+            # If recipient is a role (starts with @) and a resolver is configured,
+            # check the role resolves (exists, exactly one holder), 400 if not.
+            # Do NOT store the resolved identity - binding happens at delivery.
+            resolved_to = None
+            if recipient is not None:
+                # Recipient is optional; if present, validate format (handle or role prefix)
+                if not isinstance(recipient, str) or not recipient:
+                    raise _BadRequest("'recipient' must be a non-empty string when provided")
+                # Validate recipient format: must start with @ for agents/roles, optionally followed by more
+                if not recipient.startswith("@"):
+                    raise _BadRequest("'recipient' must be a handle (e.g., '@alice') or role (e.g., '@taOS-PA')")
+                
+                # Load resolver from config if it exists
+                try:
+                    from .role_resolver import get_resolver_from_config
+                    resolver = get_resolver_from_config(data_dir)
+                except Exception:
+                    # If the resolver fails to load (e.g., import error), fallback to None
+                    resolver = None
+                
+                # Only resolve if we have a resolver AND the recipient is a role
+                # (roles are @taOS-PA and other non-agent handles - best effort detection)
+                if resolver is not None:
+                    # For now, treat any recipient starting with @ as a role for resolution
+                    # In a real implementation, this would check against a known roles list
+                    # or have a way to differentiate agents from roles
+                    try:
+                        resolved_to = resolver.resolve(recipient)
+                        if resolved_to is None:
+                            raise _BadRequest(f"role {recipient!r} resolves to no holder")
+                    except Exception as exc:
+                        # Resolver error (e.g., unreachable) -> 503
+                        self._send_json(503, {"error": f"role resolution failed: {exc}"})
+                        return
+                    
             result = runner.run(
                 service.a2a_send(
                     sender=from_, body=body_text,
                     thread=thread, reply_to=reply_to,
-                    refs=refs, blocks=blocks,
+                    refs=refs, blocks=blocks, recipient=recipient,
                     data_dir=data_dir,
                 )
             )

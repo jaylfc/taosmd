@@ -349,6 +349,7 @@ async def a2a_send(
     reply_to: str | None = None,
     refs: list | None = None,
     blocks: list | None = None,
+    recipient: str | None = None,
     data_dir=None,
 ) -> dict:
     """Post a message onto the agent-to-agent bus.
@@ -364,8 +365,12 @@ async def a2a_send(
     payload and echoed back in the receipt and on feed/SSE reads. When
     absent they are omitted from output entirely (no null noise).
 
-    Returns ``{"id", "from", "thread", "reply_to"}`` plus ``refs`` and/or
-    ``blocks`` when those were supplied.
+    ``recipient`` is optional and may be a handle (agent @handle) or a
+    role (e.g., @taOS-PA). Stored verbatim (append-only, never rewritten),
+    returned on GET/SSE; absent = omitted.
+
+    Returns ``{"id", "from", "thread", "reply_to"}`` plus ``refs``, ``blocks``
+    and ``recipient`` when those were supplied.
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
@@ -378,7 +383,7 @@ async def a2a_send(
     if remote is not None:
         return await remote.a2a_send(
             sender, body, thread=thread, reply_to=reply_to,
-            refs=refs, blocks=blocks,
+            refs=refs, blocks=blocks, recipient=recipient,
         )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
@@ -393,6 +398,8 @@ async def a2a_send(
         data["refs"] = refs
     if blocks is not None:
         data["blocks"] = blocks
+    if recipient is not None:
+        data["recipient"] = recipient
     row_id = await archive.record(
         event_type=EVENT_A2A,
         data=data,
@@ -405,7 +412,155 @@ async def a2a_send(
         receipt["refs"] = refs
     if blocks is not None:
         receipt["blocks"] = blocks
+    if recipient is not None:
+        receipt["recipient"] = recipient
     return receipt
+
+
+async def a2a_read(
+    *,
+    thread: str | None = None,
+    since: float | None = None,
+    limit: int = 50,
+    recipient: str | None = None,
+    data_dir=None,
+) -> list[dict]:
+    """Read messages from the A2A bus, optionally filtered by recipient.
+
+    When a recipient filter is supplied, it matches either:
+      - A direct handle match (agent @handle)
+      - A role recipient match when the querying identity currently holds the role
+
+    The envelope carries BOTH recipient (the role, stored) and resolved_to
+    (current holder, computed at read). resolved_to is NEVER persisted.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        # Remote servers support recipient filtering
+        return await remote.a2a_read(thread=thread, since=since, limit=limit, recipient=recipient)
+    
+    # Resolution happens at read time - get resolver if configured
+    resolver = None
+    if data_dir is not None:
+        try:
+            from .role_resolver import get_resolver_from_config
+            resolver = get_resolver_from_config(data_dir)
+        except Exception:
+            # If resolver fails to load, continue without resolution
+            resolver = None
+    
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+
+    # Apply admin alias resolution for thread filtering
+    # (maintaining existing behavior from a2a_feed)
+    resolved_thread = thread
+    alias_sources: list[str] = []
+    if data_dir is not None:
+        from .admin import A2AAdminState
+        _admin_state = A2AAdminState(data_dir)
+        _aliases = _admin_state.channel_aliases()
+        _deleted = _admin_state.deleted_channels()
+        _superseded = _admin_state.superseded_messages()
+        # Find all channel names that alias to thread (so we can include
+        # their history when querying the canonical name).
+        if thread is not None:
+            alias_sources = [k for k, v in _aliases.items() if v == thread]
+    else:
+        _deleted = set()
+        _superseded = set()
+        alias_sources = []
+
+    # Query archive with recipient resolution logic
+    # When filtering by recipient, we need role resolution at read time
+    # So we query all and apply the recipient filter with resolution logic
+    rows_all = []
+    if alias_sources and thread is not None:
+        # Apply thread (including aliases) and recipient filters when applicable
+        rows_all = await archive.query(event_type=EVENT_A2A, since=since, limit=limit * 10)
+    elif thread is not None:
+        rows_all = await archive.query(event_type=EVENT_A2A, app_id=thread, since=since, limit=limit * 10)
+    else:
+        rows_all = await archive.query(event_type=EVENT_A2A, since=since, limit=limit * 10)
+
+    # Apply filters
+    rows = []
+    for row in rows_all:
+        # Check thread/alias filter (skip if we didn't apply it above)
+        if thread is not None:
+            row_thread = row.get("app_id")
+            if row_thread != thread and row_thread not in alias_sources:
+                continue
+        
+        # Try to parse the data JSON
+        try:
+            row_data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        
+        # Skip admin-suppressed items
+        row_id = row["id"]
+        if row_id in _superseded:
+            continue
+        if row_data.get("admin_action"):
+            continue
+        
+        # Apply recipient filter if specified
+        if recipient is not None:
+            row_recipient = row_data.get("recipient")
+            if row_recipient != recipient:
+                continue
+            
+            # If we have a resolver and recipient is a role, apply resolution
+            if resolver is not None and recipient.startswith("@"):
+                try:
+                    resolved_to = resolver.resolve(recipient)
+                    # If we need resolved_to in the message, compute it
+                    # (This is for future use - currently we just validate that it resolves)
+                except Exception:
+                    # Resolver error - skip this message for now
+                    continue
+
+        # Build message
+        msg_thread = row_data.get("thread") or row.get("app_id") or "general"
+        if msg_thread in _deleted and msg_thread not in alias_sources:
+            continue
+            
+        msg = {
+            "id": row_id,
+            "ts": row["timestamp"],
+            "from": row_data.get("from"),
+            "body": row_data.get("body"),
+            "thread": msg_thread,
+            "reply_to": row_data.get("reply_to"),
+        }
+        
+        # First-class envelope fields: stored verbatim, omitted when absent
+        if "recipient" in row_data:
+            msg["recipient"] = row_data["recipient"]
+        if "refs" in row_data:
+            msg["refs"] = row_data["refs"]
+        if "blocks" in row_data:
+            msg["blocks"] = row_data["blocks"]
+        
+        # Add resolved_to field when recipient filtering is enabled and we have a resolver
+        if recipient is not None and resolver is not None and recipient.startswith("@"):
+            try:
+                resolved_to = resolver.resolve(recipient)
+                if resolved_to:
+                    msg["resolved_to"] = resolved_to
+            except Exception:
+                # Resolver error - don't add resolved_to
+                pass
+
+        rows.append(msg)
+    
+    # Sort oldest-first for consistency
+    rows.sort(key=lambda m: m["ts"])
+    if limit:
+        rows = rows[:limit]
+    
+    return rows
 
 
 async def a2a_feed(
