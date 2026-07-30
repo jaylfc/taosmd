@@ -6,6 +6,7 @@ This module provides the service-layer logic and sidecar state for:
   POST /shelves/{id}/unarchive) per the taOS#774 contract.
 - A2A channel admin (delete-channel, rename-channel, supersede-message)
   that hide or redirect content without mutating the zero-loss archive.
+- A2A channel ACL management (read/post allowlists) per tsk-dp6fyv.
 
 Shelf lifecycle
 ---------------
@@ -23,11 +24,18 @@ persisted in a small JSON sidecar under the data dir at
 ``data/a2a-admin-state.json``. Writes use atomic tmp+os.replace exactly like
 agents.py and config.py.
 
+Channel ACL sidecar
+------------------
+The per-channel read/post allowlists are persisted in the same JSON sidecar
+under the key "channel_acls": {"channel_name": {"read": [...], "post": [...]}}.
+The special value "*" indicates all identities (default for new channels).
+Configuration is applied before normal channel visibility checks.
+
 At query time (in service.py wrappers) callers load this sidecar and filter:
 - a2a_channels() skips channels in deleted_channels
 - a2a_feed() skips channels in deleted_channels, resolves aliases, skips
-  message ids in superseded_messages
-- a2a_send() redirects sends to renamed channels via the alias map
+  message ids in superseded_messages, and enforces ACLs
+- a2a_send() redirects sends to renamed channels via the alias map and enforces ACLs
 """
 
 from __future__ import annotations
@@ -62,7 +70,11 @@ class A2AAdminState:
         {
             "deleted_channels": ["chan1", "chan2"],
             "channel_aliases": {"old_name": "new_name"},
-            "superseded_messages": [42, 99]
+            "superseded_messages": [42, 99],
+            "channel_acls": {
+                "channel_name": {"read": ["*" | identity, ...], "post": ["*" | identity, ...]},
+                "*": {"read": ["*"], "post": ["*"]}
+            }
         }
 
     All writes are atomic (tmp + os.replace). The sidecar is read fresh on
@@ -74,7 +86,12 @@ class A2AAdminState:
 
     def _read(self) -> dict[str, Any]:
         if not self._path.exists():
-            return {"deleted_channels": [], "channel_aliases": {}, "superseded_messages": []}
+            return {
+                "deleted_channels": [],
+                "channel_aliases": {},
+                "superseded_messages": [],
+                "channel_acls": {"*": {"read": ["*"], "post": ["*"]}},
+            }
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
@@ -83,6 +100,7 @@ class A2AAdminState:
             "deleted_channels": list(raw.get("deleted_channels") or []),
             "channel_aliases": dict(raw.get("channel_aliases") or {}),
             "superseded_messages": list(raw.get("superseded_messages") or []),
+            "channel_acls": raw.get("channel_acls", {"*": {"read": ["*"], "post": ["*"]}}),
         }
 
     def _write(self, state: dict[str, Any]) -> None:
@@ -102,6 +120,17 @@ class A2AAdminState:
     def superseded_messages(self) -> set[int]:
         return set(int(x) for x in self._read()["superseded_messages"])
 
+    def channel_acls(self) -> dict[str, dict[str, list[str]]]:
+        return self._read()["channel_acls"]
+
+    def get_channel_acl(self, channel: str) -> dict[str, list[str]]:
+        """Return read/post allowlists for a channel.
+
+        If no specific ACL exists, returns the default "*" entry.
+        """
+        acls = self.channel_acls()
+        return acls.get(channel) or acls.get("*") or {"read": ["*"], "post": ["*"]}
+
     def resolve_channel(self, channel: str) -> str:
         """Return the canonical channel name after following any alias chain."""
         aliases = self.channel_aliases()
@@ -110,6 +139,57 @@ class A2AAdminState:
             visited.add(channel)
             channel = aliases[channel]
         return channel
+
+    # ----- ACL operations -------------------------------------------------
+
+    def set_channel_acl(self, channel: str,
+                        read_ids: list[str] | None = None,
+                        post_ids: list[str] | None = None) -> None:
+        """Set or replace the read/post allowlists for a channel.
+
+        If channel is "*", it sets the default."""
+        state = self._read()
+        acls = state.setdefault("channel_acls", {"*": {"read": ["*"], "post": ["*"]}})
+        acl = acls.get(channel, {})
+        if read_ids is not None:
+            acl["read"] = read_ids
+        if post_ids is not None:
+            acl["post"] = post_ids
+        acls[channel] = acl
+        self._write(state)
+
+    def delete_channel_acl(self, channel: str) -> None:
+        """Remove any per-channel ACL (revert to default)."""
+        state = self._read()
+        acls = state.setdefault("channel_acls", {"*": {"read": ["*"], "post": ["*"]}})
+        acls.pop(channel, None)
+        self._write(state)
+
+    def get_all_channel_acls(self) -> dict[str, dict[str, list[str]]]:
+        """Return all configured channel ACLs (including default)."""
+        return self._read()["channel_acls"]
+
+    # ----- admin helpers ----------------------------------------------------
+
+    def get_admin_acl_response(self, channel: str = "*") -> dict:
+        """Return ACL data in admin-facing format."""
+        acls = self.get_all_channel_acls()
+        if channel == "*":
+            data = {}
+            for ch, acl in acls.items():
+                data[ch] = {"read": sorted(set(acl.get("read", []))), "post": sorted(set(acl.get("post", [])))}
+            return {"channel_acls": data}
+        else:
+            acl = acls.get(channel) or acls.get("*") or {"read": [], "post": []}
+            return {channel: {"read": sorted(set(acl.get("read", []))), "post": sorted(set(acl.get("post", [])))}
+
+    def apply_admin_acl_updates(self, updates: dict[str, dict[str, list[str]]]) -> None:
+        """Apply admin-supplied ACL updates."""
+        for channel, acl in updates.items():
+            if channel == "*":
+                self.set_channel_acl("*")
+            else:
+                self.set_channel_acl(channel, acl.get("read"), acl.get("post"))
 
     # ----- writes ----------------------------------------------------------
 

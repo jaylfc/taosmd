@@ -1047,6 +1047,13 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_admin_a2a_rename_channel()
                 elif method == "POST" and path == "/a2a/admin/supersede-message":
                     self._handle_admin_a2a_supersede_message()
+                # ----- A2A channel ACL admin ------------------------
+                elif method == "GET" and path == "/a2a/admin/acls":
+                    self._handle_admin_a2a_get_acls()
+                elif method == "POST" and path == "/a2a/admin/set-acl":
+                    self._handle_admin_a2a_set_acl()
+                elif method == "POST" and path == "/a2a/admin/clear-acl":
+                    self._handle_admin_a2a_clear_acl()
                 elif method == "GET" and _serve_dashboard and self._try_serve_static(parts.path):
                     return  # static asset served
                 elif method == "GET" and _serve_dashboard:

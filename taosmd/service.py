@@ -388,6 +388,16 @@ async def a2a_send(
         from .admin import A2AAdminState  # noqa: PLC0415
         _admin = A2AAdminState(data_dir)
         thread = _admin.resolve_channel(thread)
+    # Enforce ACL for post
+    if data_dir is not None and thread != "*":
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+        resolved_thread = _admin.resolve_channel(thread)
+        acl = _admin.get_channel_acl(resolved_thread)
+        allowed = acl.get("post", [])
+        if allowed != ["*"]:
+            if sender not in allowed:
+                raise ValueError(f"sender {sender!r} is not allowed to post to channel {resolved_thread!r}")
     data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to}
     if refs is not None:
         data["refs"] = refs
