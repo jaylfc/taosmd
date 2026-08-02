@@ -105,6 +105,7 @@ Endpoints
                            ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
                            ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
 ``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line)
+``GET  /a2a/mentions``    ``?since=&limit=&reader=``                  -> ``{"messages": [...]}`` (requires registry auth; ``reader`` is derived from the verified token ``sub``, or supplied as a query parameter when no verifier is configured)
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
@@ -953,6 +954,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_a2a_members(query)
                 elif method == "GET" and path == "/a2a/messages":
                     self._handle_a2a_messages(query)
+                elif method == "GET" and path == "/a2a/mentions":
+                    self._handle_a2a_mentions(query)
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
@@ -1542,6 +1545,51 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return
             self._send_json(200, {"messages": messages})
 
+        def _handle_a2a_mentions(self, qs: dict) -> None:
+            since_raw = (qs.get("since") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            try:
+                since = float(since_raw) if since_raw is not None else None
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'since' must be a float timestamp") from exc
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            # Auth: when a registry verifier is configured, the caller's
+            # verified identity is the reader. Unauthenticated requests
+            # return 401. When no verifier is configured (standalone), a
+            # ?reader= query parameter is accepted for testing.
+            if _registry_verifier is not None:
+                auth = self.headers.get("Authorization", "")
+                token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+                if not token:
+                    self._send_json(401, {"error": "registry auth: Bearer token required"})
+                    return
+                try:
+                    from . import registry_auth as _ra  # noqa: PLC0415
+                    import jwt as _jwt  # noqa: PLC0415
+                    unverified = _jwt.decode(token, options={"verify_signature": False})
+                    raw_sub = unverified.get("sub", "") or ""
+                except Exception:  # noqa: BLE001
+                    raw_sub = ""
+                try:
+                    claims = _registry_verifier.authorize(token, raw_sub)
+                    reader = claims.get("sub", "")
+                except _ra.AuthError as exc:
+                    self._send_json(403, {"error": f"registry auth: {exc}"})
+                    return
+            else:
+                reader = (qs.get("reader") or [None])[0]
+                if not reader:
+                    raise _BadRequest(
+                        "'reader' query parameter is required when no registry verifier is configured"
+                    )
+            messages = runner.run(
+                service.a2a_mentions_feed(reader, since=since, limit=limit_i, data_dir=data_dir)
+            )
+            self._send_json(200, {"messages": messages})
+
         def _handle_a2a_stream(self, qs: dict) -> None:
             """Server-Sent Events stream for the A2A bus.
 
@@ -2104,7 +2152,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, "
           "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
-          "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "
+          "POST /a2a/send, GET /a2a/messages, GET /a2a/mentions, GET /a2a/stream, "
           "GET /a2a/channels, GET /a2a/members, "
           "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
           "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove, "
