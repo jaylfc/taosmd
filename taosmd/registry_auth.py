@@ -30,9 +30,18 @@ GRANTS_PATH = "/api/agents/registry/grants"
 # pins this so a token from any other issuer is rejected.
 REGISTRY_ISS = "taos-registry"
 
+# The literal ``iss`` the controller mints into human assertions. The bus pins
+# this so a registry token cannot spoof a human identity (and vice versa).
+CONTROLLER_ISS = "taos-controller"
+
 
 class AuthError(Exception):
     """Raised when a token fails verification or the auth policy."""
+
+
+def _is_human_sub(sub: str) -> bool:
+    """Return True if the sub is a human canonical id (user-* convention)."""
+    return sub.startswith("user-")
 
 
 def _require_jwt():
@@ -58,14 +67,19 @@ def decode_and_verify(token: str, public_key: str) -> dict:
 
 
 def authorize_sender(token: str, claimed_from: str, *, public_key: str,
-                     revoked: set[str], expected_iss: str | None = None) -> dict:
+                     revoked: set[str], expected_iss: str | None = None,
+                     human_iss: str | None = None) -> dict:
     """Authorise a bus sender. Returns the verified claims or raises AuthError.
 
     Policy (after the EdDSA signature check):
-      * the token must carry a ``sub`` (the agent canonical_id);
+      * the token must carry a ``sub`` (the agent or human canonical_id);
       * ``sub`` must equal the message ``from`` (no impersonation);
-      * ``sub`` must not be in the registry revocation set;
-      * when ``expected_iss`` is set, ``iss`` must match it (issuer pinning).
+      * for human principals (sub starting with ``user-``):
+        - the token must carry a valid ``iss`` matching ``human_iss`` when set;
+        - revocation is not checked (humans are not in the registry);
+      * for agent principals:
+        - ``sub`` must not be in the registry revocation set;
+        - when ``expected_iss`` is set, ``iss`` must match it (issuer pinning).
     """
     claims = decode_and_verify(token, public_key)
     sub = claims.get("sub")
@@ -73,10 +87,17 @@ def authorize_sender(token: str, claimed_from: str, *, public_key: str,
         raise AuthError("token has no 'sub' (canonical_id) claim")
     if sub != claimed_from:
         raise AuthError(f"token sub {sub!r} does not match from {claimed_from!r}")
-    if sub in revoked:
-        raise AuthError(f"canonical_id {sub!r} is revoked")
-    if expected_iss is not None and claims.get("iss") != expected_iss:
-        raise AuthError(f"token iss {claims.get('iss')!r} != expected {expected_iss!r}")
+    if _is_human_sub(sub):
+        if human_iss is not None and claims.get("iss") != human_iss:
+            raise AuthError(
+                f"human token iss {claims.get('iss')!r} != expected {human_iss!r}"
+            )
+        # Humans are not in the registry: skip revocation check.
+    else:
+        if sub in revoked:
+            raise AuthError(f"canonical_id {sub!r} is revoked")
+        if expected_iss is not None and claims.get("iss") != expected_iss:
+            raise AuthError(f"token iss {claims.get('iss')!r} != expected {expected_iss!r}")
     return claims
 
 
@@ -100,12 +121,14 @@ class RegistryVerifier:
 
     def __init__(self, *, pubkey_loader, revoked_loader,
                  refresh_interval: float = 300.0, clock=time.time,
-                 expected_iss: str | None = None):
+                 expected_iss: str | None = None,
+                 human_iss: str | None = None):
         self._pubkey_loader = pubkey_loader
         self._revoked_loader = revoked_loader
         self._refresh_interval = refresh_interval
         self._clock = clock
         self._expected_iss = expected_iss
+        self._human_iss = human_iss
         self._pubkey: str | None = None
         self._revoked: set[str] = set()
         self._revoked_fetched_at: float | None = None
@@ -142,6 +165,7 @@ class RegistryVerifier:
             token, claimed_from,
             public_key=self._get_pubkey(), revoked=self._get_revoked(),
             expected_iss=self._expected_iss,
+            human_iss=self._human_iss,
         )
 
 
@@ -337,7 +361,8 @@ def grants_verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
 def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
                       opener=_http_get, clock=time.time,
                       expected_iss: str | None = REGISTRY_ISS,
-                      revoked_token: str | None = None) -> "RegistryVerifier":
+                      revoked_token: str | None = None,
+                      human_iss: str | None = CONTROLLER_ISS) -> "RegistryVerifier":
     """Build a :class:`RegistryVerifier` that fetches from a registry base URL.
 
     The HTTP getter is injectable (``opener``) so callers/tests can supply
@@ -346,11 +371,16 @@ def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
     ``revoked_token`` is the taOS local/admin token sent as a Bearer header on
     the revoked-feed poll (the #710 contract moved it behind admin auth). The
     pubkey endpoint stays public and is fetched without a token.
+
+    ``human_iss`` is the expected ``iss`` for human principal assertions. When
+    set, any token whose ``sub`` starts with ``user-`` must carry this issuer.
     """
     base = base_url.rstrip("/")
     return RegistryVerifier(
         pubkey_loader=lambda: parse_pubkey_response(opener(base + PUBKEY_PATH)),
         revoked_loader=lambda: parse_revoked_response(
             opener(base + REVOKED_PATH, token=revoked_token)),
-        refresh_interval=refresh_interval, clock=clock, expected_iss=expected_iss,
+        refresh_interval=refresh_interval, clock=clock,
+        expected_iss=expected_iss,
+        human_iss=human_iss,
     )

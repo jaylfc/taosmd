@@ -105,6 +105,28 @@ def _make_verifiers(grants: list[dict]):
     return verifier, gv
 
 
+def _make_human_verifier():
+    """Build (registry_verifier, grants_verifier) pair configured for humans."""
+    def fake_opener(url, timeout=5.0, token=None):
+        if url.endswith(registry_auth.PUBKEY_PATH):
+            return json.dumps({"pubkey": PUB_PEM})
+        if url.endswith(registry_auth.REVOKED_PATH):
+            return json.dumps([])
+        if url.endswith(registry_auth.GRANTS_PATH):
+            return json.dumps({"grants": []})
+        raise ValueError(f"unexpected url: {url}")
+
+    verifier = registry_auth.verifier_from_url(
+        "http://reg.test", opener=fake_opener,
+        expected_iss=registry_auth.REGISTRY_ISS,
+        human_iss=registry_auth.CONTROLLER_ISS,
+    )
+    gv = registry_auth.grants_verifier_from_url(
+        "http://reg.test", opener=fake_opener,
+    )
+    return verifier, gv
+
+
 @pytest.fixture
 def warn_server(tmp_path, monkeypatch):
     """Server with verifiers wired in but a2a_auth_enforce NOT set (default=False).
@@ -173,12 +195,11 @@ def test_warn_no_token_accepted(warn_server, caplog):
 
 
 def test_warn_invalid_token_accepted(warn_server, caplog):
-    """Invalid token: message accepted and warning logged in warn mode."""
+    """Invalid token: message rejected with 403 regardless of mode."""
     import logging
     with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
         status, body = _post_send(warn_server, "any-agent", "hello", token="not-a-jwt")
-    assert status == 200, body
-    assert any("verify-and-warn" in r.message for r in caplog.records)
+    assert status == 403, body
 
 
 def test_warn_valid_token_no_grant_accepted(warn_server, caplog):
@@ -330,3 +351,84 @@ def test_api_still_up_when_dashboard_hidden(tmp_path, monkeypatch):
     finally:
         httpd.shutdown()
         httpd.service_loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Human principal support (unified-chat slice 3)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def human_warn_server(tmp_path, monkeypatch):
+    """Server with human-capable verifier, a2a_auth_enforce NOT set (default).
+
+    Auth failures are rejected 403 in both modes (human policy).
+    """
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+
+    verifier, gv = _make_human_verifier()
+    httpd = http_server.make_server(
+        "127.0.0.1", 0, data_dir=str(data_dir),
+        verifier=verifier, grants_verifier=gv,
+    )
+    httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
+    host, port = httpd.server_address[:2]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        httpd.shutdown()
+        httpd.service_loop.close()
+
+
+def test_human_assertion_sub_mismatch_rejected_in_warn_mode(human_warn_server):
+    """Human assertion whose sub does not match from is rejected 403 even in
+    warn mode (fail-first: on master this would be 200)."""
+    token = pyjwt.encode(
+        {"sub": "user-123", "iss": registry_auth.CONTROLLER_ISS},
+        PRIV_PEM, algorithm="EdDSA",
+    )
+    status, body = _post_send(human_warn_server, "user-456", "hello", token=token)
+    assert status == 403
+
+
+def test_human_assertion_sub_match_accredited(human_warn_server):
+    """Valid human assertion with matching sub is accepted."""
+    token = pyjwt.encode(
+        {"sub": "user-123", "iss": registry_auth.CONTROLLER_ISS},
+        PRIV_PEM, algorithm="EdDSA",
+    )
+    status, body = _post_send(human_warn_server, "user-123", "hello", token=token)
+    assert status == 200, body
+
+
+def test_agent_jwt_claiming_human_id_rejected_in_warn_mode(human_warn_server):
+    """An agent JWT (iss=taos-registry) with a user-* sub is rejected 403."""
+    token = pyjwt.encode(
+        {"sub": "user-123", "iss": registry_auth.REGISTRY_ISS},
+        PRIV_PEM, algorithm="EdDSA",
+    )
+    status, body = _post_send(human_warn_server, "user-123", "hello", token=token)
+    assert status == 403
+
+
+def test_human_assertion_claiming_agent_id_rejected_in_warn_mode(human_warn_server):
+    """A human assertion (iss=taos-controller) with an agent sub is rejected 403."""
+    token = pyjwt.encode(
+        {"sub": "agent-1", "iss": registry_auth.CONTROLLER_ISS},
+        PRIV_PEM, algorithm="EdDSA",
+    )
+    status, body = _post_send(human_warn_server, "agent-1", "hello", token=token)
+    assert status == 403
+
+
+def test_human_missing_token_accepted_in_warn_mode(human_warn_server, caplog):
+    """Missing token for a human principal is accepted with warning in warn mode."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
+        status, body = _post_send(human_warn_server, "user-123", "hello")
+    assert status == 200, body
+    assert any("verify-and-warn" in r.message and "missing Bearer token" in r.message
+               for r in caplog.records)

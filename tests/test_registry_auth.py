@@ -402,3 +402,103 @@ def test_http_get_omits_authorization_header_without_token(monkeypatch):
     monkeypatch.setattr(registry_auth.urllib.request, "urlopen", fake_urlopen)
     registry_auth._http_get("http://reg/x")
     assert captured["auth"] is None
+
+
+# --- Human principal support (unified-chat slice 3) -------------------------
+
+
+def test_authorize_human_sender_accepts_matching_sub():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "user-123", "iss": "taos-controller"})
+
+    claims = registry_auth.authorize_sender(
+        token, "user-123", public_key=pub_pem, revoked=set(),
+        human_iss="taos-controller",
+    )
+
+    assert claims["sub"] == "user-123"
+
+
+def test_authorize_human_sender_rejects_sub_mismatch():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "user-123", "iss": "taos-controller"})
+
+    with pytest.raises(registry_auth.AuthError):
+        registry_auth.authorize_sender(
+            token, "user-456", public_key=pub_pem, revoked=set(),
+            human_iss="taos-controller",
+        )
+
+
+def test_authorize_human_sender_skips_revocation_check():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "user-123", "iss": "taos-controller"})
+
+    claims = registry_auth.authorize_sender(
+        token, "user-123", public_key=pub_pem, revoked={"user-123"},
+        human_iss="taos-controller",
+    )
+
+    assert claims["sub"] == "user-123"
+
+
+def test_authorize_human_sender_rejects_wrong_issuer():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "user-123", "iss": "wrong-issuer"})
+
+    with pytest.raises(registry_auth.AuthError):
+        registry_auth.authorize_sender(
+            token, "user-123", public_key=pub_pem, revoked=set(),
+            human_iss="taos-controller",
+        )
+
+
+def test_authorize_sender_rejects_agent_jwt_claiming_human_id():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "user-123", "iss": registry_auth.REGISTRY_ISS})
+
+    with pytest.raises(registry_auth.AuthError):
+        registry_auth.authorize_sender(
+            token, "user-123", public_key=pub_pem, revoked=set(),
+            human_iss="taos-controller",
+        )
+
+
+def test_authorize_sender_rejects_human_assertion_claiming_agent_id():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "agent-1", "iss": registry_auth.CONTROLLER_ISS})
+
+    with pytest.raises(registry_auth.AuthError):
+        registry_auth.authorize_sender(
+            token, "agent-1", public_key=pub_pem, revoked=set(),
+            expected_iss=registry_auth.REGISTRY_ISS,
+        )
+
+
+def test_decode_and_verify_is_single_entry_point_for_both_principal_types():
+    import unittest.mock
+
+    priv_pem, pub_pem = _keypair()
+    human_token = _sign(priv_pem, {"sub": "user-1", "iss": "taos-controller"})
+    agent_token = _sign(priv_pem, {"sub": "agent-1", "iss": "taos-registry"})
+
+    calls = []
+    orig = registry_auth.decode_and_verify
+
+    def wrapper(token, public_key):
+        calls.append(token)
+        return orig(token, public_key)
+
+    with unittest.mock.patch.object(
+        registry_auth, "decode_and_verify", wrapper
+    ):
+        registry_auth.authorize_sender(
+            human_token, "user-1", public_key=pub_pem, revoked=set(),
+            human_iss="taos-controller",
+        )
+        registry_auth.authorize_sender(
+            agent_token, "agent-1", public_key=pub_pem, revoked=set(),
+            expected_iss="taos-registry",
+        )
+
+    assert calls == [human_token, agent_token]

@@ -621,6 +621,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 _registry_url,
                 revoked_token=_registry_admin_token,
                 expected_iss=registry_auth.REGISTRY_ISS,
+                human_iss=registry_auth.CONTROLLER_ISS,
             )
             _grants_verifier = registry_auth.grants_verifier_from_url(
                 _registry_url,
@@ -1446,14 +1447,16 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             # 401/403. In verify-and-warn mode (default) failures are logged as
             # a WARNING but the message is accepted, allowing operators to observe
             # violations before enabling hard enforcement.
+            # Human principals (sub starting with user-) are always rejected on
+            # auth failure regardless of mode: missing credential is the only
+            # tolerated class during migration.
+            sender = from_
+            _is_human = False
             if _registry_verifier is not None:
                 from . import registry_auth  # noqa: PLC0415 - optional path
                 auth = self.headers.get("Authorization", "")
                 token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
 
-                # Compute warn_reason (None = auth passed) and the status/message
-                # to use in enforce mode. We collect these without returning early
-                # so the enforce vs. warn decision is made in one place below.
                 warn_reason: str | None = None
                 _reject_status: int = 403
                 _reject_msg: str = ""
@@ -1464,19 +1467,24 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     _reject_msg = "registry auth: Bearer token required"
                 else:
                     try:
-                        _registry_verifier.authorize(token, from_)
+                        claims = _registry_verifier.authorize(token, from_)
+                        sender = claims["sub"]
+                        _is_human = registry_auth._is_human_sub(sender)
                     except registry_auth.AuthError as exc:
-                        warn_reason = str(exc)
-                        _reject_status = 403
-                        _reject_msg = f"registry auth: {exc}"
+                        # Presented-but-failing credentials are always rejected
+                        # (both modes), regardless of principal type. Missing
+                        # credential is the only class tolerated during migration.
+                        self._send_json(403, {"error": f"registry auth: {exc}"})
+                        return
 
                 # Grant check: token proves identity; grant proves permission.
-                if warn_reason is None and _grants_verifier is not None:
+                # Humans are not in the registry, so they have no grants.
+                if warn_reason is None and _grants_verifier is not None and not _is_human:
                     try:
-                        if not _grants_verifier.has_grant(from_):
+                        if not _grants_verifier.has_grant(sender):
                             warn_reason = "no a2a_send grant"
                             _reject_status = 403
-                            _reject_msg = f"registry auth: no active grant for {from_!r}"
+                            _reject_msg = f"registry auth: no active grant for {sender!r}"
                     except registry_auth.AuthError as exc:
                         warn_reason = str(exc)
                         _reject_status = 403
@@ -1489,11 +1497,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         return
                     logger.warning(
                         "a2a verify-and-warn: accepting unverified post from %r: %s",
-                        from_, warn_reason,
+                        sender, warn_reason,
                     )
             result = runner.run(
                 service.a2a_send(
-                    sender=from_, body=body_text,
+                    sender=sender, body=body_text,
                     thread=thread, reply_to=reply_to,
                     refs=refs, blocks=blocks,
                     data_dir=data_dir,
