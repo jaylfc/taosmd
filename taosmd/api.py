@@ -144,12 +144,16 @@ async def _ensure_stores(data_dir=None) -> dict:
         from taosmd.claims.store import ClaimStore  # noqa: PLC0415
         claims = ClaimStore(db_path=str(path / "claims.db"))
         await claims.init()
+        from taosmd.receipts import ReceiptStore  # noqa: PLC0415
+        receipts = ReceiptStore(db_path=str(path / "a2a-receipts.db"))
+        await receipts.init()
 
         stores = {
             "archive": archive,
             "vector": vmem,
             "kg": kg,
             "claims": claims,
+            "receipts": receipts,
             "data_dir": str(path),
         }
         _stores_cache[resolved] = stores
