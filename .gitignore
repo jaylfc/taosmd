@@ -4,6 +4,7 @@ __pycache__/
 dist/
 build/
 data/
+uv.lock
 # dataset files stay ignored for size, but keep the tracked pointer/checksum
 !benchmarks/data/
 benchmarks/data/*
