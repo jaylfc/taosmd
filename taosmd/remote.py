@@ -212,12 +212,13 @@ class RemoteClient:
         reply_to: str | None = None,
         refs: list | None = None,
         blocks: list | None = None,
+        recipient: str | None = None,
         **_opts,
     ) -> dict:
         """POST /a2a/send: post a message to the remote A2A bus.
 
         Returns the send receipt ``{"id", "from", "thread", "reply_to"}``
-        plus ``refs``/``blocks`` when supplied (taOSmd #211).
+        plus ``refs``/``blocks``/``recipient`` when supplied (taOSmd #211/#2155).
         """
         payload: dict = {"from": sender, "body": body, "thread": thread}
         if reply_to is not None:
@@ -226,6 +227,8 @@ class RemoteClient:
             payload["refs"] = refs
         if blocks is not None:
             payload["blocks"] = blocks
+        if recipient is not None:
+            payload["recipient"] = recipient
         return await self._run("POST", "/a2a/send", payload)
 
     async def a2a_feed(
@@ -234,17 +237,23 @@ class RemoteClient:
         thread: str | None = None,
         since: float | None = None,
         limit: int = 50,
+        recipient: str | None = None,
         **_opts,
     ) -> list[dict]:
         """GET /a2a/messages: return messages from the remote A2A bus, oldest-first.
 
-        Returns the ``messages`` list from the server response.
+        ``recipient`` is forwarded as ``?recipient=`` so the remote server can
+        apply its verbatim recipient filter (taOSmd #2155). The remote does
+        not annotate ``resolved_to``; callers reading a role recipient do their
+        own delivery-time resolution.
         """
         params: dict = {"limit": limit}
         if thread is not None:
             params["thread"] = thread
         if since is not None:
             params["since"] = since
+        if recipient is not None:
+            params["recipient"] = recipient
         resp = await self._run("GET", "/a2a/messages", params=params)
         return resp.get("messages", [])
 
