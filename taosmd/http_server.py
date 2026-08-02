@@ -101,11 +101,17 @@ Endpoints
 ``GET  /shelves?project=``                                 -> ``{"shelves": [...]}``
 ``GET  /pending?agent=``                                   -> ``{"pending": [...]}``
 ``POST /pending/resolve``  ``{"id", "decision", "note"?}`` -> resolve result
-``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?, "refs"?, "blocks"?}`` -> send receipt
+``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?, "refs"?, "blocks"?, "recipient"?}`` -> send receipt
+                           ``recipient``: optional addressee handle (agent ``@handle`` or role
+                             ``@taOS-<name>``, e.g. ``@taOS-PA``); stored verbatim. A role recipient
+                             is validated at send time against the configured resolver
+                             (``a2a_role_resolver_url``): 400 if not resolvable to a single holder,
+                             503 if unreachable, 400 if no resolver configured. The resolved
+                             identity is never stored -- binding is at delivery (taOS#2155).
                            ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
                            ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
-``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line)
-``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
+``GET  /a2a/messages``     ``?thread=&since=&limit=&recipient=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``recipient=`` filters on the verbatim stored handle and, for a role ``@taOS-*``, annotates ``resolved_to`` with the current holder computed at read time)
+``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream; messages carry the verbatim ``recipient`` field when present, no ``resolved_to`` -- resolution is per-reader)
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
 ``POST /tasks``            ``{"title", "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [...], "created_by"}`` -> task object
@@ -174,6 +180,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__, capabilities, config as _config, service
+from .role_resolver import RoleResolver, RoleResolveError, is_role_handle
 
 # ---------------------------------------------------------------------------
 # Static webui helpers
@@ -578,7 +585,7 @@ class _ServiceLoop:
 
 
 def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
-                  grants_verifier=None):
+                   grants_verifier=None, role_resolver=None):
     """Build a handler class bound to a fixed ``data_dir``.
 
     ThreadingHTTPServer instantiates the handler per request, so the data dir
@@ -590,6 +597,13 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
     otherwise. ``GET /health``, ``GET /version``, ``GET /``, ``GET /ui``, and
     static assets are always open so monitoring probes, capability/drift probes,
     and the inspection UI keep working.
+
+    ``role_resolver`` is an injected seam (taOSmd #2155): an object exposing
+    ``resolve(role) -> canonical_id | None`` used to validate role recipients
+    at send time and annotate the current holder at delivery time. When None
+    it is built from the configured ``a2a_role_resolver_url``; when neither is
+    set, role recipients are rejected (400/503) as specified, and plain agent
+    handles pass through untouched.
     """
     # Read the server-side expected token once at handler-class creation time.
     # This is the token the *server* checks (not the client's outbound token).
@@ -623,9 +637,19 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 expected_iss=registry_auth.REGISTRY_ISS,
             )
             _grants_verifier = registry_auth.grants_verifier_from_url(
-                _registry_url,
-                grants_token=_registry_admin_token,
-            )
+                 _registry_url,
+                 grants_token=_registry_admin_token,
+             )
+
+    # Role resolver (taOSmd #2155). Injected for tests; otherwise built from the
+    # configured resolver URL. When None, role recipients are rejected (the bus
+    # owns the message-side concepts, not the binding; a role cannot be
+    # validated or delivered without a resolver).
+    _role_resolver = role_resolver
+    if _role_resolver is None:
+        _role_resolver_url = _config.get_a2a_role_resolver_url(data_dir)
+        if _role_resolver_url:
+            _role_resolver = RoleResolver(_role_resolver_url)
 
     # Paths that are always public regardless of the token setting.
     _PUBLIC_PATHS = frozenset({"/", "/ui", "/health", "/version"})
@@ -1396,6 +1420,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             reply_to = body.get("reply_to")
             refs = body.get("refs")
             blocks = body.get("blocks")
+            recipient = body.get("recipient")
             if not isinstance(from_, str) or not from_:
                 raise _BadRequest("'from' (non-empty string) is required")
             # --- Envelope field validation (taOSmd #211) ---
@@ -1440,6 +1465,33 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     raise _BadRequest(
                         "'body' (non-empty string) is required when 'blocks' is present"
                     )
+            # --- Recipient validation (taOSmd #2155) ---
+            # recipient: optional addressee handle (agent @handle or role
+            # @taOS-<name>). Stored VERBATIM. A role recipient is validated at
+            # send time against the configured resolver -- the binding happens at
+            # delivery, so the resolved identity is never persisted and holder
+            # rotation needs no sender reconfiguration.
+            if recipient is not None:
+                if not isinstance(recipient, str) or not recipient.strip():
+                    raise _BadRequest("'recipient' must be a non-empty string when provided")
+                recipient = recipient.strip()
+                if is_role_handle(recipient):
+                    if _role_resolver is None:
+                        raise _BadRequest(
+                            f"role recipient {recipient!r} requires a configured "
+                            "role resolver (a2a_role_resolver_url)"
+                        )
+                    try:
+                        holder = _role_resolver.resolve(recipient)
+                    except RoleResolveError as exc:
+                        # Configured but unreachable: 503, never a silent drop.
+                        self._send_json(503, {"error": f"role resolver unavailable: {exc}"})
+                        return
+                    # A None result means no single holder -> reject, nothing stored.
+                    if holder is None:
+                        raise _BadRequest(
+                            f"role recipient {recipient!r} does not resolve to a single holder"
+                        )
             # Registry auth (opt-in): when a verifier is configured, run the
             # identity + grant checks and collect any failure reason.
             # In enforce mode (a2a_auth_enforce=true) failures are rejected with
@@ -1495,7 +1547,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 service.a2a_send(
                     sender=from_, body=body_text,
                     thread=thread, reply_to=reply_to,
-                    refs=refs, blocks=blocks,
+                    refs=refs, blocks=blocks, recipient=recipient,
                     data_dir=data_dir,
                 )
             )
@@ -1507,6 +1559,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             limit_raw = (qs.get("limit") or [50])[0]
             fields_raw = (qs.get("fields") or [None])[0]
             fmt = (qs.get("format") or ["json"])[0]
+            recipient = (qs.get("recipient") or [None])[0]
             try:
                 since = float(since_raw) if since_raw is not None else None
             except (TypeError, ValueError) as exc:
@@ -1517,9 +1570,42 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'limit' must be an integer") from exc
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
+            # --- Delivery-time role resolution (taOSmd #2155) ---
+            # A role recipient (e.g. ?recipient=@taOS-PA) is matched against the
+            # verbatim stored handle by service.a2a_feed, then annotated with the
+            # CURRENT holder (resolved_to) computed here at read time. The stored
+            # envelope never carries resolved_to -- resolution is per-reader and
+            # per-read, so rotating the holder changes the answer without a
+            # re-send. Fail-loud: no resolver -> 400; unreachable -> 503; a
+            # reachable resolver that finds no holder is not an error (the role
+            # simply has no current holder), so resolved_to is omitted in that
+            # case. SSE does NOT annotate: role-addressed messages ride verbatim
+            # (recipient present, no resolved_to on the broadcast).
+            holder: str | None = None
+            annotate = False
+            if recipient is not None:
+                if not isinstance(recipient, str) or not recipient.strip():
+                    raise _BadRequest("'recipient' must be a non-empty string when provided")
+                recipient = recipient.strip()
+                if is_role_handle(recipient):
+                    annotate = True
+                    if _role_resolver is None:
+                        self._send_json(400, {"error": f"role recipient {recipient!r} requires a configured role resolver (a2a_role_resolver_url)"})
+                        return
+                    try:
+                        holder = _role_resolver.resolve(recipient)
+                    except RoleResolveError as exc:
+                        self._send_json(503, {"error": f"role resolver unavailable: {exc}"})
+                        return
             messages = runner.run(
-                service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
+                service.a2a_feed(
+                    thread=thread, since=since, limit=limit_i,
+                    recipient=recipient, data_dir=data_dir,
+                )
             )
+            if annotate and holder is not None:
+                for msg in messages:
+                    msg["resolved_to"] = holder
             # Compact mode: ?fields=id,sender,body projects each message down
             # to the named keys so token-frugal consumers (LLM agents) skip
             # framing they never read. Unknown names are ignored, never a 400,
@@ -2062,7 +2148,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
 
 def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None,
-                verifier=None, grants_verifier=None):
+                verifier=None, grants_verifier=None, role_resolver=None):
     """Create (but do not start) a :class:`ThreadingHTTPServer`.
 
     Useful for tests that need to bind an ephemeral port (``port=0``) and read
@@ -2072,6 +2158,9 @@ def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=Non
     A :class:`_ServiceLoop` is started and attached as ``server.service_loop``;
     closing it is handled by :func:`serve`. Tests that drive ``make_server``
     directly should call ``server.service_loop.close()`` during teardown.
+
+    ``role_resolver`` is an optional injectable seam (taOSmd #2155) for tests;
+    when omitted it is built from config by :func:`_make_handler`.
     """
     if verifier is not None and grants_verifier is None:
         # Identity without permission is half the locked auth contract
@@ -2084,7 +2173,7 @@ def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=Non
     runner = _ServiceLoop()
     httpd = ThreadingHTTPServer(
         (host, port),
-        _make_handler(data_dir, runner, verifier, grants_verifier),
+        _make_handler(data_dir, runner, verifier, grants_verifier, role_resolver),
     )
     httpd.service_loop = runner
     return httpd

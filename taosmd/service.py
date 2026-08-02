@@ -349,6 +349,7 @@ async def a2a_send(
     reply_to: str | None = None,
     refs: list | None = None,
     blocks: list | None = None,
+    recipient: str | None = None,
     data_dir=None,
 ) -> dict:
     """Post a message onto the agent-to-agent bus.
@@ -364,8 +365,17 @@ async def a2a_send(
     payload and echoed back in the receipt and on feed/SSE reads. When
     absent they are omitted from output entirely (no null noise).
 
+    ``recipient`` is an optional addressee handle (taOSmd #2155): an agent
+    ``@handle`` or a role ``@taOS-<name>``. It is stored VERBATIM -- the role
+    binding is resolved at delivery, never at send time, so holder rotation
+    does not require re-sending. When absent it is omitted from output.
+    Send-time role validation (400 on an unresolvable role, 503 on an
+    unreachable resolver) is performed by the HTTP server before this
+    function is called; the service layer itself only stores/forwards the
+    handle.
+
     Returns ``{"id", "from", "thread", "reply_to"}`` plus ``refs`` and/or
-    ``blocks`` when those were supplied.
+    ``blocks`` and/or ``recipient`` when those were supplied.
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
@@ -374,11 +384,15 @@ async def a2a_send(
         raise ValueError("sender must be a non-empty string")
     if not isinstance(body, str) or not body:
         raise ValueError("body must be a non-empty string")
+    if recipient is not None and (
+        not isinstance(recipient, str) or not recipient
+    ):
+        raise ValueError("recipient must be a non-empty string when provided")
     remote = _get_remote(data_dir)
     if remote is not None:
         return await remote.a2a_send(
             sender, body, thread=thread, reply_to=reply_to,
-            refs=refs, blocks=blocks,
+            refs=refs, blocks=blocks, recipient=recipient,
         )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
@@ -393,6 +407,8 @@ async def a2a_send(
         data["refs"] = refs
     if blocks is not None:
         data["blocks"] = blocks
+    if recipient is not None:
+        data["recipient"] = recipient
     row_id = await archive.record(
         event_type=EVENT_A2A,
         data=data,
@@ -405,6 +421,8 @@ async def a2a_send(
         receipt["refs"] = refs
     if blocks is not None:
         receipt["blocks"] = blocks
+    if recipient is not None:
+        receipt["recipient"] = recipient
     return receipt
 
 
@@ -413,6 +431,7 @@ async def a2a_feed(
     thread: str | None = None,
     since: float | None = None,
     limit: int = 50,
+    recipient: str | None = None,
     data_dir=None,
 ) -> list[dict]:
     """Return messages from the agent-to-agent bus, oldest-first.
@@ -423,16 +442,25 @@ async def a2a_feed(
     messages when ``since`` is None). Returns chronological order (oldest
     first) suitable for chat-style display.
 
+    ``recipient`` is an optional verbatim filter (taOSmd #2155): when given,
+    only messages whose stored ``recipient`` field equals it are returned.
+    The stored value is always the raw handle (agent ``@handle`` or role
+    ``@taOS-<name>``); the HTTP layer resolves a role recipient and annotates
+    the computed holder as ``resolved_to`` at read time. The service layer
+    itself never resolves -- it only filters on the verbatim stored handle.
+
     Each item has shape ``{"id", "ts", "from", "body", "thread",
-    "reply_to"}`` plus ``refs`` and/or ``blocks`` when those were
-    supplied on send (taOSmd #211).
+    "reply_to"}`` plus ``refs`` and/or ``blocks`` and/or ``recipient`` when
+    those were supplied on send (taOSmd #211 / #2155).
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
     """
     remote = _get_remote(data_dir)
     if remote is not None:
-        return await remote.a2a_feed(thread=thread, since=since, limit=limit)
+        return await remote.a2a_feed(
+            thread=thread, since=since, limit=limit, recipient=recipient,
+        )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
 
@@ -495,6 +523,10 @@ async def a2a_feed(
         # Skip admin-action rows (they have no "from" field)
         if data.get("admin_action"):
             continue
+        # Verbatim recipient filter: matches the stored handle (agent or role)
+        # exactly. Role resolution/annotation is the HTTP layer's job.
+        if recipient is not None and data.get("recipient") != recipient:
+            continue
         msg = {
             "id": row_id,
             "ts": row["timestamp"],
@@ -509,6 +541,9 @@ async def a2a_feed(
             msg["refs"] = data["refs"]
         if "blocks" in data:
             msg["blocks"] = data["blocks"]
+        # Addressee (taOSmd #2155): stored verbatim, omitted when absent.
+        if "recipient" in data:
+            msg["recipient"] = data["recipient"]
         result.append(msg)
     return result
 
