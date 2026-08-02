@@ -84,9 +84,10 @@ CAPABILITY_PROBES: tuple[CapabilityProbe, ...] = (
     CapabilityProbe(
         name="a2a.v1",
         module="taosmd.service",
-        symbols=("a2a_send", "a2a_feed", "a2a_channels", "a2a_members"),
+        symbols=("a2a_send", "a2a_import", "a2a_feed", "a2a_channels", "a2a_members"),
         route_markers=(
             '"/a2a/send"',
+            '"/a2a/import"',
             '"/a2a/messages"',
             '"/a2a/stream"',
             '"/a2a/channels"',
