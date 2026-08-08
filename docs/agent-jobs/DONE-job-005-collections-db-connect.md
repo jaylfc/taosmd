@@ -1,3 +1,7 @@
+> **DONE — DO NOT PICK THIS UP.** The fix landed on master in PR #215 (2026-07-28);
+> `taosmd/collections.py` already uses the shared `_db.connect` helper. Issue #202 was closed
+> 2026-08-08 with the evidence. Retained for the record, renamed so the pack cannot dispatch it.
+
 # JOB-005: Open collections.db through the shared _db.connect helper
 
 Read docs/agent-jobs/README.md first and follow its absolute rules.
