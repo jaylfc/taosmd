@@ -50,10 +50,6 @@ _SERVE_DASHBOARD_KEY = "serve_dashboard"
 _GENERATOR_PROFILE_KEY = "generator_profile"
 # Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
 _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
-# Key under which the optional A2A role-resolver base URL is stored. When set,
-# the bus can validate and deliver to taOS role handles (@taOS-*) by consulting
-# the taOS resolution endpoint; when unset, role recipients are rejected (400).
-_ROLE_RESOLVER_URL_KEY = "a2a_role_resolver_url"
 # Section under which collections settings live. ``allowed_roots`` is the
 # safety line of the collections contract: source paths must resolve inside
 # one of these directories. Empty (the default) means collections are off.
@@ -607,53 +603,6 @@ def set_a2a_auth_enforce(value: bool, data_dir=None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# A2A role resolver URL (opt-in delivery-time role resolution, taOS#2155)
-# ---------------------------------------------------------------------------
-
-def get_a2a_role_resolver_url(data_dir=None) -> str | None:
-    """Return the configured A2A role-resolver base URL, or ``None`` if unset.
-
-    Resolution order (first non-empty wins):
-
-    1. ``TAOSMD_A2A_ROLE_RESOLVER_URL`` environment variable
-    2. ``a2a_role_resolver_url`` key in ``~/.taosmd/config.json``
-
-    When set, role recipients (``@taOS-*``) are validated and resolved at send
-    time and annotated at delivery time by consulting the taOS resolution
-    endpoint. When unset, role recipients are rejected with 400 (no resolver
-    configured -> fail loud, never guess).
-    """
-    env = os.environ.get("TAOSMD_A2A_ROLE_RESOLVER_URL")
-    if env and env.strip():
-        return env.strip()
-    url = _read(data_dir).get(_ROLE_RESOLVER_URL_KEY)
-    if isinstance(url, str) and url.strip():
-        return url.strip()
-    return None
-
-
-def set_a2a_role_resolver_url(url: str, clear: bool = False, data_dir=None) -> None:
-    """Persist the A2A role-resolver base URL (or clear it).
-
-    Args:
-        url: Base URL of the taOS resolution endpoint. Ignored when ``clear``
-            is True.
-        clear: when True, remove the setting (role sends revert to 400).
-
-    Raises:
-        ValueError: when ``clear`` is False and ``url`` is not a non-empty string.
-    """
-    data = _read(data_dir)
-    if clear:
-        data.pop(_ROLE_RESOLVER_URL_KEY, None)
-    else:
-        if not isinstance(url, str) or not url.strip():
-            raise ValueError("url must be a non-empty string (or pass clear=True)")
-        data[_ROLE_RESOLVER_URL_KEY] = url.strip()
-    _write(data, data_dir)
-
-
-# ---------------------------------------------------------------------------
 # Collections: allowed roots
 # ---------------------------------------------------------------------------
 
@@ -740,8 +689,6 @@ __all__ = [
     "set_serve_dashboard",
     "get_a2a_auth_enforce",
     "set_a2a_auth_enforce",
-    "get_a2a_role_resolver_url",
-    "set_a2a_role_resolver_url",
     "MANAGED_BY_STANDALONE",
     "MANAGED_BY_TAOS",
     "get_generator_profile",
