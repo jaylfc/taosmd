@@ -330,3 +330,120 @@ def test_api_still_up_when_dashboard_hidden(tmp_path, monkeypatch):
     finally:
         httpd.shutdown()
         httpd.service_loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Human principal tests (controller sessions)
+# ---------------------------------------------------------------------------
+
+_HUMAN_ID = "user-alice"
+
+
+def _make_human_verifier():
+    def fake_opener(url, token=None):
+        if url.endswith(registry_auth.PUBKEY_PATH):
+            return json.dumps({"pubkey": PUB_PEM})
+        return json.dumps([])
+    return registry_auth.verifier_from_url(
+        "http://reg.test", opener=fake_opener,
+        expected_iss=registry_auth.REGISTRY_ISS,
+        human_principal_ids={_HUMAN_ID},
+    )
+
+
+@pytest.fixture
+def human_warn_server(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+    verifier = _make_human_verifier()
+    # Grants verifier is present but humans should skip it.
+    gv = registry_auth.GrantsVerifier(grants_loader=lambda: [])
+    httpd = http_server.make_server(
+        "127.0.0.1", 0, data_dir=str(data_dir),
+        verifier=verifier, grants_verifier=gv,
+    )
+    httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
+    host, port = httpd.server_address[:2]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        httpd.shutdown()
+        httpd.service_loop.close()
+
+
+@pytest.fixture
+def human_enforced_server(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+    cfg.set_a2a_auth_enforce(True, str(data_dir))
+    verifier = _make_human_verifier()
+    gv = registry_auth.GrantsVerifier(grants_loader=lambda: [])
+    httpd = http_server.make_server(
+        "127.0.0.1", 0, data_dir=str(data_dir),
+        verifier=verifier, grants_verifier=gv,
+    )
+    httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
+    host, port = httpd.server_address[:2]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        httpd.shutdown()
+        httpd.service_loop.close()
+
+
+def _mint_human(sub):
+    return pyjwt.encode(
+        {"sub": sub, "iss": registry_auth.REGISTRY_ISS},
+        PRIV_PEM, algorithm="EdDSA",
+    )
+
+
+def test_warn_human_sub_mismatch_rejected(human_warn_server, caplog):
+    """Human token with sub != from is 403 EVEN in warn mode."""
+    import logging
+    token = _mint_human(_HUMAN_ID)
+    with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
+        status, body = _post_send(human_warn_server, "other-human", "hello", token=token)
+    assert status == 403
+    assert not any("verify-and-warn" in r.message for r in caplog.records)
+
+
+def test_enforce_human_valid_token_accepted(human_enforced_server):
+    token = _mint_human(_HUMAN_ID)
+    status, body = _post_send(human_enforced_server, _HUMAN_ID, "hello", token=token)
+    assert status == 200, body
+
+
+def test_human_token_skips_grant_check(human_warn_server):
+    token = _mint_human(_HUMAN_ID)
+    status, body = _post_send(human_warn_server, _HUMAN_ID, "hello", token=token)
+    assert status == 200, body
+
+
+def test_agent_claiming_human_handle_rejected_in_enforce_mode(human_enforced_server):
+    token = _mint("agent-1")
+    status, body = _post_send(human_enforced_server, _HUMAN_ID, "hello", token=token)
+    assert status == 403
+
+
+def test_human_claiming_agent_handle_rejected_even_in_warn_mode(human_warn_server, caplog):
+    """Human token with from=agent-id is rejected 403 even in warn mode."""
+    import logging
+    token = _mint_human(_HUMAN_ID)
+    with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
+        status, body = _post_send(human_warn_server, "agent-1", "hello", token=token)
+    assert status == 403
+    assert not any("verify-and-warn" in r.message for r in caplog.records)
+
+
+def test_human_token_skips_grant_check_enforced(human_enforced_server):
+    """Human principal with valid token but no grant should be accepted."""
+    token = _mint_human(_HUMAN_ID)
+    status, body = _post_send(human_enforced_server, _HUMAN_ID, "hello", token=token)
+    assert status == 200, body

@@ -50,6 +50,10 @@ _SERVE_DASHBOARD_KEY = "serve_dashboard"
 _GENERATOR_PROFILE_KEY = "generator_profile"
 # Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
 _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
+# Canonical IDs of human principals (controller sessions). These IDs skip the
+# registry revocation check and the grants check; a sub/from mismatch on a
+# human token is always rejected, even in verify-and-warn mode.
+_HUMAN_PRINCIPAL_IDS_KEY = "human_principal_ids"
 # Section under which collections settings live. ``allowed_roots`` is the
 # safety line of the collections contract: source paths must resolve inside
 # one of these directories. Empty (the default) means collections are off.
@@ -603,6 +607,60 @@ def set_a2a_auth_enforce(value: bool, data_dir=None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Human principal IDs (controller sessions)
+# ---------------------------------------------------------------------------
+
+def get_human_principal_ids(data_dir=None) -> list[str]:
+    """Return the configured human principal IDs, or [] if unset.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_HUMAN_PRINCIPAL_IDS`` environment variable (comma-separated)
+    2. ``human_principal_ids`` list in ``~/.taosmd/config.json``
+
+    These IDs belong to human principals (controller sessions). They skip the
+    registry revocation check and the grants check; a sub/from mismatch on a
+    human token is always rejected, even in verify-and-warn mode.
+    """
+    env = os.environ.get("TAOSMD_HUMAN_PRINCIPAL_IDS")
+    if env and env.strip():
+        return [p.strip() for p in env.split(",") if p.strip()]
+    ids = _read(data_dir).get(_HUMAN_PRINCIPAL_IDS_KEY)
+    if isinstance(ids, list):
+        return [str(i) for i in ids if isinstance(i, str) and str(i).strip()]
+    return []
+
+
+def set_human_principal_ids(ids, clear: bool = False, data_dir=None) -> None:
+    """Persist the human principal IDs list (or clear it).
+
+    Args:
+        ids: List of human principal canonical ID strings. Ignored when
+            ``clear`` is True.
+        clear: when True, remove the setting.
+
+    Raises:
+        ValueError: when ``clear`` is False and ``ids`` is not a list of
+            non-empty strings.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_HUMAN_PRINCIPAL_IDS_KEY, None)
+    else:
+        if not isinstance(ids, list):
+            raise ValueError("ids must be a list of strings (or pass clear=True)")
+        cleaned = []
+        for i in ids:
+            if not isinstance(i, str):
+                raise ValueError(f"human principal id must be a string, got {type(i).__name__}")
+            s = i.strip()
+            if s:
+                cleaned.append(s)
+        data[_HUMAN_PRINCIPAL_IDS_KEY] = cleaned
+    _write(data, data_dir)
+
+
+# ---------------------------------------------------------------------------
 # Collections: allowed roots
 # ---------------------------------------------------------------------------
 
@@ -689,6 +747,8 @@ __all__ = [
     "set_serve_dashboard",
     "get_a2a_auth_enforce",
     "set_a2a_auth_enforce",
+    "get_human_principal_ids",
+    "set_human_principal_ids",
     "MANAGED_BY_STANDALONE",
     "MANAGED_BY_TAOS",
     "get_generator_profile",
