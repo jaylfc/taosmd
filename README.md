@@ -62,7 +62,7 @@ The agent will pull the repo, run the install, register itself, append the per-t
 
 ### One-Line Setup (manual)
 
-> **Install:** `pip install taosmd` (add the MCP server with `pip install "taosmd[mcp]"`). For a source/dev install instead, `git clone` then `pip install -e .`. The one-line bootstrap below additionally installs Ollama and downloads the embedding and LLM models; it is newer and still being validated across clean machines, so please report issues.
+> **Install:** `pip install taosmd` (add the MCP server with `pip install "taosmd[mcp]"`). For a source install instead, `git clone` then `pip install -e .`. Warning: `pip install -e .` installs the runtime only and gives you no test runner. The failure is silent, so a reader will otherwise assume their setup worked. See the Dev setup section below for the working commands. The one-line bootstrap below additionally installs Ollama and downloads the embedding and LLM models; it is newer and still being validated across clean machines, so please report issues.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jaylfc/taosmd/master/scripts/setup.sh | bash
@@ -80,6 +80,8 @@ This will:
 ```bash
 git clone https://github.com/jaylfc/taosmd.git
 cd taosmd
+
+# Runtime only -- pip install -e . gives you no test runner
 pip install -e .
 
 # 1. Embedding model (required)
@@ -96,6 +98,26 @@ hf download dulimov/Qwen3-4B-rk3588-1.2.1-base \
   Qwen3-4B-rk3588-w8a8-opt-1-hybrid-ratio-0.0.rkllm \
   --local-dir ~/.rkllama/models/qwen3-4b-chat
 ```
+
+### Dev setup
+
+```bash
+git clone https://github.com/jaylfc/taosmd.git
+cd taosmd
+
+# Install the package plus test dependencies
+uv sync
+
+# Verify the environment
+uv run python -c "import pytest, jwt, cryptography"
+
+# Run the test suite
+uv run pytest
+```
+
+`pip` is not documented as a working dev-setup path here because it is not
+available in this environment and PEP 735 `--group` support could not be
+verified. `uv sync` is the supported short path.
 
 ### Install hygiene (avoid a shadowed install)
 
