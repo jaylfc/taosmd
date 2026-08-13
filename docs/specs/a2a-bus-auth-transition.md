@@ -7,8 +7,15 @@ failure looks like fleet-wide, so neither advances on a date or on this document
 
 Open and NOT settled by that sign-off: whether human principals get a real principal store or
 are withdrawn through the session/auth layer. That is Jay's decision, @taOS-dev is putting it
-to him, and **nothing in this transition may depend on human revocation working until it is
-made**. See open question 1.
+to him with a recommendation for the session/auth layer, and **nothing in this transition may
+depend on human revocation working until it is made.** Do not sequence Stage 2 work that
+assumes either shape. See open question 1.
+
+**Read the live risk with it, because it runs counter-intuitively in the SAFE direction and
+"unresolved" invites the opposite reading.** Nothing is broken today. With no
+`human_principal_ids` configured, #235's guard condition is always true, so revocation
+currently applies to **everyone**. The hole opens the first time the feature is used for its
+purpose, not before.
 
 Owner: @taOSmd-dev. Supersedes the held Phase 2 of #138, which was blocked on the registry
 identity layer that landed 2026-08-13.
