@@ -140,27 +140,35 @@ single identity. `_normalise_handle` as it stands is sufficient for Stage 1 and 
 the install-discriminator constraint above.
 
 **Scope, so this is not over-read**: `from` fields only, last 400 messages. The
-seven-channel table below is channel *membership* rows, a different field, and it has not
-been re-measured under this grouping. Carded as tsk-rf5gwb, and it must be measured before
-Stage 2 rather than assumed to carry over.
+channel *membership* table below was re-measured under stem grouping using
+`scripts/measure_membership_stems.py --data-dir <dir>` against archive
+EVENT_A2A rows, not inferred from the `from` field. Carded as tsk-rf5gwb.
 
 ### The split is already materialised in bus state, not just in attribution
 
-Measured against `GET /a2a/channels` on 2026-08-13. Seven channels carry member rows that
-are the same agent under different spellings:
+Measured against archive EVENT_A2A rows on 2026-08-13. 34 principals across
+17 channels; four channels carry more than one `hermes` spelling and `build`
+carries all three:
 
 | Channel | Split identity | Member rows |
 |---|---|---|
-| build | taosmd-dev | `@taOSmd-dev`, `taosmd-dev` |
-| build, hermes | hermes | `hermes`, `hermes-20260608-153000`, `hermes-20260727-001415` |
-| general, taOS-taOSmd-observability | taos | `@taOS`, `taos` |
+| build | hermes | `hermes`, `hermes-20260608-153000`, `hermes-20260727-001415` |
+| hermes | hermes | `hermes`, `hermes-20260608-153000`, `hermes-20260727-001415` |
+| general | taos | `@taOS`, `taos` |
 | general | taosmd | `@taOSmd`, `taOSmd-20260609` |
-| taosmd-progress | taosmd | `@taOSmd`, `taOSmd` |
 | taOS-taOSmd-hermes-integration | hermes | `hermes`, `hermes-20260608-153000` |
+| taOS-taOSmd-observability | taos | `@taOS`, `taos` |
+| taosmd-progress | taosmd | `@taOSmd`, `taOSmd` |
 
 Three distinct spelling families are in play: the `@`-prefixed display handle, the bare
 slugified handle, and the timestamped canonical registry id. Hermes appears under all
 three.
+
+The key finding inverts the `from`-field conclusion: mint-stamp stripping is
+NOT safe for membership. Two distinct `hermes` installs (`hermes-20260608-153000`
+and `hermes-20260727-001415`) both stem to `hermes`, colliding with the bare
+`hermes` handle. Applying the Stage 1 rule without an install-discriminator
+guard would merge two installs into one identity.
 
 This makes reconciliation a migration, not a code path. Normalising only new sends means
 the enforce flip attributes a verified agent to one member row while its subscribers watch

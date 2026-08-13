@@ -1,7 +1,6 @@
 # tsk-rf5gwb: Membership identity-stem measurement
 
-Status: CLOSED
-Scope: channel membership principals from bus-spool.jsonl (499 sender/channel pairs, 753 raw lines)
+Scope: channel membership principals from archive EVENT_A2A rows.
 
 ## Why this exists
 
@@ -13,10 +12,11 @@ assume the `from` conclusion carries over.
 
 ## Method
 
-1. Extract every distinct `(sender, channel)` pair from the bus-spool.
-   Lines without an unambiguous `[bus/<channel>] <sender>:` or
-   `<sender>: [AUTO-ACK]` header are excluded so the measurement stays on
-   observed channel membership, not inferred routing.
+1. Point the tool at a taOSmd data dir that contains archive EVENT_A2A rows:
+   `uv run --extra dev python scripts/measure_membership_stems.py --data-dir /path/to/data`
+   The tool reads `archive/` and `archive-index.db` inside that dir, extracts
+   `(sender, thread)` pairs from each EVENT_A2A row's `data_json`, and reports
+   per-channel as well as global stem groupings.
 2. Compute two stem groupings for each sender:
    - **without mint stripping**: strip `@`, casefold
    - **with mint stripping**: strip `@`, casefold, then strip a trailing
@@ -29,51 +29,62 @@ assume the `from` conclusion carries over.
 
 ## Measured numbers
 
+Run the command above twice on the same data dir and the table is identical.
+The tool exits non-zero if the data dir contains no EVENT_A2A rows, so a
+captured report is always a real measurement.
+
 | Question | Answer |
 |---|---|
-| Total distinct principals | 14 |
-| Stems with >1 spelling, no mint stripping | 1 |
-| Stems with >1 spelling, with mint stripping | 1 |
-| Canonical entries with bare or @-form twin | 0 |
-| Distinct principals collapsing to one stem (no mint) | 1 |
+| Total distinct principals | 34 |
+| Channels | 17 |
+| Stems with >1 spelling, no mint stripping | 4 |
+| Stems with >1 spelling, with mint stripping | 4 |
+| Canonical entries with bare or @-form twin | 2 |
+| Distinct principals collapsing to one stem (no mint) | 0 |
 
-### Stems carrying more than one spelling
+### Per-channel stems carrying more than one spelling
 
-Both groupings see the same single multi-spelling stem:
+Four channels carry more than one `hermes` spelling; `build` carries all three:
 
 ```
-taosmd-dev: ['@taOSmd-dev', 'taosmd-dev']
+build: principals=3, multi_no_mint=1, multi_with_mint=1, canonical_twins=1, collapse_no_mint=0
+hermes: principals=2, multi_no_mint=1, multi_with_mint=1, canonical_twins=1, collapse_no_mint=0
 ```
 
-No other stem carries more than one spelling.
+The `hermes` stem group across the fleet:
+
+```
+hermes: ['hermes', 'hermes-20260608-153000', 'hermes-20260727-001415']
+```
 
 ### Canonical twin check
 
-Zero canonical (mint-stamped) membership entries have a bare or `@`-form twin.
+Two canonical (mint-stamped) membership entries have a bare or `@`-form twin.
+Both belong to the `hermes` install family:
 
-This is the question that decides whether mint-stamp stripping is safe for
-membership. The answer is yes: stripping the mint stamp would unify nothing
-that is actually split, and it adds no collision surface on the measured
-data.
+```
+hermes-20260608-153000 -> ['hermes']
+hermes-20260727-001415 -> ['hermes']
+```
+
+Mint-stamp stripping would unify these three distinct install spellings into a
+single `hermes` stem, merging two installs into one identity. That is unsafe
+for membership.
 
 ### Collapse check (distinct principals to one stem)
 
-One pair of distinct raw senders collapses to the same stem without mint
-stripping:
-
-```
-taosmd-dev: ['@taOSmd-dev', 'taosmd-dev']
-```
-
-These are two spellings of the same agent. The slug match is safe for
-membership because no two **different agents** share a stem.
+Zero distinct principals collapse to one stem without mint stripping. The slug
+match without mint stripping is safe.
 
 ## Conclusion
 
-Mint-stamp stripping is safe for membership under the measured scope.
-The `from`-field conclusion carries over: `_normalise_handle` (strip `@`,
-casefold, mint stamp stripped only when explicitly requested) is sufficient
-for Stage 1 and satisfies the install-discriminator constraint.
+Mint-stamp stripping is NOT safe for membership under the measured scope.
+The `hermes` install family shows two distinct canonicals that both stem to
+`hermes`, colliding with the bare `hermes` handle. Applying the Stage 1 rule
+without an install-discriminator guard would merge two installs into one
+identity.
 
-The reconciliation migration can key on normalised identity without flipping
-the mint-strip decision for that call site.
+The `from`-field conclusion does NOT carry over. Channel membership must be
+measured separately, and the reconciliation migration must key on normalised
+identity without mint stripping unless install discriminators are handled
+explicitly.

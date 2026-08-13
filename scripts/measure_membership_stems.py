@@ -1,12 +1,13 @@
 """Measure identity spellings in channel-membership principals.
 
-Standalone script: reads A2A archive rows (or bus-spool.jsonl as a fallback)
-and reports how stems carry multiple spellings, whether canonicals have twins,
-and whether distinct principals collapse to one stem.
+Standalone script: reads A2A archive EVENT_A2A rows and reports how stems
+carry multiple spellings, whether canonicals have twins, and whether distinct
+principals collapse to one stem. Reports per-channel as well as globally.
 
 Usage:
     uv run --extra dev python scripts/measure_membership_stems.py
     uv run --extra dev python scripts/measure_membership_stems.py --data-dir /path/to/data
+    uv run --extra dev python scripts/measure_membership_stems.py --spool ~/.taosmd/bus-spool.jsonl
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from collections import defaultdict
 from pathlib import Path
 
 MINT_STAMP_RE = re.compile(r"^.+-\d{8}-\d{6}$")
-INSTALL_DISCRIMINATOR_RE = re.compile(r"^taos-agent-[a-z0-9]{8}$", re.IGNORECASE)
 
 
 def _strip_at(principal: str) -> str:
@@ -59,11 +59,6 @@ def is_at_form(principal: str) -> bool:
 
 def is_bare_form(principal: str) -> bool:
     return not principal.startswith("@")
-
-
-def is_install_discriminator(principal: str) -> bool:
-    s = _strip_at(principal)
-    return bool(INSTALL_DISCRIMINATOR_RE.match(s))
 
 
 async def _collect_from_archive(data_dir: str) -> list[tuple[str, str]]:
@@ -115,7 +110,7 @@ def _collect_from_bus_spool(spool_path: str) -> list[tuple[str, str]]:
     return pairs
 
 
-def measure(pairs: list[tuple[str, str]]) -> dict:
+def _measure_channel(pairs: list[tuple[str, str]]) -> dict:
     principals = sorted({p for p, _ in pairs})
 
     groups_no_mint: dict[str, list[str]] = defaultdict(list)
@@ -147,6 +142,21 @@ def measure(pairs: list[tuple[str, str]]) -> dict:
     }
 
 
+def measure(pairs: list[tuple[str, str]]) -> dict:
+    by_channel: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for pair in pairs:
+        by_channel[pair[1]].append(pair)
+
+    per_channel: dict[str, dict] = {}
+    for ch in sorted(by_channel):
+        per_channel[ch] = _measure_channel(by_channel[ch])
+
+    return {
+        **_measure_channel(pairs),
+        "per_channel": per_channel,
+    }
+
+
 def print_report(result: dict, scope: str) -> None:
     print(f"Scope: {scope}")
     print(f"Total distinct principals: {result['total_principals']}")
@@ -174,6 +184,18 @@ def print_report(result: dict, scope: str) -> None:
         print(f"   {stem}: {spellings}")
     print()
 
+    if result["per_channel"]:
+        print("Per-channel results:")
+        for ch, ch_result in sorted(result["per_channel"].items()):
+            ch_n1 = len(ch_result["multi_spell_stems_without_mint"])
+            ch_n2 = len(ch_result["multi_spell_stems_with_mint"])
+            ch_n3 = len(ch_result["canonical_twins"])
+            ch_n4 = len(ch_result["collapse_without_mint"])
+            print(f"   {ch}: principals={ch_result['total_principals']}, "
+                  f"multi_no_mint={ch_n1}, multi_with_mint={ch_n2}, "
+                  f"canonical_twins={ch_n3}, collapse_no_mint={ch_n4}")
+        print()
+
     if n3 == 0 and n4 <= 1:
         print("CONCLUSION: mint-stamp stripping is safe for membership.")
         print("No canonical has a bare/@-form twin, and only one agent (taosmd-dev)")
@@ -185,23 +207,16 @@ def print_report(result: dict, scope: str) -> None:
 
 
 async def async_main(args: argparse.Namespace) -> int:
-    spool = Path.home() / ".taosmd" / "bus-spool.jsonl"
-    if args.data_dir:
-        pairs = await _collect_from_archive(args.data_dir)
-        scope = f"archive EVENT_A2A rows in {args.data_dir}"
-        if not pairs and spool.exists():
-            print(
-                f"No EVENT_A2A rows found in {args.data_dir}, falling back to {spool}",
-                file=sys.stderr,
-            )
-            pairs = _collect_from_bus_spool(str(spool))
-            scope = f"bus-spool.jsonl ({len(pairs)} sender/channel pairs)"
-    elif spool.exists():
-        pairs = _collect_from_bus_spool(str(spool))
+    if args.spool:
+        pairs = _collect_from_bus_spool(args.spool)
         scope = f"bus-spool.jsonl ({len(pairs)} sender/channel pairs)"
     else:
-        print("No data source found. Pass --data-dir or ensure ~/.taosmd/bus-spool.jsonl exists.", file=sys.stderr)
-        return 1
+        data_dir = args.data_dir or str(Path.home() / ".taosmd")
+        pairs = await _collect_from_archive(data_dir)
+        scope = f"archive EVENT_A2A rows in {data_dir}"
+        if not pairs:
+            print(f"No EVENT_A2A rows found in {data_dir}", file=sys.stderr)
+            return 1
 
     result = measure(pairs)
     print_report(result, scope)
@@ -211,6 +226,7 @@ async def async_main(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Measure identity spellings in channel-membership rows")
     parser.add_argument("--data-dir", help="Path to taOSmd data dir (uses archive EVENT_A2A rows)")
+    parser.add_argument("--spool", help="Path to bus-spool.jsonl (legacy, measures senders not membership)")
     args = parser.parse_args()
     return asyncio.run(async_main(args))
 
