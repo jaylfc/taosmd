@@ -400,6 +400,64 @@ def test_a2a_members_populated(live_server):
     assert set(body["members"]) == {"agent-x", "agent-y"}
 
 
+def test_a2a_threads_empty(live_server):
+    status, body = _get(f"{live_server}/a2a/threads")
+    assert status == 200
+    assert "threads" in body
+    assert isinstance(body["threads"], list)
+
+
+def test_a2a_threads_populated(live_server):
+    _post(f"{live_server}/a2a/send", {"from": "alice", "body": "hello", "thread": "general"})
+    _post(f"{live_server}/a2a/send", {"from": "bob", "body": "world", "thread": "general"})
+    _post(f"{live_server}/a2a/send", {"from": "alice", "body": "hi", "thread": "ops"})
+    status, body = _get(f"{live_server}/a2a/threads")
+    assert status == 200
+    threads = {t["thread"] for t in body["threads"]}
+    assert "general" in threads
+    assert "ops" in threads
+    general = next(t for t in body["threads"] if t["thread"] == "general")
+    assert set(general["participants"]) == {"alice", "bob"}
+    assert general["kind"] == "channel"
+    assert general["last_message"] is not None
+    assert general["last_message"]["from"] == "bob"
+
+
+def test_a2a_thread_messages_empty(live_server):
+    status, body = _get(f"{live_server}/a2a/threads/no-such-thread/messages")
+    assert status == 200
+    assert body["messages"] == []
+
+
+def test_a2a_thread_messages_populated(live_server):
+    _post(f"{live_server}/a2a/send", {"from": "alice", "body": "first", "thread": "t1"})
+    _post(f"{live_server}/a2a/send", {"from": "bob", "body": "second", "thread": "t1"})
+    status, body = _get(f"{live_server}/a2a/threads/t1/messages")
+    assert status == 200
+    assert body["thread"] == "t1"
+    assert len(body["messages"]) == 2
+    assert body["messages"][0]["body"] == "first"
+    assert body["messages"][1]["body"] == "second"
+
+
+def test_a2a_since_nan_rejected(live_server):
+    status, body = _get(f"{live_server}/a2a/messages?since=nan")
+    assert status == 400
+    assert "error" in body
+
+
+def test_a2a_since_inf_rejected(live_server):
+    status, body = _get(f"{live_server}/a2a/messages?since=inf")
+    assert status == 400
+    assert "error" in body
+
+
+def test_a2a_since_negative_inf_rejected(live_server):
+    status, body = _get(f"{live_server}/a2a/messages?since=-inf")
+    assert status == 400
+    assert "error" in body
+
+
 # ---------------------------------------------------------------------------
 # POST /ingest/batch + ?mode=bm25 (#25 user-memory contract)
 # ---------------------------------------------------------------------------

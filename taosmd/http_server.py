@@ -279,6 +279,8 @@ def _parse_since(since_raw: str | None) -> float | None:
         since = float(since_raw)
     except (TypeError, ValueError) as exc:
         raise _BadRequest("'since' must be a float timestamp") from exc
+    if not math.isfinite(since):
+        raise _BadRequest("'since' must be a finite number")
     if since < _SINCE_MIN_EPOCH:
         raise _BadRequest(
             "'since' is an epoch timestamp in seconds; got "
@@ -286,6 +288,25 @@ def _parse_since(since_raw: str | None) -> float | None:
             "use the message's ts field, or omit since"
         )
     return since
+
+
+def _parse_cursor(raw: str | None) -> int | float | None:
+    """Parse a cursor value into an int (message id) or float (timestamp).
+
+    Returns ``None`` when ``raw`` is absent. Raises :class:`_BadRequest` when
+    the value cannot be parsed or is a non-finite number.
+    """
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise _BadRequest("cursor must be a number") from exc
+    if not math.isfinite(val):
+        raise _BadRequest("cursor must be a finite number")
+    if val == int(val) and abs(val) < 1e15:
+        return int(val)
+    return val
 
 
 # A single self-contained page: one inline <style> and one inline vanilla
@@ -1014,6 +1035,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
+                elif method == "GET" and path == "/a2a/threads":
+                    self._handle_a2a_threads(query)
+                elif method == "GET" and path.startswith("/a2a/threads/"):
+                    rest = path[len("/a2a/threads/"):]
+                    if rest.endswith("/messages"):
+                        thread = rest[: -len("/messages")]
+                    else:
+                        thread = rest
+                    if not thread:
+                        self._send_json(404, {"error": "thread name required"})
+                    else:
+                        self._handle_a2a_thread_messages(thread, query)
                 # Task graph endpoints — prefix matching for /tasks/{id} paths
                 elif method == "POST" and path == "/tasks":
                     self._handle_task_create()
@@ -1643,6 +1676,31 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             except (BrokenPipeError, ConnectionResetError, OSError):
                 # Client disconnected; exit the thread cleanly.
                 return
+
+        def _handle_a2a_threads(self, qs: dict) -> None:
+            principal = (qs.get("principal") or [None])[0]
+            threads = runner.run(
+                service.a2a_threads(principal=principal, data_dir=data_dir)
+            )
+            self._send_json(200, {"threads": threads})
+
+        def _handle_a2a_thread_messages(self, thread: str, qs: dict) -> None:
+            before_raw = (qs.get("before") or [None])[0]
+            after_raw = (qs.get("after") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            before = _parse_cursor(before_raw)
+            after = _parse_cursor(after_raw)
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            result = runner.run(
+                service.a2a_thread_messages(
+                    thread=thread, before=before, after=after,
+                    limit=limit_i, data_dir=data_dir,
+                )
+            )
+            self._send_json(200, result)
 
         # ----- task graph handlers ----------------------------------------
 

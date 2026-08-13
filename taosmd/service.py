@@ -625,6 +625,170 @@ async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
     return sorted(members)
 
 
+async def a2a_threads(*, principal: str | None = None, data_dir=None) -> list[dict]:
+    """Return a summary of every thread on the A2A bus.
+
+    Derived from :data:`~taosmd.archive.EVENT_A2A` events. Groups by thread
+    name and aggregates participants and the last message preview.
+
+    Each item has shape ``{"thread", "kind", "participants",
+    "last_message": {"id", "ts", "from", "body_preview"}}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_threads(principal=principal)
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+
+    deleted: set[str] = set()
+    aliases: dict[str, str] = {}
+    superseded: set[int] = set()
+    if data_dir is not None:
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+        deleted = _admin.deleted_channels()
+        aliases = _admin.channel_aliases()
+        superseded = _admin.superseded_messages()
+
+    threads: dict[str, dict] = {}
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        if data.get("admin_action"):
+            continue
+        if row["id"] in superseded:
+            continue
+        thread = data.get("thread") or row.get("app_id") or "general"
+        if thread in aliases:
+            thread = aliases[thread]
+        if thread in deleted:
+            continue
+        sender = data.get("from") or ""
+        ts = row.get("timestamp", 0.0)
+        body = data.get("body") or ""
+        if thread not in threads:
+            threads[thread] = {
+                "thread": thread,
+                "kind": "channel",
+                "participants": set(),
+                "last_message": None,
+                "_last_ts": -1.0,
+            }
+        t = threads[thread]
+        if sender:
+            t["participants"].add(sender)
+        if ts > t["_last_ts"]:
+            t["_last_ts"] = ts
+            preview = body[:120] + ("..." if len(body) > 120 else "")
+            t["last_message"] = {
+                "id": row["id"],
+                "ts": ts,
+                "from": sender,
+                "body_preview": preview,
+            }
+
+    result = []
+    for t in threads.values():
+        result.append({
+            "thread": t["thread"],
+            "kind": t["kind"],
+            "participants": sorted(t["participants"]),
+            "last_message": t["last_message"],
+        })
+    result.sort(key=lambda x: x["thread"])
+    return result
+
+
+async def a2a_thread_messages(
+    *, thread: str, before: int | float | None = None,
+    after: int | float | None = None, limit: int = 50, data_dir=None,
+) -> dict:
+    """Return cursor-paginated messages for a thread, oldest-first.
+
+    ``before`` and ``after`` are message ids (int) or timestamps (float
+    >= 1e9). ``limit`` defaults to 50, max 200.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_thread_messages(
+            thread=thread, before=before, after=after, limit=limit,
+        )
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    rows = await archive.query(event_type=EVENT_A2A, app_id=thread, limit=100_000)
+
+    deleted: set[str] = set()
+    superseded: set[int] = set()
+    if data_dir is not None:
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+        deleted = _admin.deleted_channels()
+        superseded = _admin.superseded_messages()
+
+    messages = []
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        if data.get("admin_action"):
+            continue
+        if row["id"] in superseded:
+            continue
+        msg_thread = data.get("thread") or row.get("app_id") or "general"
+        if msg_thread in deleted:
+            continue
+        msg = {
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": data.get("from"),
+            "body": data.get("body"),
+            "thread": msg_thread,
+            "reply_to": data.get("reply_to"),
+        }
+        if "refs" in data:
+            msg["refs"] = data["refs"]
+        if "blocks" in data:
+            msg["blocks"] = data["blocks"]
+        messages.append(msg)
+
+    def _cursor_val(cursor):
+        if cursor is None:
+            return None
+        if isinstance(cursor, int):
+            return ("id", cursor)
+        if isinstance(cursor, float):
+            return ("ts", cursor)
+        return None
+
+    before_type, before_val = _cursor_val(before) or (None, None)
+    after_type, after_val = _cursor_val(after) or (None, None)
+
+    if before_type == "id":
+        messages = [m for m in messages if m["id"] < before_val]
+    elif before_type == "ts":
+        messages = [m for m in messages if m["ts"] < before_val]
+
+    if after_type == "id":
+        messages = [m for m in messages if m["id"] > after_val]
+    elif after_type == "ts":
+        messages = [m for m in messages if m["ts"] > after_val]
+
+    messages.sort(key=lambda m: (m["ts"], m["id"]))
+    limit_i = max(1, min(limit, 200))
+    messages = messages[:limit_i]
+    return {"thread": thread, "messages": messages}
+
+
 async def task_create(
     title: str,
     *,

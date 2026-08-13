@@ -258,6 +258,25 @@ class RemoteClient:
         resp = await self._run("GET", "/a2a/members", params={"channel": channel})
         return resp.get("members", [])
 
+    async def a2a_threads(self, *, principal: str | None = None, **_opts) -> list[dict]:
+        """GET /a2a/threads: return thread summaries from the remote server."""
+        params = {"principal": principal} if principal else None
+        resp = await self._run("GET", "/a2a/threads", params=params)
+        return resp.get("threads", [])
+
+    async def a2a_thread_messages(
+        self, *, thread: str, before: int | float | None = None,
+        after: int | float | None = None, limit: int = 50, **_opts,
+    ) -> dict:
+        """GET /a2a/threads/{thread}/messages: cursor-paginated thread messages."""
+        params: dict = {"limit": limit}
+        if before is not None:
+            params["before"] = before
+        if after is not None:
+            params["after"] = after
+        resp = await self._run("GET", f"/a2a/threads/{thread}/messages", params=params)
+        return resp
+
     async def stats(self, *, agent: str, **_opts) -> dict:
         """Best-effort stats for ``agent`` on the remote server.
 
