@@ -37,7 +37,7 @@ class TestIngestProject:
         assert result["project"] is None
 
     @pytest.mark.asyncio
-    async def test_ingest_different_agents_same_project(self, data_dir):
+    async def test_ingest_different_agents_same_project(self, data_dir, live_embed_backend):
         await ingest("Fact from Claude", agent="claude", project="proj1", data_dir=data_dir)
         await ingest("Fact from Kilo", agent="kilo", project="proj1", data_dir=data_dir)
         # Both should succeed — no conflict
@@ -50,7 +50,7 @@ class TestIngestProject:
 
 class TestSearchProject:
     @pytest.mark.asyncio
-    async def test_search_scoped_to_project(self, data_dir):
+    async def test_search_scoped_to_project(self, data_dir, live_embed_backend):
         await ingest("OAuth2 on login page", agent="claude", project="proj-a", data_dir=data_dir)
         await ingest("OAuth2 on signup page", agent="claude", project="proj-b", data_dir=data_dir)
 
@@ -64,7 +64,7 @@ class TestSearchProject:
         assert any("signup" in t for t in texts_b)
 
     @pytest.mark.asyncio
-    async def test_search_without_project_sees_all(self, data_dir):
+    async def test_search_without_project_sees_all(self, data_dir, live_embed_backend):
         await ingest("Fact A", agent="claude", project="proj-a", data_dir=data_dir)
         await ingest("Fact B", agent="claude", project="proj-b", data_dir=data_dir)
 
@@ -72,7 +72,7 @@ class TestSearchProject:
         assert len(hits) >= 2
 
     @pytest.mark.asyncio
-    async def test_cross_agent_search_with_also_include(self, data_dir):
+    async def test_cross_agent_search_with_also_include(self, data_dir, live_embed_backend):
         await ingest("Database schema uses UUIDs", agent="claude", project="proj1", data_dir=data_dir)
         await ingest("API returns JSON:API format", agent="kilo", project="proj1", data_dir=data_dir)
 

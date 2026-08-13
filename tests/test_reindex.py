@@ -233,7 +233,7 @@ def test_reindex_empty_agent_is_consistent(isolated):
     assert result["reindexed_ok"] is True
 
 
-def test_reindex_preserves_project_and_provenance(isolated):
+def test_reindex_preserves_project_and_provenance(isolated, live_embed_backend):
     """A reindexed row must carry the same scope + provenance the hot path
     wrote: the project scope, the archive_span_id of the row it backs, and the
     nested user metadata (source_id/forget_after). Without the project tag the

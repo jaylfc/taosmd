@@ -18,21 +18,4 @@ jobs:
       - name: Compile check (two merged branches previously shipped files that do not parse)
         run: uv run python -m compileall -q taosmd/
       - name: Tests
-        # The --deselect list below is the set of tests that require a live
-        # embed backend (ONNX model or qmd service) and FAIL rather than skip
-        # when none is configured. They still run in full on a configured dev
-        # box. Tracked to get proper skip-if-no-backend guards; remove the
-        # deselects when that lands. Do NOT grow this list to hide new
-        # failures.
-        run: >
-          uv run pytest tests/ -q
-          --deselect tests/test_catalog_pipeline.py::TestCrystallizeAgentScoping::test_crystallize_stage_passes_agent_name_to_lookup_date
-          --deselect tests/test_hermes_audit_batch2.py::test_bm25_cache_is_populated_after_search
-          --deselect tests/test_hermes_audit_batch2.py::test_bm25_cache_invalidated_on_add
-          --deselect tests/test_hermes_audit_batch2.py::test_bm25_cache_not_rebuilt_on_second_query
-          --deselect tests/test_http_server_registry_auth.py::test_search_token_project_id_scopes_results
-          --deselect tests/test_project_storage.py::TestIngestProject::test_ingest_different_agents_same_project
-          --deselect tests/test_project_storage.py::TestSearchProject::test_search_scoped_to_project
-          --deselect tests/test_project_storage.py::TestSearchProject::test_search_without_project_sees_all
-          --deselect tests/test_project_storage.py::TestSearchProject::test_cross_agent_search_with_also_include
-          --deselect tests/test_reindex.py::test_reindex_preserves_project_and_provenance
+        run: uv run pytest tests/ -q

@@ -148,7 +148,7 @@ class TestCrystallizeAgentScoping:
     def teardown_method(self, method):
         self._tmpdir.cleanup()
 
-    def test_crystallize_stage_passes_agent_name_to_lookup_date(self):
+    def test_crystallize_stage_passes_agent_name_to_lookup_date(self, live_embed_backend):
         """index_day(agent_name='alice') must call lookup_date with agent_name='alice'
         in the crystallize stage, so bob's sessions are never touched."""
         from unittest.mock import AsyncMock, patch

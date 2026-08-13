@@ -174,7 +174,7 @@ def test_adapt_kg_incoming_and_outgoing_differ():
 # ---------------------------------------------------------------------------
 
 
-def test_bm25_cache_is_populated_after_search(tmp_path):
+def test_bm25_cache_is_populated_after_search(tmp_path, live_embed_backend):
     """After a bm25_rrf search the cache entry must be set."""
     from taosmd.vector_memory import VectorMemory
 
@@ -201,7 +201,7 @@ def test_bm25_cache_is_populated_after_search(tmp_path):
     asyncio.run(go())
 
 
-def test_bm25_cache_invalidated_on_add(tmp_path):
+def test_bm25_cache_invalidated_on_add(tmp_path, live_embed_backend):
     """Adding a new document must mark the cache dirty."""
     from taosmd.vector_memory import VectorMemory
 
@@ -223,7 +223,7 @@ def test_bm25_cache_invalidated_on_add(tmp_path):
     asyncio.run(go())
 
 
-def test_bm25_cache_not_rebuilt_on_second_query(tmp_path):
+def test_bm25_cache_not_rebuilt_on_second_query(tmp_path, live_embed_backend):
     """Two consecutive queries on the same corpus must reuse the cached index."""
     from taosmd.vector_memory import VectorMemory
 
