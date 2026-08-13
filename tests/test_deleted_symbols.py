@@ -134,6 +134,27 @@ def _init_repo(tmp_path):
     return tmp_path
 
 
+def _init_repo_with_n_symbols(tmp_path, n):
+    """Create a git repo with n top-level defs, all deleted in head."""
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, capture_output=True)
+
+    base_file = tmp_path / "taosmd" / "service.py"
+    base_file.parent.mkdir(parents=True, exist_ok=True)
+    lines = "\n".join(f"def s{i}():\n    pass\n" for i in range(n))
+    base_file.write_text(lines)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+
+    head_file = tmp_path / "taosmd" / "service.py"
+    head_file.write_text("")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "head"], cwd=tmp_path, check=True, capture_output=True)
+
+    return tmp_path
+
+
 class TestDeletedSymbolsIntegration:
     def test_deletion_fails_without_waiver(self, tmp_path, monkeypatch):
         repo = _init_repo(tmp_path)
@@ -231,3 +252,65 @@ class TestDeletedSymbolsIntegration:
         assert rc == 0
         captured = capsys.readouterr()
         assert "If these deletions are intentional" not in captured.out
+
+    def test_main_prints_single_line_waiver_for_five_violations(self, tmp_path, monkeypatch, capsys):
+        repo = _init_repo_with_n_symbols(tmp_path, 5)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main(["--base", "HEAD~1"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        trailer_lines = [
+            line for line in captured.out.splitlines() if line.strip().startswith(TRAILER)
+        ]
+        assert len(trailer_lines) == 1
+
+    def test_main_prints_multi_line_waiver_for_six_violations(self, tmp_path, monkeypatch, capsys):
+        repo = _init_repo_with_n_symbols(tmp_path, 6)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main(["--base", "HEAD~1"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        trailer_lines = [
+            line for line in captured.out.splitlines() if line.strip().startswith(TRAILER)
+        ]
+        assert len(trailer_lines) == 6
+
+    def test_main_multi_line_waiver_feeds_back_to_rc0(self, tmp_path, monkeypatch, capsys):
+        repo = _init_repo_with_n_symbols(tmp_path, 6)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main(["--base", "HEAD~1"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        trailer_lines = [
+            line.strip() for line in captured.out.splitlines() if line.strip().startswith(TRAILER)
+        ]
+        pr_body = "\n".join(trailer_lines)
+
+        rc = main(["--base", "HEAD~1", "--pr-body", pr_body])
+        assert rc == 0
+
+    def test_wrong_symbol_still_fails_at_scale(self, tmp_path, monkeypatch):
+        repo = _init_repo_with_n_symbols(tmp_path, 6)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main([
+            "--base", "HEAD~1",
+            "--pr-body", "Removes-Intentionally: wrong/path:wrong_sym",
+        ])
+        assert rc == 1
+
+    def test_waiving_some_of_n_still_fails_for_rest(self, tmp_path, monkeypatch):
+        repo = _init_repo_with_n_symbols(tmp_path, 6)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        waived = "Removes-Intentionally: taosmd/service.py:s0, taosmd/service.py:s1, taosmd/service.py:s2"
+        rc = main(["--base", "HEAD~1", "--pr-body", waived])
+        assert rc == 1
