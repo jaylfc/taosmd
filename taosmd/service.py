@@ -625,6 +625,104 @@ async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
     return sorted(members)
 
 
+async def a2a_record_delivered(
+    message_id: int, agent_id: str, *, ts: float | None = None, data_dir=None
+) -> dict:
+    """Record that a message was delivered to an agent.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.record_delivered`.
+    ``ts`` defaults to ``time.time()`` when not supplied.
+    Returns ``{"ok": True}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if ts is None:
+        ts = time.time()
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_record_delivered(message_id, agent_id, ts=ts)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    await receipt_store.record_delivered(message_id, agent_id, ts)
+    return {"ok": True}
+
+
+async def a2a_record_seen(
+    message_id: int, agent_id: str, *, ts: float | None = None, data_dir=None
+) -> dict:
+    """Record that an agent has seen a message.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.record_seen`.
+    ``ts`` defaults to ``time.time()`` when not supplied.
+    Returns ``{"ok": True}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if ts is None:
+        ts = time.time()
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_record_seen(message_id, agent_id, ts=ts)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    await receipt_store.record_seen(message_id, agent_id, ts)
+    return {"ok": True}
+
+
+async def a2a_get_receipts(message_id: int, *, data_dir=None) -> dict:
+    """Return delivery and read receipts for a message.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.get_receipts_for_message`.
+    Returns ``{"delivered": [...], "read": [...]}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_get_receipts(message_id)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    return await receipt_store.get_receipts_for_message(message_id)
+
+
+async def a2a_get_receipt(
+    message_id: int, agent_id: str, *, data_dir=None
+) -> dict | None:
+    """Return a single receipt or ``None`` when not found.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.get_receipt`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_get_receipt(message_id, agent_id)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    return await receipt_store.get_receipt(message_id, agent_id)
+
+
+async def a2a_prune_receipts(
+    older_than_ts: float, *, data_dir=None
+) -> dict:
+    """Prune receipts older than ``older_than_ts`` (by delivered_at).
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.prune`.
+    Returns ``{"pruned": int}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_prune_receipts(older_than_ts)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    n = await receipt_store.prune(older_than_ts)
+    return {"pruned": n}
+
+
 async def task_create(
     title: str,
     *,
@@ -883,6 +981,15 @@ async def admin_a2a_supersede_message(msg_id: int, *, data_dir=None) -> dict:
     return await a2a_admin_supersede_message(msg_id, data_dir=data_dir, stores=stores)
 
 
+async def admin_a2a_prune_receipts(older_than_ts: float, *, data_dir=None) -> dict:
+    """Prune old A2A receipts."""
+    stores = await _api._ensure_stores(data_dir)
+    if data_dir is None:
+        data_dir = stores["data_dir"]
+    from .admin import a2a_admin_prune_receipts  # noqa: PLC0415
+    return await a2a_admin_prune_receipts(older_than_ts, data_dir=data_dir, stores=stores)
+
+
 # ---------------------------------------------------------------------------
 # Collections service wrappers
 # ---------------------------------------------------------------------------
@@ -1032,11 +1139,13 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
            "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
+           "a2a_record_delivered", "a2a_record_seen", "a2a_get_receipts", "a2a_get_receipt",
+           "a2a_prune_receipts",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
            "admin_a2a_delete_channel", "admin_a2a_rename_channel",
-           "admin_a2a_supersede_message",
+           "admin_a2a_supersede_message", "admin_a2a_prune_receipts",
            "collections_create", "collections_list", "collections_get",
            "collections_index_start", "collections_index_run",
            "collections_index_background", "collections_link",

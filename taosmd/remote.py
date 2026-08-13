@@ -258,6 +258,41 @@ class RemoteClient:
         resp = await self._run("GET", "/a2a/members", params={"channel": channel})
         return resp.get("members", [])
 
+    async def a2a_record_delivered(
+        self, message_id: int, agent_id: str, *, ts: float | None = None, **_opts
+    ) -> dict:
+        """POST /a2a/receipts/delivered: record that a message was delivered."""
+        body: dict = {"message_id": message_id, "agent_id": agent_id}
+        if ts is not None:
+            body["ts"] = ts
+        return await self._run("POST", "/a2a/receipts/delivered", body)
+
+    async def a2a_record_seen(
+        self, message_id: int, agent_id: str, *, ts: float | None = None, **_opts
+    ) -> dict:
+        """POST /a2a/receipts/seen: record that an agent has seen a message."""
+        body: dict = {"message_id": message_id, "agent_id": agent_id}
+        if ts is not None:
+            body["ts"] = ts
+        return await self._run("POST", "/a2a/receipts/seen", body)
+
+    async def a2a_get_receipts(self, message_id: int, **_opts) -> dict:
+        """GET /a2a/messages/{message_id}/receipts: return delivery and read receipts."""
+        resp = await self._run("GET", f"/a2a/messages/{message_id}/receipts")
+        return resp
+
+    async def a2a_get_receipt(self, message_id: int, agent_id: str, **_opts) -> dict | None:
+        """GET /a2a/receipts: return a single receipt or None."""
+        params = {"message_id": message_id, "agent": agent_id}
+        resp = await self._run("GET", "/a2a/receipts", params=params)
+        if "error" in resp and "not found" in resp["error"]:
+            return None
+        return resp
+
+    async def a2a_prune_receipts(self, older_than_ts: float, **_opts) -> dict:
+        """POST /a2a/admin/prune-receipts: prune old receipts."""
+        return await self._run("POST", "/a2a/admin/prune-receipts", {"older_than_ts": older_than_ts})
+
     async def stats(self, *, agent: str, **_opts) -> dict:
         """Best-effort stats for ``agent`` on the remote server.
 

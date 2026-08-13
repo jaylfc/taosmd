@@ -108,6 +108,9 @@ Endpoints
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
+``PATCH /a2a/receipts``    ``{"message_id"}``              -> mark message seen by authenticated agent
+``GET  /a2a/messages/{id}/receipts``                       -> ``{"delivered": [...], "read": [...]}``
+``GET  /a2a/receipts``     ``?message_id=&agent=``         -> ``{"delivered_at", "seen_at"}`` or 404
 ``POST /tasks``            ``{"title", "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [...], "created_by"}`` -> task object
 ``GET  /tasks``            ``?status=&project=&assignee=&limit=``  -> ``{"tasks": [...]}``
 ``GET  /tasks/ready``      ``?project=&assignee=&limit=``  -> ``{"tasks": [...]}``
@@ -147,6 +150,7 @@ Admin endpoints (all require a configured server token; 403 if none is set)
 ``POST /a2a/admin/delete-channel``             ``{"channel": str}`` -> ``{"deleted": true, "channel": str}``
 ``POST /a2a/admin/rename-channel``             ``{"from": str, "to": str}`` -> ``{"renamed": true, "from": str, "to": str}``
 ``POST /a2a/admin/supersede-message``          ``{"id": int}`` -> ``{"superseded": true, "id": int}``
+``POST /a2a/admin/prune-receipts``             ``{"ttl_days"?: int}`` -> ``{"pruned": int}`` (admin)
 
 Inspection UI
 -------------
@@ -722,6 +726,38 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return auth[len("Bearer "):].strip() == _server_token
             return False
 
+        def _get_authenticated_agent_id(self) -> str | None:
+            """Return the agent identity from a verified registry token, or None.
+
+            Only the ``sub`` claim of a Bearer token is used; the server token
+            (data-plane auth) is not an identity token and therefore yields
+            ``None``.  Raw-bus subscribers that present no token also get
+            ``None`` -- they produce no delivered mark.
+            """
+            if _registry_verifier is None:
+                return None
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer "):
+                return None
+            token = auth[len("Bearer "):].strip()
+            if not token:
+                return None
+            from . import registry_auth as _ra  # noqa: PLC0415
+            raw_sub: str = ""
+            try:
+                import jwt as _jwt  # noqa: PLC0415
+                unverified = _jwt.decode(token, options={"verify_signature": False})
+                raw_sub = unverified.get("sub", "") or ""
+            except Exception:  # noqa: BLE001
+                pass
+            claimed_identity = raw_sub
+            try:
+                claims = _registry_verifier.authorize(token, claimed_identity)
+                sub = claims.get("sub", "") or ""
+                return sub if sub else None
+            except _ra.AuthError:
+                return None
+
         @staticmethod
         def _is_admin_route(method: str, path: str) -> bool:
             """Return True for admin write routes (#154).
@@ -750,6 +786,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "/a2a/admin/delete-channel",
                 "/a2a/admin/rename-channel",
                 "/a2a/admin/supersede-message",
+                "/a2a/admin/prune-receipts",
             )
 
         def _check_admin_token(self) -> bool:
@@ -883,6 +920,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def do_DELETE(self) -> None:  # noqa: N802
             self._dispatch("DELETE")
 
+        def do_PATCH(self) -> None:  # noqa: N802
+            self._dispatch("PATCH")
+
         def _dispatch(self, method: str) -> None:
             parts = urlsplit(self.path)
             path = parts.path.rstrip("/") or "/"
@@ -956,7 +996,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
-                # Task graph endpoints — prefix matching for /tasks/{id} paths
+                elif method == "PATCH" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts_seen()
+                elif method == "GET" and path.startswith("/a2a/messages/") and path.endswith("/receipts"):
+                    msg_id = path[len("/a2a/messages/"):-len("/receipts")]
+                    self._handle_a2a_message_receipts(msg_id)
+                elif method == "GET" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts(query)
+                elif method == "POST" and path == "/a2a/receipts/delivered":
+                    self._handle_a2a_receipts_delivered()
+                elif method == "POST" and path == "/a2a/receipts/seen":
+                    self._handle_a2a_receipts_seen_explicit()
+                # Task graph endpoints -- prefix matching for /tasks/{id} paths
                 elif method == "POST" and path == "/tasks":
                     self._handle_task_create()
                 elif method == "GET" and path == "/tasks":
@@ -1047,6 +1098,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_admin_a2a_rename_channel()
                 elif method == "POST" and path == "/a2a/admin/supersede-message":
                     self._handle_admin_a2a_supersede_message()
+                elif method == "POST" and path == "/a2a/admin/prune-receipts":
+                    self._handle_admin_a2a_prune_receipts()
                 elif method == "GET" and _serve_dashboard and self._try_serve_static(parts.path):
                     return  # static asset served
                 elif method == "GET" and _serve_dashboard:
@@ -1551,6 +1604,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             is a quick, bounded archive query; the sleep happens here in
             the request thread, never inside the service loop. Disconnects
             are detected via write errors and exit the loop cleanly.
+
+            When the subscriber's identity is known (authenticated proxy
+            path, ``sub`` claim present in the Bearer token) a delivered
+            receipt is written after each frame lands on the wire. Raw-bus
+            subscribers that carry no identifying token produce no delivered
+            mark.
             """
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
@@ -1558,6 +1617,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 last_ts = float(since_raw) if since_raw is not None else time.time()
             except (TypeError, ValueError):
                 last_ts = time.time()
+
+            subscriber_agent = self._get_authenticated_agent_id()
 
             # Send SSE response headers before entering the poll loop.
             self.send_response(200)
@@ -1581,6 +1642,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                             frame = f"data: {json.dumps(msg)}\n\n"
                             self.wfile.write(frame.encode("utf-8"))
                             last_ts = msg["ts"]
+                            # Record a delivered receipt for authenticated
+                            # subscribers only.  Raw-bus subscribers have no
+                            # identifying token so subscriber_agent is None.
+                            if subscriber_agent is not None:
+                                runner.run(
+                                    service.a2a_record_delivered(
+                                        msg["id"],
+                                        subscriber_agent,
+                                        ts=time.time(),
+                                        data_dir=data_dir,
+                                    )
+                                )
                         self.wfile.flush()
                     else:
                         self.wfile.write(b": keepalive\n\n")
@@ -1589,6 +1662,103 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             except (BrokenPipeError, ConnectionResetError, OSError):
                 # Client disconnected; exit the thread cleanly.
                 return
+
+        # ----- A2A receipt handlers -----------------------------------------
+
+        def _handle_a2a_receipts_seen(self) -> None:
+            body = self._read_json_body()
+            message_id_raw = body.get("message_id")
+            if message_id_raw is None:
+                raise _BadRequest("'message_id' is required")
+            try:
+                message_id = int(message_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            agent_id = self._get_authenticated_agent_id()
+            if agent_id is None:
+                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                return
+            runner.run(
+                service.a2a_record_seen(message_id, agent_id, data_dir=data_dir)
+            )
+            self._send_json(200, {"ok": True})
+
+        def _handle_a2a_message_receipts(self, msg_id_str: str) -> None:
+            try:
+                message_id = int(msg_id_str)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("message id must be an integer") from exc
+            result = runner.run(
+                service.a2a_get_receipts(message_id, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_receipts(self, qs: dict) -> None:
+            message_id_raw = (qs.get("message_id") or [None])[0]
+            agent_id = (qs.get("agent") or [None])[0]
+            if message_id_raw is None or agent_id is None:
+                raise _BadRequest("'message_id' and 'agent' query parameters are required")
+            try:
+                message_id = int(message_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            receipt = runner.run(
+                service.a2a_get_receipt(message_id, agent_id, data_dir=data_dir)
+            )
+            if receipt is None:
+                self._send_json(404, {"error": "receipt not found"})
+                return
+            self._send_json(200, receipt)
+
+        def _handle_a2a_receipts_delivered(self) -> None:
+            body = self._read_json_body()
+            message_id = body.get("message_id")
+            agent_id = body.get("agent_id")
+            ts = body.get("ts")
+            if message_id is None:
+                raise _BadRequest("'message_id' is required")
+            if agent_id is None:
+                raise _BadRequest("'agent_id' is required")
+            try:
+                message_id = int(message_id)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            if ts is not None:
+                try:
+                    ts = float(ts)
+                except (TypeError, ValueError) as exc:
+                    raise _BadRequest("'ts' must be a float") from exc
+            else:
+                ts = time.time()
+            runner.run(
+                service.a2a_record_delivered(message_id, agent_id, ts=ts, data_dir=data_dir)
+            )
+            self._send_json(200, {"ok": True})
+
+        def _handle_a2a_receipts_seen_explicit(self) -> None:
+            body = self._read_json_body()
+            message_id = body.get("message_id")
+            agent_id = body.get("agent_id")
+            ts = body.get("ts")
+            if message_id is None:
+                raise _BadRequest("'message_id' is required")
+            if agent_id is None:
+                raise _BadRequest("'agent_id' is required")
+            try:
+                message_id = int(message_id)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            if ts is not None:
+                try:
+                    ts = float(ts)
+                except (TypeError, ValueError) as exc:
+                    raise _BadRequest("'ts' must be a float") from exc
+            else:
+                ts = time.time()
+            runner.run(
+                service.a2a_record_seen(message_id, agent_id, ts=ts, data_dir=data_dir)
+            )
+            self._send_json(200, {"ok": True})
 
         # ----- task graph handlers ----------------------------------------
 
@@ -2055,6 +2225,26 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'id' must be an integer") from exc
             result = runner.run(
                 service.admin_a2a_supersede_message(msg_id, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+
+        def _handle_admin_a2a_prune_receipts(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            ttl_days = body.get("ttl_days")
+            if ttl_days is not None:
+                try:
+                    ttl_days = int(ttl_days)
+                except (TypeError, ValueError) as exc:
+                    raise _BadRequest("'ttl_days' must be an integer") from exc
+                if ttl_days <= 0:
+                    raise _BadRequest("'ttl_days' must be a positive integer")
+            else:
+                ttl_days = 30
+            older_than_ts = time.time() - ttl_days * 86400
+            result = runner.run(
+                service.admin_a2a_prune_receipts(older_than_ts, data_dir=data_dir)
             )
             self._send_json(200, result)
 

@@ -77,6 +77,13 @@ def client(live_server):
     return RemoteClient(base_url)
 
 
+@pytest.fixture
+def token_client(token_server):
+    """RemoteClient pointing at the live token-gated server."""
+    base_url, token = token_server
+    return RemoteClient(base_url, token=token)
+
+
 # ---------------------------------------------------------------------------
 # RemoteClient round-trips
 # ---------------------------------------------------------------------------
@@ -155,6 +162,52 @@ def test_remote_a2a_members(client):
     members = asyncio.run(client.a2a_members(channel="chan-for-members"))
     assert "agent-gamma" in members
     assert "agent-delta" in members
+
+
+def test_remote_a2a_record_delivered(client):
+    """a2a_record_delivered returns ok."""
+    msg_id = asyncio.run(
+        client.a2a_send("agent-1", "hello", thread="remote-delivered")
+    )["id"]
+    result = asyncio.run(client.a2a_record_delivered(msg_id, "agent-1"))
+    assert result == {"ok": True}
+
+
+def test_remote_a2a_record_seen(client):
+    """a2a_record_seen returns ok."""
+    msg_id = asyncio.run(
+        client.a2a_send("agent-1", "hello", thread="remote-seen")
+    )["id"]
+    result = asyncio.run(client.a2a_record_seen(msg_id, "agent-1"))
+    assert result == {"ok": True}
+
+
+def test_remote_a2a_get_receipts(client):
+    """a2a_get_receipts returns receipts for a message."""
+    msg_id = asyncio.run(
+        client.a2a_send("agent-1", "hello", thread="remote-get")
+    )["id"]
+    result = asyncio.run(client.a2a_get_receipts(msg_id))
+    assert "delivered" in result
+    assert "read" in result
+
+
+def test_remote_a2a_get_receipt(client):
+    """a2a_get_receipt returns a single receipt or None."""
+    msg_id = asyncio.run(
+        client.a2a_send("agent-1", "hello", thread="remote-get-one")
+    )["id"]
+    asyncio.run(client.a2a_record_delivered(msg_id, "agent-1"))
+    result = asyncio.run(client.a2a_get_receipt(msg_id, "agent-1"))
+    assert result is not None
+    assert "delivered_at" in result
+
+
+def test_remote_a2a_prune_receipts(token_client):
+    """a2a_prune_receipts returns pruned count."""
+    result = asyncio.run(token_client.a2a_prune_receipts(__import__("time").time()))
+    assert "pruned" in result
+    assert isinstance(result["pruned"], int)
 
 
 def test_remote_stats_health(client):

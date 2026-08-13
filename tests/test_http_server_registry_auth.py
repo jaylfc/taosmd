@@ -633,3 +633,35 @@ def test_task_update_scoped_token_same_project_succeeds(project_server):
         {"status": "in_progress", "assignee": "agent-1"}, token=tok)
     assert status == 200, body
     assert body["status"] == "in_progress"
+
+
+# ---------------------------------------------------------------------------
+# Receipt identity must not be forgeable
+# ---------------------------------------------------------------------------
+
+def test_patch_receipts_seen_rejects_forged_token(authed_server):
+    """PATCH /a2a/receipts must reject a token signed by an unknown key."""
+    valid_token = pyjwt.encode({"sub": "agent-1"}, PRIV_PEM, algorithm="EdDSA")
+    _, send_body = _post_send(authed_server, "agent-1", "hello", token=valid_token)
+    msg_id = send_body["id"]
+
+    other_priv, _ = _keypair()
+    forged_token = pyjwt.encode({"sub": "agent-1"}, other_priv, algorithm="EdDSA")
+
+    payload = json.dumps({"message_id": msg_id}).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {forged_token}",
+    }
+    req = urllib.request.Request(
+        authed_server + "/a2a/receipts", data=payload, headers=headers, method="PATCH"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            status = resp.status
+            body = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        body = json.loads(exc.read().decode() or "{}")
+    assert status == 401, f"expected 401 for forged token, got {status}: {body}"
+

@@ -163,6 +163,7 @@ _ADMIN_ROUTES = [
     ("/a2a/admin/delete-channel", {"channel": "general"}),
     ("/a2a/admin/rename-channel", {"from": "old", "to": "new"}),
     ("/a2a/admin/supersede-message", {"id": 1}),
+    ("/a2a/admin/prune-receipts", {"ttl_days": 30}),
 ]
 
 
@@ -569,3 +570,12 @@ def test_rename_then_delete_old_name_keeps_history_under_new(live_server_with_to
     # Old name does not appear in the channel list.
     status, body = _get(f"{base}/a2a/channels", token=_TOKEN)
     assert "oldc" not in [c["channel"] for c in body.get("channels", [])]
+
+
+def test_admin_prune_receipts_happy_path(live_server_with_token):
+    """POST /a2a/admin/prune-receipts returns 200 with pruned count."""
+    base = live_server_with_token
+    status, body = _post(f"{base}/a2a/admin/prune-receipts", {"ttl_days": 30}, token=_TOKEN)
+    assert status == 200, body
+    assert "pruned" in body
+    assert isinstance(body["pruned"], int)

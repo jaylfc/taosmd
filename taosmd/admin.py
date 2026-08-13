@@ -419,6 +419,21 @@ async def a2a_admin_supersede_message(
     return {"superseded": True, "id": msg_id}
 
 
+async def a2a_admin_prune_receipts(
+    older_than_ts: float,
+    *,
+    data_dir: Path | str,
+    stores: dict,
+) -> dict:
+    """Prune receipts older than ``older_than_ts`` (by delivered_at).
+
+    Returns ``{"pruned": int}``.
+    """
+    receipt_store = stores["receipts"]
+    n = await receipt_store.prune(older_than_ts)
+    return {"pruned": n}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
