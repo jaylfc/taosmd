@@ -227,14 +227,18 @@ def main(argv: list[str] | None = None) -> int:
         for v in violations:
             print(f"  - {v.symbol} (added by {v.added_by})")
 
-        trailer_symbols = ", ".join(v.symbol for v in violations)
         print()
         print(
             "If these deletions are intentional, add this trailer to the PR body and "
-            "the gate will re-run automatically:"
+            "edit the PR body, do not use Re-run job:"
         )
         print()
-        print(f"    {TRAILER} {trailer_symbols}")
+        if len(violations) > 5:
+            for v in violations:
+                print(f"    {TRAILER} {v.symbol}")
+        else:
+            trailer_symbols = ", ".join(v.symbol for v in violations)
+            print(f"    {TRAILER} {trailer_symbols}")
         return 1
 
     print("deleted-symbols-guard: clean")
