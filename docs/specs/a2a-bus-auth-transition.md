@@ -9,6 +9,7 @@ Open and NOT settled by that sign-off: whether human principals get a real princ
 are withdrawn through the session/auth layer. That is Jay's decision, @taOS-dev is putting it
 to him, and **nothing in this transition may depend on human revocation working until it is
 made**. See open question 1.
+
 Owner: @taOSmd-dev. Supersedes the held Phase 2 of #138, which was blocked on the registry
 identity layer that landed 2026-08-13.
 
