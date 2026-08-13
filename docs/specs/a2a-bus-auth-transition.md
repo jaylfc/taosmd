@@ -5,11 +5,11 @@ Status: **STAGE 1 SIGNED OFF** by @taOS-dev, 2026-08-13, reviewed against master
 its own section below. They change what the bus rejects and therefore what a coordination
 failure looks like fleet-wide, so neither advances on a date or on this document alone.
 
-Open and NOT settled by that sign-off: whether human principals get a real principal store or
-are withdrawn through the session/auth layer. That is Jay's decision, @taOS-dev is putting it
-to him with a recommendation for the session/auth layer, and **nothing in this transition may
-depend on human revocation working until it is made.** Do not sequence Stage 2 work that
-assumes either shape. See open question 1.
+**SETTLED 2026-08-13 (bus 2499): human credential withdrawal happens in the session/auth
+layer, and the revocation feed is agent-only BY DESIGN.** Jay's ruling. The earlier bar on
+sequencing Stage 2 work is lifted in the agent-only direction. Stages 2 and 3 are still not
+signed off and their gates are unchanged: this removed an unknown, it did not clear them.
+See Target state item 3 and open question 1.
 
 **Read the live risk with it, because it runs counter-intuitively in the SAFE direction and
 "unresolved" invites the opposite reading.** Nothing is broken today. With no
@@ -44,19 +44,26 @@ credential at all.
 1. `POST /a2a/send` requires a valid registry-signed Bearer JWT.
 2. `from` is **derived from the token**, never read from the body. The body's `from` is
    ignored if present and rejected if it disagrees, so a caller cannot assert an identity.
-3. The revocation feed is honoured **for agent identities**, which is what the feed can
-   actually express.
+3. The revocation feed is honoured **for agent identities, and for agent identities only.**
 
-   **This clause deliberately does NOT promise human-principal revocation, and the earlier
-   version of it did.** That was a blocking defect, caught by @taOS-dev's review: Target
-   state is the NORMATIVE section, so promising a guarantee that open question 1 disproves
-   would instruct an implementer to build a human-revocation path that silently never fires.
-   That is the exact failure shape this whole document exists to prevent, written into the
-   one section an implementer is most likely to build from. Human principals are open
-   question 1 below, and **nothing in this transition may depend on human revocation working
-   until Jay has decided** between a real principal store and withdrawal through the
-   session/auth layer. PR #244's docstring needs the same correction, for the same reason:
-   "pending" implies data that is on its way, and it is not.
+   **This is a deliberate scope boundary, not a limitation we are working around.** Jay
+   ruled on 2026-08-13 (relayed by @taOS-dev, bus 2499) that human credential withdrawal
+   happens in the **session/auth layer**, where human auth already lives. The feed is not
+   being extended to carry human principals, no principal store is being added to
+   `agent_registry`, and `human_principal` is not becoming a controller concept.
+
+   **If you are reading this because you noticed humans are missing from the feed: that
+   absence is the design, and it is load-bearing.** Do not add them. The right table for
+   human withdrawal is the session/auth layer, and bending `agent_registry` into carrying
+   principal rows is the wrong shape. Anything in this transition that appears to need human
+   revocation from the feed is mis-specified and should be raised rather than implemented.
+
+   This clause is written to be re-read by someone with none of the history, because the
+   earlier version of it promised the opposite and was a blocking defect: Target state is
+   the NORMATIVE section, so a promise here instructs an implementer to build a
+   human-revocation path that silently never fires. PR #244's docstring needs the matching
+   correction, and the framing has now changed: it is not a check awaiting data, it is a
+   documented non-goal.
 
 ## Handle normalisation is the first hazard, not an afterthought
 
@@ -369,21 +376,37 @@ The raw-bus half is carded as tsk-d64alg; it must be coordinated before it lands
 
 ## Open questions for review
 
-**1. Human principals and revocation: ANSWERED, and the answer is worse than the question.**
-Asked at bus 2474, answered from source by @taOS-dev at 2475: the controller does **not**
-publish human principals on the revocation feed, and **cannot**. `list_revoked()` selects
-from `agent_registry`, whose insert writes the agent's *owner* as `user_id` rather than
-creating a principal row; `human_principal` appears nowhere in the controller.
+**1. Human principals and revocation: CLOSED BY DECISION, 2026-08-13. No longer an open
+question, and it is not a gap.**
 
-So this is not a check waiting on data to arrive. It is a check whose data source is
-structurally incapable of carrying the case, and PR #244's docstring (which frames it as
-pending) must be corrected before merge. **Do not record this hole as closed**, and do not
-close its card as though human withdrawal works. The controller half is @taOS-dev's.
+*The investigation, kept because it is why the decision went the way it did.* Asked at bus
+2474, answered from source by @taOS-dev at 2475: the controller does **not** publish human
+principals on the revocation feed, and **cannot**. `list_revoked()` selects from
+`agent_registry`, whose insert writes the agent's *owner* as `user_id` rather than creating a
+principal row; `human_principal` appears nowhere in the controller. So it was never a check
+waiting on data to arrive, it was a check whose data source is structurally incapable of
+carrying the case.
 
-Live risk is currently small and bounded: with no `human_principal_ids` configured, #235's
-guard condition is always true, so revocation applies to everyone. The hole opens only once
-humans are actually configured, which is to say it opens the first time the feature is
-used for its purpose.
+*The ruling.* **Jay decided (bus 2499, put to him as a choice by @taOS-dev): human credential
+withdrawal happens in the session/auth layer, and the revocation feed is agent-only by
+design.** The feed is not being extended, no principal store is being added, and
+`human_principal` is not becoming a controller concept. So the structural limitation above
+is now the documented scope boundary in Target state item 3, and the two must stay consistent
+if either is edited.
+
+*What this changed for the transition.* @taOS-dev's earlier bar, "do not sequence Stage 2 work
+that assumes either shape", is **LIFTED in the agent-only direction**. Stages 2 and 3 remain
+**NOT signed off** and their gates stand exactly as written; this removed one unknown from
+them, it did not clear them. Do not read "unblocked" as "approved".
+
+*Live risk, unchanged by the ruling and still worth stating.* With no `human_principal_ids`
+configured, #235's guard condition is always true, so revocation applies to everyone today.
+Nothing here makes that false. It means the configured-principals path is now a documented
+**non-goal** rather than an unfinished feature.
+
+*Still owed, and it is @taOS-dev's half, not ours*: the feed's own docs must say agent-only,
+and `list_revoked()` needs a test pinning that boundary rather than leaving it an emergent
+property of the query. Carded on their board. Nothing here waits on it.
 
 **2. Ordering: does the read-path fix land before, with, or after Stage 1?** My view is
 unchanged and the re-measurement above strengthens it: **before**. Stage 1's entire value is
