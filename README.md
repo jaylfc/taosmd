@@ -115,9 +115,10 @@ uv run python -c "import pytest, jwt, cryptography"
 uv run pytest
 ```
 
-`pip` is not documented as a working dev-setup path here because it is not
-available in this environment and PEP 735 `--group` support could not be
-verified. `uv sync` is the supported short path.
+`pip` is not documented as a working dev-setup path: `pip install -e .`
+installs the runtime only and does not read the PEP 735 `[dependency-groups]`
+dev group where the test dependencies live. `uv sync` is the supported short
+path.
 
 ### Install hygiene (avoid a shadowed install)
 
