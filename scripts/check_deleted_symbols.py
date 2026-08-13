@@ -229,8 +229,9 @@ def main(argv: list[str] | None = None) -> int:
 
         print()
         print(
-            "If these deletions are intentional, add this trailer to the PR body and "
-            "edit the PR body, do not use Re-run job:"
+            "If these deletions are intentional, edit the PR body to add this trailer. "
+            "Editing the PR body re-runs this gate automatically; Re-run job does not "
+            "work because it replays the stale payload with the old body:"
         )
         print()
         if len(violations) > 5:
