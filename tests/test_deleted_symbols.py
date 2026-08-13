@@ -206,3 +206,28 @@ class TestDeletedSymbolsIntegration:
         captured = capsys.readouterr()
         assert "DELETED-SYMBOLS FAIL" in captured.out
         assert "taosmd/service.py:a2a_send" in captured.out
+
+    def test_main_prints_waiver_hint_on_failure(self, tmp_path, monkeypatch, capsys):
+        repo = _init_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main(["--base", "HEAD~1"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "Removes-Intentionally:" in captured.out
+        assert "If these deletions are intentional" in captured.out
+        assert f"{TRAILER} taosmd/service.py:a2a_send" in captured.out
+
+    def test_main_omits_waiver_hint_when_clean(self, tmp_path, monkeypatch, capsys):
+        repo = _init_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main([
+            "--base", "HEAD~1",
+            "--pr-body", "Removes-Intentionally: taosmd/service.py:a2a_send",
+        ])
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "If these deletions are intentional" not in captured.out

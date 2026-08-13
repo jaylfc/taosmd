@@ -226,6 +226,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         for v in violations:
             print(f"  - {v.symbol} (added by {v.added_by})")
+
+        trailer_symbols = ", ".join(v.symbol for v in violations)
+        print()
+        print(
+            "If these deletions are intentional, add this trailer to the PR body and "
+            "the gate will re-run automatically:"
+        )
+        print()
+        print(f"    {TRAILER} {trailer_symbols}")
         return 1
 
     print("deleted-symbols-guard: clean")
