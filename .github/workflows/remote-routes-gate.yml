@@ -1,0 +1,35 @@
+name: Remote routes gate
+
+# Ensures every RemoteClient call path in taosmd/remote.py has a matching
+# routed literal in taosmd/http_server.py.  A missing route is invisible to
+# review-by-reading and invisible to the local test suite because the tests
+# only exercise the local (non-remote) path.  This gate catches it
+# mechanically before it ships.
+#
+# Paths built by interpolation (f-strings, %s) cannot be extracted by a
+# literal scan.  They are counted as unparseable call sites and reported so
+# a silent drop in coverage is visible.
+#
+# A Missing-Route-Intentionally trailer in the PR body waives named missing
+# routes, making deliberate omissions a conscious, auditable act.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  remote-routes-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PR_BODY: ${{ github.event.pull_request.body }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Install deps
+        run: uv sync --python 3.12
+      - name: Check remote routes
+        run: python scripts/check_remote_routes.py
