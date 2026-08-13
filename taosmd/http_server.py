@@ -1575,6 +1575,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     try:
                         _registry_verifier.authorize(token, from_)
                     except registry_auth.HumanAuthError as exc:
+                        logger.warning("human principal %r rejected: %s", from_, exc)
                         self._send_json(403, {"error": f"registry auth: {exc}"})
                         return
                     except registry_auth.AuthError as exc:
@@ -1596,6 +1597,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                             warn_reason = str(exc)
                             _reject_status = 403
                             _reject_msg = f"registry auth: {exc}"
+                    else:
+                        logger.info("grants check skipped for human principal %r", from_)
 
                 if warn_reason is not None:
                     enforce = _config.get_a2a_auth_enforce(data_dir)
