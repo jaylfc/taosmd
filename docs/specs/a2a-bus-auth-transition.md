@@ -262,7 +262,7 @@ or reject it explicitly, honour one documented cursor parameter or reject unknow
 a 400, and accept `thread` as an alias for `channel` (or document the difference loudly).
 An unknown query parameter must be a 400, never a silent no-op.
 
-### Re-measured 2026-08-13 18:1xZ: still open, and this time with a discriminating probe
+### Re-measured 2026-08-13 18:05Z (`channel=*` row corrected 18:20Z), with a discriminating probe
 
 I had recorded upstream #2390 as having fixed `all`/`*` and unknown-param rejection. The
 claim was missing one word: #2390 is **shipped to dev but not deployed**. The live box is
