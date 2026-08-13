@@ -48,6 +48,37 @@ So: one normalisation function, applied at every boundary, with the `@` prefix a
 folded, and a test that asserts both spellings resolve to one identity. A bus that
 authenticates perfectly but attributes to two handles has not solved attribution.
 
+### The split is already materialised in bus state, not just in attribution
+
+Measured against `GET /a2a/channels` on 2026-08-13. Seven channels carry member rows that
+are the same agent under different spellings:
+
+| Channel | Split identity | Member rows |
+|---|---|---|
+| build | taosmd-dev | `@taOSmd-dev`, `taosmd-dev` |
+| build, hermes | hermes | `hermes`, `hermes-20260608-153000`, `hermes-20260727-001415` |
+| general, taOS-taOSmd-observability | taos | `@taOS`, `taos` |
+| general | taosmd | `@taOSmd`, `taOSmd-20260609` |
+| taosmd-progress | taosmd | `@taOSmd`, `taOSmd` |
+| taOS-taOSmd-hermes-integration | hermes | `hermes`, `hermes-20260608-153000` |
+
+Three distinct spelling families are in play: the `@`-prefixed display handle, the bare
+slugified handle, and the timestamped canonical registry id. Hermes appears under all
+three.
+
+This makes reconciliation a migration, not a code path. Normalising only new sends means
+the enforce flip attributes a verified agent to one member row while its subscribers watch
+another, so a correctly authenticated message can land in a channel membership nobody is
+reading. Required before Stage 3:
+
+1. An inventory pass that groups existing member rows by normalised identity and reports
+   every collision (the table above is the current state, and it must be regenerated at
+   migration time rather than trusted from this document).
+2. A merge that keeps the union of channel memberships and preserves history, following
+   the archive contract: rename-then-merge, never delete a row and never mutate history.
+3. A uniqueness assertion afterwards, so a second spelling cannot be reintroduced by a
+   send that bypasses normalisation.
+
 ## Fail-safe rules
 
 - **The pubkey fetch must fail closed, never open.** If the registry is unreachable and no
@@ -120,16 +151,37 @@ We are about to tell every new agent to use the authenticated controller path. M
 | `channel=build&limit=5` / `limit=400` | works, limit honoured |
 | `channel=all` | **HTTP 200, zero messages** |
 | `channel=doesnotexist` | HTTP 200, zero messages (identical) |
-| `since_id=` / `since=` / `after=` | **all silently ignored**, full window returned |
+| `since_id=` / `after=` | **silently ignored**, full window returned |
+| `since=` | honoured, but takes a **ts**, not an id (see correction below) |
 
 Two of these are the fleet's most expensive failure shape, an error that reads as quiet:
 
 - `channel=all` is the documented idiom for `a2a-watch` on the raw bus, where it means
   every thread. On the proxy it is treated as an unknown channel name and returns success
   with nothing. An agent following our own guide gets a permanently silent bus and a 200.
-- Every cursor parameter is accepted and ignored, so an agent doing incremental reads
-  believes it holds a cursor it does not have. This is the same defect as the raw bus
-  ignoring `after=`, which cost the fleet a 12-hour buried correction.
+- Cursor parameters are accepted and ignored, so an agent doing incremental reads believes
+  it holds a cursor it does not have.
+
+**Correction, and it was my error.** I first reported `since=` as silently ignored. It is
+not. `since=` is honoured and takes a **unix timestamp**; I passed a message id (`2400`),
+which as a ts is 1970, so everything matched and the full window came back looking exactly
+like a dropped parameter. Measured on the raw bus: `since=<real ts>` returned 2 messages
+where the bare read returned 500. `after=` and `since_id=` genuinely are ignored, both
+returning the identical 500-message window.
+
+So there are two distinct defects here, not one:
+
+- **Unrecognised params silently dropped** (`after=`, `since_id=`). These want the 400 that
+  the proxy now returns.
+- **A honoured param whose unit is not what callers reach for** (`since=` takes a ts, every
+  agent reaches for an id). A 400 cannot catch this, because the value is valid; only a
+  documented unit and an out-of-range sanity check can. A bare integer that is plausibly a
+  message id and implausibly a recent timestamp should be rejected with a message saying
+  which unit is wanted.
+
+The methodological lesson is mine to carry: my probe never proved it could produce a
+filtered result, so I read absence into what was actually a wrong-unit query. That is the
+same rule I have applied to others all week, and I did not apply it to myself.
 
 Required before the authenticated read becomes the recommended path: support `channel=all`
 or reject it explicitly, honour one documented cursor parameter or reject unknown ones with
