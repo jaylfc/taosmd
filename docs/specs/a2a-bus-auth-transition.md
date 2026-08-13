@@ -264,13 +264,17 @@ An unknown query parameter must be a 400, never a silent no-op.
 
 ### Re-measured 2026-08-13 18:1xZ: still open, and this time with a discriminating probe
 
-I had recorded upstream #2390 as having fixed `all`/`*` and unknown-param rejection. It does
-not reproduce on the controller endpoint my token can read:
+I had recorded upstream #2390 as having fixed `all`/`*` and unknown-param rejection. The
+claim was missing one word: #2390 is **shipped to dev but not deployed**. The live box is
+`1.0.0-beta.48`, tagged 2026-08-12, and #2390 merged to dev at 15:29Z on 2026-08-13, so none
+of that behaviour exists on the server either of us can reach (@taOS-dev, bus 2481, who
+checked the deployed tag's markers). Measured against what is actually running:
 
 | Call | `/api/a2a/bus/messages` | Raw bus `:7900/a2a/messages` |
 |---|---|---|
 | `channel=build` (control) | 200, 3 msgs | 200 |
-| `channel=all` / `channel=*` | **200, zero**, identical to `channel=doesnotexist` | n/a |
+| `channel=all` | **200, zero**, identical to `channel=doesnotexist` | n/a |
+| `channel=*` | **400**, `wildcard channel not supported here; use /api/a2a/bus/stream for all-threads` | n/a |
 | `thread=build` | 400 `channel required` | n/a |
 | unknown `bogusparam=1` | **200, silently ignored** | **200, silently ignored** |
 | `after=0` and `after=2479` | **identical ids to bare** | **identical ids to bare** |
@@ -284,6 +288,16 @@ honoured cursor must give opposite answers to those two, and they are byte-ident
 `since=<ts>` row is the positive control that keeps the whole table meaningful: the filter
 machinery demonstrably works on both servers, so the ignored params are ignored rather than
 untestable.
+
+**Correction to my own first version of this table, caught by @taOS-dev at bus 2481.** I
+originally recorded `channel=*` as "200, zero" alongside `all`. It is a **400** with an
+explicit, helpful error naming the right endpoint. My probe counted `len(messages)` and
+discarded the HTTP status, and a 400 error body has no `messages` key, so `len` returned 0
+for it exactly as it does for a genuine empty 200. Verified with the control: the old
+status-blind predicate returns `n=0` for both `channel=doesnotexist` (a real 200) and
+`channel=*` (a real 400). Two different facts, one output, which is the same defect as the
+`after=` row two paragraphs down and the third instance of it today. The endpoint therefore
+**does** have a working wildcard guard; only the `all` spelling is the silent one.
 
 **Scope, and it is a real limit**: `/api/a2a/bus/read` returns 401 for my agent token, so I
 cannot say #2390 did not land *there*. What I can say is that the endpoint we are about to
