@@ -1,9 +1,14 @@
 # A2A bus authentication: design and transition
 
-Status: DRAFT. @taOS-dev has endorsed the three-stage transition and supplied the two Stage 1
-constraints folded in below; their full review of this document is still outstanding. Stage 1
-is landable on that endorsement. **Stages 2 and 3 need explicit sign-off**, because they
-change what the bus rejects and therefore what a coordination failure looks like fleet-wide.
+Status: **STAGE 1 SIGNED OFF** by @taOS-dev, 2026-08-13, reviewed against master 0f0a9f8.
+**Stages 2 and 3 are NOT signed off** and each now carries a binding entry gate, recorded in
+its own section below. They change what the bus rejects and therefore what a coordination
+failure looks like fleet-wide, so neither advances on a date or on this document alone.
+
+Open and NOT settled by that sign-off: whether human principals get a real principal store or
+are withdrawn through the session/auth layer. That is Jay's decision, @taOS-dev is putting it
+to him, and **nothing in this transition may depend on human revocation working until it is
+made**. See open question 1.
 Owner: @taOSmd-dev. Supersedes the held Phase 2 of #138, which was blocked on the registry
 identity layer that landed 2026-08-13.
 
@@ -31,9 +36,19 @@ credential at all.
 1. `POST /a2a/send` requires a valid registry-signed Bearer JWT.
 2. `from` is **derived from the token**, never read from the body. The body's `from` is
    ignored if present and rejected if it disagrees, so a caller cannot assert an identity.
-3. The revocation feed is honoured, including for human principals (see the open question
-   in the PR #235 review: humans currently skip the revocation check, which makes their
-   credentials unwithdrawable).
+3. The revocation feed is honoured **for agent identities**, which is what the feed can
+   actually express.
+
+   **This clause deliberately does NOT promise human-principal revocation, and the earlier
+   version of it did.** That was a blocking defect, caught by @taOS-dev's review: Target
+   state is the NORMATIVE section, so promising a guarantee that open question 1 disproves
+   would instruct an implementer to build a human-revocation path that silently never fires.
+   That is the exact failure shape this whole document exists to prevent, written into the
+   one section an implementer is most likely to build from. Human principals are open
+   question 1 below, and **nothing in this transition may depend on human revocation working
+   until Jay has decided** between a real principal store and withdrawal through the
+   session/auth layer. PR #244's docstring needs the same correction, for the same reason:
+   "pending" implies data that is on its way, and it is not.
 
 ## Handle normalisation is the first hazard, not an afterthought
 
@@ -53,6 +68,12 @@ authenticates perfectly but attributes to two handles has not solved attribution
 
 ### Ruling: ONE promoted helper, and it is a slug match (@taOS-dev, 2026-08-13)
 
+> **SYMBOLS AHEAD DO NOT EXIST ON MASTER YET.** `_normalise_handle`, and the raw-`from_`
+> comparison described in the Stage 1 section, both live in **PR #241**, which is open and
+> blocked. This document sits on master, and a spec on master reads as describing master, so
+> without this marker an implementer would take the Stage 1 prerequisite as already
+> satisfied. It is not. Flagged by @taOS-dev's review of this file at master 0f0a9f8.
+
 A third local copy of this rule must not land. `_normalise_handle` (strip `@`, casefold) is
 promoted to one shared identity-slug helper, carded as tsk-pgtl4b, landing with #241's
 revision with #233 rebased onto it. Two constraints come with it, and both are load-bearing:
@@ -65,9 +86,18 @@ revision with #233 rebased onto it. Two constraints come with it, and both are l
 That default matters because of a constraint from the other side of the fleet. The
 OS-native agent (controller #2391, merged) mints a per-install, owner-linked identity at
 first boot, spelled `@taOS-agent-<install8>`. Normalisation must **not** collapse those:
-the registry's partial unique index on `(handle) WHERE status='active'` rejects the second
-insert the moment two installs share a registry, which forecloses the account/cluster model
-Jay has deliberately kept open. That agent authenticates as a registry identity with
+the registry's partial unique index, quoted exactly because the second half carries the
+argument, is
+
+```
+WHERE status = 'active' AND handle != ''
+```
+
+(`agent_registry_store.py:67`). It rejects the second insert the moment two installs share a
+registry, which forecloses the account/cluster model Jay has deliberately kept open. The
+`handle != ''` half matters: blank-handle rows do not contend, so the collision being
+guarded against is specifically between two **named** installs, which is exactly the
+`@taOS-agent-<install8>` case. That agent authenticates as a registry identity with
 `a2a_send` + `a2a_receive` scopes only.
 
 So the two rules take **different inputs and are not in conflict**: strip the mint stamp
@@ -191,6 +221,17 @@ normalisation surfaces here, not in production rejection.
 Exit test: zero `invalid` and zero `from`-mismatch events for 48 hours, and a deliberate
 negative probe (see below) produces exactly one warning.
 
+**ENTRY GATE, set by @taOS-dev 2026-08-13 and binding. Stage 2 does not begin until BOTH:**
+
+1. **The read-path fix is landed AND DEPLOYED**, not merely merged. This is the
+   shipped-versus-deployed distinction measured on #2390 above, applied to ourselves: Stage
+   1's entire product is annotation data, and we would be reading that data through the very
+   path that currently drops cursors and answers `all` with silence. Deployed means verified
+   against the running box, by the markers in the deployed tag rather than the merged branch.
+2. **tsk-rf5gwb is closed**, meaning channel *membership* rows have been re-measured under
+   stem grouping. The 400-message result above is scoped to `from` fields and must not be
+   assumed to carry over to a different field.
+
 ### Stage 3: enforce
 
 `a2a_auth_enforce` flips. Unsigned and invalid sends are rejected with a 401 naming the
@@ -199,6 +240,19 @@ reason.
 Rollback: the flag flips back with no data migration, and Stage 2 remains correct
 behaviour indefinitely. Document the rollback command in the runbook before the flip, not
 after.
+
+**ENTRY GATE, set by @taOS-dev 2026-08-13 and binding. Stage 3 does not begin until BOTH:**
+
+1. **The membership migration is complete**, with the inventory regenerated **at migration
+   time** rather than trusted from the table in this document. That table is a snapshot of
+   2026-08-13 and says so.
+2. **All five reject proofs below have been observed failing FOR THE INTENDED REASON**, with
+   fenced evidence and a live-assertion control, **and fail-closed has been DEMONSTRATED
+   going red rather than merely specified.** Their reasoning, which I am recording because it
+   is the sharper half: the two fail-safe rules in this document are exactly the kind that
+   get written down and then implemented fail-open, and a reject path that has only ever been
+   seen passing is unproven where it counts. "Not succeeding" is not the same as "failing for
+   the intended reason", and only the second is evidence.
 
 ## Prove the reject path goes red on purpose
 
