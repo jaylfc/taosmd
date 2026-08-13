@@ -310,6 +310,77 @@ def test_http_a2a_messages_since_filter(live_server):
     assert msgs[0]["body"] == "after pivot"
 
 
+def test_http_a2a_messages_since_message_id_rejected(live_server):
+    """since=1444 (a message id) is rejected with 400 on /a2a/messages."""
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=any&since=1444"
+    )
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "1444" in body["error"]
+
+
+def test_http_a2a_stream_since_message_id_rejected(live_server):
+    """since=1444 (a message id) is rejected with 400 on /a2a/stream."""
+    status, body = _get(
+        f"{live_server}/a2a/stream?thread=any&since=1444"
+    )
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "1444" in body["error"]
+
+
+def test_http_a2a_messages_since_zero_rejected(live_server):
+    """since=0 is rejected with 400 on /a2a/messages."""
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=any&since=0"
+    )
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "0" in body["error"]
+
+
+def test_http_a2a_messages_since_negative_rejected(live_server):
+    """since=-1 is rejected with 400 on /a2a/messages."""
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=any&since=-1"
+    )
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "-1" in body["error"]
+
+
+def test_http_a2a_messages_since_omitted_unchanged(live_server):
+    """Omitting since returns all messages (behavior unchanged)."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg1", "thread": "since-omit"})
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg2", "thread": "since-omit"})
+
+    status, body = _get(f"{live_server}/a2a/messages?thread=since-omit")
+    assert status == 200
+    assert len(body["messages"]) == 2
+
+
+def test_http_a2a_messages_since_recent_epoch_unchanged(live_server):
+    """A recent epoch timestamp still filters correctly."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "before pivot", "thread": "since-recent"})
+    time.sleep(0.02)
+    pivot = time.time()
+    time.sleep(0.02)
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "after pivot", "thread": "since-recent"})
+
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=since-recent&since={pivot}"
+    )
+    assert status == 200
+    msgs = body["messages"]
+    assert len(msgs) == 1
+    assert msgs[0]["body"] == "after pivot"
+
+
 # ---------------------------------------------------------------------------
 # SSE smoke test
 # ---------------------------------------------------------------------------
