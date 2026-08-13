@@ -1,6 +1,9 @@
 # A2A bus authentication: design and transition
 
-Status: DRAFT for review by @taOS-dev, then Jay's sign-off before implementation is carded.
+Status: DRAFT. @taOS-dev has endorsed the three-stage transition and supplied the two Stage 1
+constraints folded in below; their full review of this document is still outstanding. Stage 1
+is landable on that endorsement. **Stages 2 and 3 need explicit sign-off**, because they
+change what the bus rejects and therefore what a coordination failure looks like fleet-wide.
 Owner: @taOSmd-dev. Supersedes the held Phase 2 of #138, which was blocked on the registry
 identity layer that landed 2026-08-13.
 
@@ -47,6 +50,54 @@ fleet has already been bitten twice today:
 So: one normalisation function, applied at every boundary, with the `@` prefix and case
 folded, and a test that asserts both spellings resolve to one identity. A bus that
 authenticates perfectly but attributes to two handles has not solved attribution.
+
+### Ruling: ONE promoted helper, and it is a slug match (@taOS-dev, 2026-08-13)
+
+A third local copy of this rule must not land. `_normalise_handle` (strip `@`, casefold) is
+promoted to one shared identity-slug helper, carded as tsk-pgtl4b, landing with #241's
+revision with #233 rebased onto it. Two constraints come with it, and both are load-bearing:
+
+1. **It is a slug match, NOT an identity check**, and the docstring must say so. Two
+   distinct agents sharing a stem would unify under it, and #241's call site is
+   authorisation. Anything that decides *who someone is* needs more than this function.
+2. **The mint stamp is an explicit, documented parameter, defaulting to NOT stripping.**
+
+That default matters because of a constraint from the other side of the fleet. The
+OS-native agent (controller #2391, merged) mints a per-install, owner-linked identity at
+first boot, spelled `@taOS-agent-<install8>`. Normalisation must **not** collapse those:
+the registry's partial unique index on `(handle) WHERE status='active'` rejects the second
+insert the moment two installs share a registry, which forecloses the account/cluster model
+Jay has deliberately kept open. That agent authenticates as a registry identity with
+`a2a_send` + `a2a_receive` scopes only.
+
+So the two rules take **different inputs and are not in conflict**: strip the mint stamp
+when comparing against a message *body* or resolving self from `TAOS_AGENT_CANONICAL`; do
+not strip it for Stage 1's `from_normalised`.
+
+### What the `from` field actually contains (measured, and it narrowed the fix)
+
+Claim under test, from @taOS-dev: a canonical id never appears in a `from` field. Measured
+over the last 400 bus messages:
+
+| Spelling family | `from` count |
+|---|---|
+| `@handle` | 245 |
+| canonical (`slug-YYYYMMDD-HHMMSS`) | 106 |
+| bare slug | 49 |
+
+The claim is false as stated: canonicals do appear, from four lane agents. But grouping
+every sender by stem, **not one canonical has a bare-or-`@` twin**; the only agent on the
+bus writing `from` under two spellings is `@taOSmd-dev`/`taosmd-dev`, me.
+
+That is why mint-stripping stays **out** of Stage 1's `from` normalisation: it would unify
+nothing that is actually split, and it would collapse two installs of one lane into a
+single identity. `_normalise_handle` as it stands is sufficient for Stage 1 and satisfies
+the install-discriminator constraint above.
+
+**Scope, so this is not over-read**: `from` fields only, last 400 messages. The
+seven-channel table below is channel *membership* rows, a different field, and it has not
+been re-measured under this grouping. Carded as tsk-rf5gwb, and it must be measured before
+Stage 2 rather than assumed to carry over.
 
 ### The split is already materialised in bus state, not just in attribution
 
@@ -107,6 +158,29 @@ signed before anyone is cut off.
 Exit test: for 72 consecutive hours, every message from the four drivers is
 `auth=verified`, and the set of `unsigned` senders is empty or contains only senders we
 have consciously decided to retire.
+
+**Prerequisite, found by reviewing Stage 1's own implementation (PR #241).** That exit test
+is unreachable today, and no amount of waiting fixes it. `_registry_verifier.authorize`
+compares the token `sub` against the **raw** `from_`, so normalisation is applied to the
+annotation but skipped in the one place it changes an outcome. Proven on the live server
+with a bare-handle control: the same token gives `auth=verified` for `from=taosmd-dev` and
+`auth=invalid` for `from=@taosmd-dev`. Since `@handle` is how every raw-bus send appears,
+and it is 245 of the last 400 messages, the drivers can never all read `verified` and
+Stage 2 is unreachable behind it.
+
+Two consequences for the plan, not just for that PR:
+
+- Normalisation must be applied **at the comparison**, not only at the annotation. This is
+  the tsk-pgtl4b helper's real call site.
+- **An unverified `sub` must never be written into `verified_sub`.** #241 populates it from
+  an unverified `jwt.decode` on the AuthError path, so a token forged with an unknown key
+  reads `auth=invalid` while `from_mismatch=False`, a forgery presenting as *consistent*,
+  on precisely the rows Stage 2's mismatch gate exists to scrutinise, and on the field the
+  membership migration keys on. Stage 1's data is the whole point of Stage 1; if the
+  annotation can be attacker-chosen, Stages 2 and 3 are built on it. Use `from_mismatch=None`
+  (unknown) on the invalid path and a separate `claimed_sub` for the unverified peek, and
+  split bad-signature from sub-vs-`from` mismatch: today they are indistinguishable, and one
+  is a misconfigured sender while the other is an attacker.
 
 ### Stage 2: verify and warn
 
@@ -188,11 +262,64 @@ or reject it explicitly, honour one documented cursor parameter or reject unknow
 a 400, and accept `thread` as an alias for `channel` (or document the difference loudly).
 An unknown query parameter must be a 400, never a silent no-op.
 
+### Re-measured 2026-08-13 18:1xZ: still open, and this time with a discriminating probe
+
+I had recorded upstream #2390 as having fixed `all`/`*` and unknown-param rejection. It does
+not reproduce on the controller endpoint my token can read:
+
+| Call | `/api/a2a/bus/messages` | Raw bus `:7900/a2a/messages` |
+|---|---|---|
+| `channel=build` (control) | 200, 3 msgs | 200 |
+| `channel=all` / `channel=*` | **200, zero**, identical to `channel=doesnotexist` | n/a |
+| `thread=build` | 400 `channel required` | n/a |
+| unknown `bogusparam=1` | **200, silently ignored** | **200, silently ignored** |
+| `after=0` and `after=2479` | **identical ids to bare** | **identical ids to bare** |
+| `since_id=2479` | identical to bare | identical to bare |
+| `since=<unix ts>` | **filters: 4 of 5** | **filters: 4 of 5, then 0 at a later ts** |
+
+The earlier version of this probe was ambiguous and I nearly filed it as-is: `after=2400`
+with `limit=2` returns the newest two messages, which is what a *honoured* cursor and an
+*ignored* one both predict. `after=0` and `after=2479` are the discriminating values: a
+honoured cursor must give opposite answers to those two, and they are byte-identical. The
+`since=<ts>` row is the positive control that keeps the whole table meaningful: the filter
+machinery demonstrably works on both servers, so the ignored params are ignored rather than
+untestable.
+
+**Scope, and it is a real limit**: `/api/a2a/bus/read` returns 401 for my agent token, so I
+cannot say #2390 did not land *there*. What I can say is that the endpoint we are about to
+recommend to every new agent still silently returns nothing for the documented `all` idiom.
+The raw-bus half is carded as tsk-d64alg; it must be coordinated before it lands, because
+`a2a_watch.sh` and `lead_bus_watch.sh` both send `after=` today and would begin 400ing.
+
 ## Open questions for review
 
-1. Human principals and revocation (PR #235). Agent credentials are withdrawable today via
-   live status re-read; human ones are not. The bus cannot honour a revocation the identity
-   layer does not express.
-2. Ordering: does the read-path fix land before, with, or after Stage 1? My view is before,
-   because Stage 1's value is the attribution data and we will be reading it through that
-   path.
+**1. Human principals and revocation: ANSWERED, and the answer is worse than the question.**
+Asked at bus 2474, answered from source by @taOS-dev at 2475: the controller does **not**
+publish human principals on the revocation feed, and **cannot**. `list_revoked()` selects
+from `agent_registry`, whose insert writes the agent's *owner* as `user_id` rather than
+creating a principal row; `human_principal` appears nowhere in the controller.
+
+So this is not a check waiting on data to arrive. It is a check whose data source is
+structurally incapable of carrying the case, and PR #244's docstring (which frames it as
+pending) must be corrected before merge. **Do not record this hole as closed**, and do not
+close its card as though human withdrawal works. The controller half is @taOS-dev's.
+
+Live risk is currently small and bounded: with no `human_principal_ids` configured, #235's
+guard condition is always true, so revocation applies to everyone. The hole opens only once
+humans are actually configured, which is to say it opens the first time the feature is
+used for its purpose.
+
+**2. Ordering: does the read-path fix land before, with, or after Stage 1?** My view is
+unchanged and the re-measurement above strengthens it: **before**. Stage 1's entire value is
+the attribution data, we will be reading that data through this path, and the path currently
+answers "no messages" and "cursor accepted" when neither is true. Collecting 72 hours of
+Stage 1 annotations through a reader that silently drops its cursor is how we would end up
+trusting a window we never actually saw.
+
+**3. Merge sequencing for #244 and #235** (added after review). #244 is cut from master and
+is a parallel reimplementation of #235's human-principal code, not a patch on top. Merged in
+either order, the docstring describing the revocation fix conflicts while **the guard that
+undoes it auto-merges silently**, taking #235's weaker version, so a resolver sees a prose
+disagreement and ships an auth hole. #244 must rebase onto `exec/tsk-legqtr` (or onto master
+once #235 lands) before either merges. If anyone hand-resolves it instead, #244's three
+revocation tests are the acceptance check and must be run *after* resolution.
