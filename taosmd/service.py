@@ -25,6 +25,7 @@ server, and Python API all go remote transparently.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 
@@ -339,6 +340,61 @@ async def stats(*, agent: str, data_dir=None) -> dict:
         total_chunks=record.get("total_chunks", 0),
     )
     return out
+
+
+async def fetch_by_ref(ref: dict, *, agent: str, data_dir=None) -> dict:
+    """Fetch and verify bytes for a taOS Files-backed ref.
+
+    Thin wrapper over :func:`taosmd.ref_fetch.fetch_by_ref`. Resolves the
+    controller base URL from config, builds a fetcher that authenticates with
+    the registry token, and returns the verified bytes as a base64-encoded
+    string together with its sha256 and size.
+
+    Returns ``{"bytes": <base64-str>, "sha256": <hash>, "size": <int>}``.
+
+    Raises :class:`ValueError` for an unresolvable uri,
+    :class:`~taosmd.ref_fetch.HashMismatchError` for a hash mismatch,
+    :class:`~taosmd.ref_fetch.NotFoundError` for a 404, or
+    :class:`~taosmd.ref_fetch.UnauthorizedError` for a 401/403.
+    """
+    import base64
+
+    from . import config as _config
+    from .ref_fetch import HashMismatchError, NotFoundError, RefFetchError, UnauthorizedError, fetch_by_ref as _fetch_by_ref
+
+    files_url = _config.get_files_url(data_dir)
+    if not files_url:
+        raise RefFetchError(
+            "files_url is not configured: set TAOSMD_FILES_URL or files_url in config.json"
+        )
+    registry_token = _config.get_registry_token(data_dir)
+
+    def _fetcher(url: str, agent: str) -> bytes:
+        import urllib.error
+        import urllib.request
+
+        headers = {"Accept": "application/octet-stream"}
+        if registry_token:
+            headers["Authorization"] = f"Bearer {registry_token}"
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                raise UnauthorizedError(f"HTTP {exc.code} from {url}") from exc
+            if exc.code == 404:
+                raise NotFoundError(f"HTTP 404 from {url}") from exc
+            raise
+        except urllib.error.URLError as exc:
+            raise RefFetchError(f"fetch failed for {url}: {exc}") from exc
+
+    raw = await _fetch_by_ref(ref, _fetcher, agent)
+    return {
+        "bytes": base64.b64encode(raw).decode("ascii"),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "size": len(raw),
+    }
 
 
 async def a2a_send(
@@ -1034,6 +1090,7 @@ __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "
            "supersede", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
+           "fetch_by_ref",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
            "admin_a2a_delete_channel", "admin_a2a_rename_channel",
            "admin_a2a_supersede_message",

@@ -251,6 +251,18 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
             )
         )
 
+    @mcp.tool()
+    async def a2a_fetch_ref(ref: dict, agent: str) -> dict:
+        """Fetch bytes for a taOS Files-backed ref and verify its sha256.
+
+        ``ref`` must be a dict with ``uri`` (a ``taos://`` uri) and ``sha256``.
+        Returns ``{"bytes": <base64-str>, "sha256": <hash>, "size": <int>}``
+        on success, or raises a typed error (mismatch / not-found / unauthorized).
+        """
+        return await _dispatch(
+            service.fetch_by_ref(ref, agent=agent, data_dir=data_dir)
+        )
+
     # ---- Task graph tools -------------------------------------------------------
 
     @mcp.tool()

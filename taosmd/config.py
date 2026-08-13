@@ -39,6 +39,9 @@ _ADMIN_TOKEN_KEY = "admin_token"
 # Key under which the global default recipe id is stored.
 _DEFAULT_RECIPE_KEY = "default_recipe"
 _REGISTRY_URL_KEY = "registry_url"
+# Key under which the optional taOS Files base URL is stored.
+# Used by the ref-fetch helper to resolve taos:// refs to concrete endpoints.
+_FILES_URL_KEY = "files_url"
 # Key under which the registry auth token (taOS local/admin token) is stored.
 # Used to poll the auth-gated registry revoked feed; the pubkey feed is public.
 _REGISTRY_TOKEN_KEY = "registry_token"
@@ -416,6 +419,53 @@ def set_registry_token(token: str, clear: bool = False, data_dir=None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# taOS Files base URL (ref-fetch helper)
+# ---------------------------------------------------------------------------
+
+def get_files_url(data_dir=None) -> str | None:
+    """Return the configured taOS Files base URL, or ``None`` if unset.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_FILES_URL`` environment variable
+    2. ``files_url`` key in ``~/.taosmd/config.json``
+
+    When set, the ref-fetch helper resolves ``taos://`` refs against this
+    controller. When unset, the helper falls back to ``registry_url`` so a
+    single-controller install needs only one setting.
+    """
+    env = os.environ.get("TAOSMD_FILES_URL")
+    if env and env.strip():
+        return env.strip()
+    url = _read(data_dir).get(_FILES_URL_KEY)
+    if isinstance(url, str) and url.strip():
+        return url.strip()
+    return None
+
+
+def set_files_url(url: str, clear: bool = False, data_dir=None) -> None:
+    """Persist the taOS Files base URL (or clear it).
+
+    Args:
+        url: Base URL of the taOS controller serving the Files API, e.g.
+            ``"http://taos:8000"``. Ignored when ``clear`` is True.
+        clear: when True, remove the setting (ref-fetch falls back to
+            ``registry_url``).
+
+    Raises:
+        ValueError: when ``clear`` is False and ``url`` is not a non-empty string.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_FILES_URL_KEY, None)
+    else:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("url must be a non-empty string (or pass clear=True)")
+        data[_FILES_URL_KEY] = url.strip()
+    _write(data, data_dir)
+
+
+# ---------------------------------------------------------------------------
 # Remote server bearer token
 # ---------------------------------------------------------------------------
 
@@ -683,6 +733,8 @@ __all__ = [
     "set_registry_url",
     "get_registry_token",
     "set_registry_token",
+    "get_files_url",
+    "set_files_url",
     "get_managed_by",
     "set_managed_by",
     "get_serve_dashboard",

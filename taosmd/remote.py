@@ -400,5 +400,12 @@ class RemoteClient:
             {"to_id": to_id, "type": edge_type},
         )
 
+    async def fetch_by_ref(self, ref: dict, agent: str, **opts) -> dict:
+        """POST /refs/fetch: proxy a ref fetch to the remote server.
+
+        Returns ``{"bytes": <base64-str>, "sha256": <hash>, "size": <int>}``.
+        """
+        return await self._run("POST", "/refs/fetch", {"ref": ref, "agent": agent})
+
 
 __all__ = ["RemoteClient"]

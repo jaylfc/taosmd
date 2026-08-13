@@ -484,6 +484,36 @@ def _a2a_bridge_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _a2a_fetch_ref_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd a2a-fetch-ref``: fetch bytes for a taOS Files-backed ref."""
+    import asyncio  # noqa: PLC0415
+    import base64  # noqa: PLC0415
+
+    from . import service  # noqa: PLC0415
+    from .ref_fetch import RefFetchError  # noqa: PLC0415
+
+    data_dir = args.data_dir
+    try:
+        ref = json.loads(args.ref_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        print(f"error: invalid ref JSON: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        result = asyncio.run(service.fetch_by_ref(ref, agent="cli", data_dir=data_dir))
+    except RefFetchError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    raw = base64.b64decode(result["bytes"])
+    if args.output:
+        Path(args.output).write_bytes(raw)
+        print(f"wrote {result['size']} bytes to {args.output}")
+    else:
+        sys.stdout.buffer.write(raw)
+    return 0
+
+
 def _a2a_poll_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd a2a-poll``: fetch new messages and update state file."""
     import asyncio  # noqa: PLC0415
@@ -1683,6 +1713,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Exit after firing the trigger N times (default 0 = run forever)",
     )
 
+    # ----- a2a-fetch-ref subcommand ---------------------------------------
+    fetch_ref_p = sub.add_parser(
+        "a2a-fetch-ref",
+        help="Fetch bytes for a taOS Files-backed ref and verify its sha256",
+    )
+    fetch_ref_p.add_argument(
+        "ref_json",
+        help="JSON object with uri and sha256 fields",
+    )
+    fetch_ref_p.add_argument(
+        "--output", "-o", default=None,
+        help="Write bytes to FILE instead of stdout",
+    )
+
     # ----- serve subcommand (local HTTP/REST API) -----------------------
     serve_p = sub.add_parser(
         "serve",
@@ -1959,6 +2003,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "a2a-bridge":
         return _a2a_bridge_cmd(args)
+
+    if args.cmd == "a2a-fetch-ref":
+        return _a2a_fetch_ref_cmd(args)
 
     if args.cmd == "serve":
         from . import service_install  # noqa: PLC0415
