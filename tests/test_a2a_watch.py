@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import threading
 from pathlib import Path
@@ -182,3 +183,50 @@ def test_bridge_all_channels(watch_server, tmp_path):
     payload = json.loads(sink.read_text())
     assert payload["thread"] == "gamma"
     assert payload["body"] == "wake-from-gamma"
+
+
+# ---------------------------------------------------------------------------
+# Doc drift guard for the "Verify your wake path" section
+# ---------------------------------------------------------------------------
+
+def _verify_wake_section(doc: str) -> str:
+    """Return the 'Verify your wake path' subsection (up to the next ``###``)."""
+    marker = "### Verify your wake path"
+    start = doc.index(marker)
+    remainder = doc[start:]
+    nxt = remainder.find("\n### ", len(marker))
+    return remainder if nxt == -1 else remainder[:nxt]
+
+
+def test_verify_wake_doc_teaches_positive_and_negative_control():
+    """The 'Verify your wake path' doc section must not teach an ambiguous probe.
+
+    The tsk-4g2wun text taught that seeing no messages "proves the wake path
+    is configured and listening" -- an ambiguous probe whose output is identical
+    for a working path and a dead one (PROBE-DISCIPLINE.md / fleet rule bus
+    2445). The fix requires a positive control (the reader sends a probe that
+    MUST wake the gate and observes the wake firing) and a negative control (a
+    probe that must NOT wake it), in the same procedure.
+
+    This test FAILS against the unfixed text and PASSES once both controls are
+    present and the absence-as-proof claim is gone.
+    """
+    doc = (
+        Path(__file__).resolve().parent.parent
+        / "taosmd" / "docs" / "a2a-comms.md"
+    ).read_text(encoding="utf-8")
+    section = _verify_wake_section(doc)
+    lower = section.lower()
+
+    # Positive control: instruct the reader to SEND a probe that MUST wake the
+    # gate and to OBSERVE the wake firing.
+    assert "positive control" in lower, section
+    assert "send" in lower, section
+    assert re.search(r"must wake|must fire", lower), section
+
+    # Negative control: a probe that must NOT wake the gate.
+    assert "negative control" in lower, section
+
+    # The ambiguous-probe claim is gone: absence of output may no longer be
+    # taught as proof the wake path is configured and listening.
+    assert "proves the wake path is configured" not in lower, section
