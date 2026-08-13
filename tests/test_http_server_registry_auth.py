@@ -293,7 +293,7 @@ def test_ingest_token_project_id_overrides_body_project(project_server):
     assert status == 200, body
 
 
-def test_search_token_project_id_scopes_results(project_server):
+def test_search_token_project_id_scopes_results(project_server, live_embed_backend):
     """Ingest under token proj-a, then search with same token and find the memory."""
     token = _make_token("agent-1", project_id="proj-a", iss=registry_auth.REGISTRY_ISS)
     # Ingest (token forces project=proj-a regardless of body)
