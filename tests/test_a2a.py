@@ -351,23 +351,96 @@ def _stream_status_code(live_server: str, path: str, timeout: float = 3.0) -> in
     return int(status_line.split()[1])
 
 
+def _stream_rejection(live_server: str, path: str, timeout: float = 3.0) -> tuple[int, dict | None]:
+    """Read the HTTP response from the SSE stream at ``path``.
+
+    On ACCEPT (200) the server keeps the connection open indefinitely, so
+    only the status line is read and ``None`` is returned as the body.
+    On REJECT (400) the full JSON body is read and returned as a dict.
+    A short socket timeout bounds the call; a timeout raises
+    ``AssertionError`` instead of hanging.
+    """
+    parsed = urllib.parse.urlsplit(live_server)
+    host = parsed.hostname
+    port = parsed.port
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        sock.sendall(
+            f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n".encode()
+        )
+        sock.settimeout(timeout)
+        line = b""
+        while b"\r\n" not in line:
+            try:
+                chunk = sock.recv(128)
+            except (socket.timeout, TimeoutError) as exc:
+                raise AssertionError(f"timed out reading stream status line: {exc}") from exc
+            if not chunk:
+                break
+            line += chunk
+        status_line = line.decode("utf-8", "replace").splitlines()[0]
+        status = int(status_line.split()[1])
+
+        if status == 200:
+            return status, None
+
+        headers_raw = b""
+        while b"\r\n\r\n" not in headers_raw:
+            try:
+                chunk = sock.recv(128)
+            except (socket.timeout, TimeoutError) as exc:
+                raise AssertionError(f"timed out reading response headers: {exc}") from exc
+            if not chunk:
+                break
+            headers_raw += chunk
+
+        header_text = headers_raw.decode("utf-8", "replace")
+        body_start = header_text.find("\r\n\r\n") + 4
+        body_bytes = header_text[body_start:].encode("utf-8")
+
+        content_length = None
+        for h in header_text.splitlines()[1:]:
+            if h.lower().startswith("content-length:"):
+                content_length = int(h.split(":", 1)[1].strip())
+                break
+
+        if content_length is not None:
+            remaining = content_length - len(body_bytes)
+            while remaining > 0:
+                try:
+                    chunk = sock.recv(min(remaining, 4096))
+                except (socket.timeout, TimeoutError) as exc:
+                    raise AssertionError(f"timed out reading response body: {exc}") from exc
+                if not chunk:
+                    break
+                body_bytes += chunk
+                remaining -= len(chunk)
+
+        return status, json.loads(body_bytes.decode("utf-8"))
+
+
 def test_http_a2a_stream_since_nan_rejected(live_server):
     """since=nan is rejected with 400 on /a2a/stream."""
-    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=nan")
+    status, body = _stream_rejection(
+        live_server, "/a2a/stream?thread=any&since=nan"
+    )
     assert status == 400
     assert "finite" in body["error"]
 
 
 def test_http_a2a_stream_since_inf_rejected(live_server):
     """since=inf is rejected with 400 on /a2a/stream."""
-    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=inf")
+    status, body = _stream_rejection(
+        live_server, "/a2a/stream?thread=any&since=inf"
+    )
     assert status == 400
     assert "finite" in body["error"]
 
 
 def test_http_a2a_stream_since_message_id_rejected(live_server):
     """since=1444 (a message id) is rejected with 400 on /a2a/stream."""
-    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=1444")
+    status, body = _stream_rejection(
+        live_server, "/a2a/stream?thread=any&since=1444"
+    )
     assert status == 400
     assert "timestamp" in body["error"]
     assert "1444" in body["error"]
@@ -375,7 +448,9 @@ def test_http_a2a_stream_since_message_id_rejected(live_server):
 
 def test_http_a2a_stream_since_unparseable_rejected(live_server):
     """since=abc (non-numeric) is rejected with 400 on /a2a/stream."""
-    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=abc")
+    status, body = _stream_rejection(
+        live_server, "/a2a/stream?thread=any&since=abc"
+    )
     assert status == 400
     assert "float timestamp" in body["error"]
 
