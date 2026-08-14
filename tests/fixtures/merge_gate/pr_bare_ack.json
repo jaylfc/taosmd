@@ -1,0 +1,12 @@
+{
+  "number": 218,
+  "headRefOid": "abc123def456",
+  "reviews": [],
+  "comments": [
+    {
+      "author": {"login": "coderabbitai"},
+      "body": "Review finished",
+      "createdAt": "2026-07-28T12:21:48Z"
+    }
+  ]
+}
