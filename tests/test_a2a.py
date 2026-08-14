@@ -311,6 +311,90 @@ def test_http_a2a_messages_since_filter(live_server):
 
 
 # ---------------------------------------------------------------------------
+# since rejection on /a2a/stream
+#
+# ``_parse_since`` runs in ``_handle_a2a_stream`` *before* the SSE response
+# headers are written, so a bad ``since`` yields a clean HTTP 400 JSON body
+# just like ``/a2a/messages``. On ACCEPT the handler emits headers and then
+# holds the connection open forever, so ``urlopen``/``resp.read()`` hangs --
+# see ``_stream_status_code`` for how the accept case bounds the call.
+# ---------------------------------------------------------------------------
+
+def _stream_status_code(live_server: str, path: str, timeout: float = 3.0) -> int:
+    """Read only the HTTP status line from the SSE stream at ``path``.
+
+    ``/a2a/stream`` on ACCEPT sends response headers and then keeps the
+    connection open indefinitely, so a naive ``urlopen``/``resp.read()``
+    hangs. Reading just the status line sidesteps that: the server emits the
+    response line and headers immediately (200 on accept, 400 on bad input).
+    A short socket timeout bounds the call, and a timeout raises here -- it is
+    a hard failure, never a silent pass.
+    """
+    parsed = urllib.parse.urlsplit(live_server)
+    host = parsed.hostname
+    port = parsed.port
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        sock.sendall(
+            f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n".encode()
+        )
+        sock.settimeout(timeout)
+        line = b""
+        while b"\r\n" not in line:
+            try:
+                chunk = sock.recv(128)
+            except (socket.timeout, TimeoutError) as exc:
+                raise AssertionError(f"timed out reading stream status line: {exc}") from exc
+            if not chunk:
+                break
+            line += chunk
+    status_line = line.decode("utf-8", "replace").splitlines()[0]
+    return int(status_line.split()[1])
+
+
+def test_http_a2a_stream_since_nan_rejected(live_server):
+    """since=nan is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=nan")
+    assert status == 400
+    assert "finite" in body["error"]
+
+
+def test_http_a2a_stream_since_inf_rejected(live_server):
+    """since=inf is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=inf")
+    assert status == 400
+    assert "finite" in body["error"]
+
+
+def test_http_a2a_stream_since_message_id_rejected(live_server):
+    """since=1444 (a message id) is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=1444")
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "1444" in body["error"]
+
+
+def test_http_a2a_stream_since_unparseable_rejected(live_server):
+    """since=abc (non-numeric) is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=abc")
+    assert status == 400
+    assert "float timestamp" in body["error"]
+
+
+def test_http_a2a_stream_since_valid_epoch_accepted(live_server):
+    """A valid epoch since= is accepted (HTTP 200) on /a2a/stream.
+
+    Reads only the status line over a raw socket so the SSE connection, which
+    stays open indefinitely on accept, cannot hang the test. Rejecting input
+    yields 400 over the same path; a valid epoch yields 200, so the two
+    outcomes are distinguishable by status code, not by absence of a 400.
+    """
+    status = _stream_status_code(
+        live_server, "/a2a/stream?thread=any&since=1786000000"
+    )
+    assert status == 200
+
+
+# ---------------------------------------------------------------------------
 # SSE smoke test
 # ---------------------------------------------------------------------------
 
