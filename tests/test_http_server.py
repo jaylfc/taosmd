@@ -799,3 +799,38 @@ def test_graph_activations_endpoint(live_server):
     assert status == 200, body
     assert "activations" in body and isinstance(body["activations"], list)
     assert "now" in body
+
+
+def test_post_refs_fetch_returns_bytes(live_server, monkeypatch):
+    from taosmd import service as svc
+
+    async def fake_fetch_by_ref(ref, agent, data_dir=None):
+        return {"bytes": "aGVsbG8=", "sha256": "abc", "size": 5}
+
+    monkeypatch.setattr(svc, "fetch_by_ref", fake_fetch_by_ref)
+
+    status, body = _post(
+        f"{live_server}/refs/fetch",
+        {"ref": {"uri": "taos://proj/files/hello.txt", "sha256": "abc"}, "agent": "http-test"},
+    )
+    assert status == 200, body
+    assert body["bytes"] == "aGVsbG8="
+    assert body["size"] == 5
+
+
+def test_post_refs_fetch_missing_ref_returns_400(live_server):
+    status, body = _post(
+        f"{live_server}/refs/fetch",
+        {"agent": "http-test"},
+    )
+    assert status == 400
+    assert "ref" in body["error"]
+
+
+def test_post_refs_fetch_missing_agent_returns_400(live_server):
+    status, body = _post(
+        f"{live_server}/refs/fetch",
+        {"ref": {"uri": "taos://proj/files/hello.txt", "sha256": "abc"}},
+    )
+    assert status == 400
+    assert "agent" in body["error"]

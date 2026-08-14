@@ -91,6 +91,7 @@ Endpoints
                            Adds ``"vector_failures": int`` and ``"degraded": true`` to the
                            result when embedding failed for one or more items (archived,
                            repairable via reconcile), same as single ingest.
+``POST /refs/fetch``        ``{"ref": {"uri": "taos://<slug>/files/<path>", "sha256": "<hex>"}, "agent"}`` -> ``{"bytes": "<base64>", "sha256": "<hex>", "size": <int>}``
 ``POST /search``           ``{"query", "agent", "limit"?, "project"?, "also_include"?, "mode"?, "collection"?, "collections"?: [...], "collections_only"?: bool}`` -> ``{"hits": [...]}``
                            ``collection``/``collections`` add granted collections' indexed
                            content to the search (grants enforced per requesting agent;
@@ -937,6 +938,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_ingest()
                 elif method == "POST" and path == "/ingest/batch":
                     self._handle_ingest_batch()
+                elif method == "POST" and path == "/refs/fetch":
+                    self._handle_refs_fetch()
                 elif method == "GET" and path == "/projects":
                     self._handle_list_projects()
                 elif method == "GET" and path == "/shelves":
@@ -1101,6 +1104,19 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             # before any write; its ValueError surfaces as a 400 here.
             result = runner.run(
                 service.ingest_batch(items, agent=agent, data_dir=data_dir, **opts)
+            )
+            self._send_json(200, result)
+
+        def _handle_refs_fetch(self) -> None:
+            body = self._read_json_body()
+            ref = body.get("ref")
+            agent = body.get("agent")
+            if not isinstance(ref, dict):
+                raise _BadRequest("'ref' (object) is required")
+            if not isinstance(agent, str) or not agent:
+                raise _BadRequest("'agent' (non-empty string) is required")
+            result = runner.run(
+                service.fetch_by_ref(ref=ref, agent=agent, data_dir=data_dir)
             )
             self._send_json(200, result)
 
