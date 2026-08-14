@@ -37,7 +37,7 @@ for r in reviews:
     if commit_oid != head_oid:
         continue
     body = r.get('body') or ''
-    has_inline = r.get('includesCreatedEdit', False)
+    has_inline = (r.get('comments') or {}).get('totalCount', 0) > 0
     if body.strip() or has_inline:
         print('SUCCESS: anchored substantive bot review found')
         sys.exit(0)

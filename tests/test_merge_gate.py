@@ -97,6 +97,43 @@ def test_human_only_fails(tmp_path):
     assert result.stdout.startswith("FAILED:")
 
 
+def test_inline_only_review_rejected_by_buggy_logic(tmp_path):
+    fixture = _read("pr_inline_only.json")
+    _make_fake_gh(str(tmp_path), pr=fixture)
+    env = os.environ.copy()
+    env["PATH"] = str(tmp_path) + ":" + env.get("PATH", "")
+
+    # Reconstruct the pre-fix logic that relied on includesCreatedEdit
+    with open(os.path.join("scripts", "merge-gate", "check_bot_anchoring.sh")) as f:
+        buggy_script = f.read().replace(
+            "has_inline = (r.get('comments') or {}).get('totalCount', 0) > 0",
+            "has_inline = r.get('includesCreatedEdit', False)",
+        )
+    buggy_path = os.path.join(str(tmp_path), "buggy.sh")
+    with open(buggy_path, "w") as f:
+        f.write(buggy_script)
+
+    result = subprocess.run(
+        ["bash", buggy_path, "218"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 10, result.stdout + result.stderr
+    assert result.stdout.startswith("FAILED:")
+
+
+def test_inline_only_review_accepted_by_fix(tmp_path):
+    result = _run(
+        "check_bot_anchoring.sh",
+        ["218"],
+        str(tmp_path),
+        pr=_read("pr_inline_only.json"),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.startswith("SUCCESS:")
+
+
 def test_rate_limited_fails(tmp_path):
     result = _run(
         "check_fake_green.sh",
