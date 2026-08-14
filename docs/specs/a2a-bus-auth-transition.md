@@ -267,6 +267,27 @@ exists to prevent. Without any exclusion the gate is unpassable by construction,
 probe it mandates creates one of the events it requires to be zero.
 (@taOS-dev ruling, 2026-08-14, bus 2553.)
 
+**INSUFFICIENT DATA is a distinct outcome from PASS, and every gate in this document is
+bound by it.** A zero count is evidence only if enough was observed for a non-zero count to
+have been possible. So the Stage 2 exit test does not pass on "zero `invalid` events" alone:
+it passes on zero `invalid` events **out of a stated observed volume**, with the volume
+recorded alongside the count. Below that volume the correct verdict is `INSUFFICIENT DATA`
+and a non-zero exit, never `PASS`. Same rule for the negative probe: "exactly one warning"
+must be one warning **out of an observed stream**, since a silent bus produces the same
+count as a broken annotation path.
+
+Written after this shape was measured twice on the same day, in two different tools, and
+neither was noticed by its author. The membership measurement tool (PR #268) concluded on
+absence of counterexamples, so `measure([])` printed *safe*, and a run that extracted 27
+pairs from a 14,397-line spool printed *safe* as well. @taOS-dev's `gate_merge.sh` had the
+same hole from the other direction: a card body that was empty (rather than unreadable)
+matched no red-demand pattern, so the entire red-proof branch was skipped and the PR merged;
+they proved it red, guarded it, and proved it green. The family also includes `grep -c`
+exiting 0 while printing `0`. **In all of them the missing evidence produces the same output
+as satisfied evidence**, which is the one property that makes a gate worthless while it
+still reports green. A gate whose PASS is reachable from zero data is not a gate.
+(Adopted by @taOS-dev as binding on their gates too, bus 2573.)
+
 **ENTRY GATE, set by @taOS-dev 2026-08-13 and binding. Stage 2 does not begin until BOTH:**
 
 1. **The read-path fix is landed AND DEPLOYED**, not merely merged. This is the
@@ -274,9 +295,29 @@ probe it mandates creates one of the events it requires to be zero.
    1's entire product is annotation data, and we would be reading that data through the very
    path that currently drops cursors and answers `all` with silence. Deployed means verified
    against the running box, by the markers in the deployed tag rather than the merged branch.
-2. **tsk-rf5gwb is closed**, meaning channel *membership* rows have been re-measured under
-   stem grouping. The 400-message result above is scoped to `from` fields and must not be
-   assumed to carry over to a different field.
+2. **tsk-knncne is closed**, meaning the identity-stem grouping has been re-measured on
+   channel-scoped principals with real data and a stated observed volume.
+
+   **CORRECTION, 2026-08-14: this gate previously said "channel *membership* rows have been
+   re-measured", and that is not a thing that can be done.** There is no channel membership
+   in taOSmd. `service.a2a_channels()` builds `members` by adding `data["from"]` to a set;
+   `service.a2a_members()` is documented as returning "distinct sender names observed on
+   `channel`"; and there is no membership, join, roster or subscription table anywhere in
+   `archive.py` or `migrations.py`. `members` is a name for `set(from)` grouped by thread.
+   So my own earlier sentence — that the channel inventory was "a different field" from
+   `from` and must not be assumed to carry over — was wrong: it is the same field, grouped
+   differently. tsk-rf5gwb and its successor tsk-aildfj asked a lane for an unmeasurable
+   quantity and were closed for that reason; tsk-knncne replaces them.
+
+   **What the gate now requires**, which is measurable: the same stem grouping applied to
+   `from` values **grouped per channel** rather than globally, against real archive rows,
+   reported with the observed volume per the INSUFFICIENT DATA rule above. Stage 2 may key
+   on sender-derived identity. It may not describe that identity as membership.
+
+   The substantive conclusion is unaffected by the naming correction, because it was always a
+   statement about senders: **mint-stamp stripping is not safe**, corroborated on the live
+   bus, which carries `hermes` and `hermes-20260727-001415` as distinct senders that
+   stem-collide under stripping. Stage 1 normalisation must not strip mint stamps.
 
 ### Stage 3: enforce
 
