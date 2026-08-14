@@ -1511,6 +1511,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 since = float(since_raw) if since_raw is not None else None
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'since' must be a float timestamp") from exc
+            if since is not None and not math.isfinite(since):
+                raise _BadRequest("'since' must be a finite timestamp")
             try:
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
@@ -1557,6 +1559,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             try:
                 last_ts = float(since_raw) if since_raw is not None else time.time()
             except (TypeError, ValueError):
+                last_ts = time.time()
+            if not math.isfinite(last_ts):
                 last_ts = time.time()
 
             # Send SSE response headers before entering the poll loop.
