@@ -9,8 +9,11 @@ needed. Requests go over the loopback via urllib.
 from __future__ import annotations
 
 import json
+import socket
 import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -18,6 +21,42 @@ import pytest
 
 from taosmd import api as taosmd_api
 from taosmd import http_server
+
+
+def _read_sse_frames(host: str, port: int, path: str, timeout: float = 8.0) -> list[str]:
+    """Open a raw TCP connection, send a minimal HTTP GET, read lines until
+    at least one ``data:`` frame arrives or timeout expires. Returns the list
+    of ``data:`` payload strings received."""
+    frames: list[str] = []
+    deadline = time.monotonic() + timeout
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        sock.sendall(
+            f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n".encode()
+        )
+        buf = b""
+        # Discard the HTTP headers section first.
+        header_done = False
+        while time.monotonic() < deadline and not frames:
+            sock.settimeout(max(0.1, deadline - time.monotonic()))
+            try:
+                chunk = sock.recv(4096)
+            except (socket.timeout, TimeoutError):
+                break
+            if not chunk:
+                break
+            buf += chunk
+            if not header_done:
+                sep = buf.find(b"\r\n\r\n")
+                if sep != -1:
+                    buf = buf[sep + 4:]
+                    header_done = True
+            if header_done:
+                # Parse SSE lines from what we have so far.
+                text = buf.decode("utf-8", errors="replace")
+                for line in text.splitlines():
+                    if line.startswith("data: "):
+                        frames.append(line[6:])
+    return frames
 
 
 def _patch_embedder(stores: dict) -> None:
@@ -456,6 +495,151 @@ def test_a2a_since_negative_inf_rejected(live_server):
     status, body = _get(f"{live_server}/a2a/messages?since=-inf")
     assert status == 400
     assert "error" in body
+
+
+# ---------------------------------------------------------------------------
+# A2A since validation tests (master validates it correctly but nothing covers /a2a/stream)
+# ---------------------------------------------------------------------------
+
+# Lifted from PR #269 (exec/tsk-dx6fok), extended to cover stream and additional edge cases
+
+def test_a2a_stream_since_message_id_rejected(live_server):
+    """since=1444 (a message id) is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=1444")
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "1444" in body["error"]
+
+
+def test_a2a_messages_since_zero_rejected(live_server):
+    """since=0 is rejected with 400 on /a2a/messages."""
+    status, body = _get(f"{live_server}/a2a/messages?thread=any&since=0")
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "0" in body["error"]
+
+
+def test_a2a_messages_since_negative_rejected(live_server):
+    """since=-1 is rejected with 400 on /a2a/messages."""
+    status, body = _get(f"{live_server}/a2a/messages?thread=any&since=-1")
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "-1" in body["error"]
+
+
+def test_a2a_messages_since_omitted_unchanged(live_server):
+    """Omitting since returns all messages (behavior unchanged)."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg1", "thread": "since-omit"})
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg2", "thread": "since-omit"})
+
+    status, body = _get(f"{live_server}/a2a/messages?thread=since-omit")
+    assert status == 200
+    assert len(body["messages"]) == 2
+
+
+def test_a2a_messages_since_recent_epoch_unchanged(live_server):
+    """A recent epoch timestamp still filters correctly."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "before pivot", "thread": "since-recent"})
+    time.sleep(0.02)
+    pivot = time.time()
+    time.sleep(0.02)
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "after pivot", "thread": "since-recent"})
+
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=since-recent&since={pivot}"
+    )
+    assert status == 200
+    msgs = body["messages"]
+    assert len(msgs) == 1
+    assert msgs[0]["body"] == "after pivot"
+
+
+# ---------------------------------------------------------------------------
+# A2A since rejection tests for /a2a/stream (missing in master)
+# ---------------------------------------------------------------------------
+
+# Extended validation tests covering nan, inf, abc for /a2a/stream
+
+def test_a2a_stream_since_nan_rejected(live_server):
+    """since=nan is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?since=nan")
+    assert status == 400
+    assert "error" in body
+
+def test_a2a_stream_since_inf_rejected(live_server):
+    """since=inf is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?since=inf")
+    assert status == 400
+    assert "error" in body
+
+def test_a2a_stream_since_negative_inf_rejected(live_server):
+    """since=-inf is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?since=-inf")
+    assert status == 400
+    assert "error" in body
+
+def test_a2a_stream_since_message_id_rejected(live_server):
+    """since=1444 (a message id) is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=1444")
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "1444" in body["error"]
+
+def test_a2a_stream_since_zero_rejected(live_server):
+    """since=0 is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=0")
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "0" in body["error"]
+
+def test_a2a_stream_since_negative_rejected(live_server):
+    """since=-1 is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=-1")
+    assert status == 400
+    assert "timestamp" in body["error"]
+    assert "-1" in body["error"]
+
+def test_a2a_stream_since_abc_rejected(live_server):
+    """since=abc is rejected with 400 on /a2a/stream."""
+    status, body = _get(f"{live_server}/a2a/stream?thread=any&since=abc")
+    assert status == 400
+    assert "error" in body
+
+def test_a2a_stream_since_valid_epoch_unchanged(live_server):
+    """A recent epoch timestamp still filters correctly on /a2a/stream."""
+    parsed = urllib.parse.urlsplit(live_server)
+    host = parsed.hostname
+    port = parsed.port
+
+    thread = "stream-recent"
+    frames_received = []
+    error_holder = []
+
+    def _stream_reader():
+        try:
+            result = _read_sse_frames(
+                host, port,
+                f"/a2a/stream?thread={thread}",
+                timeout=3.0,
+            )
+            frames_received.extend(result)
+        except Exception as exc:
+            error_holder.append(exc)
+
+    reader = threading.Thread(target=_stream_reader, daemon=True)
+    reader.start()
+
+    time.sleep(1.5)
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "after pivot", "thread": thread})
+
+    reader.join(timeout=10)
+    assert not error_holder, f"SSE reader raised: {error_holder[0]}"
+    assert frames_received, "expected at least one SSE data: frame"
 
 
 # ---------------------------------------------------------------------------
