@@ -58,8 +58,6 @@ CREATE TABLE IF NOT EXISTS archive_index (
     agent_name TEXT,
     app_id TEXT,
     project TEXT,
-    source TEXT,
-    source_id TEXT,
     summary TEXT NOT NULL DEFAULT '',
     file_path TEXT NOT NULL,
     line_number INTEGER NOT NULL,
@@ -69,9 +67,6 @@ CREATE INDEX IF NOT EXISTS idx_archive_ts ON archive_index(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_archive_type ON archive_index(event_type);
 CREATE INDEX IF NOT EXISTS idx_archive_agent ON archive_index(agent_name);
 CREATE INDEX IF NOT EXISTS idx_archive_app ON archive_index(app_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_source_uid
-ON archive_index (source, source_id)
-WHERE source IS NOT NULL AND source_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS archive_settings (
     key TEXT PRIMARY KEY,
@@ -85,7 +80,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
     tokenize='porter unicode61'
 );
 """
-
 
 class ArchiveStore:
     """Append-only event archive with daily JSONL files and SQLite index."""
@@ -249,11 +243,9 @@ class ArchiveStore:
         # Index for fast lookup
         cursor = self._conn.execute(
             """INSERT INTO archive_index
-               (timestamp, event_type, agent_name, app_id, project, source, source_id,
-                summary, file_path, line_number, data_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ts, event_type, agent_name, app_id, project, source, source_id,
-             summary, file_path, line_count, json.dumps(data, default=str)),
+               (timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ts, event_type, agent_name, app_id, project, summary, file_path, line_count, json.dumps(data, default=str)),
         )
 
         # Index in FTS for full-text search

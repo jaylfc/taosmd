@@ -698,6 +698,11 @@ async def a2a_import(
             )
         seen_source_ids.add(sid)
 
+    # --- Remote import branch: forward to remote server if configured -----
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_import(source, messages, defer_index=defer_index)
+
     # --- Idempotency + reply_to pre-check (archive is source of truth) ---
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]

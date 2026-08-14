@@ -226,13 +226,6 @@ _ARCHIVE_INDEX: tuple[Migration, ...] = (
         2, "archive_index_project", _archive_index_project,
         lambda c: has_column(c, "archive_index", "project"),
     ),
-    Migration(
-        3, "archive_index_source_uid", _archive_index_source_uid,
-        lambda c: (
-            has_column(c, "archive_index", "source")
-            and has_column(c, "archive_index", "source_id")
-        ),
-    ),
 )
 
 
