@@ -760,9 +760,12 @@ async def a2a_threads(*, principal: str | None = None, data_dir=None) -> list[di
             "kind": t["kind"],
             "participants": sorted(t["participants"]),
             "last_message": t["last_message"],
+            "_last_ts": t["_last_ts"],
         })
-    result.sort(key=lambda x: x["thread"])
-    return result
+    result.sort(key=lambda x: x["_last_ts"], reverse=True)
+    return [{"thread": t["thread"], "kind": t["kind"],
+             "participants": t["participants"],
+             "last_message": t["last_message"]} for t in result]
 
 
 async def a2a_thread_messages(
@@ -1256,6 +1259,7 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
            "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
+           "a2a_threads", "a2a_thread_messages",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
