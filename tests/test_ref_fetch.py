@@ -196,7 +196,7 @@ class TestFetchByRef:
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
                 self.end_headers()
-                self.wfile.write(b"ok")
+                self.wfile.write(b"hello world")
             def log_message(self, format, *args):
                 pass
 
@@ -257,8 +257,15 @@ class TestFetchByRef:
                 f"Keys found: {auth_keys}"
             )
 
-            # ---- Part 2: control without _NoRedirect ----
-            # Build an opener without _NoRedirect (default HTTPRedirectHandler
+# Part 2: stdlib demo (not the fetch-path control after payload fix).
+        # Hand-builds urllib.request.build_opener() with a Request bearing a
+        # hardcoded Authorization header. Demonstrates that default openers
+        # follow redirects and forward headers, and that origin B can record
+        # a header at all. Is NOT the control for our fetch path, after the
+        # payload fix, Part 1 is. Right now it reads like the control,
+        # which is misleading.
+        # ---- Part 2: control without _NoRedirect ----
+        # Build an opener without _NoRedirect (default HTTPRedirectHandler
             # follows redirects). Origin B MUST receive the Authorization header.
             headers = {"Accept": "application/octet-stream", "Authorization": "Bearer test-token"}
             req = urllib.request.Request(
