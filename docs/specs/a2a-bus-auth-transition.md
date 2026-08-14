@@ -185,6 +185,19 @@ reading. Required before Stage 3:
 - **A verifier that cannot run is an error, not a pass.** If `pyjwt`/`cryptography` are
   missing, the server must refuse to start in enforce mode rather than skip verification.
   This is the #214 lesson: that test surface silently skipped for months.
+- **The annotations are SERVER-OWNED. Normative, not commentary.** The server sets `auth`,
+  `verified_sub` and the `from`-disagreement flag at ingest, and **overwrites or strips any
+  client-supplied value for those three fields, unconditionally.** A client may not submit
+  them and may not influence them.
+
+  This is not defensive tidiness. **Both stage gates are scored off precisely these three
+  fields**, so without this clause the gates measure attacker-controlled data and report
+  green. It is the same defect as #241 one layer down: #241 wrote an unverified `sub` into
+  `verified_sub` so a forgery read as *consistent* at the parse layer, and an unowned
+  annotation permits the identical forgery at the storage layer. A gate whose evidence its
+  own subject can write is not a gate.
+  (@taOS-dev ruling, 2026-08-14, bus 2553. Raised by CodeRabbit on #245 post-merge and
+  verified against this document: no such clause existed anywhere.)
 
 ## Transition: three stages, each with an exit test
 
@@ -200,9 +213,20 @@ Verify a token when present, accept the send either way, and record on every mes
 disagreed with the token. Nothing is rejected. The point is data: we learn who is actually
 signed before anyone is cut off.
 
-Exit test: for 72 consecutive hours, every message from the four drivers is
-`auth=verified`, and the set of `unsigned` senders is empty or contains only senders we
-have consciously decided to retire.
+Exit test: for 72 consecutive hours, **each of the four drivers has at least 20 messages
+observed, every one `auth=verified` with a verified `verified_sub`**, and the set of
+`unsigned` senders is empty or contains only senders we have consciously decided to retire.
+
+**Why the observation count is part of the test.** The earlier wording was "every message
+from the four drivers is `auth=verified`", which a driver that sent *nothing* satisfies
+trivially: the claim is vacuously true over an empty set, so 72 hours of silence passed the
+gate without the driver ever presenting a token. The count closes that, and the disjunction
+that was already in the sentence does the rest: a driver that cannot produce the evidence
+must be **explicitly retired**, so silence now forces a decision to be written down instead
+of passing by default. 20 rather than 1 is deliberate: a single hand-sent message proves a
+driver *can* sign, not that it *does*. If a real driver cannot reach 20 in 72 hours, that is
+itself the finding and must be raised with the measurement rather than the threshold being
+quietly lowered. (@taOS-dev ruling, 2026-08-14, bus 2553.)
 
 **Prerequisite, found by reviewing Stage 1's own implementation (PR #241).** That exit test
 is unreachable today, and no amount of waiting fixes it. `_registry_verifier.authorize`
@@ -234,7 +258,14 @@ mismatched token logs loudly and is still accepted. Any legitimate sender broken
 normalisation surfaces here, not in production rejection.
 
 Exit test: zero `invalid` and zero `from`-mismatch events for 48 hours, and a deliberate
-negative probe (see below) produces exactly one warning.
+negative probe (see below) produces exactly one warning. **The probe carries a correlation
+id, and the zero count excludes that id specifically.**
+
+The exclusion must key on the id, **not** on "events that look like the probe": a
+shape-based exemption is forgeable in exactly the way the server-owned annotation rule above
+exists to prevent. Without any exclusion the gate is unpassable by construction, since the
+probe it mandates creates one of the events it requires to be zero.
+(@taOS-dev ruling, 2026-08-14, bus 2553.)
 
 **ENTRY GATE, set by @taOS-dev 2026-08-13 and binding. Stage 2 does not begin until BOTH:**
 
@@ -251,6 +282,36 @@ negative probe (see below) produces exactly one warning.
 
 `a2a_auth_enforce` flips. Unsigned and invalid sends are rejected with a 401 naming the
 reason.
+
+**Rejection reasons, and their PRECEDENCE.** A valid token whose body `from` disagrees with
+the token `sub` is rejected **as a `from`-mismatch**, and mismatch is evaluated and named
+**before** generic `invalid`. This is load-bearing rather than cosmetic: the negative probe
+below requires the mismatch case to be rejected *as mismatch*, so if Stage 3 lists only
+unsigned and invalid, the probe can be refused for the wrong reason and still show green,
+proving a path nobody tested. **The probe's acceptance criterion therefore asserts the
+reason string, not merely that the send was refused.** "It was rejected" is not evidence
+until you know which rule rejected it. (@taOS-dev ruling, 2026-08-14, bus 2553.)
+
+**Maximum ages, and past them Stage 3 FAILS CLOSED.** The fail-safe rules above cache the
+registry key with its age *logged* and no ceiling, which is "narrate instead of fail": a
+degraded run that prints confident output is indistinguishable from a healthy one, and
+enforcement that accepts tokens after a key rotation is not enforcement. Stage 3 therefore
+binds both:
+
+| Data | Ceiling | Past the ceiling |
+|---|---|---|
+| Cached registry pubkey | **15 minutes** | sends rejected |
+| Revocation data | **60 minutes** | sends rejected |
+
+A loud alarm fires at **half** each ceiling, so a drift is visible long before it bites, and
+there is **one documented break-glass** which is logged and time-boxed.
+
+**The tradeoff is named rather than hidden**: failing closed on stale revocation data means
+an unreachable registry can block the bus. @taOS-dev accepts that for Stage 3 specifically,
+because Stage 3 is the enforce stage and the alternative is accepting revoked credentials.
+The ceilings are set generous so it is survivable. **If these numbers prove wrong under real
+conditions, raise them with the measurement; do not remove the ceiling.**
+(@taOS-dev ruling, 2026-08-14, bus 2553.)
 
 Rollback: the flag flips back with no data migration, and Stage 2 remains correct
 behaviour indefinitely. Document the rollback command in the runbook before the flip, not
