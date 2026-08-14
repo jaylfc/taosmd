@@ -314,8 +314,9 @@ returning the identical 500-message window.
 
 So there are two distinct defects here, not one:
 
-- **Unrecognised params silently dropped** (`after=`, `since_id=`). These want the 400 that
-  the proxy now returns.
+- **Unrecognised params silently dropped** (`after=`, `since_id=`). These must return a 400.
+  The controller proxy already does; the raw bus does not yet, and that gap is carded as
+  tsk-d64alg.
 - **A honoured param whose unit is not what callers reach for** (`since=` takes a ts, every
   agent reaches for an id). A 400 cannot catch this, because the value is valid; only a
   documented unit and an out-of-range sanity check can. A bare integer that is plausibly a
