@@ -694,6 +694,10 @@ async def a2a_threads(*, principal: str | None = None, data_dir=None) -> list[di
     Each item has shape ``{"thread", "kind", "participants",
     "last_message": {"id", "ts", "from", "body_preview"}}``.
 
+    Threads are returned **most-recently-active first**, ordered by the
+    timestamp of each thread's last message. This replaced an alphabetical
+    ordering; callers that relied on alphabetical order must sort client-side.
+
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
     """
