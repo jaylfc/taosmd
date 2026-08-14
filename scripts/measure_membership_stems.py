@@ -1,11 +1,11 @@
 """Measure identity spellings in channel-membership principals.
 
-Standalone script: reads A2A archive rows (or bus-spool.jsonl as a fallback)
+Standalone script: reads A2A archive rows via ``service.a2a_channels``
 and reports how stems carry multiple spellings, whether canonicals have twins,
-and whether distinct principals collapse to one stem.
+and whether distinct principals collapse to one stem.  Channel dimension is
+preserved throughout.
 
 Usage:
-    uv run --extra dev python scripts/measure_membership_stems.py
     uv run --extra dev python scripts/measure_membership_stems.py --data-dir /path/to/data
 """
 
@@ -20,7 +20,6 @@ from collections import defaultdict
 from pathlib import Path
 
 MINT_STAMP_RE = re.compile(r"^.+-\d{8}-\d{6}$")
-INSTALL_DISCRIMINATOR_RE = re.compile(r"^taos-agent-[a-z0-9]{8}$", re.IGNORECASE)
 
 
 def _strip_at(principal: str) -> str:
@@ -61,33 +60,14 @@ def is_bare_form(principal: str) -> bool:
     return not principal.startswith("@")
 
 
-def is_install_discriminator(principal: str) -> bool:
-    s = _strip_at(principal)
-    return bool(INSTALL_DISCRIMINATOR_RE.match(s))
-
-
 async def _collect_from_archive(data_dir: str) -> list[tuple[str, str]]:
-    from taosmd.archive import ArchiveStore, EVENT_A2A
+    from taosmd.service import a2a_channels
 
-    path = Path(data_dir)
-    archive = ArchiveStore(
-        archive_dir=str(path / "archive"),
-        index_path=str(path / "archive-index.db"),
-    )
-    await archive.init()
-    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
-    await archive.close()
-
+    channels = await a2a_channels(data_dir=data_dir)
     pairs: list[tuple[str, str]] = []
-    for row in rows:
-        try:
-            data = json.loads(row.get("data_json", "{}"))
-        except (json.JSONDecodeError, TypeError):
-            data = {}
-        sender = data.get("from") or ""
-        thread = data.get("thread") or row.get("app_id") or "general"
-        if sender:
-            pairs.append((sender, thread))
+    for ch in channels:
+        for sender in ch["members"]:
+            pairs.append((sender, ch["channel"]))
     return pairs
 
 
@@ -138,12 +118,43 @@ def measure(pairs: list[tuple[str, str]]) -> dict:
 
     collapse_no_mint = {k: sorted(v) for k, v in groups_no_mint.items() if len(v) > 1}
 
+    by_channel: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for p, ch in pairs:
+        by_channel[ch].append((p, ch))
+
+    per_channel: dict[str, dict] = {}
+    for ch in sorted(by_channel):
+        ch_principals = sorted({p for p, _ in by_channel[ch]})
+        ch_groups_no_mint: dict[str, list[str]] = defaultdict(list)
+        ch_groups_with_mint: dict[str, list[str]] = defaultdict(list)
+        for p in ch_principals:
+            ch_groups_no_mint[stem_without_mint(p)].append(p)
+            ch_groups_with_mint[stem_with_mint(p)].append(p)
+        ch_multi_no_mint = {k: sorted(v) for k, v in ch_groups_no_mint.items() if len(v) > 1}
+        ch_multi_with_mint = {k: sorted(v) for k, v in ch_groups_with_mint.items() if len(v) > 1}
+        ch_canonical_twins: list[tuple[str, list[str]]] = []
+        for stem, spellings in ch_groups_with_mint.items():
+            for p in spellings:
+                if is_canonical(p):
+                    twins = [s for s in spellings if s != p and (is_bare_form(s) or is_at_form(s))]
+                    if twins:
+                        ch_canonical_twins.append((p, sorted(twins)))
+        ch_collapse_no_mint = {k: sorted(v) for k, v in ch_groups_no_mint.items() if len(v) > 1}
+        per_channel[ch] = {
+            "total_principals": len(ch_principals),
+            "multi_spell_stems_without_mint": ch_multi_no_mint,
+            "multi_spell_stems_with_mint": ch_multi_with_mint,
+            "canonical_twins": ch_canonical_twins,
+            "collapse_without_mint": ch_collapse_no_mint,
+        }
+
     return {
         "total_principals": len(principals),
         "multi_spell_stems_without_mint": multi_no_mint,
         "multi_spell_stems_with_mint": multi_with_mint,
         "canonical_twins": canonical_twins,
         "collapse_without_mint": collapse_no_mint,
+        "per_channel": per_channel,
     }
 
 
@@ -174,13 +185,36 @@ def print_report(result: dict, scope: str) -> None:
         print(f"   {stem}: {spellings}")
     print()
 
+    per_channel = result.get("per_channel", {})
+    if per_channel:
+        print("Per-channel breakdown:")
+        for ch, ch_result in sorted(per_channel.items()):
+            print(f"\n  Channel: {ch}")
+            print(f"  Total distinct principals: {ch_result['total_principals']}")
+            ch_n1 = len(ch_result["multi_spell_stems_without_mint"])
+            ch_n2 = len(ch_result["multi_spell_stems_with_mint"])
+            print(f"  Stems with >1 spelling (no mint stripping): {ch_n1}")
+            for stem, spellings in sorted(ch_result["multi_spell_stems_without_mint"].items()):
+                print(f"    {stem}: {spellings}")
+            print(f"  Stems with >1 spelling (with mint stripping): {ch_n2}")
+            for stem, spellings in sorted(ch_result["multi_spell_stems_with_mint"].items()):
+                print(f"    {stem}: {spellings}")
+            ch_n3 = len(ch_result["canonical_twins"])
+            print(f"  Canonical membership entries with bare or @-form twin: {ch_n3}")
+            for canonical, twins in ch_result["canonical_twins"]:
+                print(f"    {canonical} -> {twins}")
+            ch_n4 = len(ch_result["collapse_without_mint"])
+            print(f"  Distinct principals collapsing to one stem (no mint stripping): {ch_n4}")
+            for stem, spellings in sorted(ch_result["collapse_without_mint"].items()):
+                print(f"    {stem}: {spellings}")
+        print()
+
     if n3 == 0 and n4 <= 1:
-        print("CONCLUSION: mint-stamp stripping is safe for membership.")
-        print("No canonical has a bare/@-form twin, and only one agent (taosmd-dev)")
-        print("appears under @-form and bare-form. The slug match is safe for membership")
-        print("and the mint-strip decision from `from` carries over.")
+        print(f"CONCLUSION [scope: {scope}]: mint-stamp stripping is safe for membership.")
+        print("No canonical has a bare/@-form twin, and no more than one agent")
+        print("appears under @-form and bare-form. The slug match is safe for membership.")
     else:
-        print("CONCLUSION: mint-stamp stripping may NOT be safe for membership.")
+        print(f"CONCLUSION [scope: {scope}]: mint-stamp stripping may NOT be safe for membership.")
         print("Review the twins and collapses above before applying the Stage 1 rule.")
 
 
@@ -189,13 +223,12 @@ async def async_main(args: argparse.Namespace) -> int:
     if args.data_dir:
         pairs = await _collect_from_archive(args.data_dir)
         scope = f"archive EVENT_A2A rows in {args.data_dir}"
-        if not pairs and spool.exists():
+        if not pairs:
             print(
-                f"No EVENT_A2A rows found in {args.data_dir}, falling back to {spool}",
+                f"No EVENT_A2A rows found in {args.data_dir}",
                 file=sys.stderr,
             )
-            pairs = _collect_from_bus_spool(str(spool))
-            scope = f"bus-spool.jsonl ({len(pairs)} sender/channel pairs)"
+            return 1
     elif spool.exists():
         pairs = _collect_from_bus_spool(str(spool))
         scope = f"bus-spool.jsonl ({len(pairs)} sender/channel pairs)"

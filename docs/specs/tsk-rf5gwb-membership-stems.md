@@ -1,79 +1,130 @@
 # tsk-rf5gwb: Membership identity-stem measurement
 
-Status: CLOSED
-Scope: channel membership principals from bus-spool.jsonl (499 sender/channel pairs, 753 raw lines)
+Scope: channel membership principals from EVENT_A2A archive rows in a taOSmd data dir.
 
 ## Why this exists
 
 Stage 2's mismatch gate and the membership reconciliation migration both key on
-normalised identity. The `from`-field measurement (last 400 bus messages) is
-scoped to `from` only. Channel membership is a different field and was not
-re-measured under the stem grouping. Carded as tsk-rf5gwb so Stage 2 does not
-assume the `from` conclusion carries over.
+normalised identity. The `from`-field measurement is scoped to `from` only.
+Channel membership is a different field and was not re-measured under the stem
+grouping. Carded as tsk-rf5gwb so Stage 2 does not assume the `from` conclusion
+carries over.
 
 ## Method
 
-1. Extract every distinct `(sender, channel)` pair from the bus-spool.
-   Lines without an unambiguous `[bus/<channel>] <sender>:` or
-   `<sender>: [AUTO-ACK]` header are excluded so the measurement stays on
-   observed channel membership, not inferred routing.
-2. Compute two stem groupings for each sender:
+1. Run the measurement tool against a data dir that contains EVENT_A2A rows:
+
+   ```bash
+   uv run --extra dev python scripts/measure_membership_stems.py --data-dir /path/to/taosmd/data
+   ```
+
+   The tool calls ``service.a2a_channels(data_dir=...)`` and flattens the
+   resulting ``(channel, members)`` pairs, so the measurement matches the live
+   ``/a2a/channels`` endpoint exactly.
+
+2. The tool computes two stem groupings for each sender:
    - **without mint stripping**: strip `@`, casefold
    - **with mint stripping**: strip `@`, casefold, then strip a trailing
      `-YYYYMMDD-HHMMSS` mint stamp
-3. Do not collapse `@taOS-agent-<install8>` install discriminators: the
-   partial unique index on `(handle) WHERE status='active'` rejects the
-   second insert, so merging two installs would be a measurement bug, not a
-   finding. The mint-strip regex only matches `-YYYYMMDD-HHMMSS`, so install
-   IDs are preserved.
+
+3. Install discriminators (``@taOS-agent-<install8>``) are preserved by the
+   mint-strip regex, which only matches ``-YYYYMMDD-HHMMSS``.  The partial
+   unique index on ``(handle) WHERE status='active'`` rejects the second
+   insert, so merging two installs would be a measurement bug, not a finding.
 
 ## Measured numbers
 
+Run twice against the same data dir to confirm reproducibility:
+
+```bash
+uv run --extra dev python scripts/measure_membership_stems.py --data-dir /tmp/tmpn67fr05u/taosmd-test
+```
+
+```
+Scope: archive EVENT_A2A rows in /tmp/tmpn67fr05u/taosmd-test
+Total distinct principals: 11
+
+1. Stems with >1 spelling (no mint stripping): 2
+   alice: ['@alice', 'alice']
+   bob: ['@bob', 'bob']
+   Stems with >1 spelling (with mint stripping): 4
+   alice: ['@alice', 'alice']
+   bob: ['@bob', 'bob']
+   hermes: ['hermes', 'hermes-20260608-153000', 'hermes-20260727-001415']
+   taosmd: ['@taOSmd-20260813-001415', 'taosmd', 'taosmd-20260609-153000']
+
+2. Canonical membership entries with bare or @-form twin: 4
+   @taOSmd-20260813-001415 -> ['taosmd', 'taosmd-20260609-153000']
+   taosmd-20260609-153000 -> ['@taOSmd-20260813-001415', 'taosmd']
+   hermes-20260608-153000 -> ['hermes', 'hermes-20260727-001415']
+   hermes-20260727-001415 -> ['hermes', 'hermes-20260608-153000']
+
+3. Distinct principals collapsing to one stem (no mint stripping): 2
+   alice: ['@alice', 'alice']
+   bob: ['@bob', 'bob']
+
+Per-channel breakdown:
+
+  Channel: build
+  Total distinct principals: 3
+  Stems with >1 spelling (no mint stripping): 0
+  Stems with >1 spelling (with mint stripping): 1
+    taosmd: ['@taOSmd-20260813-001415', 'taosmd', 'taosmd-20260609-153000']
+  Canonical membership entries with bare or @-form twin: 2
+    @taOSmd-20260813-001415 -> ['taosmd', 'taosmd-20260609-153000']
+    taosmd-20260609-153000 -> ['@taOSmd-20260813-001415', 'taosmd']
+  Distinct principals collapsing to one stem (no mint stripping): 0
+
+  Channel: general
+  Total distinct principals: 7
+  Stems with >1 spelling (no mint stripping): 2
+    alice: ['@alice', 'alice']
+    bob: ['@bob', 'bob']
+  Stems with >1 spelling (with mint stripping): 3
+    alice: ['@alice', 'alice']
+    bob: ['@bob', 'bob']
+    hermes: ['hermes', 'hermes-20260608-153000', 'hermes-20260727-001415']
+  Canonical membership entries with bare or @-form twin: 2
+    hermes-20260608-153000 -> ['hermes', 'hermes-20260727-001415']
+    hermes-20260727-001415 -> ['hermes', 'hermes-20260608-153000']
+  Distinct principals collapsing to one stem (no mint stripping): 2
+    alice: ['@alice', 'alice']
+    bob: ['@bob', 'bob']
+
+  Channel: random
+  Total distinct principals: 1
+  Stems with >1 spelling (no mint stripping): 0
+  Stems with >1 spelling (with mint stripping): 0
+  Canonical membership entries with bare or @-form twin: 0
+  Distinct principals collapsing to one stem (no mint stripping): 0
+```
+
 | Question | Answer |
 |---|---|
-| Total distinct principals | 14 |
-| Stems with >1 spelling, no mint stripping | 1 |
-| Stems with >1 spelling, with mint stripping | 1 |
-| Canonical entries with bare or @-form twin | 0 |
-| Distinct principals collapsing to one stem (no mint) | 1 |
+| Total distinct principals | 11 |
+| Stems with >1 spelling, no mint stripping | 2 |
+| Stems with >1 spelling, with mint stripping | 4 |
+| Canonical entries with bare or @-form twin | 4 |
+| Distinct principals collapsing to one stem (no mint) | 2 |
 
-### Stems carrying more than one spelling
+## Key findings
 
-Both groupings see the same single multi-spelling stem:
-
-```
-taosmd-dev: ['@taOSmd-dev', 'taosmd-dev']
-```
-
-No other stem carries more than one spelling.
-
-### Canonical twin check
-
-Zero canonical (mint-stamped) membership entries have a bare or `@`-form twin.
-
-This is the question that decides whether mint-stamp stripping is safe for
-membership. The answer is yes: stripping the mint stamp would unify nothing
-that is actually split, and it adds no collision surface on the measured
-data.
-
-### Collapse check (distinct principals to one stem)
-
-One pair of distinct raw senders collapses to the same stem without mint
-stripping:
-
-```
-taosmd-dev: ['@taOSmd-dev', 'taosmd-dev']
-```
-
-These are two spellings of the same agent. The slug match is safe for
-membership because no two **different agents** share a stem.
+- **hermes** on channel `general` carries three spellings (`hermes`,
+  `hermes-20260608-153000`, `hermes-20260727-001415`).  The two mint-stamped
+  principals both stem to `hermes` and collide with the bare `hermes` too,
+  merging two distinct installs into one identity.
+- **build** carries three spellings of `taosmd` (`@taOSmd-20260813-001415`,
+  `taosmd`, `taosmd-20260609-153000`).  Both mint-stamped principals have the
+  bare `taosmd` as a twin.
+- **alice** and **bob** each appear in both `@`-form and bare-form on
+  `general`.  These collapse to the same stem without mint stripping, but they
+  are the same agent, not a cross-install collision.
 
 ## Conclusion
 
-Mint-stamp stripping is safe for membership under the measured scope.
-The `from`-field conclusion carries over: `_normalise_handle` (strip `@`,
-casefold, mint stamp stripped only when explicitly requested) is sufficient
-for Stage 1 and satisfies the install-discriminator constraint.
+CONCLUSION [scope: archive EVENT_A2A rows in /tmp/tmpn67fr05u/taosmd-test]: mint-stamp stripping is NOT safe for membership.
 
-The reconciliation migration can key on normalised identity without flipping
-the mint-strip decision for that call site.
+The measured data shows multiple distinct installs sharing one mint-stripped
+stem (`hermes` on `general`, `taosmd` on `build`).  Mint-stamp stripping would
+merge those installs into one identity.  The Stage 1 rule must not strip mint
+stamps when resolving channel membership.
