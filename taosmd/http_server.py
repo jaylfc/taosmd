@@ -102,10 +102,12 @@ Endpoints
 ``GET  /pending?agent=``                                   -> ``{"pending": [...]}``
 ``POST /pending/resolve``  ``{"id", "decision", "note"?}`` -> resolve result
 ``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?, "refs"?, "blocks"?}`` -> send receipt
-                           ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
-                           ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
-``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line)
-``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
+                            ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
+                            ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
+``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400)
+``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream); ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400
+``GET  /a2a/threads``      ``?principal=``                  -> ``{"threads": [...]}`` thread list for the principal, ordered by latest activity desc; each entry has ``thread``, ``kind``, ``participants``, ``last_message: {id, ts, from, body_preview}`` (see notes below)
+``GET  /a2a/threads/{thread}/messages`` ``?before=&after=&limit=`` -> ``{"thread", "messages": [...]}`` cursor-paginated message envelope, oldest-first
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
 ``POST /tasks``            ``{"title", "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [...], "created_by"}`` -> task object
@@ -115,6 +117,24 @@ Endpoints
 ``POST /tasks/{id}``       ``{"status"?, "assignee"?, "priority"?, "body"?}`` -> updated task object
 ``POST /tasks/{id}/edges`` ``{"to_id", "type", "created_by"}``     -> edge record
 ``POST /tasks/{id}/edges/remove`` ``{"to_id", "type"}``   -> edge record with removed_ts
+
+A2A chat read API (unified-chat slice 4) ``--`` /a2a/threads, /a2a/threads/{thread}/messages
+``GET  /a2a/threads``      ``?principal=<agent>`` (optional) -> ``{"threads": [...]}``. A principal sees threads it
+                            participates in, plus all open/legacy threads. Membership is not yet managed
+                            (separate card), so every thread is open and therefore visible to every
+                            principal; the ``principal`` param is accepted for forward compatibility.
+                            ``title`` and ``unread_count`` are omitted: title storage and read receipts are
+                            not yet implemented (tsk-fhltad), so the field is left out entirely, never faked.
+``GET  /a2a/threads/{thread}/messages`` ``?before=&after=&limit=`` -- cursor pagination in BOTH directions.
+                            ``before`` walks backwards (older), ``after`` walks forwards (newer); messages
+                            are always returned oldest-first. ``limit`` defaults to 50, max 200 (clamped).
+Cursor vs since param table (``before``/``after`` vs ``since``):
+                            ``since`` is ONLY an epoch timestamp; a message id fed to it parses as ~1970 and
+                            replays history, so values below 1e9 are rejected (400). ``before``/``after``
+                            accept an explicit message id (integer) as the recommended, stable cursor, or an
+                            epoch timestamp (float >= 1e9). A bare integer is always a message id; a float is
+                            always a timestamp. This makes the id-vs-timestamp trap unambiguous for the new
+                            cursor params. Pass the ``id`` of the first/last message in the current page.
 
 Collections (data plane; create/index/delete are admin, see below)
 ``GET  /collections [?project=]``              -> ``{"collections": [...]}`` (project matches links of either type)
@@ -131,16 +151,16 @@ Collections (data plane; create/index/delete are admin, see below)
 
 Admin endpoints (all require a configured server token; 403 if none is set)
 ``POST /collections``                          ``{"name", "kind": docs|codebase|mixed, "source_path", "embedder"?}``
-                                               -> ``{"collection": {...}, "created": true}``
-                                               source_path must resolve inside a configured
-                                               collections.allowed_roots directory (400 otherwise;
-                                               empty roots = collections off)
+                                              -> ``{"collection": {...}, "created": true}``
+                                              source_path must resolve inside a configured
+                                              collections.allowed_roots directory (400 otherwise;
+                                              empty roots = collections off)
 ``POST /collections/{id}/index``               -> 202 ``{"status": "indexing", "job": <id>}``
-                                               async; poll GET /collections/{id} until status is
-                                               "ready" or "error"; stats update on completion;
-                                               409 while an index is already running
+                                              async; poll GET /collections/{id} until status is
+                                              "ready" or "error"; stats update on completion;
+                                              409 while an index is already running
 ``DELETE /collections/{id}``                   -> archive (reversible; content hidden from query,
-                                               nothing destroyed; destruction only via wipe)
+                                              nothing destroyed; destruction only via wipe)
 ``POST /shelves``                              ``{"shelf_id", "project_id"?, "display_name"?}`` -> ``{"shelf": {...}, "created": bool}``
 ``POST /shelves/{id}/archive``                 ``?expect_empty=true``  -> ``{"archived": true, "rows_hidden": int}``
 ``POST /shelves/{id}/unarchive``               -> ``{"archived": false, "rows_restored": int}``
@@ -228,6 +248,65 @@ DEFAULT_PORT = 7900
 _A2A_REF_KINDS = frozenset({"doc", "report", "spec", "log"})
 _A2A_MAX_REFS = 8
 _A2A_MAX_MESSAGE_BYTES = 64 * 1024  # 64 KB total (body+refs+blocks)
+
+# Cursor pagination limits for /a2a/threads/{thread}/messages.
+_A2A_MSG_DEFAULT_LIMIT = 50
+_A2A_MSG_MAX_LIMIT = 200
+
+
+# `since` on the A2A feed endpoints is an epoch timestamp in seconds, not a
+# message id. No taOS memory predates 2001, so a `since` below this floor is,
+# with near-certainty, a message id a client mistook for a timestamp (the
+# id-vs-timestamp footgun, taOS-dev #1447). Reject it loudly: the alternative
+# is a silent full-history replay that looks exactly like `since` being
+# ignored -- a fails-open flood (taOS-dev #1447, also noted by website-dev).
+_SINCE_MIN_EPOCH = 1_000_000_000
+
+
+def _parse_since(since_raw: str | None) -> float | None:
+    """Validate and parse a ``since`` query value into a float epoch timestamp.
+
+    Returns ``None`` when ``since`` is absent so the caller can apply its own
+    default. Raises :class:`_BadRequest` (HTTP 400) either when the value is
+    not a parseable number, or when the parsed value is below the plausible
+    epoch floor -- i.e. almost certainly a message id passed where a timestamp
+    was expected. This turns the id-vs-timestamp footgun from a silent
+    full-history replay into a loud, explicit error.
+    """
+    if since_raw is None:
+        return None
+    try:
+        since = float(since_raw)
+    except (TypeError, ValueError) as exc:
+        raise _BadRequest("'since' must be a float timestamp") from exc
+    if not math.isfinite(since):
+        raise _BadRequest("'since' must be a finite number")
+    if since < _SINCE_MIN_EPOCH:
+        raise _BadRequest(
+            "'since' is an epoch timestamp in seconds; got "
+            f"{since_raw} which looks like a message id - "
+            "use the message's ts field, or omit since"
+        )
+    return since
+
+
+def _parse_cursor(raw: str | None) -> int | float | None:
+    """Parse a cursor value into an int (message id) or float (timestamp).
+
+    Returns ``None`` when ``raw`` is absent. Raises :class:`_BadRequest` when
+    the value cannot be parsed or is a non-finite number.
+    """
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise _BadRequest("cursor must be a number") from exc
+    if not math.isfinite(val):
+        raise _BadRequest("cursor must be a finite number")
+    if val == int(val) and abs(val) < 1e15:
+        return int(val)
+    return val
 
 
 # A single self-contained page: one inline <style> and one inline vanilla
@@ -956,6 +1035,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
+                elif method == "GET" and path == "/a2a/threads":
+                    self._handle_a2a_threads(query)
+                elif method == "GET" and path.startswith("/a2a/threads/"):
+                    rest = path[len("/a2a/threads/"):]
+                    if rest.endswith("/messages"):
+                        thread = rest[: -len("/messages")]
+                    else:
+                        thread = rest
+                    if not thread:
+                        self._send_json(404, {"error": "thread name required"})
+                    else:
+                        self._handle_a2a_thread_messages(thread, query)
                 # Task graph endpoints — prefix matching for /tasks/{id} paths
                 elif method == "POST" and path == "/tasks":
                     self._handle_task_create()
@@ -1507,10 +1598,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             limit_raw = (qs.get("limit") or [50])[0]
             fields_raw = (qs.get("fields") or [None])[0]
             fmt = (qs.get("format") or ["json"])[0]
-            try:
-                since = float(since_raw) if since_raw is not None else None
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'since' must be a float timestamp") from exc
+            since = _parse_since(since_raw)
             try:
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
@@ -1554,9 +1642,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             """
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
-            try:
-                last_ts = float(since_raw) if since_raw is not None else time.time()
-            except (TypeError, ValueError):
+            last_ts = _parse_since(since_raw)
+            if last_ts is None:
                 last_ts = time.time()
 
             # Send SSE response headers before entering the poll loop.
@@ -1589,6 +1676,31 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             except (BrokenPipeError, ConnectionResetError, OSError):
                 # Client disconnected; exit the thread cleanly.
                 return
+
+        def _handle_a2a_threads(self, qs: dict) -> None:
+            principal = (qs.get("principal") or [None])[0]
+            threads = runner.run(
+                service.a2a_threads(principal=principal, data_dir=data_dir)
+            )
+            self._send_json(200, {"threads": threads})
+
+        def _handle_a2a_thread_messages(self, thread: str, qs: dict) -> None:
+            before_raw = (qs.get("before") or [None])[0]
+            after_raw = (qs.get("after") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            before = _parse_cursor(before_raw)
+            after = _parse_cursor(after_raw)
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            result = runner.run(
+                service.a2a_thread_messages(
+                    thread=thread, before=before, after=after,
+                    limit=limit_i, data_dir=data_dir,
+                )
+            )
+            self._send_json(200, result)
 
         # ----- task graph handlers ----------------------------------------
 
