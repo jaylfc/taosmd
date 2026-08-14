@@ -59,7 +59,8 @@ against master on 2026-07-21.
 | JOB-002 | job-002-cross-encoder-path-fix.md | ON HOLD, see #199 | n/a | do not start |
 | JOB-003 | job-003-http-server-dead-import.md | OPEN | minimal | delete dead code, one function |
 | JOB-004 | job-004-eventqa-runner-exit-code.md | OPEN | low | two returns in one runner, one test file |
-| JOB-005 | job-005-collections-db-connect.md | OPEN | low | one line plus an import, one test file |
+| JOB-005 | DONE-job-005-collections-db-connect.md | DONE | n/a | completed, kept for reference |
+| JOB-006 | job-006-ref-fetch-part2-comment.md | OPEN | minimal | comments only, one test file |
 
 Take them in any order; no job depends on another. If two of you are working
 at once, do not both take the same job, and never touch a file another job
