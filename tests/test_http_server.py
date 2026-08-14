@@ -440,6 +440,97 @@ def test_a2a_thread_messages_populated(live_server):
     assert body["messages"][1]["body"] == "second"
 
 
+def test_a2a_threads_ordered_by_latest_activity_desc(live_server):
+    """Thread list is ordered by most-recent message timestamp descending."""
+    import time
+    _post(f"{live_server}/a2a/send", {"from": "alice", "body": "old", "thread": "alpha"})
+    time.sleep(0.02)
+    _post(f"{live_server}/a2a/send", {"from": "bob", "body": "new", "thread": "beta"})
+    status, body = _get(f"{live_server}/a2a/threads")
+    assert status == 200
+    names = [t["thread"] for t in body["threads"]]
+    assert names == ["beta", "alpha"]
+
+
+def test_a2a_thread_messages_before_cursor(live_server):
+    """before=<last_id> walks backwards (older messages only)."""
+    r1 = _post(f"{live_server}/a2a/send", {"from": "alice", "body": "first", "thread": "cur"})
+    _post(f"{live_server}/a2a/send", {"from": "bob", "body": "second", "thread": "cur"})
+    _post(f"{live_server}/a2a/send", {"from": "alice", "body": "third", "thread": "cur"})
+    last_id = r1[1]["id"] + 2  # id of "third"
+    status, body = _get(
+        f"{live_server}/a2a/threads/cur/messages?before={last_id}&limit=10"
+    )
+    assert status == 200
+    bodies = [m["body"] for m in body["messages"]]
+    assert "third" not in bodies
+    assert "first" in bodies
+    assert "second" in bodies
+
+
+def test_a2a_thread_messages_after_cursor(live_server):
+    """after=<first_id> walks forwards (newer messages only)."""
+    r1 = _post(f"{live_server}/a2a/send", {"from": "alice", "body": "first", "thread": "cur2"})
+    _post(f"{live_server}/a2a/send", {"from": "bob", "body": "second", "thread": "cur2"})
+    first_id = r1[1]["id"]
+    status, body = _get(
+        f"{live_server}/a2a/threads/cur2/messages?after={first_id}&limit=10"
+    )
+    assert status == 200
+    bodies = [m["body"] for m in body["messages"]]
+    assert "first" not in bodies
+    assert "second" in bodies
+
+
+def test_a2a_thread_messages_limit_clamped(live_server):
+    """limit above 200 is clamped; no error is raised."""
+    for i in range(10):
+        _post(f"{live_server}/a2a/send",
+              {"from": "alice", "body": f"msg{i}", "thread": "lim"})
+    status, body = _get(f"{live_server}/a2a/threads/lim/messages?limit=500")
+    assert status == 200
+    assert len(body["messages"]) == 10
+
+
+def test_a2a_thread_messages_stable_across_concurrent_insert(live_server):
+    """Pagination cursor is stable: an insert between pages does not duplicate
+    or skip a message across the page boundary."""
+    _post(f"{live_server}/a2a/send", {"from": "a", "body": "m1", "thread": "stab"})
+    _post(f"{live_server}/a2a/send", {"from": "b", "body": "m2", "thread": "stab"})
+    _post(f"{live_server}/a2a/send", {"from": "c", "body": "m3", "thread": "stab"})
+
+    page1_status, page1 = _get(
+        f"{live_server}/a2a/threads/stab/messages?limit=2"
+    )
+    assert page1_status == 200
+    assert len(page1["messages"]) == 2
+    last_in_page1 = page1["messages"][-1]["id"]
+    page1_bodies = {m["body"] for m in page1["messages"]}
+
+    # Insert a new message between page 1 and page 2.
+    _post(f"{live_server}/a2a/send", {"from": "d", "body": "m-inserted", "thread": "stab"})
+
+    # Walk forward from last_in_page1: must see m3 and m-inserted, never
+    # re-deliver anything from page1, and never skip m3.
+    page2_status, page2 = _get(
+        f"{live_server}/a2a/threads/stab/messages?after={last_in_page1}&limit=10"
+    )
+    assert page2_status == 200
+    page2_bodies = {m["body"] for m in page2["messages"]}
+    assert "m3" in page2_bodies, "m3 must not be skipped across page boundary"
+    assert "m-inserted" in page2_bodies, "newly-inserted message must appear"
+    assert not (page1_bodies & page2_bodies), "no message may appear in both pages"
+    all_bodies = page1_bodies | page2_bodies
+    assert all_bodies >= {"m1", "m2", "m3", "m-inserted"}
+
+
+def test_a2a_since_message_id_rejected(live_server):
+    """Passing a message id to ?since= is rejected (id-vs-timestamp trap)."""
+    status, body = _get(f"{live_server}/a2a/messages?since=42")
+    assert status == 400
+    assert "since" in body["error"].lower()
+
+
 def test_a2a_since_nan_rejected(live_server):
     status, body = _get(f"{live_server}/a2a/messages?since=nan")
     assert status == 400
