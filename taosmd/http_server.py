@@ -104,8 +104,8 @@ Endpoints
 ``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?, "refs"?, "blocks"?}`` -> send receipt
                            ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
                            ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
-``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line)
-``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
+``GET  /a2a/messages``     ``?thread=&since=<epoch_ts>&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``since`` is an epoch timestamp in seconds, values below 1_000_000_000 are rejected)
+``GET  /a2a/stream``       ``?thread=&since=<epoch_ts>``             -> SSE stream (text/event-stream; ``since`` is an epoch timestamp in seconds, values below 1_000_000_000 are rejected)
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
 ``POST /tasks``            ``{"title", "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [...], "created_by"}`` -> task object
@@ -1511,6 +1511,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 since = float(since_raw) if since_raw is not None else None
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'since' must be a float timestamp") from exc
+            if since is not None and since < 1_000_000_000:
+                raise _BadRequest(
+                    "'since' is an epoch timestamp in seconds; got "
+                    f"{since_raw} which looks like a message id - use the message's ts field, or omit since"
+                )
             try:
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
@@ -1558,6 +1563,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 last_ts = float(since_raw) if since_raw is not None else time.time()
             except (TypeError, ValueError):
                 last_ts = time.time()
+            if since_raw is not None and last_ts < 1_000_000_000:
+                raise _BadRequest(
+                    "'since' is an epoch timestamp in seconds; got "
+                    f"{since_raw} which looks like a message id - use the message's ts field, or omit since"
+                )
 
             # Send SSE response headers before entering the poll loop.
             self.send_response(200)
