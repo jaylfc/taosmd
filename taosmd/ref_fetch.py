@@ -80,8 +80,8 @@ def resolve_ref_uri(ref, files_url: str) -> str:
             f"invalid taos ref uri: {uri!r} (path must not be absolute)"
         )
     _reject_dot_segments(path)
-    encoded_path = urllib.parse.quote(path, safe="/")
-    base = files_url.rstrip("/") if files_url else files_url
+    encoded_path = urllib.parse.quote(path, safe="")
+    base = files_url.rstrip("/") if isinstance(files_url, str) else files_url
     return f"{base}/api/projects/{slug}/files/{encoded_path}"
 
 
