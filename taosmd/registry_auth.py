@@ -66,12 +66,16 @@ def authorize_sender(token: str, claimed_from: str, *, public_key: str,
       * ``sub`` must equal the message ``from`` (no impersonation);
       * ``sub`` must not be in the registry revocation set;
       * when ``expected_iss`` is set, ``iss`` must match it (issuer pinning).
+
+    Identity comparison uses :func:`taosmd.service._normalise_handle` so
+    ``@``-prefixed and bare handles compare equal case-insensitively.
     """
+    from .service import _normalise_handle  # noqa: PLC0415
     claims = decode_and_verify(token, public_key)
     sub = claims.get("sub")
     if not sub:
         raise AuthError("token has no 'sub' (canonical_id) claim")
-    if sub != claimed_from:
+    if _normalise_handle(sub) != _normalise_handle(claimed_from):
         raise AuthError(f"token sub {sub!r} does not match from {claimed_from!r}")
     if sub in revoked:
         raise AuthError(f"canonical_id {sub!r} is revoked")

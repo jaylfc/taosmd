@@ -28,12 +28,35 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 
 from . import api as _api
 from . import config as _config
 from .archive import EVENT_A2A
 
 logger = logging.getLogger(__name__)
+
+
+def _normalise_handle(handle: str, *, mint_strip: bool = False) -> str:
+    """Slug-match helper for identity comparison on the A2A bus.
+
+    This is a slug match, NOT an identity check: two distinct agents that
+    share a stem will unify under this function. Do not use it for
+    authorisation decisions that require distinguishing between same-stem
+    identities.
+
+    Strips any leading ``@``, casefolds, and optionally strips a timestamp
+    mint stamp (``-YYYYMMDD`` or ``-YYYYMMDD-HHMMSS`` suffix) when
+    ``mint_strip=True``. The default is ``mint_strip=False`` because the
+    ``from`` field on bus messages does not carry bare-or-@ twins for the
+    same canonical, and stripping would collapse install discriminators
+    such as ``@taOS-agent-1a2b3c4d``.
+    """
+    handle = handle.lstrip("@").casefold()
+    if mint_strip:
+        handle = re.sub(r"-\d{8}(-\d{6})?$", "", handle)
+    return handle
+
 
 # Cache of RemoteClient instances keyed by (base_url, token) so we don't
 # create a fresh object on every call.  Access from async coroutines is safe
