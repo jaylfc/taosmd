@@ -100,12 +100,14 @@ class RegistryVerifier:
 
     def __init__(self, *, pubkey_loader, revoked_loader,
                  refresh_interval: float = 300.0, clock=time.time,
-                 expected_iss: str | None = None):
+                 expected_iss: str | None = None,
+                 staleness_bound: float | None = None):
         self._pubkey_loader = pubkey_loader
         self._revoked_loader = revoked_loader
         self._refresh_interval = refresh_interval
         self._clock = clock
         self._expected_iss = expected_iss
+        self._staleness_bound = staleness_bound if staleness_bound is not None else 6 * refresh_interval
         self._pubkey: str | None = None
         self._revoked: set[str] = set()
         self._revoked_fetched_at: float | None = None
@@ -130,8 +132,17 @@ class RegistryVerifier:
                     raise AuthError(
                         f"revocation feed unavailable, refusing to authorise: {exc}"
                     ) from exc
-                # Already have a known-good set: keep it across a transient
-                # refresh failure (fail-safe, never silently un-revokes).
+                # Already have a known-good set: check staleness bound.
+                # If the set is older than the bound, fail closed instead of
+                # tolerating indefinitely (a revocation issued during a prolonged
+                # outage would never take effect otherwise).
+                if now - self._revoked_fetched_at > self._staleness_bound:
+                    raise AuthError(
+                        f"revocation set stale ({now - self._revoked_fetched_at:.0f}s > "
+                        f"{self._staleness_bound:.0f}s), refusing to authorise: {exc}"
+                    ) from exc
+                # Keep last-good set across a transient refresh failure
+                # (fail-safe, never silently un-revokes).
                 logger.warning("registry revocation refresh failed, "
                                "using last-good set: %s", exc)
         return self._revoked

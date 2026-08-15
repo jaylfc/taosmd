@@ -1548,56 +1548,58 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         "'body' (non-empty string) is required when 'blocks' is present"
                     )
             # Registry auth (opt-in): when a verifier is configured, run the
-            # identity + grant checks and collect any failure reason.
-            # In enforce mode (a2a_auth_enforce=true) failures are rejected with
-            # 401/403. In verify-and-warn mode (default) failures are logged as
-            # a WARNING but the message is accepted, allowing operators to observe
-            # violations before enabling hard enforcement.
+            # identity + grant checks. Two independent failure classes:
+            #   1. Missing Bearer token -> warn-and-accept (agent not migrated yet,
+            #      the only tolerated class in verify-and-warn mode).
+            #   2. Any presented-credential failure (bad signature, issuer mismatch,
+            #      revoked id, sub != from) -> always reject 403 REGARDLESS of the
+            #      enforce flag. A mismatched sub is an active impersonation attempt
+            #      with proof attached; tolerating it for migration convenience keeps
+            #      the exact attack window open that the whole design exists to close.
             if _registry_verifier is not None:
                 from . import registry_auth  # noqa: PLC0415 - optional path
                 auth = self.headers.get("Authorization", "")
                 token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
 
-                # Compute warn_reason (None = auth passed) and the status/message
-                # to use in enforce mode. We collect these without returning early
-                # so the enforce vs. warn decision is made in one place below.
-                warn_reason: str | None = None
-                _reject_status: int = 403
-                _reject_msg: str = ""
-
                 if not token:
-                    warn_reason = "missing Bearer token"
-                    _reject_status = 401
-                    _reject_msg = "registry auth: Bearer token required"
+                    # Missing Bearer token: only tolerated in verify-and-warn mode.
+                    # In enforce mode, reject with 401.
+                    enforce = _config.get_a2a_auth_enforce(data_dir)
+                    if enforce:
+                        self._send_json(401, {"error": "registry auth: Bearer token required"})
+                        return
+                    logger.warning(
+                        "a2a verify-and-warn: accepting unverified post from %r: missing Bearer token",
+                        from_,
+                    )
+                    # In warn mode: fall through (accept with warning); grant check
+                    # is skipped because identity is not verified.
+
                 else:
                     try:
                         _registry_verifier.authorize(token, from_)
                     except registry_auth.AuthError as exc:
-                        warn_reason = str(exc)
-                        _reject_status = 403
-                        _reject_msg = f"registry auth: {exc}"
-
-                # Grant check: token proves identity; grant proves permission.
-                if warn_reason is None and _grants_verifier is not None:
-                    try:
-                        if not _grants_verifier.has_grant(from_):
-                            warn_reason = "no a2a_send grant"
-                            _reject_status = 403
-                            _reject_msg = f"registry auth: no active grant for {from_!r}"
-                    except registry_auth.AuthError as exc:
-                        warn_reason = str(exc)
-                        _reject_status = 403
-                        _reject_msg = f"registry auth: {exc}"
-
-                if warn_reason is not None:
-                    enforce = _config.get_a2a_auth_enforce(data_dir)
-                    if enforce:
-                        self._send_json(_reject_status, {"error": _reject_msg})
+                        # ANY presented-credential failure (bad signature,
+                        # issuer mismatch, revoked id, sub != from) -> always 403
+                        # regardless of the enforce flag. This is the split: missing
+                        # token is the only class tolerated in warn mode; credential
+                        # failures are always rejected because a mismatched sub with
+                        # proof is an active impersonation attempt with proof attached.
+                        self._send_json(403, {"error": f"registry auth: {exc}"})
                         return
-                    logger.warning(
-                        "a2a verify-and-warn: accepting unverified post from %r: %s",
-                        from_, warn_reason,
-                    )
+
+                    # Grant check: only reached when token present + auth passed.
+                    # In enforce mode we would already have returned above (but the
+                    # return is inside the except block, so we need to fall through
+                    # here after a successful authorize).
+                    if _grants_verifier is not None:
+                        try:
+                            if not _grants_verifier.has_grant(from_):
+                                self._send_json(403, {"error": f"registry auth: no active grant for {from_!r}"})
+                                return
+                        except registry_auth.AuthError as exc:
+                            self._send_json(403, {"error": f"registry auth: {exc}"})
+                            return
             result = runner.run(
                 service.a2a_send(
                     sender=from_, body=body_text,
