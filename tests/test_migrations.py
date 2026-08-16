@@ -120,6 +120,17 @@ def test_legacy_modern_archive_index_is_stamped_without_reapplying(tmp_path):
     conn = _db.connect(path)
     conn.executescript(INDEX_SCHEMA)  # modern shape, includes `project`
     conn.execute(
+        "ALTER TABLE archive_index ADD COLUMN source TEXT"
+    )
+    conn.execute(
+        "ALTER TABLE archive_index ADD COLUMN source_id TEXT"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_source_uid "
+        "ON archive_index (source, source_id) "
+        "WHERE source IS NOT NULL AND source_id IS NOT NULL"
+    )
+    conn.execute(
         "INSERT INTO archive_index "
         "(timestamp, event_type, agent_name, app_id, project, summary,"
         " file_path, line_number, data_json) "
@@ -421,7 +432,7 @@ def test_status_reports_pending_for_an_unstamped_legacy_store(tmp_path):
     # The baseline is already present, so it is reported as detected rather
     # than as a step that would run.
     assert st["detected_baseline"] == 1
-    assert st["pending"] == ["archive_index_project"]
+    assert st["pending"] == ["archive_index_project", "archive_index_source_uid"]
 
     migrations.migrate(conn, "archive_index")
     st = migrations.status(conn, "archive_index")
@@ -436,6 +447,13 @@ def test_status_of_a_complete_legacy_store_reports_stamp_only_work(tmp_path):
 
     conn = _db.connect(tmp_path / "archive-index.db")
     conn.executescript(INDEX_SCHEMA)
+    conn.execute("ALTER TABLE archive_index ADD COLUMN source TEXT")
+    conn.execute("ALTER TABLE archive_index ADD COLUMN source_id TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_source_uid "
+        "ON archive_index (source, source_id) "
+        "WHERE source IS NOT NULL AND source_id IS NOT NULL"
+    )
     conn.commit()
 
     st = migrations.status(conn, "archive_index")
@@ -487,6 +505,82 @@ async def test_archive_store_open_stamps_the_database(tmp_path):
     assert _user_version(conn) == migrations.latest_version("archive_index")
     assert "project" in _columns(conn, "archive_index")
     conn.close()
+
+
+@pytest.mark.asyncio
+async def test_archive_store_fresh_install_has_source_uid_migration(tmp_path):
+    """A brand-new DB has source/source_id columns and the partial unique index."""
+    from taosmd.archive import ArchiveStore
+
+    store = ArchiveStore(archive_dir=tmp_path / "archive",
+                         index_path=tmp_path / "archive-index.db")
+    await store.init()
+    await store.close()
+
+    conn = sqlite3.connect(tmp_path / "archive-index.db")
+    try:
+        assert _user_version(conn) == migrations.latest_version("archive_index")
+        cols = _columns(conn, "archive_index")
+        assert "source" in cols, "fresh install must have source column"
+        assert "source_id" in cols, "fresh install must have source_id column"
+        assert "project" in cols, "positive control: project column must also be present"
+        idx_rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_archive_source_uid'"
+        ).fetchall()
+        assert idx_rows, "fresh install must have idx_archive_source_uid"
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_archive_store_upgrades_legacy_index_to_source_uid(tmp_path):
+    """A pre-source_uid DB gains the columns and index on open."""
+    from taosmd.archive import ArchiveStore
+
+    path = tmp_path / "archive-index.db"
+    conn = _db.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE archive_index (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL NOT NULL,
+            event_type TEXT NOT NULL,
+            agent_name TEXT,
+            app_id TEXT,
+            project TEXT,
+            summary TEXT NOT NULL DEFAULT '',
+            file_path TEXT NOT NULL,
+            line_number INTEGER NOT NULL,
+            data_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE archive_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        """
+    )
+    conn.execute(
+        "INSERT INTO archive_index (timestamp, event_type, summary, file_path, line_number)"
+        " VALUES (1.0, 'turn', 'legacy', 'f.jsonl', 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = ArchiveStore(archive_dir=tmp_path / "archive", index_path=path)
+    await store.init()
+    await store.close()
+
+    conn = sqlite3.connect(path)
+    try:
+        assert _user_version(conn) == migrations.latest_version("archive_index")
+        cols = _columns(conn, "archive_index")
+        assert "source" in cols
+        assert "source_id" in cols
+        idx_rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_archive_source_uid'"
+        ).fetchall()
+        assert idx_rows
+        row = conn.execute("SELECT summary FROM archive_index").fetchone()
+        assert row[0] == "legacy"
+    finally:
+        conn.close()
 
 
 @pytest.mark.asyncio

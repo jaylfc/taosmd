@@ -180,6 +180,8 @@ class ArchiveStore:
         summary: str = "",
         project: str | None = None,
         timestamp: float | None = None,
+        source: str | None = None,
+        source_id: str | None = None,
     ) -> int:
         """Record an event to the archive. Returns the index row ID.
 
@@ -240,9 +242,9 @@ class ArchiveStore:
         # Index for fast lookup
         cursor = self._conn.execute(
             """INSERT INTO archive_index
-               (timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ts, event_type, agent_name, app_id, project, summary, file_path, line_count, json.dumps(data, default=str)),
+               (timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json, source, source_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ts, event_type, agent_name, app_id, project, summary, file_path, line_count, json.dumps(data, default=str), source, source_id),
         )
 
         # Index in FTS for full-text search

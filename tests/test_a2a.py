@@ -214,6 +214,37 @@ def test_a2a_reply_to_field_preserved(isolated_data_dir):
     assert msgs[1]["reply_to"] == str(r1["id"])
 
 
+def test_a2a_import_preserves_historical_ts(isolated_data_dir):
+    """a2a_import stores each message with its caller-supplied ts."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+
+    historical_ts = 1_700_000_000.0
+    messages = [
+        {"from": "alice", "thread": "hist", "body": "first", "source_id": "h1", "ts": historical_ts},
+        {"from": "alice", "thread": "hist", "body": "second", "source_id": "h2", "ts": historical_ts + 10.0},
+    ]
+
+    result = asyncio.run(service.a2a_import("bus", messages, data_dir=dd))
+    assert result["imported"] == 2
+    assert result["skipped"] == 0
+    assert result["first_id"] is not None
+    assert result["last_id"] is not None
+    assert result["first_id"] < result["last_id"]
+
+    msgs = asyncio.run(service.a2a_feed(thread="hist", data_dir=dd))
+    assert len(msgs) == 2
+    assert msgs[0]["ts"] == historical_ts
+    assert msgs[0]["body"] == "first"
+    assert msgs[1]["ts"] == historical_ts + 10.0
+    assert msgs[1]["body"] == "second"
+
+    # Idempotency: re-importing the same batch skips both rows.
+    retry = asyncio.run(service.a2a_import("bus", messages, data_dir=dd))
+    assert retry["imported"] == 0
+    assert retry["skipped"] == 2
+
+
 # ---------------------------------------------------------------------------
 # Secret redaction
 # ---------------------------------------------------------------------------
