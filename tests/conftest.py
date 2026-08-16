@@ -15,6 +15,7 @@ explicitly still wins.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import urllib.request
@@ -22,26 +23,73 @@ from pathlib import Path
 
 import pytest
 
+_NO_BACKEND_SKIP_MSG = (
+    "No live embed backend available. "
+    "Install an ONNX model (run scripts/setup.sh or set TAOSMD_ONNX_PATH) "
+    "or start the QMD service (qmd serve on http://localhost:7832)."
+)
+
+
+def _resolve_onnx_model_file() -> Path | None:
+    """Return the ``model.onnx`` path for a discoverable ONNX backend, else None.
+
+    Honours ``$TAOSMD_ONNX_PATH`` and the default install locations
+    (``~/.taosmd/models/minilm-onnx`` and ``$TAOSMD_DIR/models/minilm-onnx``),
+    accepting either a root ``model.onnx`` or an ``onnx/model.onnx`` layout.
+    Existence is necessary but not sufficient: :func:`_has_onnx_model` loads the
+    file before a backend is considered available.
+    """
+    env = os.environ.get("TAOSMD_ONNX_PATH")
+    roots = [Path(env)] if env else []
+    roots.extend(
+        [
+            Path("~/.taosmd/models/minilm-onnx").expanduser(),
+            Path(os.environ.get("TAOSMD_DIR", "~/taosmd")).expanduser() / "models" / "minilm-onnx",
+        ]
+    )
+    for root in roots:
+        for rel in ("model.onnx", "onnx/model.onnx"):
+            candidate = root / rel
+            if candidate.is_file():
+                return candidate
+    return None
+
 
 def _has_onnx_model() -> bool:
-    """True if an ONNX embedding model is available on disk."""
-    env = os.environ.get("TAOSMD_ONNX_PATH")
-    if env:
-        p = Path(env)
-        if (p / "model.onnx").exists() or (p / "onnx" / "model.onnx").exists():
-            return True
-    candidates = [
-        Path("~/.taosmd/models/minilm-onnx").expanduser(),
-        Path(os.environ.get("TAOSMD_DIR", "~/taosmd")).expanduser() / "models" / "minilm-onnx",
-    ]
-    for candidate in candidates:
-        if (candidate / "model.onnx").exists() or (candidate / "onnx" / "model.onnx").exists():
-            return True
-    return False
+    """True if an ONNX embedding backend can actually load and embed.
+
+    Loads the model with ONNX Runtime rather than merely checking that a
+    ``model.onnx`` file exists, so a truncated or empty file left by an
+    interrupted ``scripts/setup.sh`` is treated as "no backend" and the
+    guarded tests SKIP instead of failing at embed time.
+    """
+    model_file = _resolve_onnx_model_file()
+    if model_file is None:
+        return False
+    try:
+        import onnxruntime as ort
+
+        options = ort.SessionOptions()
+        options.log_severity_level = 4  # silence the load diagnostics on bad files
+        options.intra_op_num_threads = 1
+        ort.InferenceSession(
+            str(model_file),
+            options,
+            providers=["CPUExecutionProvider"],
+        )
+        return True
+    except Exception:
+        return False
 
 
+@functools.lru_cache(maxsize=1)
 def _has_qmd_service() -> bool:
-    """True if the QMD embed service is reachable at the default URL."""
+    """True if the QMD embed service is reachable at the default URL.
+
+    Cached for the process lifetime: the cached value is itself a real probe
+    response from this session, and a filtered (rather than refused) port would
+    otherwise block for the full timeout on every function-scoped fixture call.
+    """
     try:
         data = json.dumps({"text": "probe"}).encode()
         req = urllib.request.Request(
@@ -54,6 +102,11 @@ def _has_qmd_service() -> bool:
             return resp.status == 200
     except Exception:
         return False
+
+
+def _live_backend_available() -> bool:
+    """True if a live ONNX or QMD embed backend is actually usable."""
+    return _has_onnx_model() or _has_qmd_service()
 
 
 @pytest.fixture(autouse=True)
@@ -76,13 +129,13 @@ def _no_reranker_network(monkeypatch):
 def live_embed_backend():
     """Skip unless a live embed backend (ONNX model or QMD service) is available.
 
-    Configure an ONNX model with ``scripts/setup.sh`` or ``TAOSMD_ONNX_PATH``.
-    Start the QMD service with ``qmd serve`` (default http://localhost:7832).
+    The ONNX path is verified by loading the model (not just checking that the
+    file exists), so a truncated or empty ``model.onnx`` from an interrupted
+    ``scripts/setup.sh`` SKIPs here instead of producing confusing embed
+    failures later. Configure with ``scripts/setup.sh`` or
+    ``TAOSMD_ONNX_PATH``; start the QMD service with ``qmd serve`` on the
+    default http://localhost:7832.
     """
-    if _has_onnx_model() or _has_qmd_service():
+    if _live_backend_available():
         return True
-    pytest.skip(
-        "No live embed backend available. "
-        "Install an ONNX model (run scripts/setup.sh or set TAOSMD_ONNX_PATH) "
-        "or start the QMD service (qmd serve on http://localhost:7832)."
-    )
+    pytest.skip(_NO_BACKEND_SKIP_MSG)
