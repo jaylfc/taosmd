@@ -1,0 +1,56 @@
+# Documentation-drift gate configuration for taosmd.
+#
+# Read by scripts/check_doc_gate.py. Rules are data: add more [[rules]]
+# entries here to cover new feature areas without touching the script.
+#
+# Precision over recall: `when_changed` only triggers a rule on a structural
+# change (a file added or deleted), never a plain modification, and every
+# glob below is scoped to the specific tree it names. This is deliberate --
+# a noisy gate gets disabled, so false positives are worse than an occasional
+# missed doc update.
+#
+# Note: the gate currently fires only on files ADDED or DELETED, not on
+# modifications. The opt-in `on_modify` flag (taOS card tsk-sxuexd) lifts
+# that restriction once it lands; pull it in when ready.
+
+[gate]
+trailer = "Docs-Reviewed:"
+
+[invariants]
+# Key user-facing docs that reference repo paths (docs/ or scripts/).
+# Every matched token must exist on disk; a missing target means a stale
+# link in shipped documentation.
+referenced_paths_scan = [
+    "README.md",
+    "docs/multi-agent.md",
+    "docs/collections.md",
+    "docs/serve-service.md",
+    "docs/INSTALL-AGENT-PROMPT.md",
+    "docs/benchmarks.md",
+]
+
+[[rules]]
+# New, removed, or renamed code under the taosmd package may alter the
+# user-visible API or behaviour, so a CHANGELOG entry is required. The gate
+# only fires on add/delete (not modification); use a Docs-Reviewed trailer
+# for purely-internal or doc-only additions under taosmd/docs/.
+name = "changelog"
+when_changed = ["taosmd/**"]
+require_doc = ["CHANGELOG.md"]
+hint = "changes under taosmd/ that alter user-visible or API behaviour require a CHANGELOG entry"
+
+[[rules]]
+# The A2A bus handlers live in http_server.py and service.py. Adding or
+# removing either module changes the A2A API surface and needs docs coverage.
+name = "a2a-handlers"
+when_changed = ["taosmd/http_server.py", "taosmd/service.py"]
+require_doc = ["taosmd/docs/a2a-comms.md"]
+hint = "changes to A2A handlers require docs coverage"
+
+[[rules]]
+# CI workflows and pyproject.toml are contributor-surface configuration.
+# Adding or removing either needs the contributor doc reviewed.
+name = "contributor-surface"
+when_changed = [".github/workflows/**", "pyproject.toml"]
+require_doc = ["docs/pr-verification.md"]
+hint = "changes to .github/workflows or pyproject require the contributor doc reviewed"
