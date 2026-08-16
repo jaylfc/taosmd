@@ -101,6 +101,18 @@ async def ingest(text, *, agent: str, data_dir=None, **opts) -> dict:
     return await _api.ingest(text, agent=agent, data_dir=data_dir, **opts)
 
 
+def _normalise_handle(handle, *, mint_strip=False):
+    """Normalise a handle for identity comparison.
+
+    Strips leading '@' and case-folds. When ``mint_strip=True``, also
+    strips all ``'@'`` characters from the result (opt-in mint-strip behaviour).
+    """
+    handle = handle.lstrip("@").casefold()
+    if mint_strip:
+        handle = handle.replace("@", "")
+    return handle
+
+
 async def ingest_batch(items, *, agent: str, data_dir=None, **opts) -> dict:
     """Bulk-shelve memory chunks with idempotent re-import.
 

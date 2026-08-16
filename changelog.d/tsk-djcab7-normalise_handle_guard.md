@@ -1,0 +1,2 @@
+### Added
+- Added `_normalise_handle` function to `taosmd/service.py` as the single shared identity-slug helper, and added a guard in `scripts/normalise_handle_gate.py` that fails when the count of `def _normalise_handle` under `taosmd/` is not exactly 1.
