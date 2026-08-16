@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS archive_index (
     agent_name TEXT,
     app_id TEXT,
     project TEXT,
+    source TEXT,
+    source_id TEXT,
     summary TEXT NOT NULL DEFAULT '',
     file_path TEXT NOT NULL,
     line_number INTEGER NOT NULL,
@@ -67,6 +69,9 @@ CREATE INDEX IF NOT EXISTS idx_archive_ts ON archive_index(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_archive_type ON archive_index(event_type);
 CREATE INDEX IF NOT EXISTS idx_archive_agent ON archive_index(agent_name);
 CREATE INDEX IF NOT EXISTS idx_archive_app ON archive_index(app_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_source_uid
+ON archive_index (source, source_id)
+WHERE source IS NOT NULL AND source_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS archive_settings (
     key TEXT PRIMARY KEY,
@@ -179,8 +184,18 @@ class ArchiveStore:
         app_id: str | None = None,
         summary: str = "",
         project: str | None = None,
+        source: str | None = None,
+        source_id: str | None = None,
+        timestamp: float | None = None,
     ) -> int:
-        """Record an event to the archive. Returns the index row ID."""
+        """Record an event to the archive. Returns the index row ID.
+
+        ``timestamp`` overrides the wall-clock time when provided (used by the
+        A2A batch importer to preserve historical timestamps, #211). ``source``
+        and ``source_id`` tag imported A2A messages for idempotent re-import;
+        when both are non-null the unique index ``idx_archive_source_uid``
+        enforces (source, source_id) uniqueness.
+        """
         # Skip user activity events if tracking is disabled
         if event_type in USER_ACTIVITY_EVENTS and not self._user_tracking_enabled:
             return -1
@@ -192,13 +207,15 @@ class ArchiveStore:
             if key in data and isinstance(data[key], str):
                 data[key], _ = redact_secrets(data[key])
 
-        ts = time.time()
+        ts = timestamp if timestamp is not None else time.time()
         event = {
             "timestamp": ts,
             "event_type": event_type,
             "agent_name": agent_name,
             "app_id": app_id,
             "project": project,
+            "source": source,
+            "source_id": source_id,
             "summary": summary,
             "data": data,
         }
@@ -232,9 +249,11 @@ class ArchiveStore:
         # Index for fast lookup
         cursor = self._conn.execute(
             """INSERT INTO archive_index
-               (timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ts, event_type, agent_name, app_id, project, summary, file_path, line_count, json.dumps(data, default=str)),
+               (timestamp, event_type, agent_name, app_id, project, source, source_id,
+                summary, file_path, line_number, data_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ts, event_type, agent_name, app_id, project, source, source_id,
+             summary, file_path, line_count, json.dumps(data, default=str)),
         )
 
         # Index in FTS for full-text search
@@ -341,6 +360,35 @@ class ArchiveStore:
         except (json.JSONDecodeError, TypeError):
             result["data"] = {}
         return result
+
+    async def find_source_ids(
+        self, source: str, event_type: str = EVENT_A2A
+    ) -> dict[str, int]:
+        """Return ``{source_id: archive_id}`` for all events tagged with ``source``.
+
+        Backs idempotent A2A batch import (#211): lets the importer skip rows whose
+        ``(source, source_id)`` already exists and resolve ``reply_to_source_id``
+        to the archive row id of the originally imported message. Only rows with a
+        non-null ``source_id`` are considered.
+        """
+        rows = self._conn.execute(
+            "SELECT source_id, id FROM archive_index "
+            "WHERE source = ? AND source_id IS NOT NULL AND event_type = ?",
+            (source, event_type),
+        ).fetchall()
+        return {row["source_id"]: row["id"] for row in rows}
+
+    async def find_reply_target(
+        self, source: str, source_id: str, event_type: str = EVENT_A2A
+    ) -> int | None:
+        """Return the archive row id for a ``(source, source_id)`` pair, or None."""
+        row = self._conn.execute(
+            "SELECT id FROM archive_index "
+            "WHERE source = ? AND source_id = ? AND event_type = ? "
+            "ORDER BY id ASC LIMIT 1",
+            (source, source_id, event_type),
+        ).fetchone()
+        return row["id"] if row else None
 
     async def count(
         self,
