@@ -686,7 +686,6 @@ async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
     return sorted(members)
 
 
-<<<<<<< HEAD
 async def a2a_threads(*, principal: str | None = None, data_dir=None) -> list[dict]:
     """Return a summary of every thread on the A2A bus.
 
@@ -856,7 +855,6 @@ async def a2a_thread_messages(
     limit_i = max(1, min(limit, 200))
     messages = messages[:limit_i]
     return {"thread": thread, "messages": messages}
-=======
 async def a2a_import(
     source: str,
     messages: list[dict],
@@ -904,6 +902,11 @@ async def a2a_import(
         raise ValueError("messages must be a list")
     if not messages:
         raise ValueError("messages must be a non-empty list")
+
+    # --- Remote import branch: forward to remote server if configured -----
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_import(source, messages, defer_index=defer_index)
 
     # --- Fail-loud validation: every field checked before any write --------
     seen_source_ids: set[str] = set()
@@ -1030,9 +1033,8 @@ async def a2a_import(
         "imported": imported,
         "skipped": skipped,
         "first_id": first_id,
-        "last_id": last_id,
+"last_id": last_id,
     }
->>>>>>> 04e6b07af77bb30d797e0867a2647196c18b7c28
 
 
 async def task_create(
@@ -1441,12 +1443,7 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
-<<<<<<< HEAD
-           "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
-           "a2a_threads", "a2a_thread_messages",
-=======
-           "supersede", "a2a_send", "a2a_import", "a2a_feed", "a2a_channels", "a2a_members",
->>>>>>> 04e6b07af77bb30d797e0867a2647196c18b7c28
+"supersede", "a2a_send", "a2a_import", "a2a_feed", "a2a_channels", "a2a_members",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
