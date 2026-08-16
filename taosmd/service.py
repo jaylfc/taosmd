@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 
 from . import api as _api
 from . import config as _config
@@ -854,6 +855,186 @@ async def a2a_thread_messages(
     limit_i = max(1, min(limit, 200))
     messages = messages[:limit_i]
     return {"thread": thread, "messages": messages}
+async def a2a_import(
+    source: str,
+    messages: list[dict],
+    *,
+    defer_index: bool = False,
+    data_dir=None,
+) -> dict:
+    """Admin batch-import historical chat messages onto the A2A bus.
+
+    Writes each message as an append-only :data:`~taosmd.archive.EVENT_A2A`
+    archive event, preserving the caller-supplied historical ``ts`` rather than
+    the wall-clock import time (taOSmd #211 Q3a).  Designed for the taOS chat
+    history migration: existing conversations become ordinary bus messages with
+    their original timestamps intact, so thread ordering survives in the archive.
+
+    The whole batch is validated and pre-checked *before any write*; a missing
+    required field or an unresolvable ``reply_to_source_id`` refuses the entire
+    batch with a ``ValueError`` (which the HTTP layer maps to 400) and leaves the
+    archive untouched (fail-loud, zero partial writes).
+
+    Rules:
+
+    * **Idempotent** -- uniqueness is on ``(source, source_id)``.  Messages whose
+      ``source_id`` already exists for this ``source`` (in the archive or earlier
+      in the same batch) are skipped and counted in ``skipped``, never duplicated.
+    * **TS preserved** -- the archive row carries the historical ``ts``.  Within a
+      batch, rows are inserted in ascending ``(ts, position-in-batch)`` order so
+      the auto-increment row-id ordering matches ts ordering (thread ordering
+      survives equal timestamps via the stable sort).
+    * **reply_to resolution** -- ``reply_to_source_id`` is resolved to the archive
+      row id of the matching message (same ``source``); an unresolvable id
+      refuses the batch.
+    * **defer_index** -- when ``True``, messages are archived but NOT embedded
+      into the vector store.  Run ``taosmd reindex --agent <from>`` afterwards to
+      back-fill vector entries from the archive.  When ``False`` (default) each
+      message body is embedded immediately so imported history is searchable.
+
+    Returns ``{"imported": n, "skipped": n, "first_id": int|None, "last_id": int|None}``.
+    ``first_id`` / ``last_id`` are the archive row ids of the first and last newly
+    imported messages in ts order (both ``None`` when every message was skipped).
+    """
+    if not isinstance(source, str) or not source:
+        raise ValueError("source (non-empty string) is required")
+    if not isinstance(messages, list):
+        raise ValueError("messages must be a list")
+    if not messages:
+        raise ValueError("messages must be a non-empty list")
+
+    # --- Remote import branch: forward to remote server if configured -----
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_import(source, messages, defer_index=defer_index)
+
+    # --- Fail-loud validation: every field checked before any write --------
+    seen_source_ids: set[str] = set()
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            raise ValueError(f"messages[{i}] must be an object")
+        for field in ("from", "thread", "body", "source_id"):
+            val = msg.get(field)
+            if not isinstance(val, str) or not val:
+                raise ValueError(
+                    f"messages[{i}].{field} (non-empty string) is required"
+                )
+        ts = msg.get("ts")
+        if not isinstance(ts, (int, float)) or isinstance(ts, bool) or not math.isfinite(ts):
+            raise ValueError(f"messages[{i}].ts (finite float) is required")
+        rti = msg.get("reply_to_source_id")
+        if rti is not None and not isinstance(rti, str):
+            raise ValueError(f"messages[{i}].reply_to_source_id must be a string or null")
+        sid = msg["source_id"]
+        if sid in seen_source_ids:
+            raise ValueError(
+                f"messages[{i}].source_id {sid!r} is duplicated within the batch"
+            )
+        seen_source_ids.add(sid)
+
+    # --- Idempotency + reply_to pre-check (archive is source of truth) ---
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    existing = await archive.find_source_ids(source)
+    # Every reply_to_source_id must resolve to an already-imported message
+    # (in the archive, or earlier in this same batch by source_id presence).
+    batch_ids = {msg["source_id"] for msg in messages}
+    for i, msg in enumerate(messages):
+        rti = msg.get("reply_to_source_id")
+        if rti is not None and rti not in existing and rti not in batch_ids:
+            raise ValueError(
+                f"messages[{i}].reply_to_source_id {rti!r} does not match any "
+                f"imported message in source {source!r}"
+            )
+
+    # --- Insert in ts order so auto-increment id order == ts order ----------
+    # Stable sort on (ts, original position): equal timestamps keep their
+    # in-batch order, so thread ordering survives.
+    order = sorted(
+        range(len(messages)),
+        key=lambda p: (messages[p]["ts"], p),
+    )
+
+    id_map: dict[str, int] = dict(existing)
+    imported = 0
+    skipped = 0
+    first_id: int | None = None
+    last_id: int | None = None
+
+    for pos in order:
+        msg = messages[pos]
+        sid = msg["source_id"]
+        if sid in id_map:
+            skipped += 1
+            continue
+
+        # Resolve reply_to_source_id to the archive row id of the referenced
+        # message (already imported in the archive or earlier in this batch in
+        # ts order).  A forward reference (target comes later in the batch)
+        # leaves reply_to=None but keeps reply_to_source_id for traceability.
+        rti = msg.get("reply_to_source_id")
+        reply_to: str | None = None
+        if rti is not None:
+            target = id_map.get(rti)
+            if target is not None:
+                reply_to = str(target)
+
+        data: dict = {
+            "from": msg["from"],
+            "body": msg["body"],
+            "thread": msg["thread"],
+            "reply_to": reply_to,
+            "source": source,
+            "source_id": sid,
+        }
+        if rti is not None:
+            data["reply_to_source_id"] = rti
+        if msg.get("refs") is not None:
+            data["refs"] = msg["refs"]
+        if msg.get("blocks") is not None:
+            data["blocks"] = msg["blocks"]
+
+        row_id = await archive.record(
+            event_type=EVENT_A2A,
+            data=data,
+            agent_name=msg["from"],
+            app_id=msg["thread"],
+            summary=msg["body"][:200],
+            source=source,
+            source_id=sid,
+            timestamp=msg["ts"],
+        )
+        id_map[sid] = row_id
+        if first_id is None:
+            first_id = row_id
+        last_id = row_id
+        imported += 1
+
+        # Optional vector embedding (skipped when deferring).
+        if not defer_index:
+            meta: dict = {
+                "agent": msg["from"],
+                "source": source,
+                "source_id": sid,
+                "ts": msg["ts"],
+            }
+            if isinstance(row_id, int) and row_id >= 0:
+                meta["archive_span_id"] = row_id
+            try:
+                await stores["vector"].add(msg["body"], metadata=meta)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "a2a_import: vector embed failed for source_id %r; "
+                    "message is archived and recoverable",
+                    sid,
+                )
+
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "first_id": first_id,
+"last_id": last_id,
+    }
 
 
 async def task_create(
@@ -1262,8 +1443,7 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
-           "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
-           "a2a_threads", "a2a_thread_messages",
+"supersede", "a2a_send", "a2a_import", "a2a_feed", "a2a_channels", "a2a_members",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",

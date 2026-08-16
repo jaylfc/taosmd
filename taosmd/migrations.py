@@ -199,6 +199,24 @@ def _archive_index_project(conn: sqlite3.Connection) -> None:
     add_column(conn, "archive_index", "project", "TEXT")
 
 
+def _archive_index_source_uid(conn: sqlite3.Connection) -> None:
+    """Add source/source_id columns for idempotent A2A batch import (#211).
+
+    ``source`` and ``source_id`` tag each imported A2A message with the
+    external origin and its stable per-source id, so a re-import can skip
+    rows already present without relying on the JSON payload alone. The
+    partial unique index enforces (source, source_id) uniqueness at the
+    database level as a safety net against duplicate writes.
+    """
+    add_column(conn, "archive_index", "source", "TEXT")
+    add_column(conn, "archive_index", "source_id", "TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_source_uid "
+        "ON archive_index (source, source_id) "
+        "WHERE source IS NOT NULL AND source_id IS NOT NULL"
+    )
+
+
 _ARCHIVE_INDEX: tuple[Migration, ...] = (
     Migration(
         1, "archive_index_baseline", _archive_index_baseline,

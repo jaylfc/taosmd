@@ -105,10 +105,17 @@ Endpoints
 ``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?, "refs"?, "blocks"?}`` -> send receipt
                             ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
                             ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
+<<<<<<< HEAD
 ``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400)
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream); ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400
 ``GET  /a2a/threads``      ``?principal=``                  -> ``{"threads": [...]}`` thread list for the principal, ordered by latest activity desc; each entry has ``thread``, ``kind``, ``participants``, ``last_message: {id, ts, from, body_preview}`` (see notes below)
 ``GET  /a2a/threads/{thread}/messages`` ``?before=&after=&limit=`` -> ``{"thread", "messages": [...]}`` cursor-paginated message envelope, oldest-first
+=======
+``POST /a2a/import``      (admin) ``{"source": str, "defer_index"?: bool, "messages": [{"from": str, "thread": str, "body": str, "ts": float, "source_id": str, "reply_to_source_id"?: str|null, "blocks"?: [...], "refs"?: [...]}]}`` -> ``{"imported": n, "skipped": n, "first_id": int|null, "last_id": int|null}``
+                            Batch-import historical chat history onto the bus (taOSmd #211 Q3a). Idempotent on ``(source, source_id)``: re-runs skip existing rows. ``ts`` is preserved as the archive timestamp, not import time. ``reply_to_source_id`` resolves to the imported archive id of the referenced message (same source); unresolvable -> 400, no write. ``defer_index=true`` archives only and defers vector embedding; run ``taosmd reindex --agent <from>`` afterwards to back-fill vectors from the archive.
+``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line)
+``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream)
+>>>>>>> 04e6b07af77bb30d797e0867a2647196c18b7c28
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
 ``POST /tasks``            ``{"title", "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [...], "created_by"}`` -> task object
@@ -830,6 +837,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "/a2a/admin/delete-channel",
                 "/a2a/admin/rename-channel",
                 "/a2a/admin/supersede-message",
+                "/a2a/import",
             )
 
         def _check_admin_token(self) -> bool:
@@ -1029,6 +1037,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_pending_resolve()
                 elif method == "POST" and path == "/a2a/send":
                     self._handle_a2a_send()
+                elif method == "POST" and path == "/a2a/import":
+                    self._handle_a2a_import()
                 elif method == "GET" and path == "/a2a/channels":
                     self._handle_a2a_channels()
                 elif method == "GET" and path == "/a2a/members":
@@ -1604,6 +1614,26 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     thread=thread, reply_to=reply_to,
                     refs=refs, blocks=blocks,
                     data_dir=data_dir,
+                )
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_import(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            source = body.get("source")
+            defer_index = body.get("defer_index", False)
+            messages = body.get("messages")
+            if not isinstance(source, str) or not source:
+                raise _BadRequest("'source' (non-empty string) is required")
+            if not isinstance(messages, list) or not messages:
+                raise _BadRequest("'messages' (non-empty list) is required")
+            if not isinstance(defer_index, bool):
+                raise _BadRequest("'defer_index' must be a boolean when provided")
+            result = runner.run(
+                service.a2a_import(
+                    source, messages, defer_index=defer_index, data_dir=data_dir,
                 )
             )
             self._send_json(200, result)
@@ -2232,7 +2262,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, "
           "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
-          "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "
+          "POST /a2a/send, POST /a2a/import, GET /a2a/messages, GET /a2a/stream, "
           "GET /a2a/channels, GET /a2a/members, "
           "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
           "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove, "
@@ -2244,7 +2274,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
           "POST /shelves, POST /shelves/{id}/archive, "
           "POST /shelves/{id}/unarchive, "
           "POST /a2a/admin/delete-channel, POST /a2a/admin/rename-channel, "
-          "POST /a2a/admin/supersede-message")
+          "POST /a2a/admin/supersede-message, POST /a2a/import")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
