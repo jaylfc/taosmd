@@ -35,6 +35,11 @@ from .archive import EVENT_A2A
 
 logger = logging.getLogger(__name__)
 
+
+def _normalise_handle(handle: str) -> str:
+    return handle.lstrip("@").casefold()
+
+
 # Cache of RemoteClient instances keyed by (base_url, token) so we don't
 # create a fresh object on every call.  Access from async coroutines is safe
 # because Python dict operations are GIL-protected.
@@ -410,6 +415,7 @@ async def a2a_send(
     refs: list | None = None,
     blocks: list | None = None,
     data_dir=None,
+    _auth: dict | None = None,
 ) -> dict:
     """Post a message onto the agent-to-agent bus.
 
@@ -424,8 +430,14 @@ async def a2a_send(
     payload and echoed back in the receipt and on feed/SSE reads. When
     absent they are omitted from output entirely (no null noise).
 
+    ``_auth`` is an internal dict produced by the HTTP handler with keys
+    ``auth`` (``"verified"``, ``"unsigned"``, or ``"invalid"``),
+    ``verified_sub``, ``from_raw``, ``from_normalised``, and
+    ``from_mismatch``.  When omitted a default unsigned annotation is
+    recorded.
+
     Returns ``{"id", "from", "thread", "reply_to"}`` plus ``refs`` and/or
-    ``blocks`` when those were supplied.
+    ``blocks`` when those were supplied, plus the auth annotation fields.
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
@@ -434,6 +446,14 @@ async def a2a_send(
         raise ValueError("sender must be a non-empty string")
     if not isinstance(body, str) or not body:
         raise ValueError("body must be a non-empty string")
+    if _auth is None:
+        _auth = {
+            "auth": "unsigned",
+            "verified_sub": None,
+            "from_raw": sender,
+            "from_normalised": _normalise_handle(sender),
+            "from_mismatch": False,
+        }
     remote = _get_remote(data_dir)
     if remote is not None:
         return await remote.a2a_send(
@@ -449,6 +469,13 @@ async def a2a_send(
         _admin = A2AAdminState(data_dir)
         thread = _admin.resolve_channel(thread)
     data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to}
+    data["auth"] = _auth["auth"]
+    data["verified_sub"] = _auth["verified_sub"]
+    data["from_raw"] = _auth["from_raw"]
+    data["from_normalised"] = _auth["from_normalised"]
+    data["from_mismatch"] = _auth["from_mismatch"]
+    if "reason" in _auth:
+        data["reason"] = _auth["reason"]
     if refs is not None:
         data["refs"] = refs
     if blocks is not None:
@@ -461,6 +488,13 @@ async def a2a_send(
         summary=body[:200],
     )
     receipt = {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to}
+    receipt["auth"] = _auth["auth"]
+    receipt["verified_sub"] = _auth["verified_sub"]
+    receipt["from_raw"] = _auth["from_raw"]
+    receipt["from_normalised"] = _auth["from_normalised"]
+    receipt["from_mismatch"] = _auth["from_mismatch"]
+    if "reason" in _auth:
+        receipt["reason"] = _auth["reason"]
     if refs is not None:
         receipt["refs"] = refs
     if blocks is not None:
@@ -569,6 +603,11 @@ async def a2a_feed(
             msg["refs"] = data["refs"]
         if "blocks" in data:
             msg["blocks"] = data["blocks"]
+        # Bus auth Stage 1 annotation: present on messages sent after the
+        # transition, absent on older archive rows.
+        for _key in ("auth", "verified_sub", "from_raw", "from_normalised", "from_mismatch", "reason"):
+            if _key in data:
+                msg[_key] = data[_key]
         result.append(msg)
     return result
 

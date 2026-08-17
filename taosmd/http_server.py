@@ -1549,6 +1549,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     raise _BadRequest(
                         "'body' (non-empty string) is required when 'blocks' is present"
                     )
+            # Build the Stage 1 auth annotation (observe only, never reject).
+            _auth_annotation = {
+                "auth": "unsigned",
+                "verified_sub": None,
+                "from_raw": from_,
+                "from_normalised": from_.lstrip("@").casefold(),
+                "from_mismatch": False,
+            }
             # Registry auth (opt-in): when a verifier is configured, run the
             # identity + grant checks and collect any failure reason.
             # In enforce mode (a2a_auth_enforce=true) failures are rejected with
@@ -1557,8 +1565,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             # violations before enabling hard enforcement.
             if _registry_verifier is not None:
                 from . import registry_auth  # noqa: PLC0415 - optional path
-                auth = self.headers.get("Authorization", "")
-                token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+                auth_header = self.headers.get("Authorization", "")
+                token = auth_header[len("Bearer "):].strip() if auth_header.startswith("Bearer ") else ""
 
                 # Compute warn_reason (None = auth passed) and the status/message
                 # to use in enforce mode. We collect these without returning early
@@ -1573,15 +1581,23 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     _reject_msg = "registry auth: Bearer token required"
                 else:
                     try:
-                        _registry_verifier.authorize(token, from_)
-                    except registry_auth.HumanAuthError as exc:
-                        logger.warning("human principal %r rejected: %s", from_, exc)
-                        self._send_json(403, {"error": f"registry auth: {exc}"})
-                        return
+                        claims = _registry_verifier.authorize(token, from_)
+                        _auth_annotation["auth"] = "verified"
+                        _auth_annotation["verified_sub"] = claims.get("sub")
                     except registry_auth.AuthError as exc:
                         warn_reason = str(exc)
                         _reject_status = 403
                         _reject_msg = f"registry auth: {exc}"
+                        _auth_annotation["auth"] = "invalid"
+                        _auth_annotation["reason"] = warn_reason
+                        try:
+                            import jwt as _jwt  # noqa: PLC0415 - optional path
+                            decoded = _jwt.decode(token, options={"verify_signature": False})
+                            sub = decoded.get("sub")
+                            if sub:
+                                _auth_annotation["verified_sub"] = str(sub)
+                        except Exception:
+                            pass
 
                 # Grant check: token proves identity; grant proves permission.
                 # Human principals (controller sessions) have no registry grant,
@@ -1601,6 +1617,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         logger.info("grants check skipped for human principal %r", from_)
 
                 if warn_reason is not None:
+                    _auth_annotation.setdefault("reason", warn_reason)
                     enforce = _config.get_a2a_auth_enforce(data_dir)
                     if enforce:
                         self._send_json(_reject_status, {"error": _reject_msg})
@@ -1609,12 +1626,17 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         "a2a verify-and-warn: accepting unverified post from %r: %s",
                         from_, warn_reason,
                     )
+            # Normalised identity and mismatch flag.
+            if _auth_annotation["verified_sub"] is not None:
+                _auth_annotation["from_normalised"] = _auth_annotation["verified_sub"].lstrip("@").casefold()
+            _auth_annotation["from_mismatch"] = from_.lstrip("@").casefold() != _auth_annotation["from_normalised"]
             result = runner.run(
                 service.a2a_send(
                     sender=from_, body=body_text,
                     thread=thread, reply_to=reply_to,
                     refs=refs, blocks=blocks,
                     data_dir=data_dir,
+                    _auth=_auth_annotation,
                 )
             )
             self._send_json(200, result)
