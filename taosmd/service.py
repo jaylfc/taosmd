@@ -28,10 +28,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import time
 
 from . import api as _api
 from . import config as _config
 from .archive import EVENT_A2A
+from .mentions import MentionStore, _normalise_handle
 
 logger = logging.getLogger(__name__)
 
@@ -409,6 +412,7 @@ async def a2a_send(
     reply_to: str | None = None,
     refs: list | None = None,
     blocks: list | None = None,
+    recipient: str | None = None,
     data_dir=None,
 ) -> dict:
     """Post a message onto the agent-to-agent bus.
@@ -424,6 +428,10 @@ async def a2a_send(
     payload and echoed back in the receipt and on feed/SSE reads. When
     absent they are omitted from output entirely (no null noise).
 
+    ``recipient`` is an optional explicit mention target (tsk-s2qt2q);
+    when provided it is stored in the archive payload and indexed as a
+    mention so the recipient can retrieve it via GET /a2a/mentions.
+
     Returns ``{"id", "from", "thread", "reply_to"}`` plus ``refs`` and/or
     ``blocks`` when those were supplied.
 
@@ -438,7 +446,7 @@ async def a2a_send(
     if remote is not None:
         return await remote.a2a_send(
             sender, body, thread=thread, reply_to=reply_to,
-            refs=refs, blocks=blocks,
+            refs=refs, blocks=blocks, recipient=recipient,
         )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
@@ -449,6 +457,8 @@ async def a2a_send(
         _admin = A2AAdminState(data_dir)
         thread = _admin.resolve_channel(thread)
     data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to}
+    if recipient is not None:
+        data["recipient"] = recipient
     if refs is not None:
         data["refs"] = refs
     if blocks is not None:
@@ -461,10 +471,24 @@ async def a2a_send(
         summary=body[:200],
     )
     receipt = {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to}
+    if recipient is not None:
+        receipt["recipient"] = recipient
     if refs is not None:
         receipt["refs"] = refs
     if blocks is not None:
         receipt["blocks"] = blocks
+    # Index @handle mentions for the A2A mention feed (#211).
+    stored = await archive.get_event(row_id)
+    ts = stored["timestamp"] if stored else time.time()
+    mentions = stores.get("mentions")
+    if isinstance(mentions, MentionStore):
+        await mentions.record_mentions(
+            message_id=row_id,
+            body=body,
+            thread=thread,
+            ts=ts,
+            recipient=recipient,
+        )
     return receipt
 
 
@@ -854,6 +878,147 @@ async def a2a_thread_messages(
     limit_i = max(1, min(limit, 200))
     messages = messages[:limit_i]
     return {"thread": thread, "messages": messages}
+
+
+async def a2a_mentions_feed(
+    reader: str,
+    *,
+    since: float | None = None,
+    limit: int = 50,
+    data_dir=None,
+) -> list[dict]:
+    """Return messages that mention ``reader`` plus their reply_to chains.
+
+    Each item has shape ``{"id", "ts", "from", "body", "thread",
+    "reply_to", "thread_root"}``. Results are ordered oldest-first and
+    capped by ``limit``.
+
+    Thread-scoped visibility (#211 anti-bypass): a mention grants access
+    to the mentioned message and the full reply_to chain rooted at it,
+    but not to unrelated sibling messages in the same channel.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if not isinstance(limit, int) or math.isnan(limit) or math.isinf(limit) or limit <= 0:
+        raise ValueError("limit must be a positive finite integer")
+    if since is not None and (math.isnan(since) or math.isinf(since)):
+        raise ValueError("since must be a finite float timestamp or None")
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_mentions_feed(reader, since=since, limit=limit)
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    mentions_store = stores["mentions"]
+
+    norm_reader = _normalise_handle(reader)
+    mentioned_rows = await mentions_store.get_mentioned_message_ids(
+        norm_reader, since=since, limit=limit,
+    )
+    mentioned_ids = {r["message_id"] for r in mentioned_rows}
+    if not mentioned_ids:
+        return []
+
+    all_rows = await archive.query(event_type=EVENT_A2A)
+    msg_thread: dict[int, str] = {}
+    children: dict[int, list[dict]] = {}
+    for row in all_rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        thread = data.get("thread") or row.get("app_id") or "general"
+        msg_thread[row["id"]] = thread
+        reply_to = data.get("reply_to")
+        if reply_to is not None:
+            try:
+                parent_id = int(reply_to)
+                children.setdefault(parent_id, []).append(row)
+            except (TypeError, ValueError):
+                continue
+
+    root_threads = {msg_thread[mid] for mid in mentioned_ids if mid in msg_thread}
+    reply_chain_ids = set(mentioned_ids)
+    queue = list(mentioned_ids)
+    while queue:
+        parent_id = queue.pop()
+        for child_row in children.get(parent_id, []):
+            if child_row["id"] in reply_chain_ids:
+                continue
+            child_thread = msg_thread.get(child_row["id"])
+            parent_thread = msg_thread.get(parent_id)
+            if child_thread and parent_thread and child_thread == parent_thread:
+                reply_chain_ids.add(child_row["id"])
+                queue.append(child_row["id"])
+
+    thread_roots: dict[int, int] = {}
+    for mid in reply_chain_ids:
+        root = await _find_thread_root(mid, archive)
+        if root is not None:
+            thread_roots[mid] = root
+
+    result = []
+    for row in all_rows:
+        if row["id"] not in reply_chain_ids:
+            continue
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if data.get("admin_action"):
+            continue
+        msg = {
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": data.get("from"),
+            "body": data.get("body"),
+            "thread": data.get("thread") or row.get("app_id") or "general",
+            "reply_to": data.get("reply_to"),
+            "thread_root": thread_roots.get(row["id"]),
+        }
+        result.append(msg)
+
+    result.sort(key=lambda m: m["ts"])
+    return result[:limit]
+
+
+async def _find_thread_root(message_id: int, archive) -> int | None:
+    """Walk reply_to links upward to find the root message ID."""
+    visited: set[int] = set()
+    current_id = message_id
+    while current_id:
+        if current_id in visited:
+            break
+        visited.add(current_id)
+        row = await archive.get_event(current_id)
+        if not row:
+            break
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            break
+        reply_to = data.get("reply_to")
+        if reply_to is None:
+            return current_id
+        try:
+            current_id = int(reply_to)
+        except (TypeError, ValueError):
+            break
+    return None
+
+
+async def can_read(reader: str, msg: dict, data_dir=None) -> bool:
+    """Thread-scoped read guard (#211 anti-bypass).
+
+    ``canRead(reader, msg) = channelACL(reader, msg.thread) OR
+    mentionGrant(reader, threadRoot(msg))``
+
+    A mention grants visibility of the mentioned message and its full
+    reply_to chain, but never widens channel access. Channel ACL
+    enforcement (tsk-dp6fyv) plugs into the ``channelACL`` slot; until
+    then it is effectively always-true for compatibility.
+    """
+    return True
 
 
 async def task_create(
@@ -1264,6 +1429,7 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
            "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
            "a2a_threads", "a2a_thread_messages",
+           "a2a_mentions_feed", "can_read",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
