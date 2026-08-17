@@ -1,0 +1,2 @@
+### Added
+- Markdown front matter now parses `doc_id`, `version` (always int), and `review_by` (validated ISO date) keys at index time, storing them on collection chunk metadata. Search hits gain `is_current`, `as_of` (always float), `is_past_review`, and on superseded rows `superseded_by` with `is_current` set to false. Front-matter parsing respects both `.md` and `.markdown` extensions and ignores document keys from thematic-break documents via a closing-delimiter line budget.

@@ -449,6 +449,15 @@ def _format_hit(hit: dict) -> dict:
         user_md = dict(user_md)  # copy: never mutate the stored row metadata
         for key, value in preserved.items():
             user_md.setdefault(key, value)
+        # Warn (not assert) if critical provenance keys were lost during
+        # unwrap. A bare assert is stripped under ``-O`` and would convert a
+        # metadata-shape anomaly into a 500 on the search request path.
+        for key in ("archive_span_id", "agent", "project"):
+            if key in (md or {}) and key not in user_md:
+                logger.warning(
+                    "_format_hit lost critical key %r during metadata unwrap",
+                    key,
+                )
 
     confidence = (
         md.get("similarity")
@@ -462,6 +471,33 @@ def _format_hit(hit: dict) -> dict:
         or (md.get("timestamp") if isinstance(md, dict) else None)
         or 0
     )
+
+    # Collection doc-currency metadata lives in the inner user-metadata dict
+    # (that is how ingest_folder's chunk_md stores it), so read from user_md
+    # after the unwrap, not from the outer envelope.
+    # is_current is False for superseded/history rows (hidden_by set);
+    # always True on the default active-recall path.
+    # as_of is the indexing timestamp: indexed_at (float epoch) or the
+    # row's created_at/timestamp, coerced to float for a single type.
+    # is_past_review is True only when review_by is present and overdue.
+    if isinstance(user_md, dict):
+        is_current = not (isinstance(md, dict) and "hidden_by" in md)
+        as_of = user_md.get("indexed_at")
+        if as_of is None:
+            as_of = timestamp
+        as_of = float(as_of)
+        review_by = user_md.get("review_by")
+        has_review_by = review_by is not None
+        is_past_review = has_review_by and review_by < time.strftime("%Y-%m-%d")
+
+        user_md["is_current"] = is_current
+        user_md["as_of"] = as_of
+        if has_review_by:
+            user_md["is_past_review"] = is_past_review
+        # doc_id / version / review_by are already in user_md when present;
+        # no extraction needed. Only superseded_by comes from the envelope.
+        if isinstance(md, dict) and "hidden_by" in md:
+            user_md["superseded_by"] = md["hidden_by"]
 
     return {
         "text": hit.get("text", ""),
