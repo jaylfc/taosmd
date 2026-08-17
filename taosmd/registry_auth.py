@@ -79,7 +79,8 @@ def authorize_sender(token: str, claimed_from: str, *, public_key: str,
     sub = claims.get("sub")
     if not sub:
         raise AuthError("token has no 'sub' (canonical_id) claim")
-    if sub != claimed_from:
+    from .service import _normalise_handle  # noqa: PLC0415
+    if _normalise_handle(sub) != _normalise_handle(claimed_from):
         if human_principal_ids and sub in human_principal_ids:
             logger.warning("human principal %r sub/from mismatch: sub=%r, from=%r",
                            sub, sub, claimed_from)
@@ -88,7 +89,7 @@ def authorize_sender(token: str, claimed_from: str, *, public_key: str,
             )
         raise AuthError(f"token sub {sub!r} does not match from {claimed_from!r}")
     if not (human_principal_ids and sub in human_principal_ids):
-        if sub in revoked:
+        if _normalise_handle(sub) in revoked:
             raise AuthError(f"canonical_id {sub!r} is revoked")
     if expected_iss is not None and claims.get("iss") != expected_iss:
         raise AuthError(f"token iss {claims.get('iss')!r} != expected {expected_iss!r}")

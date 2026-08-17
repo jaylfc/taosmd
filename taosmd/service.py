@@ -25,6 +25,7 @@ server, and Python API all go remote transparently.
 
 from __future__ import annotations
 
+from pathlib import Path
 import hashlib
 import json
 import logging
@@ -39,6 +40,27 @@ logger = logging.getLogger(__name__)
 # create a fresh object on every call.  Access from async coroutines is safe
 # because Python dict operations are GIL-protected.
 _remote_cache: dict[tuple[str, str | None], object] = {}
+
+
+def _normalise_handle(handle: str, *, mint_strip: bool = False) -> str:
+    """Slug-match helper for identity comparison on the A2A bus.
+
+    This is a slug match, NOT an identity check: two distinct agents that
+    share a stem will unify under this function. Do not use it for
+    authorisation decisions that require distinguishing between same-stem
+    identities.
+
+    Strips any leading ``@``, casefolds, and optionally strips a timestamp
+    mint stamp (``-YYYYMMDD`` or ``-YYYYMMDD-HHMMSS`` suffix) when
+    ``mint_strip=True``. The default is ``mint_strip=False`` because the
+    ``from`` field on bus messages does not carry bare-or-@ twins for the
+    same canonical, and stripping would collapse install discriminators
+    such as ``@taOS-agent-1a2b3c4d``.
+    """
+    handle = handle.lstrip("@").casefold()
+    if mint_strip:
+        handle = re.sub(r"-\d{8}(-\d{6})?$", "", handle)
+    return handle
 
 
 def _get_remote(data_dir=None):
@@ -442,6 +464,12 @@ async def a2a_send(
         )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
+    from taosmd.mentions import MentionStore  # noqa: PLC0415
+    db_path = str(Path(data_dir) / "mentions.db") if data_dir else None
+    mention_store: MentionStore | None = None
+    if db_path is not None:
+        mention_store = MentionStore(db_path)
+        await mention_store.init()
     # Redirect sends to renamed channels: if the target thread has been aliased
     # to a new name, route the message to the canonical name instead.
     if data_dir is not None:
@@ -460,6 +488,16 @@ async def a2a_send(
         app_id=thread,
         summary=body[:200],
     )
+    if mention_store is not None:
+        await mention_store.record_mentions(
+            message_id=row_id,
+            body=body,
+            thread=thread,
+            ts=row_id,
+            recipient=None,
+        )
+    if mention_store is not None:
+        await mention_store.close()
     receipt = {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to}
     if refs is not None:
         receipt["refs"] = refs
