@@ -1,0 +1,27 @@
+name: Normalise handle gate
+
+# Fails if any module under ``taosmd/`` contains more than one definition
+# of the internal helper ``_normalise_handle``.  Overload stubs decorated
+# with ``@typing.overload`` or ``@overload`` are excluded.  Files that
+# cannot be decoded as UTF-8 are skipped with a warning.
+#
+# See scripts/normalise_handle_gate.py for the implementation.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  normalise-handle-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Install deps
+        run: uv sync --python 3.12
+      - name: Check for duplicate _normalise_handle definitions
+        run: python scripts/normalise_handle_gate.py
