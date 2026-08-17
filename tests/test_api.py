@@ -190,7 +190,7 @@ def test_format_hit_prefers_similarity_over_source_score():
     assert formatted["confidence"] == 0.85
     assert formatted["source"] == "vector"
     assert formatted["timestamp"] == 1700000000
-    assert formatted["metadata"] == {"position": 7, "timestamp": 1700000000}
+    assert formatted["metadata"] == {"position": 7, "timestamp": 1700000000, "as_of": 1700000000.0, "is_current": True}
 
 
 def test_format_hit_falls_back_to_source_score():
