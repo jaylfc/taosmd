@@ -259,10 +259,10 @@ class RemoteClient:
         """GET /a2a/mentions: return messages mentioning ``reader`` plus reply chains.
 
         Returns the ``messages`` list from the server response. Requires
-        registry auth on the server side; the ``reader`` identity is derived
-        from the verified token ``sub``.
+        registry auth on the server side; ``reader`` is forwarded as a query
+        parameter so the server returns the requested user's mentions.
         """
-        params: dict = {"limit": limit}
+        params: dict = {"reader": reader, "limit": limit}
         if since is not None:
             params["since"] = since
         resp = await self._run("GET", "/a2a/mentions", params=params)

@@ -28,12 +28,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import time
 
 from . import api as _api
 from . import config as _config
 from .archive import EVENT_A2A
-from .mentions import MentionStore
+from .mentions import MentionStore, _normalise_handle
 
 logger = logging.getLogger(__name__)
 
@@ -899,6 +900,10 @@ async def a2a_mentions_feed(
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
     """
+    if not isinstance(limit, int) or math.isnan(limit) or math.isinf(limit) or limit <= 0:
+        raise ValueError("limit must be a positive finite integer")
+    if since is not None and (math.isnan(since) or math.isinf(since)):
+        raise ValueError("since must be a finite float timestamp or None")
     remote = _get_remote(data_dir)
     if remote is not None:
         return await remote.a2a_mentions_feed(reader, since=since, limit=limit)
@@ -906,46 +911,52 @@ async def a2a_mentions_feed(
     archive = stores["archive"]
     mentions_store = stores["mentions"]
 
+    norm_reader = _normalise_handle(reader)
     mentioned_rows = await mentions_store.get_mentioned_message_ids(
-        reader, since=since, limit=limit,
+        norm_reader, since=since, limit=limit,
     )
     mentioned_ids = {r["message_id"] for r in mentioned_rows}
     if not mentioned_ids:
         return []
 
-    # Build the reply-to chain: any message whose reply_to is in the
-    # mentioned set (recursively) is also visible to the reader.
-    all_rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
-    reply_chain_ids = set(mentioned_ids)
-    changed = True
-    while changed:
-        changed = False
-        for row in all_rows:
-            if row["id"] in reply_chain_ids:
-                continue
-            try:
-                data = json.loads(row.get("data_json", "{}"))
-            except (json.JSONDecodeError, TypeError):
-                continue
-            reply_to = data.get("reply_to")
-            if reply_to is not None:
-                try:
-                    if int(reply_to) in reply_chain_ids:
-                        reply_chain_ids.add(row["id"])
-                        changed = True
-                except (TypeError, ValueError):
-                    continue
-
-    # Collect thread-root for each message (top of its reply_to chain).
-    thread_roots: dict[int, int] = {}
+    all_rows = await archive.query(event_type=EVENT_A2A)
+    msg_thread: dict[int, str] = {}
+    children: dict[int, list[dict]] = {}
     for row in all_rows:
-        if row["id"] not in reply_chain_ids:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
             continue
-        root = await _find_thread_root(row["id"], archive)
-        if root is not None:
-            thread_roots[row["id"]] = root
+        thread = data.get("thread") or row.get("app_id") or "general"
+        msg_thread[row["id"]] = thread
+        reply_to = data.get("reply_to")
+        if reply_to is not None:
+            try:
+                parent_id = int(reply_to)
+                children.setdefault(parent_id, []).append(row)
+            except (TypeError, ValueError):
+                continue
 
-    # Assemble result.
+    root_threads = {msg_thread[mid] for mid in mentioned_ids if mid in msg_thread}
+    reply_chain_ids = set(mentioned_ids)
+    queue = list(mentioned_ids)
+    while queue:
+        parent_id = queue.pop()
+        for child_row in children.get(parent_id, []):
+            if child_row["id"] in reply_chain_ids:
+                continue
+            child_thread = msg_thread.get(child_row["id"])
+            parent_thread = msg_thread.get(parent_id)
+            if child_thread and parent_thread and child_thread == parent_thread:
+                reply_chain_ids.add(child_row["id"])
+                queue.append(child_row["id"])
+
+    thread_roots: dict[int, int] = {}
+    for mid in reply_chain_ids:
+        root = await _find_thread_root(mid, archive)
+        if root is not None:
+            thread_roots[mid] = root
+
     result = []
     for row in all_rows:
         if row["id"] not in reply_chain_ids:
@@ -1007,47 +1018,9 @@ async def can_read(reader: str, msg: dict, data_dir=None) -> bool:
     enforcement (tsk-dp6fyv) plugs into the ``channelACL`` slot; until
     then it is effectively always-true for compatibility.
     """
-    stores = await _api._ensure_stores(data_dir)
-    archive = stores["archive"]
-    mentions_store = stores["mentions"]
+    return True
 
-    # channelACL: no enforcement yet (tsk-dp6fyv); always passes.
-    if True:
-        return True
 
-    # mentionGrant: reader is mentioned on threadRoot(msg) or any ancestor
-    # in its reply_to chain.
-    msg_id = msg.get("id")
-    if msg_id is None:
-        return False
-    thread_root_id = await _find_thread_root(msg_id, archive)
-    if thread_root_id is None:
-        return False
-
-    current_id = thread_root_id
-    visited: set[int] = set()
-    while current_id:
-        if current_id in visited:
-            break
-        visited.add(current_id)
-        recipients = await mentions_store.get_mention_recipients(current_id)
-        if reader in recipients:
-            return True
-        row = await archive.get_event(current_id)
-        if not row:
-            break
-        try:
-            data = json.loads(row.get("data_json", "{}"))
-        except (json.JSONDecodeError, TypeError):
-            break
-        reply_to = data.get("reply_to")
-        if reply_to is None:
-            break
-        try:
-            current_id = int(reply_to)
-        except (TypeError, ValueError):
-            break
-    return False
 async def task_create(
     title: str,
     *,

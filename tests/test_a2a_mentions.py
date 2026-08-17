@@ -351,6 +351,58 @@ def test_a2a_mentions_feed_thread_root_field(isolated_data_dir):
         assert m["thread_root"] == r1["id"]
 
 
+def test_a2a_mentions_feed_normalises_handle(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+
+    asyncio.run(service.a2a_send("agentA", "hey @BOB", thread="t1", data_dir=dd))
+
+    msgs = asyncio.run(service.a2a_mentions_feed("bob", data_dir=dd))
+    assert len(msgs) == 1
+
+    msgs2 = asyncio.run(service.a2a_mentions_feed("@bob", data_dir=dd))
+    assert len(msgs2) == 1
+
+    msgs3 = asyncio.run(service.a2a_mentions_feed("BOB", data_dir=dd))
+    assert len(msgs3) == 1
+
+
+def test_a2a_mentions_feed_excludes_cross_channel_reply(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+
+    r1 = asyncio.run(service.a2a_send("agentA", "hey @bob", thread="public", data_dir=dd))
+    asyncio.run(service.a2a_send(
+        "agentA", "leak reply in private", thread="private-ops",
+        reply_to=str(r1["id"]), data_dir=dd,
+    ))
+
+    msgs = asyncio.run(service.a2a_mentions_feed("bob", data_dir=dd))
+    bodies = [m["body"] for m in msgs]
+    assert "hey @bob" in bodies
+    assert "leak reply in private" not in bodies
+
+
+def test_a2a_mentions_feed_rejects_bad_limit(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+
+    with pytest.raises(ValueError):
+        asyncio.run(service.a2a_mentions_feed("bob", limit=-1, data_dir=dd))
+    with pytest.raises(ValueError):
+        asyncio.run(service.a2a_mentions_feed("bob", limit=0, data_dir=dd))
+
+
+def test_a2a_mentions_feed_rejects_bad_since(isolated_data_dir):
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+
+    with pytest.raises(ValueError):
+        asyncio.run(service.a2a_mentions_feed("bob", since=float("nan"), data_dir=dd))
+    with pytest.raises(ValueError):
+        asyncio.run(service.a2a_mentions_feed("bob", since=float("inf"), data_dir=dd))
+
+
 # ---------------------------------------------------------------------------
 # Service-layer: canRead anti-bypass
 # ---------------------------------------------------------------------------

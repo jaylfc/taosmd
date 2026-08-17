@@ -9,10 +9,16 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import math
 
 from taosmd import _db
 
-_MENTION_RE = re.compile(r'@([a-zA-Z0-9_-]+)')
+
+def _normalise_handle(handle: str) -> str:
+    return handle.lstrip("@").casefold()
+
+
+_MENTION_RE = re.compile(r'(?<![\w/])@([a-zA-Z0-9_-]+)')
 
 
 class MentionStore:
@@ -52,9 +58,9 @@ class MentionStore:
     ) -> None:
         handles: set[str] = set()
         for m in _MENTION_RE.finditer(body or ''):
-            handles.add(m.group(1))
+            handles.add(_normalise_handle(m.group(1)))
         if recipient:
-            handles.add(recipient)
+            handles.add(_normalise_handle(recipient))
 
         for handle in handles:
             self._conn.execute(
@@ -67,8 +73,9 @@ class MentionStore:
     async def get_mentioned_message_ids(
         self, reader: str, since: float | None = None, limit: int = 50
     ) -> list[dict]:
+        norm = _normalise_handle(reader)
         query = "SELECT message_id, ts FROM mentions WHERE mentioned_handle = ?"
-        params: list = [reader]
+        params: list = [norm]
         if since is not None:
             query += " AND ts > ?"
             params.append(since)

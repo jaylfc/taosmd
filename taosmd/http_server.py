@@ -1691,10 +1691,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     raw_sub = ""
                 try:
                     claims = _registry_verifier.authorize(token, raw_sub)
-                    reader = claims.get("sub", "")
+                    token_sub = claims.get("sub", "")
                 except _ra.AuthError as exc:
                     self._send_json(403, {"error": f"registry auth: {exc}"})
                     return
+                qp_reader = (qs.get("reader") or [None])[0]
+                reader = qp_reader or token_sub
             else:
                 reader = (qs.get("reader") or [None])[0]
                 if not reader:
