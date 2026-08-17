@@ -849,3 +849,34 @@ def test_http_a2a_blocks_without_body_returns_400(live_server):
     assert status == 400
     assert "blocks" in body["error"]
     _assert_thread_empty(live_server, "v-blocks-no-body")
+
+
+def test_a2a_import_preserves_historical_ts(isolated_data_dir):
+    """End-to-end: a2a_import writes a row with its original ts intact."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+
+    past_ts = 1_700_000_000.0
+    messages = [
+        {
+            "from": "bus",
+            "thread": "general",
+            "body": "hello from the past",
+            "source_id": "msg-1",
+            "ts": past_ts,
+        }
+    ]
+
+    result = asyncio.run(service.a2a_import("bus", messages, data_dir=dd))
+
+    assert result["imported"] == 1
+    assert result["skipped"] == 0
+    assert isinstance(result["first_id"], int)
+    assert result["first_id"] == result["last_id"]
+
+    stores = asyncio.run(taosmd_api._ensure_stores(dd))
+    archive = stores["archive"]
+    rows = asyncio.run(archive.search_fts("hello from the past"))
+    assert rows is not None and len(rows) == 1
+    row = rows[0]
+    assert row["timestamp"] == past_ts
