@@ -17,11 +17,13 @@ import scripts.check_deleted_symbols as cds
 from scripts.check_deleted_symbols import (
     TRAILER,
     Violation,
+    _extract_all_exports,
     _extract_symbols,
     _find_adding_commit,
     _get_symbols_at_ref,
     _run_git,
     check_deleted_symbols,
+    find_removed_all_entries,
     find_signal_symbols,
     main,
     parse_waived_symbols,
@@ -62,6 +64,53 @@ class TestExtractSymbols:
         assert syms == {}
 
 
+class TestExtractAllExports:
+    def test_single_line_all(self):
+        src = 'def foo():\n    pass\n\ndef bar():\n    pass\n\n__all__ = ["foo", "bar"]\n'
+        exports = _extract_all_exports(src, "pkg/mod.py")
+        assert "pkg/mod.py:foo" in exports
+        assert "pkg/mod.py:bar" in exports
+        assert len(exports) == 2
+
+    def test_multi_line_all(self):
+        src = (
+            'def foo():\n    pass\n\n'
+            'def bar():\n    pass\n\n'
+            '__all__ = ["foo",\n    "bar"]\n'
+        )
+        exports = _extract_all_exports(src, "pkg/mod.py")
+        assert "pkg/mod.py:foo" in exports
+        assert "pkg/mod.py:bar" in exports
+
+    def test_tuple_all(self):
+        src = '__all__ = ("foo", "bar")\n'
+        exports = _extract_all_exports(src, "pkg/mod.py")
+        assert "pkg/mod.py:foo" in exports
+        assert "pkg/mod.py:bar" in exports
+
+    def test_continuation_at_column_zero(self):
+        src = '__all__ = ["foo", "bar",\n"baz"]\n'
+        exports = _extract_all_exports(src, "pkg/mod.py")
+        assert "pkg/mod.py:foo" in exports
+        assert "pkg/mod.py:bar" in exports
+        assert "pkg/mod.py:baz" in exports
+
+    def test_no_all(self):
+        src = "def foo():\n    pass\n"
+        exports = _extract_all_exports(src, "pkg/mod.py")
+        assert exports == {}
+
+    def test_syntax_error_returns_empty(self):
+        exports = _extract_all_exports("def foo(\n", "pkg/mod.py")
+        assert exports == {}
+
+    def test_augmented_all(self):
+        src = '__all__ = ["foo"]\n__all__ += ["bar"]\n'
+        exports = _extract_all_exports(src, "pkg/mod.py")
+        assert "pkg/mod.py:foo" in exports
+        assert "pkg/mod.py:bar" in exports
+
+
 class TestFindSignalSymbols:
     def test_deleted_symbol_detected(self):
         base = {"taosmd/foo.py:bar": "def"}
@@ -79,6 +128,43 @@ class TestFindSignalSymbols:
         base = {"taosmd/foo.py:bar": "def"}
         head = {"taosmd/foo.py:bar": "def"}
         signal = find_signal_symbols(base, head)
+        assert signal == {}
+
+
+class TestFindRemovedAllEntries:
+    def test_removed_all_but_def_survives(self):
+        base_exports = {"pkg/mod.py:foo": "export", "pkg/mod.py:bar": "export"}
+        head_exports = {"pkg/mod.py:foo": "export"}
+        head_symbols = {"pkg/mod.py:foo": "def", "pkg/mod.py:bar": "def"}
+        signal = find_removed_all_entries(base_exports, head_exports, head_symbols)
+        assert signal == {"pkg/mod.py:bar": "def"}
+
+    def test_removed_all_and_def_removed_is_not_signal(self):
+        base_exports = {"pkg/mod.py:foo": "export", "pkg/mod.py:bar": "export"}
+        head_exports = {"pkg/mod.py:foo": "export"}
+        head_symbols = {"pkg/mod.py:foo": "def"}
+        signal = find_removed_all_entries(base_exports, head_exports, head_symbols)
+        assert signal == {}
+
+    def test_no_removal(self):
+        base_exports = {"pkg/mod.py:foo": "export"}
+        head_exports = {"pkg/mod.py:foo": "export"}
+        head_symbols = {"pkg/mod.py:foo": "def"}
+        signal = find_removed_all_entries(base_exports, head_exports, head_symbols)
+        assert signal == {}
+
+    def test_added_to_all_is_not_signal(self):
+        base_exports = {"pkg/mod.py:foo": "export"}
+        head_exports = {"pkg/mod.py:foo": "export", "pkg/mod.py:bar": "export"}
+        head_symbols = {"pkg/mod.py:foo": "def", "pkg/mod.py:bar": "def"}
+        signal = find_removed_all_entries(base_exports, head_exports, head_symbols)
+        assert signal == {}
+
+    def test_removed_export_no_def_is_not_signal(self):
+        base_exports = {"pkg/mod.py:bar": "export"}
+        head_exports = {}
+        head_symbols = {}
+        signal = find_removed_all_entries(base_exports, head_exports, head_symbols)
         assert signal == {}
 
 
@@ -314,3 +400,181 @@ class TestDeletedSymbolsIntegration:
         waived = "Removes-Intentionally: taosmd/service.py:s0, taosmd/service.py:s1, taosmd/service.py:s2"
         rc = main(["--base", "HEAD~1", "--pr-body", waived])
         assert rc == 1
+
+
+# ----------------------------------------------------------------------
+# __all__ export-removal: a name dropped from __all__ while its def survives
+# ----------------------------------------------------------------------
+
+def _init_repo_all_removed(tmp_path):
+    """A name is removed from __all__ while its def survives at HEAD."""
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, capture_output=True)
+
+    base_file = tmp_path / "taosmd" / "service.py"
+    base_file.parent.mkdir(parents=True, exist_ok=True)
+    base_file.write_text(
+        'def func_a():\n    pass\n\n'
+        'def func_b():\n    pass\n\n'
+        '__all__ = ["func_a", "func_b"]\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+
+    head_file = tmp_path / "taosmd" / "service.py"
+    head_file.write_text(
+        'def func_a():\n    pass\n\n'
+        'def func_b():\n    pass\n\n'
+        '__all__ = ["func_a"]\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "head"], cwd=tmp_path, check=True, capture_output=True)
+
+    return tmp_path
+
+
+def _init_repo_legitimate_deletion(tmp_path):
+    """A name is removed from both __all__ and the file (legitimate deletion)."""
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, capture_output=True)
+
+    base_file = tmp_path / "taosmd" / "service.py"
+    base_file.parent.mkdir(parents=True, exist_ok=True)
+    base_file.write_text(
+        'def func_a():\n    pass\n\n'
+        'def func_b():\n    pass\n\n'
+        '__all__ = ["func_a", "func_b"]\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+
+    head_file = tmp_path / "taosmd" / "service.py"
+    head_file.write_text(
+        'def func_a():\n    pass\n\n'
+        '__all__ = ["func_a"]\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "head"], cwd=tmp_path, check=True, capture_output=True)
+
+    return tmp_path
+
+
+def _init_repo_noop(tmp_path):
+    """A PR that touches neither symbols nor __all__."""
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, capture_output=True)
+
+    base_file = tmp_path / "taosmd" / "service.py"
+    base_file.parent.mkdir(parents=True, exist_ok=True)
+    base_file.write_text(
+        'def func_a():\n    pass\n\n'
+        '__all__ = ["func_a"]\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+
+    head_file = tmp_path / "taosmd" / "service.py"
+    head_file.write_text(
+        '# harmless comment\n'
+        'def func_a():\n    pass\n\n'
+        '__all__ = ["func_a"]\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "head"], cwd=tmp_path, check=True, capture_output=True)
+
+    return tmp_path
+
+
+class TestAllRemovalIntegration:
+    def test_all_removal_fails_when_def_survives(self, tmp_path, monkeypatch):
+        repo = _init_repo_all_removed(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        violations, waived = check_deleted_symbols(
+            base_ref="HEAD~1",
+            repo_root=repo,
+            pr_body=None,
+            waived=None,
+        )
+        assert len(violations) == 1
+        assert violations[0].symbol == "taosmd/service.py:func_b"
+        assert violations[0].kind == "export-removed"
+        assert waived == set()
+
+    def test_all_removal_exits_nonzero(self, tmp_path, monkeypatch):
+        repo = _init_repo_all_removed(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main(["--base", "HEAD~1"])
+        assert rc == 1
+
+    def test_all_removal_passes_with_waiver(self, tmp_path, monkeypatch):
+        repo = _init_repo_all_removed(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main([
+            "--base", "HEAD~1",
+            "--pr-body", "Removes-Intentionally: taosmd/service.py:func_b",
+        ])
+        assert rc == 0
+
+    def test_all_removal_prints_violation_details(self, tmp_path, monkeypatch, capsys):
+        repo = _init_repo_all_removed(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main(["--base", "HEAD~1"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "DELETED-SYMBOLS FAIL" in captured.out
+        assert "from __all__" in captured.out
+        assert "taosmd/service.py:func_b" in captured.out
+
+
+class TestAllRemovalControl:
+    def test_legitimate_deletion_has_no_export_violation(self, tmp_path, monkeypatch):
+        """A name removed from both __all__ and the file is a legitimate deletion.
+        The existing def-deletion check catches it; the __all__ check must not."""
+        repo = _init_repo_legitimate_deletion(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        violations, waived = check_deleted_symbols(
+            base_ref="HEAD~1",
+            repo_root=repo,
+            pr_body=None,
+            waived=None,
+        )
+        deleted = [v for v in violations if v.kind == "deleted"]
+        assert len(deleted) == 1
+        assert deleted[0].symbol == "taosmd/service.py:func_b"
+        assert waived == set()
+        export_removed = [v for v in violations if v.kind == "export-removed"]
+        assert export_removed == []
+
+    def test_legitimate_deletion_passes_with_def_waiver(self, tmp_path, monkeypatch):
+        """With the def-deletion waived, the full gate is clean."""
+        repo = _init_repo_legitimate_deletion(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main([
+            "--base", "HEAD~1",
+            "--pr-body", "Removes-Intentionally: taosmd/service.py:func_b",
+        ])
+        assert rc == 0
+
+    def test_noop_change_is_clean(self, tmp_path, monkeypatch):
+        """A PR that touches neither symbols nor __all__ stays green."""
+        repo = _init_repo_noop(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main(["--base", "HEAD~1"])
+        assert rc == 0

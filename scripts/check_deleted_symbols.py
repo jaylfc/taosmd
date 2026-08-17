@@ -7,18 +7,32 @@ PR branch cut before hardening commits landed on dev would silently delete
 them when merged -- git reports "Automatic merge went well" with no conflict
 because the PR branch simply wins on files dev touched after the branch point.
 
+Two shapes of silent loss are detected:
+
+  1. A def/class present on the target branch but gone at HEAD (definition
+     removal).
+  2. A name removed from a module __all__ while its top-level def/class still
+     exists at HEAD (export removal). This is the shape a mechanical merge
+     resolution produces: one side of a conflicted __all__ block is taken
+     wholesale, dropping entries without touching the definitions.
+
 Algorithm:
   1. Extract all Python def/class symbols at two points: the target branch
      head and HEAD (the merge ref / PR head).
   2. A symbol is "deleted by the PR" if it exists at the target head but not
      at HEAD. The signal is that set.
-  3. Fail with an explicit list of the deleted symbols and the commits that
+  3. Also compare __all__ membership: an entry present at the target head but
+     absent at HEAD is a signal only when the corresponding top-level
+     def/class still exists at HEAD. A genuine deletion removes both the
+     definition and the __all__ entry, so it stays allowed.
+  4. Fail with an explicit list of the deleted symbols and the commits that
      added them.
-  4. A "Removes-Intentionally: <symbol>, ..." trailer in the PR body waives
+  5. A "Removes-Intentionally: <symbol>, ..." trailer in the PR body waives
      named symbols, making deliberate deletions a conscious, auditable act.
 
 Narrow by design: Python def/class names only (test functions are defs).
-No semantic analysis -- name-level matching catches every instance hit so far.
+Exports are compared via AST so continuation lines and indentation never
+matter.
 
 Usage:
     python scripts/check_deleted_symbols.py --base origin/master
@@ -45,6 +59,7 @@ TRAILER = "Removes-Intentionally:"
 class Violation:
     symbol: str
     added_by: str
+    kind: str = "deleted"
 
 
 def _run_git(args: list[str], cwd: str | Path | None = None) -> str:
@@ -84,6 +99,42 @@ def _extract_symbols(source: str, file_path: str) -> dict[str, str]:
     return symbols
 
 
+def _collect_all_names(value: ast.AST, file_path: str, exports: dict[str, str]) -> None:
+    """Collect string-literal names from an __all__ value expression."""
+    if isinstance(value, (ast.List, ast.Tuple)):
+        for elt in value.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                exports[f"{file_path}:{elt.value}"] = "export"
+
+
+def _extract_all_exports(source: str, file_path: str) -> dict[str, str]:
+    """Extract __all__ export names from Python source.
+
+    Returns a dict mapping "file_path:name" to "export". Uses AST (not
+    regex) so continuation lines and indentation never matter. Handles list
+    and tuple literals, including __all__ += [...] augmented assignment.
+    """
+    exports: dict[str, str] = {}
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return exports
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "__all__":
+                    _collect_all_names(node.value, file_path, exports)
+        elif (
+            isinstance(node, ast.AugAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "__all__"
+        ):
+            _collect_all_names(node.value, file_path, exports)
+
+    return exports
+
+
 def _get_symbols_at_ref(ref: str, repo_root: Path = REPO_ROOT) -> dict[str, str]:
     """Get all Python symbols at a given git ref using git archive."""
     result = subprocess.run(
@@ -101,6 +152,25 @@ def _get_symbols_at_ref(ref: str, repo_root: Path = REPO_ROOT) -> dict[str, str]
             source = f.read().decode("utf-8", errors="ignore")
             symbols.update(_extract_symbols(source, member.name))
     return symbols
+
+
+def _get_all_exports_at_ref(ref: str, repo_root: Path = REPO_ROOT) -> dict[str, str]:
+    """Get all __all__ exports at a given git ref using git archive."""
+    result = subprocess.run(
+        ["git", "archive", ref],
+        cwd=repo_root, capture_output=True, check=True,
+    )
+    exports: dict[str, str] = {}
+    with tarfile.open(fileobj=io.BytesIO(result.stdout)) as tar:
+        for member in tar.getmembers():
+            if not member.name.startswith("taosmd/") or not member.name.endswith(".py"):
+                continue
+            f = tar.extractfile(member)
+            if f is None:
+                continue
+            source = f.read().decode("utf-8", errors="ignore")
+            exports.update(_extract_all_exports(source, member.name))
+    return exports
 
 
 def _find_adding_commit(
@@ -160,6 +230,22 @@ def find_signal_symbols(
     return {k: base_symbols[k] for k in signal_keys}
 
 
+def find_removed_all_entries(
+    base_exports: dict[str, str],
+    head_exports: dict[str, str],
+    head_symbols: dict[str, str],
+) -> dict[str, str]:
+    """Find __all__ entries removed at HEAD while their def/class still exists.
+
+    An entry in base __all__ that is absent from head __all__ is a signal only
+    when the corresponding top-level def/class still exists at HEAD. A genuine
+    deletion removes both the definition and the __all__ entry, so it does not
+    appear here -- it is caught by find_signal_symbols instead.
+    """
+    removed = set(base_exports) - set(head_exports)
+    return {k: head_symbols[k] for k in removed if k in head_symbols}
+
+
 def check_deleted_symbols(
     base_ref: str,
     repo_root: Path = REPO_ROOT,
@@ -177,6 +263,10 @@ def check_deleted_symbols(
 
     signal = find_signal_symbols(base_symbols, head_symbols)
 
+    base_exports = _get_all_exports_at_ref(base_ref, repo_root)
+    head_exports = _get_all_exports_at_ref("HEAD", repo_root)
+    export_signal = find_removed_all_entries(base_exports, head_exports, head_symbols)
+
     waived_set: set[str] = set()
     if waived:
         waived_set.update(waived)
@@ -190,7 +280,15 @@ def check_deleted_symbols(
             continue
         file_path, name = symbol.rsplit(":", 1)
         added_by = _find_adding_commit(file_path, name, kind, base_ref, repo_root)
-        violations.append(Violation(symbol=symbol, added_by=added_by))
+        violations.append(Violation(symbol=symbol, added_by=added_by, kind="deleted"))
+
+    for symbol, kind in sorted(export_signal.items()):
+        if symbol in waived_set:
+            waived_in_signal.add(symbol)
+            continue
+        file_path, name = symbol.rsplit(":", 1)
+        added_by = _find_adding_commit(file_path, name, kind, base_ref, repo_root)
+        violations.append(Violation(symbol=symbol, added_by=added_by, kind="export-removed"))
 
     return violations, waived_in_signal
 
@@ -220,12 +318,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"deleted-symbols-guard: waived via Removes-Intentionally: {sym}")
 
     if violations:
-        print(
-            f"DELETED-SYMBOLS FAIL: this PR deletes {len(violations)} symbol(s) that "
-            f"exist on the base branch but are missing from the merge result:"
-        )
-        for v in violations:
-            print(f"  - {v.symbol} (added by {v.added_by})")
+        deleted = [v for v in violations if v.kind == "deleted"]
+        export_removed = [v for v in violations if v.kind == "export-removed"]
+
+        if deleted:
+            print(
+                f"DELETED-SYMBOLS FAIL: this PR deletes {len(deleted)} symbol(s) that "
+                f"exist on the base branch but are missing from the merge result:"
+            )
+            for v in deleted:
+                print(f"  - {v.symbol} (added by {v.added_by})")
+
+        if export_removed:
+            print(
+                f"DELETED-SYMBOLS FAIL: this PR removes {len(export_removed)} symbol(s) "
+                f"from __all__ while the definition still exists at HEAD:"
+            )
+            for v in export_removed:
+                print(f"  - {v.symbol} (added by {v.added_by})")
 
         print()
         print(
