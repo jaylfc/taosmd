@@ -81,6 +81,8 @@ def authorize_sender(token: str, claimed_from: str, *, public_key: str,
         raise AuthError("token has no 'sub' (canonical_id) claim")
     if sub != claimed_from:
         if human_principal_ids and sub in human_principal_ids:
+            logger.warning("human principal %r sub/from mismatch: sub=%r, from=%r",
+                           sub, sub, claimed_from)
             raise HumanAuthError(
                 f"human token sub {sub!r} does not match from {claimed_from!r}"
             )
@@ -129,6 +131,8 @@ class RegistryVerifier:
         self._clock = clock
         self._expected_iss = expected_iss
         self._human_principal_ids = human_principal_ids or set()
+        logger.info("resolved human principal set: %s",
+                    sorted(self._human_principal_ids))
         self._pubkey: str | None = None
         self._revoked: set[str] = set()
         self._revoked_fetched_at: float | None = None

@@ -524,3 +524,28 @@ def test_decode_and_verify_is_single_entry_point_for_human_and_agent():
         registry_auth.decode_and_verify(bad_human, pub_pem)
     with pytest.raises(registry_auth.AuthError):
         registry_auth.decode_and_verify(bad_agent, pub_pem)
+
+
+def test_authorize_sender_logs_human_auth_error(caplog):
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "human-1"})
+
+    with pytest.raises(registry_auth.HumanAuthError):
+        registry_auth.authorize_sender(
+            token, "human-2", public_key=pub_pem, revoked=set(),
+            human_principal_ids={"human-1"},
+        )
+    assert any("human principal 'human-1' sub/from mismatch" in r.message
+               for r in caplog.records)
+
+
+def test_registry_verifier_logs_human_principal_set(caplog):
+    import logging
+    with caplog.at_level(logging.INFO, logger="taosmd.registry_auth"):
+        v = registry_auth.RegistryVerifier(
+            pubkey_loader=lambda: "pk",
+            revoked_loader=lambda: set(),
+            human_principal_ids={"human-1", "user-alice"},
+        )
+    assert any("resolved human principal set: ['human-1', 'user-alice']" in r.message
+               for r in caplog.records)
