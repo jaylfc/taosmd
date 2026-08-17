@@ -228,6 +228,24 @@ class RemoteClient:
             payload["blocks"] = blocks
         return await self._run("POST", "/a2a/send", payload)
 
+    async def a2a_import(
+        self,
+        source: str,
+        messages: list[dict],
+        *,
+        defer_index: bool = False,
+        **_opts,
+    ) -> dict:
+        """POST /a2a/import: admin batch-import historical messages onto the remote bus.
+
+        Returns ``{"imported", "skipped", "first_id", "last_id"}`` (taOSmd #211 Q3a).
+        Uses the client's bearer token, which must be an admin token.
+        """
+        payload: dict = {"source": source, "messages": messages}
+        if defer_index:
+            payload["defer_index"] = True
+        return await self._run("POST", "/a2a/import", payload)
+
     async def a2a_feed(
         self,
         *,
