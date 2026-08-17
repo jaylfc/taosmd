@@ -1,0 +1,45 @@
+name: Doc drift gate
+
+# Authoritative documentation-drift gate. Blocks PRs that change feature code
+# (a taosmd module, an A2A handler, an installer, a catalog manifest) without
+# touching the doc that covers it, unless a commit in the PR carries a
+# "Docs-Reviewed: <why>" trailer. See docs/doc-gate.toml for the rules and
+# scripts/check_doc_gate.py for the implementation. This job is authoritative
+# regardless of local hooks (--no-verify does not skip it).
+#
+# Layer A (invariants) runs on the whole tree and rejects stale path references
+# and protected docs that have lost their required section headings. Layer B
+# (diff-gate) is the per-change rule engine; on_modify rules fire on file
+# modifications as well as add/delete, so gutting a doc is caught, not just
+# adding/removing one.
+
+on:
+  pull_request:
+    branches: [master]
+
+jobs:
+  doc-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      BASE_REF: ${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Sync dev deps (stdlib-only gate, but keeps the repo env uniform)
+        run: uv sync --python 3.12
+
+      - name: Fetch base branch
+        run: git fetch origin "$BASE_REF"
+
+      - name: Invariants (Layer A)
+        run: uv run python scripts/check_doc_gate.py invariants
+
+      - name: Diff gate (Layer B)
+        run: uv run python scripts/check_doc_gate.py diff-gate --base "origin/$BASE_REF"
