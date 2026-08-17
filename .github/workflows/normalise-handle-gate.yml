@@ -1,0 +1,31 @@
+name: Normalise handle gate
+
+# Guards against two or more `def _normalise_handle` definitions under
+# taosmd/. The slug helper is promoted by #283; this gate exists only to fail
+# if a second, behaviourally-compatible copy lands in another lane, which no
+# existing check could detect. It asserts "at most one", so a clean branch with
+# zero definitions (a master that has not landed #283 yet) is green -- the
+# defect being caught is a duplicate, never the absence of the helper.
+#
+# This is the wiring PR #285 lacked: the script is invoked here in CI on every
+# pull request, and the logic is covered by tests/test_normalise_handle_gate.py.
+# See scripts/normalise_handle_gate.py for the implementation.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  normalise-handle-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Install deps
+        run: uv sync --python 3.12
+      - name: Check for duplicate _normalise_handle definitions
+        run: uv run python scripts/normalise_handle_gate.py
