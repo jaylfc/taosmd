@@ -804,6 +804,28 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return auth[len("Bearer "):].strip() == _server_token
             return False
 
+        def _get_authenticated_agent_id(self) -> str | None:
+            """Return the agent identity from a registry token, or None.
+
+            Decodes the JWT and reads the ``sub`` claim.  A token with an invalid
+            signature yields ``None`` so the receipt system never records a
+            forged identity.
+            """
+            if _registry_verifier is None:
+                return None
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer "):
+                return None
+            token = auth[len("Bearer "):].strip()
+            if not token:
+                return None
+            from . import registry_auth as _ra  # noqa: PLC0415
+            try:
+                claims = _registry_verifier.authorize(token, "")
+                return claims.get("sub") or None
+            except _ra.AuthError:
+                return None
+
         @staticmethod
         def _is_admin_route(method: str, path: str) -> bool:
             """Return True for admin write routes (#154).
@@ -1059,6 +1081,28 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_task_list(query)
                 elif method == "GET" and path == "/tasks/ready":
                     self._handle_task_ready(query)
+                elif method == "POST" and path == "/a2a/receipts":
+                    # Record that a message was delivered to an agent
+                    body = self._read_json_body()
+                    message_id = body.get("message_id")
+                    agent_id = body.get("agent_id")
+                    if not isinstance(message_id, int) or not isinstance(agent_id, str) or not agent_id:
+                        raise _BadRequest("'message_id' (integer) and 'agent_id' (non-empty string) are required")
+                    receipt = runner.run(
+                        service.a2a_record_delivered(message_id, agent_id, data_dir=data_dir)
+                    )
+                    self._send_json(200, receipt)
+                elif method == "PATCH" and path == "/a2a/receipts":
+                    # Record that an agent has seen a message
+                    body = self._read_json_body()
+                    message_id = body.get("message_id")
+                    agent_id = body.get("agent_id")
+                    if not isinstance(message_id, int) or not isinstance(agent_id, str) or not agent_id:
+                        raise _BadRequest("'message_id' (integer) and 'agent_id' (non-empty string) are required")
+                    receipt = runner.run(
+                        service.a2a_record_seen(message_id, agent_id, data_dir=data_dir)
+                    )
+                    self._send_json(200, receipt)
                 elif method == "GET" and path == "/tasks/prime":
                     self._handle_task_prime(query)
                 elif method == "POST" and path.startswith("/tasks/"):
@@ -1082,6 +1126,19 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                             self._send_json(404, {"error": "task id required"})
                         else:
                             self._handle_task_update(task_id)
+                # ----- A2A receipt endpoints ----------------------------------
+                elif method == "PATCH" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts_seen()
+                elif method == "GET" and path.startswith("/a2a/messages/") and path.endswith("/receipts"):
+                    msg_id = path[len("/a2a/messages/"):-len("/receipts")]
+                    if not msg_id:
+                        self._send_json(404, {"error": "message id required"})
+                    else:
+                        self._handle_a2a_message_receipts(msg_id)
+                elif method == "GET" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts(query)
+                elif method == "POST" and path == "/a2a/admin/prune-receipts":
+                    self._handle_admin_a2a_prune_receipts()
                 # ----- admin surface: shelf lifecycle ---------------------
                 elif method == "POST" and path == "/shelves":
                     self._handle_admin_shelf_create()
@@ -2196,6 +2253,57 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 service.admin_a2a_supersede_message(msg_id, data_dir=data_dir)
             )
             self._send_json(200, result)
+        def _handle_admin_a2a_prune_receipts(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            older_than_ts = body.get("ttl_days")
+            if older_than_ts is not None:
+                try:
+                    older_than_ts = float(older_than_ts)
+                except (TypeError, ValueError):
+                    raise _BadRequest("'ttl_days' must be a number when provided")
+            else:
+                import time as _time
+                older_than_ts = _time.time() - 30 * 24 * 3600  # 30 days ago
+            result = runner.run(
+                service.a2a_prune_receipts(older_than_ts, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+        def _handle_a2a_receipts_seen(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            message_id = body.get("message_id")
+            if not isinstance(message_id, int) or not message_id:
+                raise _BadRequest("'message_id' (integer) is required")
+            receipt = runner.run(
+                service.a2a_get_receipt(message_id, data_dir=data_dir)
+            )
+            if receipt is None:
+                self._send_json(404, {"error": "receipt not found"})
+            else:
+                self._send_json(200, receipt)
+        def _handle_a2a_message_receipts(self, msg_id_str: str) -> None:
+            try:
+                message_id = int(msg_id_str)
+            except (TypeError, ValueError):
+                raise _BadRequest("message id must be an integer")
+            receipt = runner.run(
+                service.a2a_get_receipts(message_id, data_dir=data_dir)
+            )
+            self._send_json(200, receipt)
+        def _handle_a2a_receipts(self, qs: dict) -> None:
+            message_id = qs.get("message_id", [None])[0]
+            if not message_id:
+                raise _BadRequest("'message_id' query parameter is required")
+            receipt = runner.run(
+                service.a2a_get_receipts(int(message_id), data_dir=data_dir)
+            )
+            if receipt is None:
+                self._send_json(404, {"error": "receipt not found"})
+            else:
+                self._send_json(200, receipt)
 
     return TaosmdHandler
 
