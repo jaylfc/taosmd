@@ -9,7 +9,11 @@ needed. Requests go over the loopback via urllib.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -618,6 +622,158 @@ def test_search_unknown_mode_is_400(live_server):
     status, body = _get(f"{live_server}/search?q=x&agent=a&mode=cosine9000")
     assert status == 400
     assert "unsupported search mode" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# A2A auth-mode banner (serve() stdout)
+#
+# These tests assert on what serve() ACTUALLY prints, not on a copy of the
+# mode/where logic recomputed inside the test body. serve() blocks on
+# serve_forever(), so each probe runs it in a subprocess, captures stdout
+# until the last banner line, then terminates the child. A PROVENANCE marker
+# is printed first so each test can prove it exercised this repo's
+# http_server.py rather than a stale install.
+# ---------------------------------------------------------------------------
+
+
+def _serve_banner(host, data_dir, env_extra=None, timeout=15.0):
+    """Run serve() in a subprocess and return the banner lines it prints.
+
+    serve() prints its banner then blocks on serve_forever(), so the child is
+    terminated once the final banner line has been read. A PROVENANCE marker
+    is emitted first so each test can confirm it exercised this repo's
+    http_server.py (not a stale installed copy).
+    """
+    env = dict(os.environ)
+    env.pop("TAOSMD_REGISTRY_URL", None)
+    env.pop("TAOSMD_A2A_AUTH_ENFORCE", None)
+    env["PYTHONUNBUFFERED"] = "1"
+    if env_extra:
+        env.update(env_extra)
+    snippet = (
+        "from taosmd import http_server as h; "
+        "print('PROVENANCE', h.__file__); "
+        f"h.serve(host={host!r}, port=0, data_dir={str(data_dir)!r})"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", snippet],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        text=True,
+    )
+    lines: list[str] = []
+    try:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            line = line.rstrip("\n")
+            lines.append(line)
+            if line.startswith("Admin (admin token required)"):
+                break
+        return lines
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def _first_line(lines, prefix):
+    return next((l for l in lines if l.startswith(prefix)), None)
+
+
+def _require_provenance(lines):
+    provenance = _first_line(lines, "PROVENANCE ")
+    assert provenance is not None, "subprocess did not emit a PROVENANCE marker"
+    served_path = provenance.split(" ", 1)[1]
+    assert served_path == http_server.__file__, (
+        f"served banner from {served_path}, expected {http_server.__file__}"
+    )
+
+
+def _mode_line(lines):
+    line = _first_line(lines, "A2A registry auth mode:")
+    assert line is not None, "serve() did not print the A2A registry auth mode banner"
+    return line
+
+
+def _listening_line(lines):
+    line = _first_line(lines, "taosmd HTTP API listening on http://")
+    assert line is not None, "serve() did not print a listening line"
+    return line
+
+
+def test_banner_a2a_mode_off_when_no_registry_url(tmp_path):
+    """No registry_url -> mode banner reads OFF and the where line says localhost only."""
+    lines = _serve_banner("127.0.0.1", tmp_path)
+    _require_provenance(lines)
+    assert _mode_line(lines) == (
+        "A2A registry auth mode: OFF (no registry_url: senders are self-claimed)"
+    )
+    assert "localhost only" in _listening_line(lines)
+
+
+def test_banner_a2a_mode_enforce(tmp_path):
+    """registry_url set + enforce -> mode banner reads ENFORCE."""
+    lines = _serve_banner("127.0.0.1", tmp_path, {
+        "TAOSMD_REGISTRY_URL": "http://reg.test",
+        "TAOSMD_A2A_AUTH_ENFORCE": "1",
+    })
+    _require_provenance(lines)
+    assert _mode_line(lines) == "A2A registry auth mode: ENFORCE"
+    assert "localhost only" in _listening_line(lines)
+
+
+def test_banner_a2a_mode_warn(tmp_path):
+    """registry_url set + warn -> mode banner reads WARN (verify-and-warn)."""
+    lines = _serve_banner("127.0.0.1", tmp_path, {
+        "TAOSMD_REGISTRY_URL": "http://reg.test",
+    })
+    _require_provenance(lines)
+    assert _mode_line(lines) == "A2A registry auth mode: WARN (verify-and-warn)"
+    assert "localhost only" in _listening_line(lines)
+
+
+def test_banner_lan_off_keeps_no_auth(tmp_path):
+    """LAN bind, no registry -> mode OFF and (no auth) stays on the where line."""
+    lines = _serve_banner("0.0.0.0", tmp_path)
+    _require_provenance(lines)
+    assert _mode_line(lines) == (
+        "A2A registry auth mode: OFF (no registry_url: senders are self-claimed)"
+    )
+    listening = _listening_line(lines)
+    assert listening.startswith("taosmd HTTP API listening on http://0.0.0.0:")
+    assert "(no auth)" in listening
+
+
+def test_banner_lan_warn_keeps_no_auth(tmp_path):
+    """LAN bind, registry + warn -> mode WARN and (no auth) stays (warn never locks)."""
+    lines = _serve_banner("0.0.0.0", tmp_path, {
+        "TAOSMD_REGISTRY_URL": "http://reg.test",
+    })
+    _require_provenance(lines)
+    assert _mode_line(lines) == "A2A registry auth mode: WARN (verify-and-warn)"
+    listening = _listening_line(lines)
+    assert listening.startswith("taosmd HTTP API listening on http://0.0.0.0:")
+    assert "(no auth)" in listening
+
+
+def test_banner_lan_enforce_strips_no_auth(tmp_path):
+    """LAN bind, registry + enforce -> mode ENFORCE and (no auth) is stripped."""
+    lines = _serve_banner("0.0.0.0", tmp_path, {
+        "TAOSMD_REGISTRY_URL": "http://reg.test",
+        "TAOSMD_A2A_AUTH_ENFORCE": "1",
+    })
+    _require_provenance(lines)
+    assert _mode_line(lines) == "A2A registry auth mode: ENFORCE"
+    listening = _listening_line(lines)
+    assert listening.startswith("taosmd HTTP API listening on http://0.0.0.0:")
+    assert "(no auth)" not in listening
 
 
 # ---------------------------------------------------------------------------
