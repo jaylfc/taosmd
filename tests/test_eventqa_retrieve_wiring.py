@@ -18,6 +18,7 @@ effect and both E-025 arms were byte-identical. These tests pin the wiring:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import importlib.util
 import sys
@@ -226,3 +227,69 @@ def test_summarize_retrieval_delta_reports_identity(runner):
     assert summary["identical"] == 1
     assert summary["identical_pct"] == 50.0
     assert runner.summarize_retrieval_delta([{"score": 1}]) is None
+
+
+# ---------------------------------------------------------------------------
+# 7. a refusal must abort with a non-zero exit
+# ---------------------------------------------------------------------------
+
+def _args(**overrides):
+    base = dict(
+        tier="eventqa_65536",
+        contexts=1,
+        limit=1,
+        llm=False,
+        graph_expansion=512,
+        retrieval_path="retrieve",
+        report_retrieval_delta=False,
+        out="",
+    )
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
+def test_unsupported_graph_expansion_aborts_the_run(runner, monkeypatch):
+    """The safety-critical case: refuse rather than run two identical arms."""
+    monkeypatch.setattr(runner, "retrieve_supports_graph_expansion", lambda: False)
+
+    opened = []
+    monkeypatch.setattr(
+        runner, "load_eventqa_rows",
+        lambda tier, contexts: opened.append("loaded") or [],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(runner.run(_args()))
+
+    # Non-zero exit: a chain that checks $? must read a refusal as a failure.
+    assert exc.value.code != 0
+    assert opened == [], "the dataset must not even be loaded after a refusal"
+
+
+def test_empty_dataset_aborts_the_run(runner, monkeypatch):
+    """No rows loaded is an instrument failure, not an empty success."""
+    monkeypatch.setattr(runner, "retrieve_supports_graph_expansion", lambda: True)
+    monkeypatch.setattr(runner, "load_eventqa_rows", lambda tier, contexts: [])
+
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(runner.run(_args()))
+
+    assert exc.value.code != 0
+
+
+def test_zero_graph_expansion_never_probes(runner, monkeypatch):
+    """graph_expansion=0 must run on any checkout, probe or no probe."""
+    def _boom():
+        raise AssertionError("probe must not gate the default arm")
+
+    monkeypatch.setattr(runner, "retrieve_supports_graph_expansion", _boom)
+    monkeypatch.setattr(runner, "load_eventqa_rows", lambda tier, contexts: [])
+
+    # Still aborts, but on the empty dataset, not on the probe.
+    # Assert the CODE, not just that SystemExit was raised: this whole job
+    # exists because a refusal exited 0, and a bare pytest.raises(SystemExit)
+    # passes on sys.exit(0) too. A test that cannot fail on the original bug
+    # is not evidence.
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(runner.run(_args(graph_expansion=0)))
+    assert exc.value.code != 0
