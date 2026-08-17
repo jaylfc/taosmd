@@ -190,7 +190,68 @@ def test_format_hit_prefers_similarity_over_source_score():
     assert formatted["confidence"] == 0.85
     assert formatted["source"] == "vector"
     assert formatted["timestamp"] == 1700000000
-    assert formatted["metadata"] == {"position": 7, "timestamp": 1700000000}
+    # New collection doc metadata fields are added alongside existing user keys.
+    assert formatted["metadata"]["position"] == 7
+    assert formatted["metadata"]["timestamp"] == 1700000000
+    assert formatted["metadata"]["as_of"] == 1700000000
+    assert formatted["metadata"]["is_current"] is True
+
+
+def test_format_hit_includes_front_matter_metadata():
+    """_format_hit passes through doc_id, version, review_by from user metadata."""
+    hit = {
+        "text": "test content",
+        "source": "vector",
+        "metadata": {
+            "doc_id": "doc-abc123",
+            "version": 5,
+            "review_by": "2024-12-31",
+            "metadata": {"file_path": "docs/intro.md"},
+            "collection_id": "col-xyz",
+        },
+    }
+    formatted = taosmd_api._format_hit(hit)
+    assert formatted["metadata"]["doc_id"] == "doc-abc123"
+    assert formatted["metadata"]["version"] == 5
+    assert formatted["metadata"]["is_current"] is True
+    assert formatted["metadata"]["is_past_review"] is True  # 2024-12-31 < now
+    assert formatted["metadata"]["as_of"] is not None
+    assert formatted["metadata"]["review_by"] == "2024-12-31"
+
+
+def test_format_hit_no_front_matter_no_doc_id():
+    """_format_hit without doc_id/version in metadata leaves those keys absent."""
+    hit = {
+        "text": "test content",
+        "source": "vector",
+        "metadata": {
+            "file_path": "docs/intro.md",
+        },
+    }
+    formatted = taosmd_api._format_hit(hit)
+    assert "doc_id" not in formatted["metadata"]
+    assert "version" not in formatted["metadata"]
+    assert "is_past_review" not in formatted["metadata"]
+    # is_current and as_of should always be present
+    assert formatted["metadata"]["is_current"] is True
+    assert formatted["metadata"]["as_of"] is not None
+
+
+def test_format_hit_review_by_in_future_is_not_past_review():
+    """_format_hit is_past_review is false when review_by is after today."""
+    import datetime
+    future_date = (datetime.date.today() + datetime.timedelta(days=365)).isoformat()
+    hit = {
+        "text": "test content",
+        "source": "vector",
+        "metadata": {
+            "doc_id": "doc-abc123",
+            "review_by": future_date,
+        },
+    }
+    formatted = taosmd_api._format_hit(hit)
+    assert formatted["metadata"]["is_past_review"] is False
+    assert formatted["metadata"]["review_by"] == future_date
 
 
 def test_format_hit_falls_back_to_source_score():

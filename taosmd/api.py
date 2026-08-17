@@ -425,6 +425,16 @@ def _format_hit(hit: dict) -> dict:
     underlying row's ``created_at`` / ``timestamp`` field.
     """
     md = hit.get("metadata", {}) or {}
+    # --- NEW: extract front-matter doc metadata before unwrapping ---
+    # We extract from the original md here because the unwrapping loop
+    # descends into nested metadata dicts, which would lose top-level keys
+    # like doc_id, version, review_by that are stored alongside a nested
+    # metadata key (as happens when chunks from ingest_folder carry them).
+    doc_id = md.get("doc_id") if isinstance(md, dict) else None
+    version = md.get("version") if isinstance(md, dict) else None
+    review_by = md.get("review_by") if isinstance(md, dict) else None
+    # --- end NEW ---
+
     # Unwrap to the innermost user metadata. Depending on the path a hit's
     # metadata is nested differently: the BM25 path passes the row metadata
     # (one ``metadata`` level for batch rows), while the full retrieval path
@@ -450,6 +460,12 @@ def _format_hit(hit: dict) -> dict:
         for key, value in preserved.items():
             user_md.setdefault(key, value)
 
+    # Assert that critical provenance keys survive the unwrapping
+    # (PR #195: deep-unwrap once stripped archive_span_id and blinded the claims gate).
+    for key in ("archive_span_id", "agent", "project"):
+        if key in (md or {}):
+            assert key in user_md, f"_format_hit lost critical key: {key} during metadata unwrap"
+
     confidence = (
         md.get("similarity")
         if isinstance(md, dict) and md.get("similarity") is not None
@@ -462,6 +478,41 @@ def _format_hit(hit: dict) -> dict:
         or (md.get("timestamp") if isinstance(md, dict) else None)
         or 0
     )
+
+    # --- NEW: add collection doc metadata to formatted hit ---
+    # is_current: always true on the default path (results are current by construction)
+    # as_of: the indexing timestamp of the row
+    # is_past_review: true when review_by exists and is before now
+    is_current = True
+    as_of = user_md.get("indexed_at") if isinstance(user_md, dict) else None
+    if as_of is None:
+        as_of = timestamp
+    has_review_by = review_by is not None
+    is_past_review = has_review_by and review_by < time.strftime("%Y-%m-%d")
+
+    # Base new metadata fields: always add is_current and as_of.
+    # Add is_past_review only when review_by is present (front-matter case).
+    # When review_by is absent, is_past_review is omitted per the spec:
+    # "Same file without front-matter -> none of those keys except is_current/as_of".
+    user_md["is_current"] = is_current
+    user_md["as_of"] = as_of
+    if has_review_by:
+        user_md["is_past_review"] = is_past_review
+    if doc_id is not None:
+        user_md["doc_id"] = doc_id
+    if version is not None:
+        user_md["version"] = version
+    if has_review_by:
+        user_md["review_by"] = review_by
+    # --- end NEW ---
+
+    # NOTE: superseded_by is ONLY included on rows from an explicit
+    # superseded/history query (not the default path), because default
+    # results are current by construction — superseded rows are hidden.
+    # The ``hidden_by`` marker on the row's metadata indicates it has
+    # been superseded; when present, carry forward the replacement info.
+    if "hidden_by" in (md or {}):
+        user_md["superseded_by"] = md["hidden_by"]
 
     return {
         "text": hit.get("text", ""),

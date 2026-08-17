@@ -1,0 +1,2 @@
+### Added
+- Front-matter parsing: markdown files with YAML front-matter now parse `doc_id`, `version`, and `review_by` keys at index time, storing them on every chunk's metadata. Collection search hits gain `doc_id`, `version`, `is_current` (always true on default path), `as_of` (indexing timestamp), and `is_past_review` (true when `review_by` exists and is before now). A assertion in `_format_hit` guards against metadata loss reverting to PR #195 behaviour.

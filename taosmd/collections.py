@@ -494,6 +494,55 @@ def _is_ignored(
     return ignored
 
 
+def _parse_front_matter(file_path: str) -> dict:
+    """Parse YAML front-matter from a markdown file (stdlib-only, no deps).
+
+    Looks for ``\\n---\\n`` at the start, extracts simple ``key: value`` pairs
+    from the block between the opening and closing ``---`` delimiters.
+    Returns a dict with doc_id (str), version (int), review_by (ISO date str)
+    when present; absent keys are omitted.
+    """
+    try:
+        text = Path(file_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    if not text.startswith("---\n") and not text.startswith("---"):
+        return {}
+    # Find the closing --- after the opening ---
+    rest = text[4:] if text.startswith("---\n") else text[3:]
+    close_idx = rest.find("\n---\n")
+    if close_idx < 0:
+        close_idx = rest.rfind("\n---")
+        if close_idx < 0:
+            return {}
+    fm_text = rest[:close_idx].strip()
+    if not fm_text:
+        return {}
+    result: dict = {}
+    for line in fm_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        # Strip surrounding quotes
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            value = value[1:-1]
+        elif len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+            value = value[1:-1]
+        # Try int for version
+        if key == "version":
+            try:
+                value = int(value)
+            except ValueError:
+                pass
+        result[key] = value
+    return result
+
+
 def _loader_for(path: Path):
     """Return an instance of the loader that explicitly claims ``path``,
     or ``None`` when no registered loader does.
@@ -810,6 +859,10 @@ async def ingest_folder(
                         # vanished, and clients show the two separately.
                         emptied.add(rel)
                     continue
+                # Parse front-matter from markdown files at index time.
+                fm: dict = {}
+                if abs_path.suffix.lower() == ".md":
+                    fm = _parse_front_matter(str(abs_path))
                 # Hashing + chunking are CPU-bound; off-loop like the walk above.
                 file_hash, chunks = await asyncio.to_thread(
                     _hash_and_chunk, text, chunk_chars, prior.get(rel)
@@ -823,16 +876,22 @@ async def ingest_folder(
                     chunk_id = hashlib.sha256(
                         f"{collection_id}:{rel}:{file_hash}:{i}".encode("utf-8")
                     ).hexdigest()
+                    chunk_md: dict = {
+                        "collection_id": collection_id,
+                        "file_path": rel,
+                        "source": "collection",
+                        "chunk_index": i,
+                        "file_hash": file_hash,
+                        "indexed_at": time.time(),
+                    }
+                    # Add front-matter parsed fields when present.
+                    for key in ("doc_id", "version", "review_by"):
+                        if key in fm:
+                            chunk_md[key] = fm[key]
                     items.append({
                         "text": chunk,
                         "id": chunk_id,
-                        "metadata": {
-                            "collection_id": collection_id,
-                            "file_path": rel,
-                            "source": "collection",
-                            "chunk_index": i,
-                            "file_hash": file_hash,
-                        },
+                        "metadata": chunk_md,
                     })
                 indexed.append((rel, file_hash))
 
