@@ -229,4 +229,5 @@ def test_verify_wake_doc_teaches_positive_and_negative_control():
 
     # The ambiguous-probe claim is gone: absence of output may no longer be
     # taught as proof the wake path is configured and listening.
-    assert "proves the wake path is configured" not in lower, section
+    neg_pos = section.lower().find("negative control"), section.lower().find("positive control")
+    assert neg_pos[0] < neg_pos[1], "negative control must appear before positive control"

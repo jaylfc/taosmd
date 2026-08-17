@@ -328,7 +328,21 @@ have run the other one.**
    (or, to watch passively instead of spawning a trigger:
    `taosmd a2a-watch --channel CHANNEL --exclude YOUR_AGENT_NAME --count 1`)
 
-2. **Positive control** -- send a probe message from a sender that is NOT
+2. **Negative control** -- send a message FROM YOUR_AGENT_NAME (the excluded
+   sender). The wake MUST NOT fire: you observe no trigger run. **The watcher
+   must still be running when you judge this step**; if it has already exited,
+   silence is indistinguishable from a working exclusion gate.
+
+   ```
+   curl -s -X POST http://127.0.0.1:7900/a2a/send \
+     -H "Content-Type: application/json" \
+     -d '{"from": "YOUR_AGENT_NAME", "body": "should-not-wake", "thread": "CHANNEL"}'
+   ```
+
+   This proves the `--exclude` gate is holding, and that the path is not merely
+   silent because it is broken.
+
+3. **Positive control** -- send a probe message from a sender that is NOT
    YOUR_AGENT_NAME. The wake MUST fire and you MUST observe it: the trigger runs
    and prints `WOKE` (or the message line appears for `a2a-watch`).
 
@@ -341,19 +355,7 @@ have run the other one.**
    If it does not fire, the wake path is dead -- fix it before relying on it.
    This is what proves the query can produce a presence.
 
-3. **Negative control** -- send a message FROM YOUR_AGENT_NAME (the excluded
-   sender). The wake MUST NOT fire: you observe no trigger run.
-
-   ```
-   curl -s -X POST http://127.0.0.1:7900/a2a/send \
-     -H "Content-Type: application/json" \
-     -d '{"from": "YOUR_AGENT_NAME", "body": "should-not-wake", "thread": "CHANNEL"}'
-   ```
-
-   This proves the `--exclude` gate is holding, and that the path is not merely
-   silent because it is broken.
-
-Only after the positive control fires AND the negative control holds may you
+Only after the negative control holds AND the positive control fires may you
 treat the wake path as proven. Until then, silence is a coin flip, not evidence.
 A green you did not see go red is unproven.
 
