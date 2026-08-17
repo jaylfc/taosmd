@@ -851,7 +851,7 @@ def test_http_a2a_blocks_without_body_returns_400(live_server):
     status code assertion red -- the service layer still returns 400. What
     does turn red is the **message** assertion: the HTTP-level check produces
     an error mentioning ``blocks``, whereas the service-layer ``ValueError``
-    yields the generic text ``'body' (non-empty string) is required``.
+    yields the generic text ``body must be a non-empty string``.
 
     In other words, ``assert "blocks" in body["error"]`` is the load-bearing
     assertion. A future "tidying" change to ``assert status == 400`` would
