@@ -688,11 +688,13 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             # configured taOS local token on them; pin the issuer.
             _registry_admin_token = _config.get_registry_token(data_dir)
             _human_principal_ids = set(_config.get_human_principal_ids(data_dir))
+            _staleness_bound = _config.get_registry_staleness_bound(data_dir)
             _registry_verifier = registry_auth.verifier_from_url(
                 _registry_url,
                 revoked_token=_registry_admin_token,
                 expected_iss=registry_auth.REGISTRY_ISS,
                 human_principal_ids=_human_principal_ids,
+                staleness_bound=_staleness_bound,
             )
             _grants_verifier = registry_auth.grants_verifier_from_url(
                 _registry_url,
@@ -1597,19 +1599,28 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         "'body' (non-empty string) is required when 'blocks' is present"
                     )
             # Registry auth (opt-in): when a verifier is configured, run the
-            # identity + grant checks and collect any failure reason.
-            # In enforce mode (a2a_auth_enforce=true) failures are rejected with
-            # 401/403. In verify-and-warn mode (default) failures are logged as
-            # a WARNING but the message is accepted, allowing operators to observe
-            # violations before enabling hard enforcement.
+            # identity + grant checks. Two failure classes:
+            #   1. Missing Bearer token -> the only tolerated class in
+            #      verify-and-warn mode (agent not migrated yet). Warn-and-
+            #      accept (200) when enforce is off; 401 when on.
+            #   2. Presented-credential failure (bad signature, issuer
+            #      mismatch, revoked id, sub != from) -> always 403 regardless
+            #      of the enforce flag. A matched-sub proof that fails is an
+            #      active impersonation attempt; tolerating it for migration
+            #      keeps the exact attack window open that the design exists to
+            #      close.
+            # Grant failure (valid token, no active grant) is NOT a credential
+            # failure: identity is proven and nothing is being impersonated, so
+            # it follows the same warn-or-enforce path as a missing token.
             if _registry_verifier is not None:
                 from . import registry_auth  # noqa: PLC0415 - optional path
                 auth = self.headers.get("Authorization", "")
                 token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
 
                 # Compute warn_reason (None = auth passed) and the status/message
-                # to use in enforce mode. We collect these without returning early
-                # so the enforce vs. warn decision is made in one place below.
+                # to use in enforce mode. Presented-credential failures return
+                # immediately; grant failures fall through to the single
+                # enforce-or-warn decision below.
                 warn_reason: str | None = None
                 _reject_status: int = 403
                 _reject_msg: str = ""
@@ -1626,9 +1637,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         self._send_json(403, {"error": f"registry auth: {exc}"})
                         return
                     except registry_auth.AuthError as exc:
-                        warn_reason = str(exc)
-                        _reject_status = 403
-                        _reject_msg = f"registry auth: {exc}"
+                        # Class 2: presented-credential failure. Always reject,
+                        # even in warn mode -- see the comment block above.
+                        logger.warning(
+                            "a2a auth: rejecting presented-credential failure "
+                            "from %r in warn mode: %s", from_, exc,
+                        )
+                        self._send_json(403, {"error": f"registry auth: {exc}"})
+                        return
 
                 # Grant check: token proves identity; grant proves permission.
                 # Human principals (controller sessions) have no registry grant,

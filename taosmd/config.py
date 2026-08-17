@@ -52,6 +52,9 @@ _SERVE_DASHBOARD_KEY = "serve_dashboard"
 _GENERATOR_PROFILE_KEY = "generator_profile"
 # Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
 _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
+# Maximum age (seconds) of a cached revocation set before refresh failures fail
+# closed. Defaults to 6 * refresh_interval inside RegistryVerifier.
+_REGISTRY_STALENESS_BOUND_KEY = "registry_staleness_bound"
 # Canonical IDs of human principals (controller sessions). These IDs skip the
 # registry revocation check and the grants check; a sub/from mismatch on a
 # human token is always rejected, even in verify-and-warn mode. They are also
@@ -656,6 +659,64 @@ def set_a2a_auth_enforce(value: bool, data_dir=None) -> None:
     _write(data, data_dir)
 
 
+def get_registry_staleness_bound(data_dir=None) -> float | None:
+    """Return the configured revocation staleness bound in seconds, or ``None``.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_REGISTRY_STALENESS_BOUND`` environment variable
+    2. ``registry_staleness_bound`` key in ``~/.taosmd/config.json``
+
+    When set, a cached revocation set older than this many seconds is considered
+    stale: a refresh is attempted, and if it fails auth fails closed instead of
+    tolerating the old set indefinitely. When unset (``None``), the verifier
+    defaults to ``6 * refresh_interval`` (30 min with the default 5-min refresh).
+    """
+    env = os.environ.get("TAOSMD_REGISTRY_STALENESS_BOUND")
+    if env and env.strip():
+        try:
+            val = float(env.strip())
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    val = _read(data_dir).get(_REGISTRY_STALENESS_BOUND_KEY)
+    if val is not None:
+        try:
+            fval = float(val)
+            if fval > 0:
+                return fval
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def set_registry_staleness_bound(value: float, *, clear: bool = False,
+                                 data_dir=None) -> None:
+    """Persist the revocation staleness bound in seconds (or clear it).
+
+    Args:
+        value: Staleness bound in seconds (must be positive). Ignored when
+            ``clear`` is True.
+        clear: when True, remove the setting (verifier reverts to its default
+            of ``6 * refresh_interval``).
+
+    Raises:
+        ValueError: when ``clear`` is False and ``value`` is not a positive
+            number.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_REGISTRY_STALENESS_BOUND_KEY, None)
+    else:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(
+                "staleness_bound must be a positive number (or pass clear=True)"
+            )
+        data[_REGISTRY_STALENESS_BOUND_KEY] = float(value)
+    _write(data, data_dir)
+
+
 # ---------------------------------------------------------------------------
 # Human principal IDs (controller sessions)
 # ---------------------------------------------------------------------------
@@ -804,6 +865,8 @@ __all__ = [
     "set_serve_dashboard",
     "get_a2a_auth_enforce",
     "set_a2a_auth_enforce",
+    "get_registry_staleness_bound",
+    "set_registry_staleness_bound",
     "get_human_principal_ids",
     "set_human_principal_ids",
     "MANAGED_BY_STANDALONE",
