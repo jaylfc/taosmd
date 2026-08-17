@@ -113,7 +113,7 @@ def get_memory_model(data_dir=None) -> str | None:
     return None
 
 
-def set_memory_model(model: str, clear: bool = False, data_dir=None) -> None:
+def set_memory_model(model: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the global memory model.
 
     Args:
@@ -142,7 +142,7 @@ def get_generator_profile(data_dir=None) -> str | None:
     return None
 
 
-def set_generator_profile(profile_id: str, clear: bool = False, data_dir=None) -> None:
+def set_generator_profile(profile_id: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the active global generator-profile id.
 
     Args:
@@ -171,7 +171,7 @@ def get_default_recipe(data_dir=None) -> str | None:
     return None
 
 
-def set_default_recipe(recipe_id: str, clear: bool = False, data_dir=None) -> None:
+def set_default_recipe(recipe_id: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the global default recipe id (or clear it).
 
     Args:
@@ -309,7 +309,7 @@ def get_server_url(data_dir=None) -> str | None:
     return None
 
 
-def set_server_url(url: str, clear: bool = False, data_dir=None) -> None:
+def set_server_url(url: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the remote server URL.
 
     Args:
@@ -356,7 +356,7 @@ def get_registry_url(data_dir=None) -> str | None:
     return None
 
 
-def set_registry_url(url: str, clear: bool = False, data_dir=None) -> None:
+def set_registry_url(url: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the agent-registry base URL (or clear it).
 
     Args:
@@ -399,7 +399,7 @@ def get_registry_token(data_dir=None) -> str | None:
     return None
 
 
-def set_registry_token(token: str, clear: bool = False, data_dir=None) -> None:
+def set_registry_token(token: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the registry auth token (or clear it).
 
     Args:
@@ -442,7 +442,7 @@ def get_files_url(data_dir=None) -> str | None:
     return None
 
 
-def set_files_url(url: str, clear: bool = False, data_dir=None) -> None:
+def set_files_url(url: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the taOS Files base URL (or clear it).
 
     Args:
@@ -488,7 +488,7 @@ def get_server_token(data_dir=None) -> str | None:
     return None
 
 
-def set_server_token(token: str, clear: bool = False, data_dir=None) -> None:
+def set_server_token(token: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the remote server bearer token.
 
     Args:
@@ -533,7 +533,7 @@ def get_admin_token(data_dir=None) -> str | None:
     return None
 
 
-def set_admin_token(token: str, clear: bool = False, data_dir=None) -> None:
+def set_admin_token(token: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the admin bearer token.
 
     Args:
@@ -676,7 +676,7 @@ def get_human_principal_ids(data_dir=None) -> list[str]:
     return []
 
 
-def set_human_principal_ids(ids, clear: bool = False, data_dir=None) -> None:
+def set_human_principal_ids(ids, *, clear: bool = False, data_dir=None) -> None:
     """Persist the human principal IDs list (or clear it).
 
     Args:
@@ -738,7 +738,7 @@ def get_collections_allowed_roots(data_dir=None) -> list[str]:
     return [r.strip() for r in roots if isinstance(r, str) and r.strip()]
 
 
-def set_collections_allowed_roots(roots, clear: bool = False, data_dir=None) -> None:
+def set_collections_allowed_roots(roots, *, clear: bool = False, data_dir=None) -> None:
     """Persist the collections allowed-roots list (or clear it).
 
     Args:
