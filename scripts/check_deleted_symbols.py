@@ -14,17 +14,22 @@ Two shapes of silent loss are detected:
   2. A name removed from a module __all__ while its top-level def/class still
      exists at HEAD (export removal). This is the shape a mechanical merge
      resolution produces: one side of a conflicted __all__ block is taken
-     wholesale, dropping entries without touching the definitions.
+     wholesale, dropping entries without touching the definitions. Re-exports
+     are included: when the removed entry is a re-exported name (imported, not
+     defined, in the file holding __all__), the gate resolves it through the
+     file's from-import statements and checks whether the target def/class
+     survives anywhere at HEAD.
 
 Algorithm:
   1. Extract all Python def/class symbols at two points: the target branch
      head and HEAD (the merge ref / PR head).
   2. A symbol is "deleted by the PR" if it exists at the target head but not
      at HEAD. The signal is that set.
-  3. Also compare __all__ membership: an entry present at the target head but
-     absent at HEAD is a signal only when the corresponding top-level
-     def/class still exists at HEAD. A genuine deletion removes both the
-     definition and the __all__ entry, so it stays allowed.
+  3. Compare __all__ membership: an entry present at the target head but absent
+     at HEAD is a signal only when the corresponding top-level def/class still
+     exists at HEAD (or, for re-exports, the definition it names survives at
+     HEAD). A genuine deletion removes both the definition and the __all__
+     entry, so it stays allowed.
   4. Fail with an explicit list of the deleted symbols and the commits that
      added them.
   5. A "Removes-Intentionally: <symbol>, ..." trailer in the PR body waives
@@ -32,7 +37,7 @@ Algorithm:
 
 Narrow by design: Python def/class names only (test functions are defs).
 Exports are compared via AST so continuation lines and indentation never
-matter.
+matter. Import resolution for re-exports also uses AST.
 
 Usage:
     python scripts/check_deleted_symbols.py --base origin/master
@@ -173,6 +178,85 @@ def _get_all_exports_at_ref(ref: str, repo_root: Path = REPO_ROOT) -> dict[str, 
     return exports
 
 
+def _resolve_import_parts(node: ast.ImportFrom, pkg_dir: str) -> list[str] | None:
+    """Resolve an ImportFrom node to dotted package parts.
+
+    Handles relative imports (``from .x import Y``, ``from ..x.y import Z``)
+    using *pkg_dir* (the directory of the importing file) and the import
+    ``level``.  Absolute imports (``from taosmd.x import Y``) are returned as-is.
+    ``from . import X`` (``module`` is None) returns None: the local name
+    refers to a module, not a def/class, so it cannot back an __all__ entry.
+    """
+    if node.module is None:
+        return None
+    if node.level == 0:
+        return node.module.split(".")
+    pkg_parts = pkg_dir.split("/") if pkg_dir else []
+    up = node.level - 1
+    if up > 0:
+        pkg_parts = pkg_parts[: max(0, len(pkg_parts) - up)]
+    return pkg_parts + node.module.split(".")
+
+
+def _extract_imports(source: str, file_path: str) -> dict[str, list[str]]:
+    """Extract from-import bindings that could back __all__ re-exports.
+
+    Returns a dict mapping each local name bound by a
+    ``from .x import Name`` or ``from .x import Name as Alias``
+    to candidate definition keys of the form ``"<file>:<name>"``.
+    Both ``<x>.py`` and ``<x>/__init__.py`` file forms are produced so the
+    caller can match against the symbol table regardless of whether the
+    target is a module file or a package.
+    """
+    imports: dict[str, list[str]] = {}
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return imports
+
+    pkg_dir = os.path.dirname(file_path)
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        parts = _resolve_import_parts(node, pkg_dir)
+        if parts is None:
+            continue
+        module_path = "/".join(parts)
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            original = alias.name
+            local = alias.asname if alias.asname else alias.name
+            imports.setdefault(local, []).extend([
+                f"{module_path}.py:{original}",
+                f"{module_path}/__init__.py:{original}",
+            ])
+    return imports
+
+
+def _get_imports_at_ref(
+    ref: str, repo_root: Path = REPO_ROOT
+) -> dict[str, dict[str, list[str]]]:
+    """Get import bindings for all Python files at a given git ref."""
+    result = subprocess.run(
+        ["git", "archive", ref],
+        cwd=repo_root, capture_output=True, check=True,
+    )
+    imports: dict[str, dict[str, list[str]]] = {}
+    with tarfile.open(fileobj=io.BytesIO(result.stdout)) as tar:
+        for member in tar.getmembers():
+            if not member.name.startswith("taosmd/") or not member.name.endswith(".py"):
+                continue
+            f = tar.extractfile(member)
+            if f is None:
+                continue
+            source = f.read().decode("utf-8", errors="ignore")
+            file_imports = _extract_imports(source, member.name)
+            if file_imports:
+                imports[member.name] = file_imports
+    return imports
+
+
 def _find_adding_commit(
     file_path: str,
     name: str,
@@ -234,6 +318,7 @@ def find_removed_all_entries(
     base_exports: dict[str, str],
     head_exports: dict[str, str],
     head_symbols: dict[str, str],
+    base_imports: dict[str, dict[str, list[str]]] | None = None,
 ) -> dict[str, str]:
     """Find __all__ entries removed at HEAD while their def/class still exists.
 
@@ -241,9 +326,44 @@ def find_removed_all_entries(
     when the corresponding top-level def/class still exists at HEAD. A genuine
     deletion removes both the definition and the __all__ entry, so it does not
     appear here -- it is caught by find_signal_symbols instead.
+
+    Re-exports are resolved through the base file's import statements: when the
+    entry has no same-file definition, the gate follows the from-import that
+    supplied the name and checks whether the target def/class survives at HEAD.
     """
     removed = set(base_exports) - set(head_exports)
-    return {k: head_symbols[k] for k in removed if k in head_symbols}
+    base_imports = base_imports or {}
+    result: dict[str, str] = {}
+    for k in removed:
+        if k in head_symbols:
+            result[k] = head_symbols[k]
+            continue
+        file_path, name = k.rsplit(":", 1)
+        for candidate in base_imports.get(file_path, {}).get(name, []):
+            if candidate in head_symbols:
+                result[k] = head_symbols[candidate]
+                break
+    return result
+
+
+def _resolve_export_key(
+    symbol: str,
+    base_imports: dict[str, dict[str, list[str]]],
+    head_symbols: dict[str, str],
+) -> str:
+    """Resolve an __all__ entry key to the definition key it is backed by.
+
+    For same-file def/class entries this is a no-op. For re-exports the entry
+    is resolved through the base file's import statements. Falls back to the
+    original symbol when no backing definition is found.
+    """
+    if symbol in head_symbols:
+        return symbol
+    file_path, name = symbol.rsplit(":", 1)
+    for candidate in base_imports.get(file_path, {}).get(name, []):
+        if candidate in head_symbols:
+            return candidate
+    return symbol
 
 
 def check_deleted_symbols(
@@ -265,7 +385,10 @@ def check_deleted_symbols(
 
     base_exports = _get_all_exports_at_ref(base_ref, repo_root)
     head_exports = _get_all_exports_at_ref("HEAD", repo_root)
-    export_signal = find_removed_all_entries(base_exports, head_exports, head_symbols)
+    base_imports = _get_imports_at_ref(base_ref, repo_root)
+    export_signal = find_removed_all_entries(
+        base_exports, head_exports, head_symbols, base_imports
+    )
 
     waived_set: set[str] = set()
     if waived:
@@ -286,7 +409,8 @@ def check_deleted_symbols(
         if symbol in waived_set:
             waived_in_signal.add(symbol)
             continue
-        file_path, name = symbol.rsplit(":", 1)
+        resolved = _resolve_export_key(symbol, base_imports, head_symbols)
+        file_path, name = resolved.rsplit(":", 1)
         added_by = _find_adding_commit(file_path, name, kind, base_ref, repo_root)
         violations.append(Violation(symbol=symbol, added_by=added_by, kind="export-removed"))
 
