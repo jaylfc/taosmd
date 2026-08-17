@@ -2227,7 +2227,10 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     httpd = make_server(host, port, data_dir)
     bound_host, bound_port = httpd.server_address[:2]
     where = "localhost only" if bound_host in {"127.0.0.1", "::1"} else "LAN-reachable (no auth)"
+    enforce = _config.get_a2a_auth_enforce(data_dir)
+    mode = "ENFORCE" if enforce else "WARN (verify-and-warn)"
     print(f"taosmd HTTP API listening on http://{bound_host}:{bound_port} ({where})")
+    print(f"A2A registry auth mode: {mode}")
     print(f"Inspection UI (read-only): http://{bound_host}:{bound_port}/")
     print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, "
           "GET /projects, GET /shelves, "
