@@ -1,0 +1,3 @@
+### Fixed
+
+- **Durable cron line now posts/logs/removes correctly**: The `do_fire` function no longer swallows all failures with `except Exception: pass`. It now attempts to post `[RESUME DUE]` to the A2A bus, falls back to appending to `~/.taos-team/resume_fire.log` when the bus cannot import taosmd, and lets crontab errors surface instead of silently exiting 0. The crontab write now properly includes a trailing newline. The marker uses stable `hashlib.sha256(script_path.encode()).hexdigest()[:8]` instead of randomized `hash(script_path)`. The full 721-line helper from `~/.taos-fleet-tools/resume_arm_time.py` has been moved into `scripts/` as the one canonical version, with derivation and evidence printing intact.
