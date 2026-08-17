@@ -757,10 +757,14 @@ def test_http_a2a_sse_with_refs_and_blocks(live_server):
 # --- Validation tests: each asserts 400 AND nothing stored -------------------
 
 def test_http_a2a_refs_not_list_returns_400(live_server):
+    # Using an int (non-iterable) isolates the isinstance(refs, list) check:
+    # a string would have len > 8 and trip the max-refs guard first, hiding
+    # the fact that this test does not exercise the is-a-list rule. See the
+    # per-rule sweep in docs/verify-merged-assertions.md (Finding 3).
     status, body = _post(
         f"{live_server}/a2a/send",
         {"from": "agentA", "body": "msg", "thread": "v-refs-not-list",
-         "refs": "not a list"},
+         "refs": 42},
     )
     assert status == 400
     assert "refs" in body["error"]
@@ -802,10 +806,14 @@ def test_http_a2a_refs_bad_kind_returns_400(live_server):
 
 
 def test_http_a2a_blocks_not_list_returns_400(live_server):
+    # Using an int (non-iterable) isolates the isinstance(blocks, list) check:
+    # a string would iterate into characters and trip the dict-items guard
+    # first, hiding the fact that this test does not exercise the is-a-list
+    # rule. See the per-rule sweep in docs/verify-merged-assertions.md (Finding 3).
     status, body = _post(
         f"{live_server}/a2a/send",
         {"from": "agentA", "body": "msg", "thread": "v-blocks-not-list",
-         "blocks": "not a list"},
+         "blocks": 42},
     )
     assert status == 400
     assert "blocks" in body["error"]
@@ -837,9 +845,18 @@ def test_http_a2a_message_too_large_returns_400(live_server):
 def test_http_a2a_blocks_without_body_returns_400(live_server):
     """Invariant: blocks present => body must be non-empty.
 
-    This test FAILS if the invariant check in the HTTP handler is removed,
-    because the service layer would still reject empty body with a
-    ValueError whose message does not mention 'blocks'.
+    The ``assert status == 400`` half of this test is **duplicated** at the
+    service layer: ``service.a2a_send`` itself raises ``ValueError`` for an
+    empty body. Removing this HTTP-level invariant check does NOT turn the
+    status code assertion red -- the service layer still returns 400. What
+    does turn red is the **message** assertion: the HTTP-level check produces
+    an error mentioning ``blocks``, whereas the service-layer ``ValueError``
+    yields the generic text ``'body' (non-empty string) is required``.
+
+    In other words, ``assert "blocks" in body["error"]`` is the load-bearing
+    assertion. A future "tidying" change to ``assert status == 400`` would
+    silently delete the only check that distinguishes the HTTP-level guard
+    from the service-level one.
     """
     status, body = _post(
         f"{live_server}/a2a/send",
