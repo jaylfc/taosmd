@@ -35,6 +35,10 @@ class AuthError(Exception):
     """Raised when a token fails verification or the auth policy."""
 
 
+class HumanAuthError(AuthError):
+    """Raised when a human principal's sub does not match the claimed from."""
+
+
 def _require_jwt():
     try:
         import jwt  # noqa: PLC0415
@@ -58,13 +62,17 @@ def decode_and_verify(token: str, public_key: str) -> dict:
 
 
 def authorize_sender(token: str, claimed_from: str, *, public_key: str,
-                     revoked: set[str], expected_iss: str | None = None) -> dict:
+                     revoked: set[str], expected_iss: str | None = None,
+                     human_principal_ids: set[str] | None = None) -> dict:
     """Authorise a bus sender. Returns the verified claims or raises AuthError.
 
     Policy (after the EdDSA signature check):
-      * the token must carry a ``sub`` (the agent canonical_id);
+      * the token must carry a ``sub`` (the principal canonical_id);
       * ``sub`` must equal the message ``from`` (no impersonation);
-      * ``sub`` must not be in the registry revocation set;
+      * if the principal is a human (sub in ``human_principal_ids``), a
+        sub/from mismatch raises :class:`HumanAuthError` (always rejected,
+        even in verify-and-warn mode);
+      * for agent principals, ``sub`` must not be in the registry revocation set;
       * when ``expected_iss`` is set, ``iss`` must match it (issuer pinning).
     """
     claims = decode_and_verify(token, public_key)
@@ -72,9 +80,14 @@ def authorize_sender(token: str, claimed_from: str, *, public_key: str,
     if not sub:
         raise AuthError("token has no 'sub' (canonical_id) claim")
     if sub != claimed_from:
+        if human_principal_ids and sub in human_principal_ids:
+            raise HumanAuthError(
+                f"human token sub {sub!r} does not match from {claimed_from!r}"
+            )
         raise AuthError(f"token sub {sub!r} does not match from {claimed_from!r}")
-    if sub in revoked:
-        raise AuthError(f"canonical_id {sub!r} is revoked")
+    if not (human_principal_ids and sub in human_principal_ids):
+        if sub in revoked:
+            raise AuthError(f"canonical_id {sub!r} is revoked")
     if expected_iss is not None and claims.get("iss") != expected_iss:
         raise AuthError(f"token iss {claims.get('iss')!r} != expected {expected_iss!r}")
     return claims
@@ -96,19 +109,33 @@ class RegistryVerifier:
     ``pubkey_loader`` and ``revoked_loader`` are injected so the network layer
     can be supplied by the caller (and stubbed in tests). ``clock`` defaults to
     wall-clock ``time.time``; an injected clock makes refresh timing testable.
+
+    ``human_principal_ids`` is the set of canonical_ids that belong to human
+    principals (controller sessions). Human principals skip the registry
+    revocation check (they are not in the registry) and skip the grants check.
+    A human principal whose token ``sub`` does not match the message ``from``
+    raises :class:`HumanAuthError`, which the bus always rejects (even in
+    verify-and-warn mode) so a human cannot impersonate another human or an
+    agent handle.
     """
 
     def __init__(self, *, pubkey_loader, revoked_loader,
                  refresh_interval: float = 300.0, clock=time.time,
-                 expected_iss: str | None = None):
+                 expected_iss: str | None = None,
+                 human_principal_ids: set[str] | None = None):
         self._pubkey_loader = pubkey_loader
         self._revoked_loader = revoked_loader
         self._refresh_interval = refresh_interval
         self._clock = clock
         self._expected_iss = expected_iss
+        self._human_principal_ids = human_principal_ids or set()
         self._pubkey: str | None = None
         self._revoked: set[str] = set()
         self._revoked_fetched_at: float | None = None
+
+    def is_human(self, canonical_id: str) -> bool:
+        """Return True if ``canonical_id`` is a known human principal."""
+        return canonical_id in self._human_principal_ids
 
     def _get_pubkey(self) -> str:
         if self._pubkey is None:
@@ -125,23 +152,32 @@ class RegistryVerifier:
                 self._revoked_fetched_at = now
             except Exception as exc:  # noqa: BLE001
                 if self._revoked_fetched_at is None:
-                    # Never loaded: we cannot prove an agent is unrevoked, so
-                    # fail CLOSED rather than fall through to an empty allowlist.
                     raise AuthError(
                         f"revocation feed unavailable, refusing to authorise: {exc}"
                     ) from exc
-                # Already have a known-good set: keep it across a transient
-                # refresh failure (fail-safe, never silently un-revokes).
                 logger.warning("registry revocation refresh failed, "
                                "using last-good set: %s", exc)
         return self._revoked
 
     def authorize(self, token: str, claimed_from: str) -> dict:
-        """Authorise a sender; return verified claims or raise AuthError."""
+        """Authorise a sender; return verified claims or raise AuthError.
+
+        Human principals skip the revocation feed fetch entirely so the
+        fail-closed revocation check never blocks controller-signed humans.
+        """
+        try:
+            import jwt  # noqa: PLC0415
+            raw = jwt.decode(token, options={"verify_signature": False})
+        except Exception:  # noqa: BLE001
+            raw = {}
+        sub = raw.get("sub")
+        is_human = bool(sub and sub in self._human_principal_ids)
+        revoked = set() if is_human else self._get_revoked()
         return authorize_sender(
             token, claimed_from,
-            public_key=self._get_pubkey(), revoked=self._get_revoked(),
+            public_key=self._get_pubkey(), revoked=revoked,
             expected_iss=self._expected_iss,
+            human_principal_ids=self._human_principal_ids,
         )
 
 
@@ -337,7 +373,8 @@ def grants_verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
 def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
                       opener=_http_get, clock=time.time,
                       expected_iss: str | None = REGISTRY_ISS,
-                      revoked_token: str | None = None) -> "RegistryVerifier":
+                      revoked_token: str | None = None,
+                      human_principal_ids: set[str] | None = None) -> "RegistryVerifier":
     """Build a :class:`RegistryVerifier` that fetches from a registry base URL.
 
     The HTTP getter is injectable (``opener``) so callers/tests can supply
@@ -346,6 +383,10 @@ def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
     ``revoked_token`` is the taOS local/admin token sent as a Bearer header on
     the revoked-feed poll (the #710 contract moved it behind admin auth). The
     pubkey endpoint stays public and is fetched without a token.
+
+    ``human_principal_ids`` is the set of canonical_ids that belong to human
+    principals (controller sessions). These principals skip the registry
+    revocation check and their sub/from mismatch is always rejected.
     """
     base = base_url.rstrip("/")
     return RegistryVerifier(
@@ -353,4 +394,5 @@ def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
         revoked_loader=lambda: parse_revoked_response(
             opener(base + REVOKED_PATH, token=revoked_token)),
         refresh_interval=refresh_interval, clock=clock, expected_iss=expected_iss,
+        human_principal_ids=human_principal_ids,
     )

@@ -697,10 +697,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             # The revoked and grants feeds are admin-gated (#710/#719): send the
             # configured taOS local token on them; pin the issuer.
             _registry_admin_token = _config.get_registry_token(data_dir)
+            _human_principal_ids = set(_config.get_human_principal_ids(data_dir))
             _registry_verifier = registry_auth.verifier_from_url(
                 _registry_url,
                 revoked_token=_registry_admin_token,
                 expected_iss=registry_auth.REGISTRY_ISS,
+                human_principal_ids=_human_principal_ids,
             )
             _grants_verifier = registry_auth.grants_verifier_from_url(
                 _registry_url,
@@ -1572,22 +1574,28 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 else:
                     try:
                         _registry_verifier.authorize(token, from_)
+                    except registry_auth.HumanAuthError as exc:
+                        self._send_json(403, {"error": f"registry auth: {exc}"})
+                        return
                     except registry_auth.AuthError as exc:
                         warn_reason = str(exc)
                         _reject_status = 403
                         _reject_msg = f"registry auth: {exc}"
 
                 # Grant check: token proves identity; grant proves permission.
+                # Human principals (controller sessions) have no registry grant,
+                # so the grants check is skipped for them.
                 if warn_reason is None and _grants_verifier is not None:
-                    try:
-                        if not _grants_verifier.has_grant(from_):
-                            warn_reason = "no a2a_send grant"
+                    if not _registry_verifier.is_human(from_):
+                        try:
+                            if not _grants_verifier.has_grant(from_):
+                                warn_reason = "no a2a_send grant"
+                                _reject_status = 403
+                                _reject_msg = f"registry auth: no active grant for {from_!r}"
+                        except registry_auth.AuthError as exc:
+                            warn_reason = str(exc)
                             _reject_status = 403
-                            _reject_msg = f"registry auth: no active grant for {from_!r}"
-                    except registry_auth.AuthError as exc:
-                        warn_reason = str(exc)
-                        _reject_status = 403
-                        _reject_msg = f"registry auth: {exc}"
+                            _reject_msg = f"registry auth: {exc}"
 
                 if warn_reason is not None:
                     enforce = _config.get_a2a_auth_enforce(data_dir)
