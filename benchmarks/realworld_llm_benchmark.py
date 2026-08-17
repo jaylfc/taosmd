@@ -297,7 +297,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
         print(f"\nERROR: {LLM_MODEL} not available in Ollama")
         print(f"Available models: {models}")
         print(f"Run: ollama pull {LLM_MODEL}")
-        return
+        sys.exit(1)
 
     print(f"Ollama OK — {LLM_MODEL} available")
 
