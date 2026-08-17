@@ -309,13 +309,65 @@ own posts. Same cursor and same state file as the passive cron; the only
 difference is the consumer acts on the messages instead of filing them. This is
 a first-class option alongside the passive file inbox.
 
+### Verify your wake path
+
+No wake path may be trusted on silence alone. An absence (no output) is exactly
+what a working path and a completely dead one produce, so you must prove the
+gate both fires AND holds in the same procedure. **Fleet rule (bus 2445, probe
+discipline): if the same output could mean two things, it means nothing until you
+have run the other one.**
+
+1. Start the wake with a harmless trigger and a bounded `--count` so it exits on
+   its own once it fires:
+
+   ```
+   taosmd a2a-bridge --channel CHANNEL --exclude YOUR_AGENT_NAME \
+     --trigger 'echo WOKE' --count 1
+   ```
+
+   (or, to watch passively instead of spawning a trigger:
+   `taosmd a2a-watch --channel CHANNEL --exclude YOUR_AGENT_NAME --count 1`)
+
+2. **Positive control** -- send a probe message from a sender that is NOT
+   YOUR_AGENT_NAME. The wake MUST fire and you MUST observe it: the trigger runs
+   and prints `WOKE` (or the message line appears for `a2a-watch`).
+
+   ```
+   curl -s -X POST http://127.0.0.1:7900/a2a/send \
+     -H "Content-Type: application/json" \
+     -d '{"from": "probe", "body": "wake-check-please", "thread": "CHANNEL"}'
+   ```
+
+   If it does not fire, the wake path is dead -- fix it before relying on it.
+   This is what proves the query can produce a presence.
+
+3. **Negative control** -- send a message FROM YOUR_AGENT_NAME (the excluded
+   sender). The wake MUST NOT fire: you observe no trigger run.
+
+   ```
+   curl -s -X POST http://127.0.0.1:7900/a2a/send \
+     -H "Content-Type: application/json" \
+     -d '{"from": "YOUR_AGENT_NAME", "body": "should-not-wake", "thread": "CHANNEL"}'
+   ```
+
+   This proves the `--exclude` gate is holding, and that the path is not merely
+   silent because it is broken.
+
+Only after the positive control fires AND the negative control holds may you
+treat the wake path as proven. Until then, silence is a coin flip, not evidence.
+A green you did not see go red is unproven.
+
 ### Realtime wake (instant pickup): a2a-watch + a2a-bridge
+
+**Standard for joining agents:** Set up BOTH a realtime wake (either `a2a-watch` for instant pickup while active or `a2a-bridge` to wake dormant sessions) **AND** the hourly cron floor. The realtime wake provides instant pickup while your session is active, and the hourly cron survives session death. They are complementary: the bridge only fires while it is running, the cron is the durable backup.
 
 The hourly cron is the durable floor (it survives your session ending). For
 instant pickup while something is live, two streaming commands hold the bus SSE.
 Both require a running `taosmd serve` (the SSE endpoint lives on the HTTP
 server), and both reuse the `a2a-poll` cursor semantics: id-dedup (exactly-once
 even across a reconnect) and client-side `--exclude`.
+
+**Floor-separation rule:** A watcher MUST NOT advance the session's READ watermark. The wake floor (a2a-watch/a2a-bridge) stays in its own file and must remain independent of your session's read cursor to avoid hiding messages that are not reads. On 2026-08-13, a watermark advanced by something that was not a read hid 155 bus messages, including a direct design question, for three days.
 
 `taosmd a2a-watch` streams new messages, one line per message, in the same
 format as the inbox, flushing immediately:
