@@ -263,6 +263,123 @@ def test_verifier_fails_closed_when_revocation_never_loaded():
         v.authorize(token, "agent-1")
 
 
+# --- staleness_bound: fail-closed expiry of the cached revocation set ---------
+
+
+def test_verifier_staleness_bound_defaults_to_six_refresh_intervals():
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: "pk",
+        revoked_loader=lambda: set(),
+        refresh_interval=300,
+    )
+    assert v._staleness_bound == 6 * 300
+
+
+def test_verifier_staleness_bound_fails_closed_after_bound():
+    """When refresh fails and cache age exceeds staleness_bound, fail closed.
+
+    With refresh_interval=300 and staleness_bound=30, advancing 31s triggers a
+    refresh (31 > 30), the refresh fails, and the cache is too stale (31 > 30)
+    so authorize raises AuthError instead of tolerating.
+    """
+    priv_pem, pub_pem = _keypair()
+    state = {"fail": False}
+
+    def revoked_loader():
+        if state["fail"]:
+            raise OSError("registry unreachable")
+        return set()
+
+    clock = _FakeClock()
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: pub_pem, revoked_loader=revoked_loader,
+        refresh_interval=300, clock=clock,
+        staleness_bound=30,
+    )
+    token = _sign(priv_pem, {"sub": "agent-1"})
+    v.authorize(token, "agent-1")  # primes cache
+
+    state["fail"] = True
+    clock.advance(31)  # cache_age=31 > staleness_bound=30, < refresh_interval=300
+    with pytest.raises(registry_auth.AuthError, match="stale"):
+        v.authorize(token, "agent-1")
+
+
+def test_verifier_staleness_bound_age_equal_to_bound_remains_valid():
+    """Age exactly equal to staleness_bound is still valid (strict > comparison).
+
+    At cache_age == staleness_bound, the stale predicate is False, so no refresh
+    is attempted and the cached revocation set is returned directly.
+    """
+    priv_pem, pub_pem = _keypair()
+    state = {"fail": False}
+
+    def revoked_loader():
+        if state["fail"]:
+            raise OSError("registry unreachable")
+        return {"agent-revoked"}
+
+    clock = _FakeClock()
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: pub_pem, revoked_loader=revoked_loader,
+        refresh_interval=300, clock=clock,
+        staleness_bound=30,
+    )
+    token_ok = _sign(priv_pem, {"sub": "agent-ok"})
+    token_revoked = _sign(priv_pem, {"sub": "agent-revoked"})
+    v.authorize(token_ok, "agent-ok")  # primes cache with revoked set
+
+    state["fail"] = True
+    clock.advance(30)  # cache_age == staleness_bound: not stale, cache returned
+    # Revoked agent still rejected via the cached set
+    with pytest.raises(registry_auth.AuthError):
+        v.authorize(token_revoked, "agent-revoked")
+    # Non-revoked agent still accepted
+    v.authorize(token_ok, "agent-ok")
+
+
+def test_verifier_staleness_bound_triggers_refresh_before_refresh_interval():
+    """When staleness_bound < refresh_interval, refresh is attempted after the
+    bound expires even though the normal refresh interval hasn't elapsed."""
+    priv_pem, pub_pem = _keypair()
+    calls = {"revoked": 0}
+
+    def revoked_loader():
+        calls["revoked"] += 1
+        return set()
+
+    clock = _FakeClock()
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: pub_pem, revoked_loader=revoked_loader,
+        refresh_interval=300, clock=clock,
+        staleness_bound=30,
+    )
+    token = _sign(priv_pem, {"sub": "agent-1"})
+    v.authorize(token, "agent-1")
+    assert calls["revoked"] == 1
+
+    clock.advance(31)  # cache_age=31 > staleness_bound=30 -> stale -> refresh
+    v.authorize(token, "agent-1")
+    assert calls["revoked"] == 2
+
+
+def test_verifier_from_url_accepts_staleness_bound():
+    """verifier_from_url threads staleness_bound through to RegistryVerifier."""
+    import json
+
+    def fake_opener(url, token=None):
+        if url.endswith(registry_auth.PUBKEY_PATH):
+            return json.dumps({"pubkey": _PEM})
+        if url.endswith(registry_auth.REVOKED_PATH):
+            return json.dumps([])
+        raise AssertionError(f"unexpected url: {url}")
+
+    v = registry_auth.verifier_from_url(
+        "http://taos:8000", opener=fake_opener, staleness_bound=42, expected_iss=None,
+    )
+    assert v._staleness_bound == 42
+
+
 # --- response parsers (tolerant of the registry's exact JSON shape) ----------
 
 _PEM = ("-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n"

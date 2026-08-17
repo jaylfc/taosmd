@@ -124,13 +124,18 @@ class RegistryVerifier:
     def __init__(self, *, pubkey_loader, revoked_loader,
                  refresh_interval: float = 300.0, clock=time.time,
                  expected_iss: str | None = None,
-                 human_principal_ids: set[str] | None = None):
+                 human_principal_ids: set[str] | None = None,
+                 staleness_bound: float | None = None):
         self._pubkey_loader = pubkey_loader
         self._revoked_loader = revoked_loader
         self._refresh_interval = refresh_interval
         self._clock = clock
         self._expected_iss = expected_iss
         self._human_principal_ids = human_principal_ids or set()
+        self._staleness_bound = (
+            staleness_bound if staleness_bound is not None
+            else 6 * refresh_interval
+        )
         logger.info("resolved human principal set: %s",
                     sorted(self._human_principal_ids))
         self._pubkey: str | None = None
@@ -148,8 +153,10 @@ class RegistryVerifier:
 
     def _get_revoked(self) -> set[str]:
         now = self._clock()
-        stale = (self._revoked_fetched_at is None
-                 or now - self._revoked_fetched_at >= self._refresh_interval)
+        cache_age = (float("inf") if self._revoked_fetched_at is None
+                     else now - self._revoked_fetched_at)
+        stale = (cache_age >= self._refresh_interval
+                 or cache_age > self._staleness_bound)
         if stale:
             try:
                 self._revoked = set(self._revoked_loader())
@@ -158,6 +165,12 @@ class RegistryVerifier:
                 if self._revoked_fetched_at is None:
                     raise AuthError(
                         f"revocation feed unavailable, refusing to authorise: {exc}"
+                    ) from exc
+                if cache_age > self._staleness_bound:
+                    raise AuthError(
+                        f"revocation set stale ({cache_age:.0f}s > "
+                        f"{self._staleness_bound:.0f}s), "
+                        f"refusing to authorise: {exc}"
                     ) from exc
                 logger.warning("registry revocation refresh failed, "
                                "using last-good set: %s", exc)
@@ -378,7 +391,8 @@ def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
                       opener=_http_get, clock=time.time,
                       expected_iss: str | None = REGISTRY_ISS,
                       revoked_token: str | None = None,
-                      human_principal_ids: set[str] | None = None) -> "RegistryVerifier":
+                      human_principal_ids: set[str] | None = None,
+                      staleness_bound: float | None = None) -> "RegistryVerifier":
     """Build a :class:`RegistryVerifier` that fetches from a registry base URL.
 
     The HTTP getter is injectable (``opener``) so callers/tests can supply
@@ -391,6 +405,10 @@ def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
     ``human_principal_ids`` is the set of canonical_ids that belong to human
     principals (controller sessions). These principals skip the registry
     revocation check and their sub/from mismatch is always rejected.
+
+    ``staleness_bound`` is the maximum age (in seconds) of a cached revocation
+    set before a refresh failure fails closed instead of tolerating. When
+    ``None`` it defaults to ``6 * refresh_interval``.
     """
     base = base_url.rstrip("/")
     return RegistryVerifier(
@@ -399,4 +417,5 @@ def verifier_from_url(base_url: str, *, refresh_interval: float = 300.0,
             opener(base + REVOKED_PATH, token=revoked_token)),
         refresh_interval=refresh_interval, clock=clock, expected_iss=expected_iss,
         human_principal_ids=human_principal_ids,
+        staleness_bound=staleness_bound,
     )
