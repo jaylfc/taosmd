@@ -171,6 +171,43 @@ def test_grant_unknown_collection_raises(store):
         store.grant("col-000000000000", "agent-a")
 
 
+def test_revoke_matches_the_spelling_grant_stored(store, source_dir):
+    """A revoke passing the same string as the grant must remove the row.
+
+    ``grant`` has always stored ``canonical_id.strip()``. ``revoke`` deleted on
+    the raw string, so a caller handing both calls one padded id granted access
+    and then could not take it back: the DELETE matched nothing and returned
+    normally. Access is only removed if both ends agree on the spelling.
+    """
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.grant(col["id"], "agent-a ")
+    assert store.has_grant("agent-a", col["id"])
+    store.revoke(col["id"], "agent-a ")
+    assert not store.has_grant("agent-a", col["id"])
+    assert store.get(col["id"])["grants"] == []
+
+
+def test_has_grant_matches_the_spelling_grant_stored(store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.grant(col["id"], "agent-a")
+    assert store.has_grant("agent-a ", col["id"])
+
+
+def test_grantee_match_is_not_case_insensitive(store, source_dir):
+    """Control on the fix: normalising the two ends must not widen the match.
+
+    ``has_grant`` gates which collections join ``search_agents`` in
+    :func:`taosmd.api.search`, so a case-insensitive compare would hand content
+    granted to one identity to a differently-cased one. Whitespace symmetry is
+    the whole change; folding case is not part of it.
+    """
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.grant(col["id"], "Agent-A")
+    assert not store.has_grant("agent-a", col["id"])
+    store.revoke(col["id"], "agent-a")
+    assert store.has_grant("Agent-A", col["id"])
+
+
 # ---------------------------------------------------------------------------
 # archive (delete alias) + status
 # ---------------------------------------------------------------------------
