@@ -1,5 +1,19 @@
 # JOB-004: Make the EventQA runner exit non-zero when it refuses to run
 
+**Status: DONE, closed out 2026-08-18. DO NOT START THIS JOB.**
+
+Delivered by PR #290 as commit `8e0f45a1` on 2026-08-17, whose subject is the exact
+commit message this job specified. Verified on master `b13304c9` rather than assumed:
+the refusal path in `async def run` now ends in `sys.exit(1)` (two such calls in that
+function, at the unsupported-lever refusal and the empty-rows refusal), and all three
+tests this job asked for exist in `tests/test_eventqa_retrieve_wiring.py`:
+`test_unsupported_graph_expansion_aborts_the_run`,
+`test_empty_dataset_aborts_the_run`, and `test_zero_graph_expansion_never_probes`.
+
+The job text is kept below unchanged, as the record of what was asked for. Nothing in
+it is still actionable. If you were sent here to do this work, stop and tell the
+primary session the pack pointed you at finished work.
+
 Read docs/agent-jobs/README.md first and follow its absolute rules.
 
 - Tracks issue #205.

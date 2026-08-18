@@ -1,8 +1,12 @@
 # JOB-001: Replace every em dash in docs/benchmarks.md
 
-**Status: OPEN (re-verified 2026-08-14).** `grep -c "—" docs/benchmarks.md`
-prints 120 on current master, so the sweep has not been done. The count below
-says "roughly 121"; 120 is the current number and is what you should expect.
+**Status: OPEN (re-verified 2026-08-18 on master b13304c9).** The sweep has not
+been done. MEASURE THE COUNT YOURSELF AND DO NOT TRUST ANY NUMBER WRITTEN HERE:
+it was 120 on 2026-08-14 and is 150 today, because docs/benchmarks.md grows
+whenever a benchmark lands. Both earlier numbers in this file, the "roughly 121"
+below and the 120 above, were correct when written and are wrong now. What you
+verify against is the AFTER count, which must be 0; the before count is only
+something to record in the PR body.
 
 Read docs/agent-jobs/README.md first and follow its absolute rules.
 
@@ -20,8 +24,8 @@ only.
 ## Steps
 
 1. `git fetch origin && git checkout -b docs/benchmarks-em-dash-sweep origin/master`
-2. Count first: `grep -c "—" docs/benchmarks.md` (expect roughly 121; record
-   the exact number for the PR body).
+2. Count first: `grep -c "—" docs/benchmarks.md` and record the exact number
+   for the PR body. Expect NO particular value: see the status note at the top.
 3. Replace each em dash by hand-reviewing context. Rules of thumb:
    - ` — ` joining two clauses becomes `: ` when the second clause explains
      the first, otherwise `, `.
