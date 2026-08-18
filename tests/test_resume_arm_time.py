@@ -40,7 +40,7 @@ resume_arm_time = _load_module()
 
 def _marker(fire_type, armed_at):
     ts = datetime.datetime.fromisoformat(armed_at).strftime("%Y%m%d%H%M")
-    return f"/home/jay/.taos-fleet-tools/resume_arm_time.py#{fire_type}-{ts}"
+    return f"{SCRIPT}#{fire_type}-{ts}"
 
 
 class _Proc:
@@ -140,8 +140,8 @@ def test_system_crontab_block_names_usr_bin_python3():
     fire = datetime.datetime(2026, 8, 18, 0, 7, 0, tzinfo=datetime.timezone.utc)
     retry = datetime.datetime(2026, 8, 18, 0, 17, 0, tzinfo=datetime.timezone.utc)
     block = resume_arm_time.system_crontab_block(fire, retry)
-    assert "/usr/bin/python3 /home/jay/.taos-fleet-tools/resume_arm_time.py --fire primary" in block
-    assert "/usr/bin/python3 /home/jay/.taos-fleet-tools/resume_arm_time.py --fire retry" in block
+    assert f"/usr/bin/python3 {SCRIPT} --fire primary" in block
+    assert f"/usr/bin/python3 {SCRIPT} --fire retry" in block
     # No bare `python3` token (the blocked PR emitted `python3 <path>`).
     assert " python3 " not in block
 
@@ -275,7 +275,7 @@ def test_do_fire_runs_as_subprocess(tmp_path, monkeypatch):
     marker = _marker("primary", armed_at)
     initial_crontab = (
         f"# taOSmd-resume: {marker}\n"
-        + f"7 0 18 8 * /usr/bin/python3 /home/jay/.taos-fleet-tools/resume_arm_time.py --fire primary {armed_at}\n"
+        + f"7 0 18 8 * /usr/bin/python3 {SCRIPT} --fire primary {armed_at}\n"
         + WATCHER_LINE
     )
     state = _install_fake_crontab(tmp_path, monkeypatch, initial_crontab)

@@ -53,6 +53,10 @@ import re
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+# SCRIPT is a module-level constant representing the path to this script itself
+SCRIPT = Path(__file__).resolve()
 
 # The two tunables, each stating WHAT IT IS A FUNCTION OF. That is the whole point of
 # this file: a constant whose dependency is unnamed is the bug it exists to prevent.
@@ -503,8 +507,8 @@ def system_crontab_block(primary_fire, retry_fire):
     r_min, r_hou, r_dy, r_mo = cron_fields(retry_fire)
     p_ts = primary_fire.strftime("%Y%m%d%H%M")
     r_ts = retry_fire.strftime("%Y%m%d%H%M")
-    marker_prefix = "/home/jay/.taos-fleet-tools/resume_arm_time.py#"
-    helper = "/home/jay/.taos-fleet-tools/resume_arm_time.py"
+    marker_prefix = f"{SCRIPT}#"
+    helper = str(SCRIPT)
 
     lines = [
         "SYSTEM CRONTAB (durable, survives session death):",
@@ -539,7 +543,7 @@ def do_fire(fire_type, timestamp_str):
         )
 
     ts = timestamp.strftime("%Y%m%d%H%M")
-    marker = f"/home/jay/.taos-fleet-tools/resume_arm_time.py#{fire_type}-{ts}"
+    marker = f"{SCRIPT}#{fire_type}-{ts}"
 
     record = f"[RESUME DUE] {fire_type} fired armed_at={timestamp_str}"
 
