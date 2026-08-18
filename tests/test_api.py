@@ -388,7 +388,7 @@ def test_search_hit_metadata_always_has_doc_currency_fields(isolated_data_dir):
 # ---------------------------------------------------------------------------
 
 def _coerce_and_search(data_dir, metadata, text, agent="coerce-agent",
-                       query=None):
+                        query=None):
     """Ingest one item with *metadata* via ingest_batch, then search for it.
 
     Returns the search hits.  On the unguarded tree the search() call itself
@@ -414,7 +414,6 @@ def test_coerce_iso_string_timestamp_returns_hits(isolated_data_dir):
     On the unfixed tree float("2020-01-01T00:00:00Z") raises ValueError at
     api.py and search() propagates it as an error instead of returning hits.
     """
-    marker = "zqxklbm-coerce-iso-timestamp"
     hits = _coerce_and_search(
         isolated_data_dir, {"timestamp": "2020-01-01T00:00:00Z"},
         "The unique token zqxklbm-coerce-iso-timestamp was ingested.",
@@ -429,7 +428,6 @@ def test_coerce_int_review_by_returns_hits(isolated_data_dir):
 
     On the unfixed tree 2020 < "2026-08-18" raises TypeError at api.py.
     """
-    marker = "zqxklbm-coerce-int-review"
     hits = _coerce_and_search(
         isolated_data_dir, {"review_by": 2020},
         "The unique token zqxklbm-coerce-int-review was ingested.",
