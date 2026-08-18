@@ -65,6 +65,8 @@ def _webui_dir() -> Path | None:
    it.
 5. `python3 -m pytest -q -m "not slow"` (all green; the webui-serving tests
    cover this function), and
-   `python3 -m ruff check taosmd/http_server.py` (the F401 finding for
-   `_ir` must be gone; do not fix any OTHER findings).
+    `ruff check taosmd/http_server.py` (the F401 finding for
+    `_ir` must be gone; do not fix any OTHER findings). If `ruff` is not
+    found on PATH, report it in the PR body and skip this verification step.
+    Do not invent a substitute tool.
 6. One commit, push, open the PR.

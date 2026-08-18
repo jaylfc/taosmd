@@ -103,7 +103,9 @@ def _default_onnx_path() -> str:
 7. `python3 -m pytest tests/test_cross_encoder_path.py -q` (3 passed), then
    the FULL suite `python3 -m pytest -q -m "not slow"` (all green; the
    existing reranker tests prove explicit-path behavior is unchanged), then
-   `python3 -m ruff check taosmd/cross_encoder.py tests/test_cross_encoder_path.py`.
+    `ruff check taosmd/cross_encoder.py tests/test_cross_encoder_path.py`.
+    If `ruff` is not found on PATH, report it in the PR body and skip this
+    verification step. Do not invent a substitute tool.
 8. One commit, push, open the PR. PR body: the bug (cwd-dependent default),
    the fix (repo-root-resolved default, explicit arg untouched), test counts.
 

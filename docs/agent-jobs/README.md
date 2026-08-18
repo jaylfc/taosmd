@@ -24,7 +24,8 @@ Do not improvise.
 7. The full test suite must pass before you push:
    `python3 -m pytest -q -m "not slow"` (well over a thousand tests, all
    green; record the exact number in your PR body). Lint the files you
-   changed: `python3 -m ruff check <files>`.
+    changed: `ruff check <files>`. If `ruff` is not found on PATH, report it
+    in the PR body and skip this verification step. Do not invent a substitute tool.
 8. Never commit IP addresses, hostnames, tokens, or credentials.
 9. STOP on any surprise: a failing test you did not cause, a merge conflict,
    a file that does not look like the job describes. Open the PR with what
