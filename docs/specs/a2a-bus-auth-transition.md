@@ -15,7 +15,21 @@ See Target state item 3 and open question 1.
 "unresolved" invites the opposite reading.** Nothing is broken today. With no
 `human_principal_ids` configured, #235's guard condition is always true, so revocation
 currently applies to **everyone**. The hole opens the first time the feature is used for its
-purpose, not before.
+purpose, not before. Once an id is listed, it is also exempt from the fail-closed refusal
+that fires when the revocation feed has never loaded, and it is not validated as belonging
+to a human: naming an agent's canonical_id there silently disables that agent's revocation.
+Measured on exec/tsk-legqtr at 8ba25e2:
+
+```
+revoked id IS on the feed:
+  human_principal_ids=set()            rejected   <- control, the check can reject
+  human_principal_ids={that id}        ACCEPTED
+  human_principal_ids={a different id} rejected   <- control, it is the membership
+
+revocation feed UNREACHABLE (never loaded, fail-closed path):
+  human_principal_ids=set()            rejected   <- control
+  human_principal_ids={that id}        ACCEPTED
+```
 
 Owner: @taOSmd-dev. Supersedes the held Phase 2 of #138, which was blocked on the registry
 identity layer that landed 2026-08-13.
