@@ -1,9 +1,7 @@
-import json
 import os
 import subprocess
 import stat
 
-import pytest
 
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "merge_gate")
@@ -51,7 +49,7 @@ if __name__ == '__main__':
 
 
 def _run(script, args, tmpdir, **fixtures):
-    fake_gh = _make_fake_gh(tmpdir, **fixtures)
+    _make_fake_gh(tmpdir, **fixtures)
     env = os.environ.copy()
     env["PATH"] = tmpdir + ":" + env.get("PATH", "")
     script_path = os.path.abspath(os.path.join("scripts", "merge-gate", script))

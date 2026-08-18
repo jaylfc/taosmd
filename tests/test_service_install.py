@@ -18,10 +18,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import textwrap
 from pathlib import Path
-from typing import Optional
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -599,7 +596,6 @@ class TestCliFlags:
 
     def test_service_flags_are_mutually_exclusive(self, monkeypatch):
         """argparse should refuse two service flags at once."""
-        import io
         with pytest.raises(SystemExit) as exc:
             self._run_cli(
                 ["serve", "--install-service", "--uninstall-service"],

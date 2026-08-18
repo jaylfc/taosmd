@@ -51,7 +51,7 @@ def live_server_with_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(taosmd_api, "_stores_cache", {})
 
     httpd = http_server.make_server("127.0.0.1", 0, data_dir=str(data_dir))
-    stores = httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
+    httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
 
     host, port = httpd.server_address[:2]
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)

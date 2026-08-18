@@ -22,17 +22,16 @@ import os
 import sys
 import tempfile
 import time
-from itertools import product
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
 
-from taosmd import VectorMemory, KnowledgeGraph, Archive, SessionCatalog
+from taosmd import VectorMemory, KnowledgeGraph, Archive
 from taosmd.memory_extractor import extract_facts_from_text
 from taosmd.query_expansion import expand_query_fast
 from taosmd.temporal_boost import temporal_rerank, classify_temporal_query
-from taosmd.retrieval import retrieve, _rrf_merge, _deduplicate, _adapt_vector
+from taosmd.retrieval import retrieve
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_full.json")
 ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx")
@@ -244,7 +243,7 @@ async def run_question(item, top_k, config, http_client=None):
 
 async def run_benchmark(limit: int = 500, top_k: int = 5):
     print("=" * 78)
-    print(f"Combo Benchmark — Exhaustive pipeline path combinations")
+    print("Combo Benchmark — Exhaustive pipeline path combinations")
     print(f"LLM: {LLM_MODEL} | Embed: MiniLM ONNX | {limit} questions | Top-{top_k}")
     print("=" * 78)
 

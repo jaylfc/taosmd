@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from taosmd.loaders import (
-    Blob,
     BlobType,
     ChatBlob,
     ChatLoader,

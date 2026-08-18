@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from taosmd.knowledge_graph import TemporalKnowledgeGraph
 from taosmd.archive import ArchiveStore
-from taosmd.memory_extractor import extract_facts_from_text, process_conversation_turn
+from taosmd.memory_extractor import process_conversation_turn
 from taosmd.context_assembler import ContextAssembler
 from taosmd.vector_memory import VectorMemory
 
@@ -450,15 +450,15 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
     print(f"\n  Overall: {total_correct}/{total_questions} ({overall:.1f}%)")
     print(f"  Total time: {total_time:.1f}s ({total_time/total_questions:.1f}s per question)")
 
-    print(f"\n  By question type:")
+    print("\n  By question type:")
     for qtype, data in sorted(results_by_type.items()):
         pct = data["correct"] / data["total"] * 100 if data["total"] > 0 else 0
         print(f"    {qtype:30s} {data['correct']:3d}/{data['total']:<3d} ({pct:.1f}%)")
 
-    print(f"\n  Comparison:")
-    print(f"    MemPalace (raw verbatim):     96.6%")
-    print(f"    SuperMemory:                  81.6%")
-    print(f"    GPT-4o (full context):        ~70%")
+    print("\n  Comparison:")
+    print("    MemPalace (raw verbatim):     96.6%")
+    print("    SuperMemory:                  81.6%")
+    print("    GPT-4o (full context):        ~70%")
     print(f"    taOSmd (Pi NPU, no cloud):    {overall:.1f}%")
     print(f"{'='*70}")
 

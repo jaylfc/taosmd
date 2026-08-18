@@ -48,7 +48,6 @@ async def run_question(item, top_k, config):
 
     # Search with config-specific parameters
     search_query = question
-    retrieve_k = top_k
 
     if config == "raw_semantic":
         results = await vmem.search(question, limit=top_k, hybrid=False)

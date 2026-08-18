@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
-import pytest
 
 from taosmd.knowledge_graph import TemporalKnowledgeGraph
 from taosmd.vector_memory import SCHEMA, VectorMemory

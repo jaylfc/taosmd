@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from pathlib import Path
 
-import pytest
 
 from taosmd.session_catalog import SessionCatalog
 

@@ -11,16 +11,13 @@ variant that sets a server token via env or config.
 from __future__ import annotations
 
 import json
-import os
 import threading
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import pytest
 
 from taosmd import api as taosmd_api
-from taosmd import config as taosmd_config
 from taosmd import http_server
 
 

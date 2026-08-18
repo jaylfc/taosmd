@@ -542,7 +542,7 @@ def test_authorize_sender_logs_human_auth_error(caplog):
 def test_registry_verifier_logs_human_principal_set(caplog):
     import logging
     with caplog.at_level(logging.INFO, logger="taosmd.registry_auth"):
-        v = registry_auth.RegistryVerifier(
+        registry_auth.RegistryVerifier(
             pubkey_loader=lambda: "pk",
             revoked_loader=lambda: set(),
             human_principal_ids={"human-1", "user-alice"},

@@ -18,6 +18,6 @@ jobs:
       - name: Compile check (two merged branches previously shipped files that do not parse)
         run: uv run python -m compileall -q taosmd/
       - name: Lint (pyflakes via ruff; its own step so a lint failure is not read as a test failure)
-        run: uv run ruff check taosmd/
+        run: uv run ruff check taosmd/ tests/ benchmarks/
       - name: Tests
         run: uv run pytest tests/ -q

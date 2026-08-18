@@ -29,11 +29,10 @@ import httpx
 
 from taosmd import (
     VectorMemory, KnowledgeGraph, Archive, SessionCatalog,
-    CrystalStore, retrieve,
+    retrieve,
 )
-from taosmd.memory_extractor import extract_facts_from_text, extract_facts_with_llm
+from taosmd.memory_extractor import extract_facts_from_text
 from taosmd.query_expansion import expand_query_fast
-from taosmd.session_catalog import SessionCatalog
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_full.json")
 ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx")
@@ -287,7 +286,7 @@ async def check_ollama():
 async def run_benchmark(limit: int = 500, top_k: int = 5):
     print("=" * 74)
     print(f"Real-World LLM Pipeline Benchmark — Recall@{top_k}")
-    print(f"Embedding: all-MiniLM-L6-v2 (ONNX)")
+    print("Embedding: all-MiniLM-L6-v2 (ONNX)")
     print(f"LLM: {LLM_MODEL} via Ollama")
     print(f"Dataset: {limit} questions")
     print("=" * 74)
@@ -309,7 +308,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
         ("vector_only", "Vector + hybrid + query expansion (baseline)"),
         ("regex_kg", "Vector + regex KG extraction"),
         ("llm_kg", f"Vector + LLM KG extraction ({LLM_MODEL})"),
-        ("full_llm_fanout", f"Full LLM pipeline + retrieve(thorough)"),
+        ("full_llm_fanout", "Full LLM pipeline + retrieve(thorough)"),
     ]
 
     all_results = {}
