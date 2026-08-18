@@ -1082,6 +1082,104 @@ async def can_read(reader: str, msg: dict, data_dir=None) -> bool:
     return True
 
 
+async def a2a_record_delivered(
+    message_id: int, agent_id: str, *, ts: float | None = None, data_dir=None
+) -> dict:
+    """Record that a message was delivered to an agent.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.record_delivered`.
+    ``ts`` defaults to ``time.time()`` when not supplied.
+    Returns ``{"ok": True}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if ts is None:
+        ts = time.time()
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_record_delivered(message_id, agent_id, ts=ts)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    await receipt_store.record_delivered(message_id, agent_id, ts)
+    return {"ok": True}
+
+
+async def a2a_record_seen(
+    message_id: int, agent_id: str, *, ts: float | None = None, data_dir=None
+) -> dict:
+    """Record that an agent has seen a message.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.record_seen`.
+    ``ts`` defaults to ``time.time()`` when not supplied.
+    Returns ``{"ok": True}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if ts is None:
+        ts = time.time()
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_record_seen(message_id, agent_id, ts=ts)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    await receipt_store.record_seen(message_id, agent_id, ts)
+    return {"ok": True}
+
+
+async def a2a_get_receipts(message_id: int, *, data_dir=None) -> dict:
+    """Return delivery and read receipts for a message.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.get_receipts_for_message`.
+    Returns ``{"delivered": [...], "read": [...]}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_get_receipts(message_id)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    return await receipt_store.get_receipts_for_message(message_id)
+
+
+async def a2a_get_receipt(
+    message_id: int, agent_id: str, *, data_dir=None
+) -> dict | None:
+    """Return a single receipt or ``None`` when not found.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.get_receipt`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_get_receipt(message_id, agent_id)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    return await receipt_store.get_receipt(message_id, agent_id)
+
+
+async def a2a_prune_receipts(
+    older_than_ts: float, *, data_dir=None
+) -> dict:
+    """Prune receipts older than ``older_than_ts`` (by delivered_at).
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.prune`.
+    Returns ``{"pruned": int}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_prune_receipts(older_than_ts)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    n = await receipt_store.prune(older_than_ts)
+    return {"pruned": n}
+
+
 async def task_create(
     title: str,
     *,
@@ -1496,6 +1594,8 @@ __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
            "admin_a2a_delete_channel", "admin_a2a_rename_channel",
            "admin_a2a_supersede_message",
+           "a2a_record_delivered", "a2a_record_seen", "a2a_get_receipts",
+           "a2a_get_receipt", "a2a_prune_receipts",
            "collections_create", "collections_list", "collections_get",
            "collections_index_start", "collections_index_run",
            "collections_index_background", "collections_link",

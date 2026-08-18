@@ -805,6 +805,39 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return auth[len("Bearer "):].strip() == _server_token
             return False
 
+        def _get_authenticated_agent_id(self) -> str | None:
+            """Return the agent identity from a verified registry token, or None.
+
+            The token is verified via ``_registry_verifier.authorize``; the
+            claimed identity is the token's own ``sub`` claim, so the
+            ``sub == claimed_from`` policy is satisfied by construction and
+            only the signature/revocation/issuer checks actually filter.  A
+            forged token (bad signature) raises ``AuthError`` and yields
+            ``None``; a valid token yields its ``sub``.  When no registry
+            verifier is configured (standalone) it yields ``None``: receipt
+            writes require an authenticated identity, never a body claim.
+            """
+            if _registry_verifier is None:
+                return None
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer "):
+                return None
+            token = auth[len("Bearer "):].strip()
+            if not token:
+                return None
+            from . import registry_auth as _ra  # noqa: PLC0415
+            try:
+                import jwt as _jwt  # noqa: PLC0415
+                unverified = _jwt.decode(token, options={"verify_signature": False})
+                claimed = unverified.get("sub", "") or ""
+                claims = _registry_verifier.authorize(token, claimed)
+                sub = claims.get("sub", "") or ""
+                return sub if sub else None
+            except _ra.AuthError:
+                return None
+            except Exception:  # noqa: BLE001
+                return None
+
         @staticmethod
         def _is_admin_route(method: str, path: str) -> bool:
             """Return True for admin write routes (#154).
@@ -833,6 +866,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "/a2a/admin/delete-channel",
                 "/a2a/admin/rename-channel",
                 "/a2a/admin/supersede-message",
+                "/a2a/admin/prune-receipts",
             )
 
         def _check_admin_token(self) -> bool:
@@ -966,6 +1000,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def do_DELETE(self) -> None:  # noqa: N802
             self._dispatch("DELETE")
 
+        def do_PATCH(self) -> None:  # noqa: N802
+            self._dispatch("PATCH")
+
         def _dispatch(self, method: str) -> None:
             parts = urlsplit(self.path)
             path = parts.path.rstrip("/") or "/"
@@ -1057,6 +1094,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         self._send_json(404, {"error": "thread name required"})
                     else:
                         self._handle_a2a_thread_messages(thread, query)
+                # ----- A2A receipt endpoints --------------------------------
+                elif method == "POST" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts_delivered()
+                elif method == "PATCH" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts_seen()
+                elif method == "GET" and path.startswith("/a2a/messages/") and path.endswith("/receipts"):
+                    msg_id = path[len("/a2a/messages/"):-len("/receipts")]
+                    self._handle_a2a_message_receipts(msg_id)
+                elif method == "GET" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts(query)
+                elif method == "POST" and path == "/a2a/admin/prune-receipts":
+                    self._handle_admin_a2a_prune_receipts()
                 # Task graph endpoints — prefix matching for /tasks/{id} paths
                 elif method == "POST" and path == "/tasks":
                     self._handle_task_create()
@@ -1731,12 +1780,20 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             is a quick, bounded archive query; the sleep happens here in
             the request thread, never inside the service loop. Disconnects
             are detected via write errors and exit the loop cleanly.
+
+            When the subscriber's identity is known (authenticated proxy
+            path, ``sub`` claim present in the Bearer token) a delivered
+            receipt is written after each frame lands on the wire. Raw-bus
+            subscribers that carry no identifying token produce no delivered
+            mark.
             """
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             last_ts = _parse_since(since_raw)
             if last_ts is None:
                 last_ts = time.time()
+
+            subscriber_agent = self._get_authenticated_agent_id()
 
             # Send SSE response headers before entering the poll loop.
             self.send_response(200)
@@ -1760,6 +1817,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                             frame = f"data: {json.dumps(msg)}\n\n"
                             self.wfile.write(frame.encode("utf-8"))
                             last_ts = msg["ts"]
+                            if subscriber_agent is not None:
+                                runner.run(
+                                    service.a2a_record_delivered(
+                                        msg["id"],
+                                        subscriber_agent,
+                                        ts=time.time(),
+                                        data_dir=data_dir,
+                                    )
+                                )
                         self.wfile.flush()
                     else:
                         self.wfile.write(b": keepalive\n\n")
@@ -1791,6 +1857,107 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     thread=thread, before=before, after=after,
                     limit=limit_i, data_dir=data_dir,
                 )
+            )
+            self._send_json(200, result)
+
+        # ----- A2A receipt handlers -----------------------------------------
+
+        def _handle_a2a_receipts_delivered(self) -> None:
+            """POST /a2a/receipts -- record that a message was delivered.
+
+            ``agent_id`` is derived from the verified registry token, never
+            from the request body.  ``message_id`` comes from the body.
+            """
+            body = self._read_json_body()
+            message_id_raw = body.get("message_id")
+            if message_id_raw is None:
+                raise _BadRequest("'message_id' is required")
+            try:
+                message_id = int(message_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            agent_id = self._get_authenticated_agent_id()
+            if agent_id is None:
+                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                return
+            runner.run(
+                service.a2a_record_delivered(message_id, agent_id, data_dir=data_dir)
+            )
+            self._send_json(200, {"ok": True})
+
+        def _handle_a2a_receipts_seen(self) -> None:
+            """PATCH /a2a/receipts -- record that an agent has seen a message.
+
+            ``agent_id`` is derived from the verified registry token, never
+            from the request body.  ``message_id`` comes from the body.
+            """
+            body = self._read_json_body()
+            message_id_raw = body.get("message_id")
+            if message_id_raw is None:
+                raise _BadRequest("'message_id' is required")
+            try:
+                message_id = int(message_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            agent_id = self._get_authenticated_agent_id()
+            if agent_id is None:
+                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                return
+            runner.run(
+                service.a2a_record_seen(message_id, agent_id, data_dir=data_dir)
+            )
+            self._send_json(200, {"ok": True})
+
+        def _handle_a2a_message_receipts(self, msg_id_str: str) -> None:
+            """GET /a2a/messages/{id}/receipts -- all receipts for one message."""
+            try:
+                message_id = int(msg_id_str)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("message id must be an integer") from exc
+            result = runner.run(
+                service.a2a_get_receipts(message_id, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_receipts(self, qs: dict) -> None:
+            """GET /a2a/receipts?message_id=X&agent=Y -- a single receipt."""
+            message_id_raw = (qs.get("message_id") or [None])[0]
+            agent_id = (qs.get("agent") or [None])[0]
+            if message_id_raw is None or agent_id is None:
+                raise _BadRequest("'message_id' and 'agent' query parameters are required")
+            try:
+                message_id = int(message_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            receipt = runner.run(
+                service.a2a_get_receipt(message_id, agent_id, data_dir=data_dir)
+            )
+            if receipt is None:
+                self._send_json(404, {"error": "receipt not found"})
+                return
+            self._send_json(200, receipt)
+
+        def _handle_admin_a2a_prune_receipts(self) -> None:
+            """POST /a2a/admin/prune-receipts -- admin-only prune.
+
+            Accepts ``ttl_days`` (days) and converts to an absolute epoch
+            timestamp before delegating to the service layer, matching the
+            default path which also uses ``time.time() - N * 86400``.
+            """
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            ttl_days = body.get("ttl_days")
+            if ttl_days is not None:
+                try:
+                    ttl_days = float(ttl_days)
+                except (TypeError, ValueError):
+                    raise _BadRequest("'ttl_days' must be a number when provided")
+                older_than_ts = time.time() - ttl_days * 86400
+            else:
+                older_than_ts = time.time() - 30 * 24 * 3600
+            result = runner.run(
+                service.a2a_prune_receipts(older_than_ts, data_dir=data_dir)
             )
             self._send_json(200, result)
 
