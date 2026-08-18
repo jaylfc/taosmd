@@ -12,7 +12,9 @@ passes green while the cited witness tokens are deleted from the test, because t
 test file itself survives. This gate cannot be fooled by that -- it resolves the
 TOKEN, not the path. The gate is non-vacuous in both directions: it fails when a
 declared token is removed (file stays importable), and it does NOT fire on a bare
-test-filename mention in ordinary prose.
+test-filename mention in ordinary prose. A comment that quotes the marker
+syntax (e.g. ``path::token``) without forming a live marker will still be
+flagged by the near-miss detector.
 
 Marker contract (the only thing that triggers the check):
 
@@ -63,11 +65,20 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = Path(os.environ.get("WITNESS_GATE_ROOT") or _REPO_ROOT)
 WITNESS_RE = re.compile(r"#\s*WITNESS:\s*(.+)$")
-_NEAR_MISS_RE = re.compile(r"#\s*WITNESS[^:]")
-# Files whose docstrings contain de-marked illustrative examples. Greppable name.
-_DEMARKED_MARKER_EXEMPTION = frozenset({
-    "scripts/check_witness_token.py",
-})
+# A near-miss resembles a WITNESS marker whose separator is broken -- a
+# zero-width character (e.g. U+200B) lodged between WITNESS and the colon,
+# or the colon replaced. Requiring a colon after the broken separator keeps
+# ordinary prose mentioning WITNESS from being mistaken for a malformed
+# marker, while still catching de-marked markers that omit the ``::``
+# payload. Prose that quotes the marker syntax (e.g. ``path::token``) still
+# trips the near-miss detector; that is a known residual.
+_NEAR_MISS_RE = re.compile(r"#\s*WITNESS[^:](?=[^:]*:)")
+# Documented examples of a de-marked marker in this file's own docstring.
+# They are intentionally de-marked and must not be reported; every other line
+# in the same file (e.g. an appended genuine marker) still is. Greppable name.
+_DEMARKED_MARKER_EXEMPTION = {
+    "scripts/check_witness_token.py": frozenset({4, 21, 38}),
+}
 
 
 @dataclass
@@ -120,14 +131,15 @@ def _extract_claims(file_path: Path, repo_root: Path) -> list[WitnessClaim]:
 
 def _check_near_misses(file_path: Path, repo_root: Path) -> list[Violation]:
     rel = _relative_source(file_path, repo_root)
-    if rel in _DEMARKED_MARKER_EXEMPTION:
-        return []
+    exempt_lines = _DEMARKED_MARKER_EXEMPTION.get(rel, frozenset())
     try:
         source = file_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return []
     violations: list[Violation] = []
     for lineno, line in enumerate(source.splitlines(), start=1):
+        if lineno in exempt_lines:
+            continue
         if _NEAR_MISS_RE.search(line):
             claim = WitnessClaim(
                 source_file=rel, line_number=lineno, raw=line.strip()

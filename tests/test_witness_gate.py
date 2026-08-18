@@ -332,6 +332,84 @@ class TestWitnessGateIntegration:
         rc, out = _run_main(repo)
         assert rc == 1
 
+    def test_near_miss_regex_spares_prose_arms(self, tmp_path):
+        # WEAKNESS 1: a tightened near-miss regex must not flag ordinary prose
+        # that merely mentions WITNESS, while still catching de-marked (ZWSP)
+        # and malformed markers. All four arms live in one test so a loosening
+        # that silences the prose cannot silence the de-marked arms either.
+        # Arm A -- prose in taosmd/ mentioning WITNESS but no ``::`` is clean.
+        repo = _repo(tmp_path / "a")
+        _write(repo, TEST_TEST, GREEN_TEST)
+        _write(
+            repo,
+            "taosmd/p.py",
+            "# WITNESS markers are validated by the gate.\nVALUE = 1\n",
+        )
+        assert check_witnesses(repo) == []
+        rc, _out = _run_main(repo)
+        assert rc == 0
+
+        # Arm B -- de-marked example (ZWSP) in taosmd/ still exits 1.
+        repo = _repo(tmp_path / "b")
+        _write(repo, TEST_TEST, GREEN_TEST)
+        _write(repo, TEST_SRC, f"# WITNESS\u200b: {TEST_TEST}::{TOKEN}\n")
+        violations = check_witnesses(repo)
+        assert len(violations) == 1
+        assert violations[0].reason == "de-marked or malformed marker"
+        rc, _out = _run_main(repo)
+        assert rc == 1
+
+        # Arm C -- de-marked example (ZWSP) in scripts/ still exits 1.
+        repo = _repo(tmp_path / "c")
+        _write(repo, TEST_TEST, GREEN_TEST)
+        _write(repo, SCRIPTS_SRC, f"# WITNESS\u200b: {TEST_TEST}::{TOKEN}\nVALUE = 1\n")
+        violations = check_witnesses(repo)
+        assert len(violations) == 1
+        assert violations[0].claim.source_file == "scripts/gate_demo.py"
+        assert violations[0].reason == "de-marked or malformed marker"
+        rc, _out = _run_main(repo)
+        assert rc == 1
+
+        # Arm D -- de-marked (ZWSP) marker in taosmd/ with no ``::`` payload
+        # must still exit 1 (regression guard).
+        repo = _repo(tmp_path / "d")
+        _write(repo, TEST_TEST, GREEN_TEST)
+        _write(repo, TEST_SRC, f"# WITNESS\u200b: {TEST_TEST}\n")
+        violations = check_witnesses(repo)
+        assert len(violations) == 1
+        assert violations[0].reason == "de-marked or malformed marker"
+        rc, _out = _run_main(repo)
+        assert rc == 1
+
+    def test_gate_does_not_swallow_appended_near_miss(self, tmp_path):
+        # WEAKNESS 2: the gate's own docstring examples are exempted line by
+        # line, so a genuine de-marked marker appended to a copy of the gate is
+        # still reported. The unmodified gate copy must remain clean.
+        repo = _repo(tmp_path)
+        _write(repo, TEST_TEST, GREEN_TEST)
+        gate_copy = _write(
+            repo,
+            "scripts/check_witness_token.py",
+            GATE_SCRIPT.read_text(encoding="utf-8"),
+        )
+        assert check_witnesses(repo) == []
+        rc, _out = _run_main(repo)
+        assert rc == 0
+
+        appended = gate_copy.read_text(encoding="utf-8")
+        appended += f"# WITNESS\u200b: {TEST_TEST}::{TOKEN}\n"
+        gate_copy.write_text(appended)
+        violations = check_witnesses(repo)
+        near = [
+            v for v in violations
+            if v.reason == "de-marked or malformed marker"
+        ]
+        assert len(near) == 1
+        assert near[0].claim.source_file == "scripts/check_witness_token.py"
+        rc, out = _run_main(repo)
+        assert rc == 1
+        assert "de-marked or malformed marker" in out
+
 
 # ----------------------------------------------------------------------
 # CLI subprocess tests: prove the real script exit codes (Layer A path)
