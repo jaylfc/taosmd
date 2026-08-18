@@ -1,6 +1,11 @@
 # JOB-002: Make CrossEncoderReranker's default model path cwd-independent
 
-**Status: ON HOLD (re-verified 2026-08-14). DO NOT START THIS JOB.**
+**Status: ON HOLD (re-verified 2026-08-18 on master ec80d41b). DO NOT START THIS JOB.**
+
+Both halves of that status were re-checked today rather than carried: `taosmd/cross_encoder.py`
+still defaults `onnx_path` to the relative `"models/cross-encoder-onnx"` in
+`CrossEncoderReranker.__init__`, so the bug is real, and issue #199 is still open, so the
+supersession still holds. Nothing here changed; only the date on the claim did.
 
 The bug this job describes is still real: `taosmd/cross_encoder.py` line 21
 still defaults `onnx_path` to the relative `"models/cross-encoder-onnx"`.
