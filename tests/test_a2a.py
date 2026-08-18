@@ -9,7 +9,6 @@ patched wherever stores are initialised.
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import socket
 import threading
@@ -17,7 +16,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
 
 import pytest
 

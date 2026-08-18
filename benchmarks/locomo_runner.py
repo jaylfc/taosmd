@@ -1295,7 +1295,7 @@ async def _process_qa(
                         no_think_prefix=no_think_prefix,
                         force_empty_think=force_empty_think,
                     )
-            except Exception as cove_exc:
+            except Exception:
                 # if any verification step fails, fall back to draft
                 predicted = draft
         else:

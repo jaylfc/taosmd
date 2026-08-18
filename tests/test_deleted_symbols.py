@@ -7,24 +7,16 @@ Proves both directions:
 """
 from __future__ import annotations
 
-import os
 import subprocess
-import sys
 
-import pytest
 
 import scripts.check_deleted_symbols as cds
 from scripts.check_deleted_symbols import (
     TRAILER,
-    Violation,
     _extract_all_exports,
     _extract_imports,
     _extract_symbols,
-    _find_adding_commit,
-    _get_imports_at_ref,
-    _get_symbols_at_ref,
     _resolve_export_key,
-    _run_git,
     check_deleted_symbols,
     find_removed_all_entries,
     find_signal_symbols,

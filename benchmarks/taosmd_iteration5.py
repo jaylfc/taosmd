@@ -6,7 +6,6 @@ Also runs standard memory benchmarks comparable to MemPalace/Mem0/SuperMemory.
 """
 
 import asyncio
-import json
 import os
 import tempfile
 import time
@@ -72,7 +71,6 @@ async def main():
     from tinyagentos.archive import ArchiveStore
     from tinyagentos.memory_extractor import process_conversation_turn
     from tinyagentos.context_assembler import ContextAssembler
-    from tinyagentos.intent_classifier import classify_intent
 
     print("=" * 70)
     print("taOSmd Iteration 5 — Intent-Aware Retrieval Benchmark")
@@ -139,7 +137,7 @@ async def main():
             avg_latency = total_latency / len(QUERIES)
 
             print(f"\n    OVERALL: {total_hits}/{total_expected} ({avg_precision:.0%}) avg {avg_latency:.1f}ms")
-            print(f"\n    By category:")
+            print("\n    By category:")
             for qtype, data in sorted(by_type.items()):
                 p = data["hits"] / data["expected"] if data["expected"] > 0 else 0
                 print(f"      {qtype:<15s} {data['hits']}/{data['expected']} ({p:.0%})")
@@ -177,7 +175,7 @@ async def main():
         past_facts = await kg.query_entity("Jay", as_of=now - 86400)
         print(f"    Current facts about Jay: {len(current_facts)}")
         print(f"    Facts about Jay 24h ago: {len(past_facts)}")
-        print(f"    Temporal queries: PASS" if len(current_facts) >= len(past_facts) else "    Temporal queries: FAIL")
+        print("    Temporal queries: PASS" if len(current_facts) >= len(past_facts) else "    Temporal queries: FAIL")
 
         # 3. Contradiction Resolution
         print("\n  3. Contradiction Resolution")
@@ -186,17 +184,17 @@ async def main():
         current = await kg.query_entity("Jay")
         works_on = [r["object_name"] for r in current if r["predicate"] == "works_on"]
         resolved = "ProjectB" in works_on and "ProjectA" not in works_on
-        print(f"    Added 'Jay works_on ProjectA' then 'Jay works_on ProjectB'")
+        print("    Added 'Jay works_on ProjectA' then 'Jay works_on ProjectB'")
         print(f"    Current: Jay works_on {', '.join(works_on)}")
         print(f"    Contradiction resolved: {'PASS' if resolved else 'FAIL'}")
 
         # 4. Archive completeness
         print("\n  4. Zero-Loss Archive Completeness")
         archive_stats = await archive.stats()
-        archive_events = await archive.query(limit=100)
+        await archive.query(limit=100)
         print(f"    Events archived: {archive_stats['total_events']}")
         print(f"    Disk usage: {archive_stats['disk_usage_mb']:.2f} MB")
-        print(f"    Archive PASS" if archive_stats["total_events"] >= len(SEED_TEXT) else "    Archive FAIL")
+        print("    Archive PASS" if archive_stats["total_events"] >= len(SEED_TEXT) else "    Archive FAIL")
 
         # 5. Extraction efficiency
         print("\n  5. Extraction Efficiency")
@@ -214,16 +212,16 @@ async def main():
         print("  taOSmd SCORECARD")
         print(f"{'='*70}")
         print(f"    Fact Recall:           {fact_recall:.0f}%")
-        print(f"    Temporal Queries:      PASS")
+        print("    Temporal Queries:      PASS")
         print(f"    Contradiction Resolve: {'PASS' if resolved else 'FAIL'}")
         print(f"    Archive Completeness:  {archive_stats['total_events']} events")
         print(f"    Extraction Speed:      {regex_time/len(SEED_TEXT):.1f}ms/passage (regex)")
         print(f"    KG Size:               {stats['entities']} entities, {stats['triples']} triples")
-        print(f"    Intent Classification: 20/20 tests passing")
-        print(f"\n    Comparable benchmarks:")
-        print(f"    MemPalace LongMemEval: 96.6% (raw verbatim)")
-        print(f"    SuperMemory LongMemEval: 81.6%")
-        print(f"    Mem0: +26% accuracy over OpenAI Memory")
+        print("    Intent Classification: 20/20 tests passing")
+        print("\n    Comparable benchmarks:")
+        print("    MemPalace LongMemEval: 96.6% (raw verbatim)")
+        print("    SuperMemory LongMemEval: 81.6%")
+        print("    Mem0: +26% accuracy over OpenAI Memory")
         print(f"    taOSmd Fact Recall:    {fact_recall:.0f}% (on Pi NPU, no cloud)")
         print(f"{'='*70}")
 

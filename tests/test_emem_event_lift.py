@@ -20,7 +20,6 @@ import asyncio
 import json
 from typing import Any
 
-import pytest
 
 from taosmd.emem_event_lift import lift_edu_to_triples, lift_edus_to_events
 from taosmd.knowledge_graph import TemporalKnowledgeGraph

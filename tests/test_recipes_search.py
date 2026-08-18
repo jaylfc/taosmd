@@ -1,7 +1,6 @@
 # tests/test_recipes_search.py
 from __future__ import annotations
 import asyncio
-import pytest
 from taosmd import retrieval
 
 
@@ -33,7 +32,6 @@ def test_retrieve_threads_fusion_and_candidate_top_k():
     assert results[0]["text"] == "hit"
 
 
-from pathlib import Path
 from taosmd import api as taosmd_api
 from taosmd import agents as taosmd_agents
 from taosmd import recipes

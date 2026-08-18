@@ -7,11 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +189,7 @@ def test_bm25_cache_is_populated_after_search(tmp_path, live_embed_backend):
             # Cache should be dirty before first search
             assert vm._bm25_dirty is True
 
-            results = await vm.search("quick fox", hybrid=True, fusion="bm25_rrf", limit=2)
+            await vm.search("quick fox", hybrid=True, fusion="bm25_rrf", limit=2)
 
         # After a bm25_rrf search the cache must be populated and clean
         assert "bm25_rrf" in vm._bm25_cache
@@ -363,7 +360,7 @@ def test_retrieve_calls_llm_reranker_when_set():
             )
         return results
 
-    results = asyncio.run(go())
+    asyncio.run(go())
     assert len(call_log) == 1, "_apply_llm_rerank should have been called once"
     assert call_log[0]["query"] == "test query"
 
@@ -372,7 +369,6 @@ def test_retrieve_default_behavior_unchanged_without_llm_reranker():
     """When llm_reranker=None (default), behavior is unchanged."""
     from taosmd.retrieval import retrieve
 
-    call_log = []
 
     class MockVMem:
         async def search(self, q, limit=5, hybrid=True, **_):

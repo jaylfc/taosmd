@@ -97,7 +97,7 @@ def _drop_all_vector_rows_by_text(data_dir, text: str) -> int:
 def test_reconcile_repairs_crash_gap(isolated):
     """ingest 3 turns, drop one vector row, reconcile repairs it."""
     data_dir = isolated
-    stores = _setup(data_dir)
+    _setup(data_dir)
     agent = "reconcile-agent"
 
     turns = [

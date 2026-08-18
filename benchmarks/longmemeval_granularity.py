@@ -133,7 +133,7 @@ async def main():
 
     best = max(results, key=lambda x: x["pct"])
     print(f"\n  Best: {best['name']} ({best['pct']:.1f}%)")
-    print(f"  MemPalace (raw): 96.6%")
+    print("  MemPalace (raw): 96.6%")
     print(f"{'=' * 70}")
 
 
