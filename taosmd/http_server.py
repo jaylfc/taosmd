@@ -191,7 +191,6 @@ import mimetypes
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.resources import files as _pkg_files
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -204,18 +203,9 @@ from . import __version__, capabilities, config as _config, service
 def _webui_dir() -> Path | None:
     """Return the path to the built webui, or None if absent.
 
-    Tries importlib.resources first (works in wheel installs); falls back to
-    a path relative to this file (works in editable / source installs).
+    Resolved via a path relative to this file, reliable in both wheel and
+    source installs.
     """
-    try:
-        ref = _pkg_files("taosmd").joinpath("webui")
-        # In Python 3.9+ files() returns a Traversable; we need a real Path.
-        # For wheels, traverse to a concrete path via as_file context is
-        # awkward to keep open; instead resolve via __file__ which always works.
-        _ = ref  # keeps `ref` above from tripping the unused-local rule
-    except Exception:
-        pass
-    # Use __file__-relative path, reliable in both source and wheel.
     candidate = Path(__file__).parent / "webui"
     if (candidate / "index.html").exists():
         return candidate
