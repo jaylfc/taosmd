@@ -12,6 +12,7 @@ Usage: .venv/bin/python benchmarks/longmemeval_runner.py [--limit N] [--type TYP
 
 import argparse
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -24,6 +25,7 @@ from taosmd.knowledge_graph import TemporalKnowledgeGraph
 from taosmd.archive import ArchiveStore
 from taosmd.memory_extractor import extract_facts_from_text, process_conversation_turn
 from taosmd.context_assembler import ContextAssembler
+from taosmd.retrieval import retrieve as _retrieve
 from taosmd.vector_memory import VectorMemory
 
 
@@ -66,7 +68,23 @@ SELF_VERIFY = os.environ.get("TAOSMD_SELF_VERIFY", "0") == "1"
 # temporal). Set TAOSMD_SAMPLE_SEED to shuffle deterministically before slicing
 # so a screen at limit<500 covers all six types. Unset = head slice (back-compat).
 SAMPLE_SEED = os.environ.get("TAOSMD_SAMPLE_SEED")
+# Ollama context window for generation. 0 (the default) means "do not send
+# num_ctx", which leaves Ollama on its own default and keeps every historical
+# LongMemEval number reproducible byte for byte. It is recorded in the result
+# JSON so a run's window is never guessed after the fact. Note that a 16000-char
+# context is roughly 4500-5000 tokens, so Ollama's 4096 default already
+# truncates some prompts; raising this changes what is measured, which is why it
+# is opt-in rather than silently bumped here.
+NUM_CTX = int(os.environ.get("TAOSMD_LME_NUM_CTX", "0"))
 _reranker = None
+
+
+def _gen_options(**extra):
+    """Ollama options dict, carrying num_ctx only when it was explicitly set."""
+    opts = dict(extra)
+    if NUM_CTX:
+        opts["num_ctx"] = NUM_CTX
+    return opts
 
 
 def sample_dataset(dataset, limit, seed=None):
@@ -175,7 +193,7 @@ async def llm_answer(client, context: str, question: str) -> str:
                 "messages": [{"role": "user", "content": ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)}],
                 "stream": False,
                 "think": False,
-                "options": {"temperature": 0, "num_predict": 100},
+                "options": _gen_options(temperature=0, num_predict=100),
             },
             timeout=30,
         )
@@ -251,7 +269,7 @@ async def self_verify_answer(client, context: str, question: str, answer: str) -
                 "messages": [{"role": "user", "content": VERIFY_PROMPT.format(context=context[:CONTEXT_CHARS], question=question, answer=answer)}],
                 "stream": False,
                 "think": False,
-                "options": {"temperature": 0, "num_predict": 100},
+                "options": _gen_options(temperature=0, num_predict=100),
             },
             timeout=30,
         )
@@ -264,14 +282,267 @@ async def self_verify_answer(client, context: str, question: str, answer: str) -
     return answer
 
 
-async def run_benchmark(limit: int = 50, question_type: str | None = None, use_llm: bool = False):
+def retrieve_supports_graph_expansion() -> bool:
+    """True when the installed ``taosmd.retrieval.retrieve`` accepts graph_expansion.
+
+    The control is added by the bi-temporal fact-readback work (PR #191). On a
+    checkout without it the runner still works, but the E-030 arms cannot be
+    distinguished, so ``--graph-expansion N>0`` is rejected up front rather
+    than silently producing two identical arms (the exact failure mode this
+    wiring exists to remove).
+    """
+    return "graph_expansion" in inspect.signature(_retrieve).parameters
+
+
+async def retrieve_vector_hits(
+    question: str,
+    kg,
+    vmem,
+    graph_expansion: int = 0,
+    reranker=None,
+    limit: int | None = None,
+) -> list[dict]:
+    """Fetch the vector-layer hits through the real retrieval path.
+
+    Goes through ``taosmd.retrieval.retrieve`` rather than calling
+    ``vmem.search`` directly, so runtime retrieval controls -- notably
+    ``graph_expansion`` -- actually take effect on this benchmark.
+
+    Anchor preservation: the call is deliberately parameterised to reproduce
+    the hand-rolled vector stage it replaces.
+
+    * ``strategy="custom"`` with ``memory_layers=["vector"]`` queries the
+      vector source only. ``kg`` is still passed in ``sources`` because
+      ``_append_graph_expansion`` reads ``sources["kg"]`` regardless of which
+      layers were searched, so the fact-readback block can fire without the KG
+      competing for the ``limit`` slots.
+    * ``candidate_top_k=RETRIEVE_LIMIT`` pins the vector fetch to exactly the
+      ``limit`` the old code used (retrieve() would otherwise fetch limit * 3).
+    * ``limit`` is ``RERANK_TOP_K`` when reranking is on and ``RETRIEVE_LIMIT``
+      otherwise, matching the old narrow-after-rerank behaviour.
+    * ``verify`` is left at its default False: the old stage never gated on
+      claims, so turning verification on here would quietly change what the
+      benchmark measures.
+
+    The one residual difference from the old code is retrieve()'s near-duplicate
+    filter (Jaccard >= 0.8 over the hit texts) where the old path deduplicated
+    on exact string equality only. LongMemEval chunks are ~100-word windows with
+    a 20-word overlap, so unlike EventQA this filter CAN fire; that is exactly
+    what ``--report-retrieval-delta`` measures rather than assumes.
+
+    Returns the raw normalised hit dicts (each with a ``text`` field). When
+    ``graph_expansion`` > 0 a trailing derived block (``source ==
+    "kg_expansion"``) is present.
+    """
+    if limit is None:
+        limit = RERANK_TOP_K if reranker is not None else RETRIEVE_LIMIT
+
+    kwargs = dict(
+        strategy="custom",
+        memory_layers=["vector"],
+        sources={"vector": vmem, "kg": kg},
+        limit=limit,
+        candidate_top_k=RETRIEVE_LIMIT,
+        reranker=reranker,
+        agent_name="longmemeval_eval",
+    )
+    if graph_expansion:
+        kwargs["graph_expansion"] = graph_expansion
+    return await _retrieve(question, **kwargs)
+
+
+async def retrieve_vector_results(
+    question: str,
+    kg,
+    vmem,
+    llm_client=None,
+    graph_expansion: int = 0,
+    retrieval_path: str = "retrieve",
+) -> list[dict]:
+    """The runner's vector stage, on either the wired or the legacy path.
+
+    Reproduces the pre-wiring shape in both modes: optional query decomposition
+    with a deduplicated union capped at ``RETRIEVE_LIMIT``, then an optional
+    cross-encoder rerank down to ``RERANK_TOP_K``.
+    """
+    rr = _get_reranker()
+    reranker = rr if (rr is not None and getattr(rr, "available", False)) else None
+    decomposing = DECOMPOSE and llm_client is not None
+
+    if graph_expansion and retrieval_path == "legacy":
+        raise ValueError(
+            "graph_expansion requires --retrieval-path retrieve; the legacy "
+            "path assembles context by hand and cannot honour the control."
+        )
+    if graph_expansion and decomposing:
+        raise ValueError(
+            "graph_expansion cannot be combined with TAOSMD_DECOMPOSE=1: the "
+            "sub-query union is truncated to RETRIEVE_LIMIT, which can discard "
+            "the derived fact-readback block and make the arm unmeasurable."
+        )
+
+    async def _search(query: str, want_rerank: bool) -> list[dict]:
+        """One query's hits. want_rerank folds the rerank into retrieve()."""
+        if retrieval_path == "legacy":
+            return await vmem.search(query, limit=RETRIEVE_LIMIT)
+        return await retrieve_vector_hits(
+            question=query,
+            kg=kg,
+            vmem=vmem,
+            graph_expansion=graph_expansion,
+            reranker=reranker if want_rerank else None,
+            limit=None if want_rerank else RETRIEVE_LIMIT,
+        )
+
+    if decomposing:
+        # The union is reranked once at the end, so the per-sub-query fetch must
+        # NOT rerank; otherwise the union would be assembled from pre-narrowed
+        # pools and would not match the pre-wiring behaviour.
+        sub_queries = await decompose_query(llm_client, question)
+        seen_texts = set()
+        vector_results = []
+        for sq in sub_queries:
+            for r in await _search(sq, want_rerank=False):
+                t = r.get("text", "")
+                if t and t not in seen_texts:
+                    seen_texts.add(t)
+                    vector_results.append(r)
+        vector_results = vector_results[:RETRIEVE_LIMIT]
+        if reranker is not None and vector_results:
+            vector_results = reranker.rerank(question, vector_results, RERANK_TOP_K)
+        return vector_results
+
+    vector_results = await _search(question, want_rerank=retrieval_path != "legacy")
+    if retrieval_path == "legacy" and reranker is not None and vector_results:
+        vector_results = reranker.rerank(question, vector_results, RERANK_TOP_K)
+    return vector_results
+
+
+async def retrieve_context(
+    question: str,
+    kg,
+    archive,
+    vmem,
+    llm_client=None,
+    graph_expansion: int = 0,
+    retrieval_path: str = "retrieve",
+) -> str:
+    """Assemble the generator context for one question.
+
+    Combines the three retrieval methods the runner has always combined:
+    ContextAssembler, archive FTS over the question's leading terms, and the
+    vector stage. Only the vector stage moved onto ``retrieve()``; the other
+    two are untouched.
+
+    Args:
+        graph_expansion: Token budget for the bi-temporal fact-readback block
+            (0 = off). Requires ``retrieval_path="retrieve"``; the manual
+            legacy path cannot honour it, which is what blocked E-030.
+        retrieval_path: ``"retrieve"`` (default) routes the vector stage
+            through ``taosmd.retrieval.retrieve`` so runtime controls apply.
+            ``"legacy"`` reproduces the pre-wiring hand-rolled stage so the
+            published anchors can be re-measured side by side.
+    """
+    assembler = ContextAssembler(kg=kg, archive=archive)
+    ctx = await assembler.assemble(
+        query=question,
+        depth="auto",
+        max_total_tokens=ASSEMBLE_TOKENS,
+    )
+
+    # FTS search over raw archive (the MemPalace approach -- verbatim recall).
+    # Search for key words from the question.
+    archive_text = ""
+    for term in question.split()[:5]:
+        if len(term) > 3:  # Skip short words
+            try:
+                fts_results = await archive.search_fts(term, limit=FTS_LIMIT)
+                for r in fts_results:
+                    archive_text += " " + r.get("data_json", "") + " " + r.get("summary", "")
+            except Exception:
+                pass
+
+    vector_results = await retrieve_vector_results(
+        question, kg, vmem,
+        llm_client=llm_client,
+        graph_expansion=graph_expansion,
+        retrieval_path=retrieval_path,
+    )
+    vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+
+    return ctx["context"] + " " + archive_text + " " + vector_text
+
+
+def summarize_retrieval_delta(results: list[dict]) -> dict | None:
+    """Summarise the wired-vs-legacy context comparison, or None if not measured.
+
+    Only populated when the runner is given ``--report-retrieval-delta``. This
+    is the evidence for whether routing through retrieve() preserved the
+    published LongMemEval anchors: 100% byte-identical means they carry over
+    untouched, and anything less quantifies exactly how much has to be
+    re-anchored before the arms can be trusted.
+    """
+    deltas = [r["retrieval_delta"] for r in results if r.get("retrieval_delta")]
+    if not deltas:
+        return None
+    n = len(deltas)
+    identical = sum(1 for d in deltas if d["identical"])
+    return {
+        "n": n,
+        "identical": identical,
+        "identical_pct": round(identical / n * 100, 2),
+        "mean_legacy_chars": round(sum(d["legacy_chars"] for d in deltas) / n, 1),
+        "mean_wired_chars": round(sum(d["wired_chars"] for d in deltas) / n, 1),
+    }
+
+
+def load_dataset() -> list:
+    """Load the LongMemEval oracle set from disk."""
+    with open(DATA_PATH) as f:
+        return json.load(f)
+
+
+async def run_benchmark(
+    limit: int = 50,
+    question_type: str | None = None,
+    use_llm: bool = False,
+    args: argparse.Namespace | None = None,
+):
+    graph_expansion = 0
+    retrieval_path = "retrieve"
+    report_retrieval_delta = False
+    out_path = ""
+    if args is not None:
+        limit = args.limit
+        question_type = args.type
+        use_llm = args.llm
+        graph_expansion = args.graph_expansion
+        retrieval_path = args.retrieval_path
+        report_retrieval_delta = args.report_retrieval_delta
+        out_path = args.out
+
     print("=" * 70)
     print("LongMemEval Benchmark — taOSmd")
     print("=" * 70)
+    print(
+        f"  retrieval_path={retrieval_path}  graph_expansion={graph_expansion}  "
+        f"num_ctx={NUM_CTX or 'ollama-default'}"
+    )
+
+    # Refuse rather than silently run two identical arms. Exits non-zero on
+    # purpose so an automated chain checking $? reads a refusal as a failure.
+    if graph_expansion and not retrieve_supports_graph_expansion():
+        print(
+            "  ERROR: the installed taosmd.retrieval.retrieve() has no "
+            "graph_expansion parameter, so both E-030 arms would be identical. "
+            "Run this on a checkout that includes the bi-temporal fact-readback "
+            "work (PR #191).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Load dataset
-    with open(DATA_PATH) as f:
-        dataset = json.load(f)
+    dataset = load_dataset()
 
     if question_type:
         dataset = [q for q in dataset if q["question_type"] == question_type]
@@ -281,6 +552,7 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
     print(f"Running {len(dataset)} questions" + (f" (sampled, seed={SAMPLE_SEED})" if SAMPLE_SEED else ""))
 
     results_by_type = {}
+    all_results: list[dict] = []
     total_correct = 0
     total_questions = 0
     total_time = 0
@@ -354,53 +626,36 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
 
         ingest_time = time.time() - t0
 
-        # Query taOSmd — both assembled context AND raw archive search
-        assembler = ContextAssembler(kg=kg, archive=archive)
+        # Query taOSmd: assembled context + raw archive FTS + the vector stage,
+        # the last of which now runs through taosmd.retrieval.retrieve().
         t1 = time.time()
-        ctx = await assembler.assemble(
-            query=question,
-            depth="auto",
-            max_total_tokens=ASSEMBLE_TOKENS,
+        full_context = await retrieve_context(
+            question, kg, archive, vmem,
+            llm_client=llm_client,
+            graph_expansion=graph_expansion,
+            retrieval_path=retrieval_path,
         )
-
-        # Also do FTS search over raw archive (the MemPalace approach — verbatim recall)
-        # Search for key words from the question AND the answer
-        search_terms = question.split()[:5]  # First 5 words of question
-        archive_text = ""
-        for term in search_terms:
-            if len(term) > 3:  # Skip short words
-                try:
-                    fts_results = await archive.search_fts(term, limit=FTS_LIMIT)
-                    for r in fts_results:
-                        archive_text += " " + r.get("data_json", "") + " " + r.get("summary", "")
-                except Exception:
-                    pass
-
-        # Also do semantic vector search (the MemPalace approach). Retrieve a
-        # wider pool, then rerank/prune to the clean top-K (intelligent context
-        # release) so the generator is not buried in redundant chunks.
-        if DECOMPOSE and llm_client is not None:
-            sub_queries = await decompose_query(llm_client, question)
-            seen_texts = set()
-            vector_results = []
-            for sq in sub_queries:
-                for r in await vmem.search(sq, limit=RETRIEVE_LIMIT):
-                    t = r.get("text", "")
-                    if t and t not in seen_texts:
-                        seen_texts.add(t)
-                        vector_results.append(r)
-            vector_results = vector_results[:RETRIEVE_LIMIT]
-        else:
-            vector_results = await vmem.search(question, limit=RETRIEVE_LIMIT)
-        rr = _get_reranker()
-        if rr is not None and getattr(rr, "available", False) and vector_results:
-            vector_results = rr.rerank(question, vector_results, RERANK_TOP_K)
-        vector_text = " ".join(r["text"] for r in vector_results)
-
         query_time = time.time() - t1
 
-        # Score — combine ALL retrieval methods
-        full_context = ctx["context"] + " " + archive_text + " " + vector_text
+        # Anchor evidence: with the flag on, also build the pre-wiring context
+        # and record how far the two diverge, so "does the default path still
+        # reproduce the published numbers?" is answered with a measurement.
+        delta = None
+        if report_retrieval_delta:
+            legacy_ctx = await retrieve_context(
+                question, kg, archive, vmem,
+                llm_client=llm_client,
+                retrieval_path="legacy",
+            )
+            delta = {
+                "legacy_chars": len(legacy_ctx),
+                "wired_chars": len(full_context),
+                "identical": legacy_ctx == full_context,
+            }
+            print(
+                f"    [DELTA] q={i} legacy={delta['legacy_chars']} "
+                f"wired={delta['wired_chars']} identical={delta['identical']}"
+            )
 
         if use_llm and llm_client is not None:
             t_llm = time.time()
@@ -432,6 +687,14 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
 
         elapsed = ingest_time + query_time
         total_time += elapsed
+        all_results.append({
+            "idx": i,
+            "question_type": qtype,
+            "question": question,
+            "correct": bool(correct),
+            "retrieved_chars": len(full_context),
+            "retrieval_delta": delta,
+        })
 
         status = "✓" if correct else "✗"
         print(f"  [{i+1:3d}/{len(dataset)}] {status} {qtype:25s} | ingest:{ingest_time:.1f}s query:{query_time:.3f}s | {question[:50]}")
@@ -443,12 +706,23 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
 
     # Results
     overall = total_correct / total_questions * 100 if total_questions > 0 else 0
+    per_q = total_time / total_questions if total_questions > 0 else 0.0
+
+    delta_summary = summarize_retrieval_delta(all_results)
+    if delta_summary:
+        print(f"\n{'='*70}")
+        print("RETRIEVAL DELTA (wired retrieve() path vs pre-wiring legacy path)")
+        print(f"  questions compared:      {delta_summary['n']}")
+        print(f"  byte-identical contexts: {delta_summary['identical']}"
+              f" ({delta_summary['identical_pct']:.1f}%)")
+        print(f"  mean chars legacy/wired: {delta_summary['mean_legacy_chars']:.0f}"
+              f" / {delta_summary['mean_wired_chars']:.0f}")
 
     print(f"\n{'='*70}")
     print("RESULTS")
     print(f"{'='*70}")
     print(f"\n  Overall: {total_correct}/{total_questions} ({overall:.1f}%)")
-    print(f"  Total time: {total_time:.1f}s ({total_time/total_questions:.1f}s per question)")
+    print(f"  Total time: {total_time:.1f}s ({per_q:.1f}s per question)")
 
     print(f"\n  By question type:")
     for qtype, data in sorted(results_by_type.items()):
@@ -465,14 +739,78 @@ async def run_benchmark(limit: int = 50, question_type: str | None = None, use_l
     if llm_client:
         await llm_client.aclose()
 
+    if total_questions:
+        if not out_path:
+            out_dir = os.path.join(os.path.dirname(__file__), "results")
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, f"longmemeval_{int(time.time())}.json")
+        result_doc = {
+            "question_type": question_type,
+            "limit": limit,
+            "generator": REMOTE_LLM_MODEL,
+            "judge": JUDGE_MODEL,
+            "rerank": RERANK,
+            "decompose": DECOMPOSE,
+            "self_verify": SELF_VERIFY,
+            "assemble_tokens": ASSEMBLE_TOKENS,
+            "retrieve_limit": RETRIEVE_LIMIT,
+            "fts_limit": FTS_LIMIT,
+            "context_chars": CONTEXT_CHARS,
+            "num_ctx": NUM_CTX,
+            "retrieval_path": retrieval_path,
+            "graph_expansion": graph_expansion,
+            "retrieval_delta": delta_summary,
+            "metrics": {
+                "n": total_questions,
+                "correct": total_correct,
+                "accuracy": overall,
+                "by_type": results_by_type,
+            },
+            "results": all_results,
+        }
+        with open(out_path, "w") as f:
+            json.dump(result_doc, f, indent=2)
+        print(f"  results -> {out_path}")
+
     return overall
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Evaluate taOSmd on LongMemEval")
     parser.add_argument("--limit", type=int, default=50, help="Number of questions to run")
     parser.add_argument("--type", type=str, default=None, help="Filter by question type")
     parser.add_argument("--llm", action="store_true", help="Use remote LLM for answer generation")
+    parser.add_argument(
+        "--graph-expansion",
+        type=int,
+        default=int(os.environ.get("TAOSMD_GRAPH_EXPANSION", "0")),
+        metavar="N",
+        help="Bi-temporal fact-readback token budget (0 = off, the default). "
+             "This is the E-030 lever; needs --retrieval-path retrieve.",
+    )
+    parser.add_argument(
+        "--retrieval-path",
+        default="retrieve",
+        choices=("retrieve", "legacy"),
+        help="'retrieve' (default) routes the vector stage through "
+             "taosmd.retrieval.retrieve() so runtime controls apply. 'legacy' "
+             "reproduces the pre-wiring hand-rolled stage, for re-anchoring only.",
+    )
+    parser.add_argument(
+        "--report-retrieval-delta",
+        action="store_true",
+        help="Also build the legacy context per question and report how far the "
+             "wired path diverges (anchor evidence). Doubles retrieval cost.",
+    )
+    parser.add_argument(
+        "--out",
+        default="",
+        help="Result JSON path (default: benchmarks/results/longmemeval_<ts>.json)",
+    )
     args = parser.parse_args()
 
-    asyncio.run(run_benchmark(limit=args.limit, question_type=args.type, use_llm=args.llm))
+    asyncio.run(run_benchmark(args=args))
+
+
+if __name__ == "__main__":
+    main()
