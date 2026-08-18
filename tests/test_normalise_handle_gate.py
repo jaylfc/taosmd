@@ -10,8 +10,12 @@ Proves the duplicate-definition gate (the successor to the narrow
 - ``@typing.overload`` stubs, ``@property`` getters, and
   ``@<name>.setter`` / ``@<name>.getter`` / ``@<name>.deleter`` accessories
   are legitimate same-name pairs and do not fire.
-- Nested functions (closures) are not collected: they are neither top-level
-  functions nor methods.
+- Definitions inside module-level ``if`` / ``try`` / ``for`` / ``while`` /
+  ``with`` blocks share the module scope, matching Python's binding rules.
+- Same-name closures inside one parent function are reported; same-name
+  closures in different parents remain legal.
+- The ``try:`` / ``except ImportError:`` fallback pattern is recognised and
+  left silent.
 - Files that cannot be decoded as UTF-8 are skipped with a warning, and
   files that fail to parse are left silent.
 """
@@ -199,7 +203,7 @@ class TestDuplicateDefinitions:
         )
         assert _duplicate_definitions(f) == []
 
-    def test_nested_functions_are_not_collected(self, tmp_path):
+    def test_same_name_closures_in_one_parent_are_reported(self, tmp_path):
         f = tmp_path / "mod.py"
         f.write_text(
             "def outer():\n"
@@ -209,9 +213,108 @@ class TestDuplicateDefinitions:
             "        pass\n"
             "    return inner\n"
         )
+        dups = _duplicate_definitions(f)
+        assert len(dups) == 1
+        assert dups[0].name == "inner"
+        assert dups[0].scope == "module > outer"
+        assert dups[0].lines == [2, 4]
+
+    def test_same_name_closures_in_different_parents_are_fine(self, tmp_path):
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "def outer1():\n"
+            "    def inner():\n"
+            "        pass\n"
+            "def outer2():\n"
+            "    def inner():\n"
+            "        pass\n"
+        )
         assert _duplicate_definitions(f) == []
 
-    def test_try_except_import_error_fallback_is_silent(self, tmp_path):
+    def test_def_in_module_level_if_is_reported(self, tmp_path):
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "if condition:\n"
+            "    def foo():\n"
+            "        pass\n"
+            "def foo():\n"
+            "    pass\n"
+        )
+        dups = _duplicate_definitions(f)
+        assert len(dups) == 1
+        assert dups[0].name == "foo"
+        assert dups[0].scope == "module"
+        assert dups[0].lines == [2, 4]
+
+    def test_def_in_module_level_for_is_reported(self, tmp_path):
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "for x in range(10):\n"
+            "    def foo():\n"
+            "        pass\n"
+            "def foo():\n"
+            "    pass\n"
+        )
+        dups = _duplicate_definitions(f)
+        assert len(dups) == 1
+        assert dups[0].name == "foo"
+        assert dups[0].scope == "module"
+
+    def test_def_in_module_level_while_is_reported(self, tmp_path):
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "while True:\n"
+            "    def foo():\n"
+            "        pass\n"
+            "    break\n"
+            "def foo():\n"
+            "    pass\n"
+        )
+        dups = _duplicate_definitions(f)
+        assert len(dups) == 1
+        assert dups[0].name == "foo"
+        assert dups[0].scope == "module"
+
+    def test_def_in_module_level_with_is_reported(self, tmp_path):
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "with open('x') as f:\n"
+            "    def foo():\n"
+            "        pass\n"
+            "def foo():\n"
+            "    pass\n"
+        )
+        dups = _duplicate_definitions(f)
+        assert len(dups) == 1
+        assert dups[0].name == "foo"
+        assert dups[0].scope == "module"
+
+    def test_try_except_import_error_fallback_with_defs_is_silent(self, tmp_path):
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "try:\n"
+            "    def foo():\n"
+            "        pass\n"
+            "except ImportError:\n"
+            "    def foo():\n"
+            "        pass\n"
+        )
+        assert _duplicate_definitions(f) == []
+
+    def test_try_except_value_error_fallback_is_reported(self, tmp_path):
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "try:\n"
+            "    def foo():\n"
+            "        pass\n"
+            "except ValueError:\n"
+            "    def foo():\n"
+            "        pass\n"
+        )
+        dups = _duplicate_definitions(f)
+        assert len(dups) == 1
+        assert dups[0].name == "foo"
+        assert dups[0].scope == "module"
         f = tmp_path / "mod.py"
         f.write_text(
             "try:\n"
