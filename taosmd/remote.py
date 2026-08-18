@@ -248,6 +248,26 @@ class RemoteClient:
         resp = await self._run("GET", "/a2a/messages", params=params)
         return resp.get("messages", [])
 
+    async def a2a_mentions_feed(
+        self,
+        reader: str,
+        *,
+        since: float | None = None,
+        limit: int = 50,
+        **_opts,
+    ) -> list[dict]:
+        """GET /a2a/mentions: return messages mentioning ``reader`` plus reply chains.
+
+        Returns the ``messages`` list from the server response. Requires
+        registry auth on the server side; ``reader`` is forwarded as a query
+        parameter so the server returns the requested user's mentions.
+        """
+        params: dict = {"reader": reader, "limit": limit}
+        if since is not None:
+            params["since"] = since
+        resp = await self._run("GET", "/a2a/mentions", params=params)
+        return resp.get("messages", [])
+
     async def a2a_channels(self, **_opts) -> list[dict]:
         """GET /a2a/channels: return a summary of every channel on the remote bus."""
         resp = await self._run("GET", "/a2a/channels")
