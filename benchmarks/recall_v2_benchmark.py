@@ -20,7 +20,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from taosmd import VectorMemory, KnowledgeGraph
-from taosmd.graph_expansion import expand_from_results, extract_entities_from_text
+from taosmd.graph_expansion import expand_from_results
 from taosmd.query_expansion import expand_query_fast
 from taosmd.memory_extractor import extract_facts_from_text
 from taosmd.retention import retention_score, classify_tier
@@ -189,7 +189,6 @@ async def run_recall_benchmark(
 
         for i, item in enumerate(dataset):
             qtype = item["question_type"]
-            question = item["question"]
 
             t0 = time.time()
             recall_hit, tier_counts = await run_single_question(item, top_k, mode=run_mode)
@@ -208,7 +207,7 @@ async def run_recall_benchmark(
             status = "✓" if recall_hit else "✗"
             running_pct = total_recall / total_questions * 100
             if (i + 1) % 50 == 0 or i == len(dataset) - 1:
-                print(f"  [{i+1:3d}/{len(dataset)}] {total_recall}/{total_questions} ({running_pct:.1f}%) — {elapsed:.1f}s")
+                print(f"  [{i+1:3d}/{len(dataset)}] {total_recall}/{total_questions} ({running_pct:.1f}%) — {elapsed:.1f}s {status}")
 
         total_time = time.time() - t_start
         overall = total_recall / total_questions * 100 if total_questions > 0 else 0
@@ -217,16 +216,16 @@ async def run_recall_benchmark(
         print(f"  Overall: {total_recall}/{total_questions} ({overall:.1f}%)")
         print(f"  Time: {total_time:.0f}s ({total_time/total_questions:.1f}s/question)")
 
-        print(f"\n  By category:")
+        print("\n  By category:")
         for qtype, data in sorted(results_by_type.items()):
             pct = data["hits"] / data["total"] * 100 if data["total"] > 0 else 0
             print(f"    {qtype:35s} {data['hits']:3d}/{data['total']:<3d} ({pct:.1f}%)")
 
     print(f"\n{'='*70}")
     print(f"Comparison (Recall@{top_k}):")
-    print(f"  MemPalace (raw, all-MiniLM-L6):    96.6%")
-    print(f"  agentmemory (BM25+vec, MiniLM):    95.2%")
-    print(f"  taOSmd v0.1 (published):           97.2%")
+    print("  MemPalace (raw, all-MiniLM-L6):    96.6%")
+    print("  agentmemory (BM25+vec, MiniLM):    95.2%")
+    print("  taOSmd v0.1 (published):           97.2%")
     print(f"{'='*70}")
 
 
