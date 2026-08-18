@@ -125,7 +125,7 @@ def uninstall_systemd() -> int:
 
     Returns 0 on success, non-zero on error.
     """
-    rc = _run_systemctl(["disable", "--now", _SYSTEMD_UNIT_NAME])
+    _rc = _run_systemctl(["disable", "--now", _SYSTEMD_UNIT_NAME])
     # rc may be non-zero if the unit was never enabled; tolerate that.
     unit_path = Path.home() / ".config" / "systemd" / "user" / _SYSTEMD_UNIT_NAME
     if unit_path.exists():

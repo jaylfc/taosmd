@@ -210,7 +210,6 @@ def _webui_dir() -> Path | None:
     try:
         ref = _pkg_files("taosmd").joinpath("webui")
         # In Python 3.9+ files() returns a Traversable; we need a real Path.
-        import importlib.resources as _ir  # noqa: PLC0415
         # For wheels, traverse to a concrete path via as_file context is
         # awkward to keep open; instead resolve via __file__ which always works.
         _ = ref  # suppress unused-variable on the import above

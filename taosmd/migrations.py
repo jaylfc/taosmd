@@ -59,9 +59,9 @@ migration**, because the schema constant cannot deliver it.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence, Union
+from typing import Callable, Sequence, Union
 
 __all__ = [
     "Migration",

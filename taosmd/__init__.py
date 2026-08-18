@@ -202,4 +202,15 @@ __all__ = [
     "local_probe",
     # Librarian prompts
     "prompts",
+    # Re-exported above but previously undeclared. These are imported so that
+    # attribute access works (taosmd.config, taosmd.loaders and so on) and
+    # callers across the tree rely on it, so they are declared here rather than
+    # dropped. Declaring them also puts them under the deleted-symbols gate,
+    # which only tracks what __all__ names.
+    "predicate_vocab",
+    "emem_event_lift",
+    "loaders",
+    "config",
+    "list_pending_decisions",
+    "resolve_pending_decision",
 ]

@@ -29,7 +29,6 @@ import hashlib
 import json
 import logging
 import math
-import re
 import time
 
 from . import api as _api
@@ -368,7 +367,7 @@ async def fetch_by_ref(ref: dict, *, agent: str, data_dir=None) -> dict:
         return await remote.fetch_by_ref(ref, agent=agent)
 
     from . import config as _config
-    from .ref_fetch import HashMismatchError, NotFoundError, RefFetchError, UnauthorizedError, fetch_by_ref as _fetch_by_ref
+    from .ref_fetch import NotFoundError, RefFetchError, UnauthorizedError, fetch_by_ref as _fetch_by_ref
 
     registry_token = _config.get_registry_token(data_dir)
 
@@ -524,7 +523,6 @@ async def a2a_feed(
     # Apply admin alias resolution: reads of a new channel name include history
     # from the old name. Resolve thread through the alias map so callers
     # querying the canonical name see both old and new messages.
-    resolved_thread = thread
     alias_sources: list[str] = []
     if data_dir is not None:
         from .admin import A2AAdminState  # noqa: PLC0415

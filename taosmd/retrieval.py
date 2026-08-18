@@ -12,7 +12,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from taosmd.agents import run_if_enabled, is_task_enabled  # noqa: E402
+from taosmd.agents import is_task_enabled  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Normalised result schema (for reference):
@@ -849,7 +849,7 @@ async def retrieve(
     Returns:
         List of normalised result dicts, sorted by relevance, length <= limit.
     """
-    from taosmd.intent_classifier import classify_intent, get_search_strategy  # noqa: PLC0415
+    from taosmd.intent_classifier import get_search_strategy  # noqa: PLC0415
 
     if sources is None:
         sources = {}

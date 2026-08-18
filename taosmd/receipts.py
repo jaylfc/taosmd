@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-import time
 
 __all__ = ["SCHEMA", "ReceiptStore"]
 
