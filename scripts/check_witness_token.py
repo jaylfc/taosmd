@@ -42,6 +42,10 @@ The zero-width space (U+200B) between ``WITNESS`` and ``:`` in the on-disk
 examples above is intentional: it de-marks the docstring examples so they
 are not treated as live markers.
 
+Two de-marked examples (with ZWSP between WITNESS and ``:``) that must be
+exempted so the gate does not flag its own docstring; every other line in the
+same file (e.g. an appended genuine marker) still is. Greppable name.
+
 An optional ``WITNESS_GATE_ROOT`` environment variable overrides the repo root
 the gate scans (defaulting to the tree containing this script). This lets the
 gate target an arbitrary checkout, a staged tree, or a fixture directory -- useful
@@ -66,8 +70,12 @@ WITNESS_RE = re.compile(r"#\s*WITNESS:\s*(.+)$")
 # A near-miss resembles a WITNESS marker whose separator is broken -- a
 # zero-width character (e.g. U+200B) lodged between WITNESS and the colon,
 # or the colon replaced. Requiring the ``::`` payload keeps ordinary prose
-# mentioning WITNESS from being mistaken for a malformed marker.
-_NEAR_MISS_RE = re.compile(r"#\s*WITNESS[^:](?=.*::)")
+# mentioning WITNESS from being mistaken for a malformed marker. The regex
+# ``#\s*WITNESS[^:](?=[^:]*:)`` also catches prose carrying a plain colon
+# (e.g. a colon appearing after WITNESS text without ``::``) without ``::``,
+# which master's ``(?=.*::)`` does not -- this is the "widening" noted in the
+# regression table.
+_NEAR_MISS_RE = re.compile(r"#\s*WITNESS[^:](?=[^:]*:)")
 # Documented examples of a de-marked marker in this file's own docstring.
 # They are intentionally de-marked and must not be reported; every other line
 # in the same file (e.g. an appended genuine marker) still is. Greppable name.
@@ -107,7 +115,6 @@ def _extract_claims(file_path: Path, repo_root: Path) -> list[WitnessClaim]:
             file=sys.stderr,
         )
         return []
-
     rel = _relative_source(file_path, repo_root)
     claims: list[WitnessClaim] = []
     for lineno, line in enumerate(source.splitlines(), start=1):
