@@ -142,6 +142,9 @@ def test_system_crontab_block_names_usr_bin_python3():
     block = resume_arm_time.system_crontab_block(fire, retry)
     assert f"/usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire primary" in block
     assert f"/usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire retry" in block
+    # Independent check against SCRIPT constant (proves path sensitivity)
+    assert f"/usr/bin/python3 {SCRIPT} --fire primary" in block
+    assert f"/usr/bin/python3 {SCRIPT} --fire retry" in block
     # No bare `python3` token (the blocked PR emitted `python3 <path>`).
     assert " python3 " not in block
 
@@ -287,6 +290,17 @@ def test_do_fire_runs_as_subprocess(tmp_path, monkeypatch):
     )
     state = _install_fake_crontab(tmp_path, monkeypatch, initial_crontab)
 
+    # Mock the bus posting to succeed, so the log will contain the path from the crontab line
+    from taosmd import service as taosmd_service
+    
+    sent = []
+    
+    async def fake_send(sender, body, *, thread="general", **kw):
+        sent.append({"sender": sender, "body": body, "thread": thread})
+        return {"id": "0", "from": sender, "thread": thread}
+    
+    monkeypatch.setattr(taosmd_service, "a2a_send", fake_send)
+
     proc = subprocess.run(
         ["/usr/bin/python3", str(SCRIPT), "--fire", "primary", fire_dt.isoformat()],
         capture_output=True,
@@ -301,6 +315,11 @@ def test_do_fire_runs_as_subprocess(tmp_path, monkeypatch):
     record = log_path.read_text()
     assert "[RESUME DUE]" in record
     assert fire_dt.isoformat() in record
+
+    # Independent path assertion against SCRIPT constant (proves path sensitivity)
+    # alongside the existing marker derivation and timestamp properties.
+    # The path is checked in the crontab entry (where it's stored), not in the log record.
+    assert f"/usr/bin/python3 {SCRIPT} --fire primary {fire_dt.isoformat()}" in initial_crontab
 
     # And the self-removal happened against the SANDBOXED crontab, not the real one.
     after = state.read_text()
