@@ -147,6 +147,9 @@ async def _ensure_stores(data_dir=None) -> dict:
         from taosmd.mentions import MentionStore  # noqa: PLC0415
         mentions = MentionStore(db_path=str(path / "a2a-mentions.db"))
         await mentions.init()
+        from taosmd.receipts import ReceiptStore  # noqa: PLC0415
+        receipts = ReceiptStore(db_path=str(path / "a2a-receipts.db"))
+        await receipts.init()
 
         stores = {
             "archive": archive,
@@ -154,6 +157,7 @@ async def _ensure_stores(data_dir=None) -> dict:
             "kg": kg,
             "claims": claims,
             "mentions": mentions,
+            "receipts": receipts,
             "data_dir": str(path),
         }
         _stores_cache[resolved] = stores
