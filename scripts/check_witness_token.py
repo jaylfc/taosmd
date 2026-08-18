@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Witness token gate.
 
-Verifies that every explicit ``# WITNESS: <test>::<token>`` marker in a source
+Verifies that every explicit ``# WITNESS​: <test>::<token>`` marker in a source
 file resolves to something real INSIDE the named test: the referenced test file
 must exist and ``<token>`` must appear in it as a case-sensitive substring (grep
 semantics).
@@ -16,7 +16,7 @@ test-filename mention in ordinary prose.
 
 Marker contract (the only thing that triggers the check):
 
-    # WITNESS: tests/test_foo.py::some_grepable_token
+    # WITNESS​: tests/test_foo.py::some_grepable_token
 
 - The ``WITNESS:`` marker is all-caps and opt-in. A bare mention of a test
   filename in prose -- whether describing a removal or stating a fact --
@@ -31,10 +31,12 @@ Marker contract (the only thing that triggers the check):
 - The token is matched as a case-sensitive substring, the same match ``grep``
   would perform.
 
-Scope: ``taosmd/**/*.py``. Witnesses are declared in source, not in tests --
-scanning ``tests/`` for markers would let a test's own example markers (which
-name fixture trees that do not exist in the checked-out repo) produce false
-violations. The sibling normalise-handle gate uses the same ``taosmd/`` scope.
+Scope: ``taosmd/**/*.py`` and ``scripts/**/*.py``. Witnesses are declared in
+source, not in tests -- the suite embeds fixture markers as f-strings
+(e.g. ``f"# WITNESS​: {TEST}::{TOK}"``) whose interpolated names never
+resolve to real files, so scanning ``tests/`` would produce false violations.
+The sibling ``check_deleted_symbols.py`` gate follows the same pattern: it
+restricts to ``taosmd/`` only, excluding ``tests/``.
 
 An optional ``WITNESS_GATE_ROOT`` environment variable overrides the repo root
 the gate scans (defaulting to the tree containing this script). This lets the
@@ -119,7 +121,10 @@ def _read_text(path: Path) -> str:
 
 
 def _source_files(repo_root: Path) -> list[Path]:
-    return sorted(set(repo_root.glob("taosmd/**/*.py")))
+    return sorted(
+        set(repo_root.glob("taosmd/**/*.py"))
+        | set(repo_root.glob("scripts/**/*.py"))
+    )
 
 
 def _check_claim(
