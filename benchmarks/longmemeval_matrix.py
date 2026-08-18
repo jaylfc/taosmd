@@ -61,7 +61,7 @@ async def run_question(item, top_k, config):
     Configs:
       mempalace_match — user_turns, raw semantic only (hybrid=False)
       v01_hybrid      — user_turns, hybrid search
-      v02_graph       — user_turns, hybrid + KG graph expansion (retrieval-valid)
+      v02_graph_cost  — user_turns, hybrid + KG graph expansion (retrieval-valid)
       all_turns       — all_turns, hybrid search
     """
     question = item["question"]
@@ -72,7 +72,7 @@ async def run_question(item, top_k, config):
     # Determine ingestion mode
     ingest_mode = "all_turns" if config == "all_turns" else "user_turns"
     use_hybrid = config != "mempalace_match"
-    use_graph = config == "v02_graph"
+    use_graph = config == "v02_graph_cost"
 
     tmp = tempfile.mkdtemp()
     vmem = VectorMemory(
@@ -158,7 +158,7 @@ async def run_matrix(limit: int = 500, top_k: int = 5):
     configs = {
         "mempalace_match": "User-turns, raw semantic (MemPalace method)",
         "v01_hybrid": "User-turns, hybrid semantic+keyword (taOSmd v0.1)",
-        "v02_graph": "User-turns, hybrid + KG graph expansion (taOSmd v0.2)",
+        "v02_graph_cost": "User-turns, hybrid + KG graph expansion (taOSmd v0.2)",
         "all_turns": "All-turns, hybrid (harder test)",
     }
 
@@ -231,7 +231,7 @@ async def run_matrix(limit: int = 500, top_k: int = 5):
     print("  - All taOSmd runs use all-MiniLM-L6-v2 ONNX (same model as MemPalace)")
     print("  - 'MemPalace method' = user-turns only, pure cosine similarity, no hybrid")
     print("  - 'hybrid' = cosine + 30% keyword overlap boost")
-    print("  - 'graph expansion' provides richer context but doesn't change Recall@k")
+    print("  - v02_graph_cost: expansion is timed but its result is discarded, so it measures expansion cost at unchanged Recall@k")
     print("  - 'all-turns' includes assistant responses (harder, more noise)")
     print(f"{'='*74}")
 

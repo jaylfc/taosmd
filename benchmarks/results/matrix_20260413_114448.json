@@ -29,7 +29,7 @@
         }
       }
     },
-    "v02_graph": {
+    "v02_graph_cost": {
       "overall": 100.0,
       "total": 10,
       "questions": 10,
