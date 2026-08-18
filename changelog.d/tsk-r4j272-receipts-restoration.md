@@ -1,15 +1,16 @@
-### Fixed
-- Restored the A2A receipts subsystem (ReceiptStore, registered migration,
-  service wrappers, ``_ensure_stores`` integration) that was dropped by PR #326,
-  which had left all receipt-write endpoints returning 500.
-- Fixed receipt identity: ``agent_id`` is now derived from the verified
-  registry token's ``sub`` claim via ``_get_authenticated_agent_id``, never from
-  the request body. A forged token produces a 401 with no receipt row written.
-- Added ``do_PATCH`` so ``PATCH /a2a/receipts`` routes correctly, and de-duplicated
-  the routing table so each receipt path is dispatched exactly once.
-- Fixed ``ttl_days`` unit handling in ``POST /a2a/admin/prune-receipts``: days are
-  now converted to an absolute epoch timestamp (``time.time() - ttl_days * 86400``)
-  instead of being passed through as epoch seconds.
-- Added five ``RemoteClient`` methods (``a2a_record_delivered``,
-  ``a2a_record_seen``, ``a2a_get_receipts``, ``a2a_get_receipt``,
-  ``a2a_prune_receipts``) so remote clients mirror the local service API.
+### Added
+- A2A read receipts: a `ReceiptStore` keyed by `(message_id, agent_id)` tracking a
+  `delivered_at` mark that never moves once set and a `seen_at` mark that only ever
+  goes from unset to set, with a registered migration, service wrappers and
+  `_ensure_stores` integration.
+- Receipt endpoints `POST /a2a/receipts`, `PATCH /a2a/receipts`,
+  `GET /a2a/messages/{id}/receipts`, `GET /a2a/receipts` and
+  `POST /a2a/admin/prune-receipts`, plus `do_PATCH` so the PATCH route dispatches.
+  Delivered marks are also written for identified SSE subscribers.
+- Receipt identity is taken from the verified registry token's `sub` claim via
+  `_get_authenticated_agent_id`, never from the request body. A request with no
+  token, or one signed by a key the registry does not know, gets a 401 and writes
+  no row. Reads are not authenticated.
+- Five `RemoteClient` methods (`a2a_record_delivered`, `a2a_record_seen`,
+  `a2a_get_receipts`, `a2a_get_receipt`, `a2a_prune_receipts`) so remote clients
+  mirror the local service API.
