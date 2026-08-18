@@ -15,13 +15,18 @@ skipped with a warning rather than allowed to crash the gate.
 Definitions inside module-level ``if`` / ``try`` / ``for`` / ``while`` /
 ``with`` blocks are treated as module-scope, matching Python's binding rules.
 Same-name closures inside one parent function are also reported; same-name
-closures in different parents remain legal.  Sibling arms of the same
+closures in different parents remain legal.  Classes defined inside a function
+body are descended into as well: their methods are scoped under the enclosing
+closure (``module > factory > class Foo``), so a redefined class within one
+closure is reported while the same class name in different closures does not
+collide.  Sibling arms of the same
 ``if`` / ``elif`` / ``else`` chain and the ``body`` / ``handlers`` /
 ``orelse`` arms of one ``try`` statement are mutually exclusive and do not
 collide.  The ``try:`` / ``except ImportError:`` and ``except
 ModuleNotFoundError:`` fallback patterns are therefore left silent by the
 same sibling-arm rule, since at most one arm ever binds.
-Nested classes are scanned at any depth.
+Nested classes are scanned at any depth, including those defined inside a
+ function body.
 """
 from __future__ import annotations
 
@@ -129,18 +134,20 @@ def _collect_definitions(
                 )
             )
         elif isinstance(node, ast.ClassDef):
-            if " > " not in scope:
-                new_class_path = class_path + (node.name,)
+            new_class_path = class_path + (node.name,)
+            if scope == "module" or " > " not in scope:
                 new_scope = "class " + ".".join(new_class_path)
-                found.extend(
-                    _collect_definitions(
-                        node.body,
-                        new_scope,
-                        new_class_path,
-                        in_try=False,
-                        arm_tracker=None,
-                    )
+            else:
+                new_scope = f"{scope} > class {node.name}"
+            found.extend(
+                _collect_definitions(
+                    node.body,
+                    new_scope,
+                    new_class_path,
+                    in_try=False,
+                    arm_tracker=None,
                 )
+            )
         elif isinstance(
             node,
             (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith),

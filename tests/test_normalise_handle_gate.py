@@ -479,6 +479,114 @@ class TestDuplicateDefinitions:
         assert dups[0].lines == [3, 4]
 
     # ------------------------------------------------------------------
+    # Blocker 4: classes defined inside a function body (closures)
+    # ------------------------------------------------------------------
+
+    def test_redefined_class_inside_closure_is_reported(self, tmp_path):
+        """A class re-defined within one closure is a genuine duplicate the gate
+        must catch.  Before the closure-class fix this was invisible."""
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "def factory():\n"
+            "    class Foo:\n"
+            "        def _normalise_handle(self): ...\n"
+            "    class Foo:\n"
+            "        def _normalise_handle(self): ...\n"
+        )
+        dups = _duplicate_definitions(f)
+        assert len(dups) == 1
+        assert dups[0].name == "_normalise_handle"
+        assert dups[0].scope == "module > factory > class Foo"
+        assert dups[0].lines == [3, 5]
+
+    def test_distinct_classes_inside_closure_are_silent(self, tmp_path):
+        """Two distinct class names in one closure do not collide, matching
+        module-level class semantics."""
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "def factory():\n"
+            "    class Foo:\n"
+            "        def _normalise_handle(self): ...\n"
+            "    class Bar:\n"
+            "        def _normalise_handle(self): ...\n"
+        )
+        assert _duplicate_definitions(f) == []
+
+    def test_same_class_name_in_different_closures_are_silent(self, tmp_path):
+        """The closure name qualifies the class scope, so the same class name
+        in two separate closures does not produce a false duplicate."""
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "def a():\n"
+            "    class Foo:\n"
+            "        def _normalise_handle(self): ...\n"
+            "def b():\n"
+            "    class Foo:\n"
+            "        def _normalise_handle(self): ...\n"
+        )
+        assert _duplicate_definitions(f) == []
+
+    def test_class_inside_closure_does_not_collide_with_module_class(self, tmp_path):
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "class Foo:\n"
+            "    def _normalise_handle(self): ...\n"
+            "def factory():\n"
+            "    class Foo:\n"
+            "        def _normalise_handle(self): ...\n"
+        )
+        assert _duplicate_definitions(f) == []
+
+    def test_class_in_method_does_not_collide_with_module_class(self, tmp_path):
+        """A class defined inside a method is scoped under that method, so it
+        must not collide with a same-named class at module level.  Before the
+        guard fix the dotted-scope branch matched on ``scope.startswith("class "``)
+        and the method scope ``class Outer > make`` was treated as a bare class
+        scope, producing a false duplicate."""
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "class Outer:\n"
+            "    def make(self):\n"
+            "        class Foo:\n"
+            "            def run(self): ...\n"
+            "class Foo:\n"
+            "    def run(self): ...\n"
+        )
+        assert _duplicate_definitions(f) == []
+
+    def test_same_class_in_two_sibling_methods_is_silent(self, tmp_path):
+        """The same class name defined inside two sibling methods is not a
+        duplicate: each method scopes its class differently.  Before the guard
+        fix both were collapsed to ``class Foo`` and the gate fired."""
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "class Outer:\n"
+            "    def make(self):\n"
+            "        class Foo:\n"
+            "            def run(self): ...\n"
+            "    def other(self):\n"
+            "        class Foo:\n"
+            "            def run(self): ...\n"
+        )
+        assert _duplicate_definitions(f) == []
+
+    def test_closure_class_scanned_at_any_depth(self, tmp_path):
+        """A nested class inside a closure-class is descended into."""
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "def factory():\n"
+            "    class Foo:\n"
+            "        class Inner:\n"
+            "            def run(self): ...\n"
+            "            def run(self): ...\n"
+        )
+        dups = _duplicate_definitions(f)
+        assert len(dups) == 1
+        assert dups[0].name == "run"
+        assert dups[0].scope == "module > factory > class Foo > class Inner"
+        assert dups[0].lines == [4, 5]
+
+    # ------------------------------------------------------------------
     # Scope-parity corpus: one case per claimed scope, verdicts pinned
     # ------------------------------------------------------------------
 
@@ -518,6 +626,60 @@ class TestDuplicateDefinitions:
             ),
             "closure_in_different_parents_silent": (
                 "def a():\n    def inner(): pass\ndef b():\n    def inner(): pass\n",
+                [],
+            ),
+            "closure_class_redefinition_duplicate": (
+                (
+                    "def factory():\n"
+                    "    class Foo:\n"
+                    "        def _normalise_handle(self): ...\n"
+                    "    class Foo:\n"
+                    "        def _normalise_handle(self): ...\n"
+                ),
+                [("module > factory > class Foo", "_normalise_handle", [3, 5])],
+            ),
+            "closure_distinct_classes_silent": (
+                (
+                    "def factory():\n"
+                    "    class Foo:\n"
+                    "        def _normalise_handle(self): ...\n"
+                    "    class Bar:\n"
+                    "        def _normalise_handle(self): ...\n"
+                ),
+                [],
+            ),
+            "closure_same_class_different_parents_silent": (
+                (
+                    "def a():\n"
+                    "    class Foo:\n"
+                    "        def _normalise_handle(self): ...\n"
+                    "def b():\n"
+                    "    class Foo:\n"
+                    "        def _normalise_handle(self): ...\n"
+                ),
+                [],
+            ),
+            "class_in_method_vs_module_silent": (
+                (
+                    "class Outer:\n"
+                    "    def make(self):\n"
+                    "        class Foo:\n"
+                    "            def run(self): ...\n"
+                    "class Foo:\n"
+                    "    def run(self): ...\n"
+                ),
+                [],
+            ),
+            "same_class_in_two_sibling_methods_silent": (
+                (
+                    "class Outer:\n"
+                    "    def make(self):\n"
+                    "        class Foo:\n"
+                    "            def run(self): ...\n"
+                    "    def other(self):\n"
+                    "        class Foo:\n"
+                    "            def run(self): ...\n"
+                ),
                 [],
             ),
             "overload_pair_silent": (
