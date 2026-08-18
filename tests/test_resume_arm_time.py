@@ -40,7 +40,7 @@ resume_arm_time = _load_module()
 
 def _marker(fire_type, armed_at):
     ts = datetime.datetime.fromisoformat(armed_at).strftime("%Y%m%d%H%M")
-    return f"/home/jay/.taos-fleet-tools/resume_arm_time.py#{fire_type}-{ts}"
+    return f"{SCRIPT}#{fire_type}-{ts}"
 
 
 class _Proc:
@@ -140,8 +140,8 @@ def test_system_crontab_block_names_usr_bin_python3():
     fire = datetime.datetime(2026, 8, 18, 0, 7, 0, tzinfo=datetime.timezone.utc)
     retry = datetime.datetime(2026, 8, 18, 0, 17, 0, tzinfo=datetime.timezone.utc)
     block = resume_arm_time.system_crontab_block(fire, retry)
-    assert "/usr/bin/python3 /home/jay/.taos-fleet-tools/resume_arm_time.py --fire primary" in block
-    assert "/usr/bin/python3 /home/jay/.taos-fleet-tools/resume_arm_time.py --fire retry" in block
+    assert f"/usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire primary" in block
+    assert f"/usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire retry" in block
     # No bare `python3` token (the blocked PR emitted `python3 <path>`).
     assert " python3 " not in block
 
@@ -265,35 +265,42 @@ def test_do_fire_crontab_read_failure_is_visible(tmp_path, monkeypatch):
 
 def test_do_fire_runs_as_subprocess(tmp_path, monkeypatch):
     """Runs the emitted cron command under /usr/bin/python3 with a sandboxed
-    crontab and HOME. Asserts the armed-at token is recorded and the crontab
-    marker is removed. Gut do_fire and this test goes RED: an invocation that
-    records nothing fails the assertion against an empty log."""
+    crontab and HOME. Asserts the marker written by arming is the marker
+    removed by firing, and the fire timestamp is recorded. Gut do_fire and
+    this test goes RED: an invocation that records nothing fails the assertion
+    against an empty log."""
     if not Path("/usr/bin/python3").exists():
         pytest.skip("/usr/bin/python3 is not present in this environment")
 
-    armed_at = "2026-08-18T00:00:00.473075+00:00"
-    marker = _marker("primary", armed_at)
+    # Derive the marker from the arming code so the test is coupled to
+    # system_crontab_block, not to a hand-written literal.
+    fire_dt = datetime.datetime(2026, 8, 18, 0, 7, 0, tzinfo=datetime.timezone.utc)
+    retry_dt = datetime.datetime(2026, 8, 18, 0, 17, 0, tzinfo=datetime.timezone.utc)
+    block = resume_arm_time.system_crontab_block(fire_dt, retry_dt)
+    marker_line = next(l for l in block.splitlines() if l.startswith("# taOSmd-resume: "))
+    marker = marker_line[len("# taOSmd-resume: "):]
+
     initial_crontab = (
         f"# taOSmd-resume: {marker}\n"
-        + f"7 0 18 8 * /usr/bin/python3 /home/jay/.taos-fleet-tools/resume_arm_time.py --fire primary {armed_at}\n"
+        + f"7 0 18 8 * /usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire primary {fire_dt.isoformat()}\n"
         + WATCHER_LINE
     )
     state = _install_fake_crontab(tmp_path, monkeypatch, initial_crontab)
 
     proc = subprocess.run(
-        ["/usr/bin/python3", str(SCRIPT), "--fire", "primary", armed_at],
+        ["/usr/bin/python3", str(SCRIPT), "--fire", "primary", fire_dt.isoformat()],
         capture_output=True,
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
 
-    # The record must carry THIS invocation's exact armed-at token, not the
+    # The record must carry THIS invocation's exact timestamp, not the
     # bare word "fired" -- which (per the review) already has 24 lines in the
     # real log and would satisfy the old assertion before the subprocess runs.
     log_path = tmp_path / ".taos-team" / "resume_fire.log"
     record = log_path.read_text()
-    assert armed_at in record
     assert "[RESUME DUE]" in record
+    assert fire_dt.isoformat() in record
 
     # And the self-removal happened against the SANDBOXED crontab, not the real one.
     after = state.read_text()
