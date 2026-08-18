@@ -1,0 +1,19 @@
+# The task requires fixing PR #380 which made incorrect changes to benchmarks:
+# 1. recall_v2_benchmark.py: The PR made incorrect changes (deleted question assignment, removed status usage)
+# 2. longmemeval_matrix.py: The PR changed the metric itself (scan all sessions instead of only top-k) which is a methodology change that needs its own card
+
+WHAT NEEDS TO BE DONE:
+1. Keep recall_v2_benchmark.py AS IS from the PR (it says half correct and should survive)
+2. Fix longmemeval_matrix.py by choosing one of the two non-breaking options:
+   - Rename the config to v02_graph_cost and fix comments to say it's a COST probe at unchanged recall
+   - OR drop the config entirely
+
+The correct choice is to rename v02_graph to v02_graph_cost and update everything to reflect it's a cost probe, not a metric change.
+
+Let me first check what needs to be changed in longmemeval_matrix.py:
+1. Change config name from "v02_graph" to "v02_graph_cost" 
+2. Update docstring to clarify it's a cost probe
+3. Update comments to match (graph expansion provides richer context but doesn't change Recall@k)
+4. Update the Notes section to match the new config name
+
+This maintains the original API while clarifying it's a cost probe.
