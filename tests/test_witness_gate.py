@@ -2,7 +2,7 @@
 
 Proves the witness-token gate in both directions:
 
-* RED, motivating: a source file declares ``# WITNESS: <test>::<token>`` but the
+* RED, motivating: a source file declares ``# WITNESS​: <test>::<token>`` but the
   token is absent from that test -- the gate exits non-zero and names the source
   file, the test and the token.
 * RED, non-vacuity: the passing case (token present) passes, then ONLY the token
@@ -11,6 +11,9 @@ Proves the witness-token gate in both directions:
 * GREEN, true positive: a declared witness whose token IS present exits 0.
 * GREEN, false positive: a source file that merely mentions a test filename in
   ordinary prose, with no ``WITNESS:`` marker, is not flagged.
+
+The same controls are repeated for ``scripts/`` source files, verifying that
+the widened scope catches witnesses declared outside ``taosmd/``.
 """
 from __future__ import annotations
 
@@ -35,6 +38,7 @@ GATE_SCRIPT = REPO_ROOT / "scripts" / "check_witness_token.py"
 TEST_SRC = "taosmd/svc.py"
 TEST_TEST = "tests/test_foo.py"
 TOKEN = "MAX_FIRE_TO_DELETE"
+SCRIPTS_SRC = "scripts/gate_demo.py"
 
 GREEN_SRC = (
     "# Constants justified by a live witness in the suite.\n"
@@ -249,6 +253,54 @@ class TestWitnessGateIntegration:
         _write(repo, "taosmd/prose.py", PROSE_SRC)
         # No WITNESS marker anywhere; the prose mention of the test filename
         # must not be treated as a declaration.
+        assert check_witnesses(repo) == []
+        rc, out = _run_main(repo)
+        assert rc == 0
+        assert "witness-gate: clean" in out
+
+    def test_scripts_scope_red_absent_token(self, tmp_path):
+        repo = _repo(tmp_path)
+        _write(repo, SCRIPTS_SRC, f"# WITNESS: {TEST_TEST}::{TOKEN}\nVALUE = 1\n")
+        _write(repo, TEST_TEST, RED_TEST)
+
+        violations = check_witnesses(repo)
+        assert len(violations) == 1
+        assert violations[0].claim.source_file == SCRIPTS_SRC
+        assert violations[0].claim.test_file == TEST_TEST
+        assert violations[0].claim.token == TOKEN
+        assert "not found" in violations[0].reason
+
+        rc, out = _run_main(repo)
+        assert rc == 1
+        assert "WITNESS GATE FAIL" in out
+        assert SCRIPTS_SRC in out
+
+    def test_scripts_scope_green_present_token(self, tmp_path):
+        repo = _repo(tmp_path)
+        _write(repo, SCRIPTS_SRC, f"# WITNESS: {TEST_TEST}::{TOKEN}\nVALUE = 1\n")
+        _write(repo, TEST_TEST, GREEN_TEST)
+        _run_main_clean(repo)
+
+    def test_scripts_scope_non_vacuity(self, tmp_path):
+        repo = _repo(tmp_path)
+        _write(repo, SCRIPTS_SRC, f"# WITNESS: {TEST_TEST}::{TOKEN}\nVALUE = 1\n")
+        _write(repo, TEST_TEST, GREEN_TEST)
+
+        # GREEN baseline: token present -> clean.
+        _run_main_clean(repo)
+
+        # Delete ONLY the token; file stays present and importable.
+        _write(repo, TEST_TEST, RED_TEST)
+        violations = check_witnesses(repo)
+        assert len(violations) == 1
+        assert violations[0].claim.token == TOKEN
+
+        rc, _out = _run_main(repo)
+        assert rc == 1
+
+    def test_green_prose_in_scripts(self, tmp_path):
+        repo = _green_repo(tmp_path)
+        _write(repo, "scripts/prose_demo.py", PROSE_SRC)
         assert check_witnesses(repo) == []
         rc, out = _run_main(repo)
         assert rc == 0
