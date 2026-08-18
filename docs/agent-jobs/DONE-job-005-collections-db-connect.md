@@ -106,7 +106,7 @@ from . import _db
    `grep -n "sqlite3\." taosmd/collections.py` that other uses remain.
 7. `python3 -m pytest tests/test_collections_db_connect.py -q` (2 passed),
    then the FULL suite `python3 -m pytest -q -m "not slow"`, then
-   `python3 -m ruff check taosmd/collections.py tests/test_collections_db_connect.py`.
+   `uv run ruff check taosmd/collections.py tests/test_collections_db_connect.py`.
 8. One commit, push, open the PR. PR body: the inconsistency, the one-line
    fix, confirmation that nothing in the store depended on the journal mode,
    and the test count. Reference issue #202. Do not merge.

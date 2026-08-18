@@ -23,7 +23,6 @@ and an empty-filter fallback at retrieval).
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import httpx
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +23,6 @@ import httpx
 from .agents import run_if_enabled
 from .config import resolve_memory_model
 from .generator_profiles import split_provider
-from .prompts import intake_classification_prompt
 from .session_catalog import SessionCatalog
 from .crystallize import CrystalStore
 from .knowledge_graph import TemporalKnowledgeGraph
@@ -162,7 +161,6 @@ class CatalogPipeline:
         # --- Stage 1: Split ---
         split_result = self.catalog.split_day(date, force=force)
         result["split"] = split_result
-        sessions_created = split_result.get("sessions_created", 0)
 
         tier, model = await self.detect_best_tier()
         # The memory model is a system-wide setting. When configured it
@@ -359,7 +357,6 @@ class CatalogPipeline:
 
         for path in archive_files:
             # Expect structure: archive_dir/YYYY/MM/DD.jsonl[.gz]
-            parts = path.parts
             try:
                 # Walk up from filename to get year/month/day
                 day_part = path.stem  # "DD" (strip .jsonl or .jsonl from .gz)
