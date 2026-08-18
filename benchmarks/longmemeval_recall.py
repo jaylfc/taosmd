@@ -28,7 +28,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import httpx
 from tinyagentos.vector_memory import VectorMemory
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json")
+DATA_PATH = os.environ.get(
+        "LONGMEMEVAL_ORACLE_DATA_PATH",
+        os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json"),
+    )
 QMD_URL = "http://localhost:7832"
 
 

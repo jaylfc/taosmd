@@ -26,7 +26,10 @@ from taosmd.memory_extractor import extract_facts_from_text
 from taosmd.retention import retention_score, classify_tier
 from taosmd.secret_filter import contains_secrets
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json")
+DATA_PATH = os.environ.get(
+        "LONGMEMEVAL_ORACLE_DATA_PATH",
+        os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json"),
+    )
 ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx")
 
 

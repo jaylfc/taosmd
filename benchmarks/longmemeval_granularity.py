@@ -21,7 +21,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tinyagentos.vector_memory import VectorMemory
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_cleaned.json")
+DATA_PATH = os.environ.get(
+        "LONGMEMEVAL_CLEANED_DATA_PATH",
+        os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_cleaned.json"),
+    )
 
 
 async def run_variant(data, name, build_docs_fn, hybrid, limit=100):

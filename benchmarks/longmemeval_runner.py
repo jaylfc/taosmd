@@ -27,7 +27,10 @@ from taosmd.context_assembler import ContextAssembler
 from taosmd.vector_memory import VectorMemory
 
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json")
+DATA_PATH = os.environ.get(
+        "LONGMEMEVAL_ORACLE_DATA_PATH",
+        os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json"),
+    )
 
 # Remote LLM for answer generation (override via TAOSMD_OLLAMA_URL env var)
 REMOTE_LLM_URL = os.environ.get("TAOSMD_OLLAMA_URL", "http://localhost:11434")
