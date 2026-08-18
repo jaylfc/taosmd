@@ -178,7 +178,7 @@ def test_zero_graph_expansion_never_probes(runner, monkeypatch):
 7. Re-run the file: `python3 -m pytest tests/test_eventqa_retrieve_wiring.py -q`
    (all green), then the FULL suite
    `python3 -m pytest -q -m "not slow"`, then
-   `python3 -m ruff check benchmarks/eventqa_runner.py tests/test_eventqa_retrieve_wiring.py`.
+   `uv run ruff check benchmarks/eventqa_runner.py tests/test_eventqa_retrieve_wiring.py`.
 8. One commit, push, open the PR. PR body: the bug (a refusal exited 0 so a
    chain read it as success), the fix (`sys.exit(1)` on both refusal paths,
    the dry-run success return untouched), the reference it copies
