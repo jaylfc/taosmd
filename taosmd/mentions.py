@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 import sqlite3
-import math
 
 from taosmd import _db
 
