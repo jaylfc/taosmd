@@ -365,6 +365,23 @@ def test_ui_backing_endpoints_still_work(live_server):
     assert body["pending"] == []
 
 
+def test_webui_dir_uses_file_relative_path(tmp_path, monkeypatch):
+    """_webui_dir() resolves webui relative to __file__, not importlib.resources."""
+    pkg_dir = tmp_path / "taosmd"
+    pkg_dir.mkdir()
+    webui = pkg_dir / "webui"
+    webui.mkdir()
+    (webui / "index.html").write_text("<html></html>", encoding="utf-8")
+
+    fake_module = pkg_dir / "http_server.py"
+    fake_module.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(http_server, "__file__", str(fake_module))
+
+    result = http_server._webui_dir()
+    assert result == webui
+
+
 # ----- A2A channels / members ---------------------------------------------
 
 
