@@ -453,6 +453,88 @@ class TestXmlEscape:
         assert service_install._xml_escape("/usr/bin/python3") == "/usr/bin/python3"
 
 
+# ── uninstall_systemd ─────────────────────────────────────────────────────────
+
+class TestUninstallSystemd:
+    def test_uninstall_systemd_returns_zero_on_success(self, monkeypatch, tmp_path):
+        unit_dir = tmp_path / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        unit_path = unit_dir / "taosmd.service"
+        unit_path.write_text("dummy")
+
+        calls = []
+        def fake_run_systemctl(args):
+            calls.append(args)
+            return 0
+
+        monkeypatch.setattr(service_install, "_run_systemctl", fake_run_systemctl)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        rc = service_install.uninstall_systemd()
+        assert rc == 0
+        assert not unit_path.exists()
+        assert calls == [
+            ["disable", "--now", "taosmd.service"],
+            ["daemon-reload"],
+        ]
+
+    def test_uninstall_systemd_returns_nonzero_on_daemon_reload_failure(
+        self, monkeypatch, tmp_path
+    ):
+        unit_dir = tmp_path / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        unit_path = unit_dir / "taosmd.service"
+        unit_path.write_text("dummy")
+
+        results = [0, 1]
+        idx = [0]
+        def fake_run_systemctl(args):
+            rc = results[idx[0]]
+            idx[0] += 1
+            return rc
+
+        monkeypatch.setattr(service_install, "_run_systemctl", fake_run_systemctl)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        rc = service_install.uninstall_systemd()
+        assert rc == 1
+
+    def test_uninstall_systemd_returns_nonzero_on_unlink_failure(
+        self, monkeypatch, tmp_path
+    ):
+        unit_dir = tmp_path / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        unit_path = unit_dir / "taosmd.service"
+        unit_path.write_text("dummy")
+
+        monkeypatch.setattr(service_install, "_run_systemctl", lambda args: 0)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        def fake_unlink(self, *args, **kwargs):
+            raise OSError("simulated unlink failure")
+
+        monkeypatch.setattr(Path, "unlink", fake_unlink)
+
+        rc = service_install.uninstall_systemd()
+        assert rc == 1
+
+    def test_uninstall_systemd_missing_unit_file(self, monkeypatch, tmp_path):
+        unit_dir = tmp_path / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+
+        calls = []
+        def fake_run_systemctl(args):
+            calls.append(args)
+            return 0
+
+        monkeypatch.setattr(service_install, "_run_systemctl", fake_run_systemctl)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        rc = service_install.uninstall_systemd()
+        assert rc == 0
+        assert calls == [["disable", "--now", "taosmd.service"]]
+
+
 # ── CLI integration (no subprocess side-effects) ──────────────────────────────
 
 class TestCliFlags:
