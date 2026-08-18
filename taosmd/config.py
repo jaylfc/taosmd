@@ -57,7 +57,7 @@ _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
 # human token is always rejected, even in verify-and-warn mode. They are also
 # exempt from the fail-closed refusal that fires when the revocation feed has
 # never loaded. The id is not validated as belonging to a human: the controller
-# has no human_principal concept. Naming an agent canonical_id here silently
+# has no human_principal concept. Naming an agent's canonical_id here silently
 # disables that agent's revocation. The set resolves from
 # ``TAOSMD_HUMAN_PRINCIPAL_IDS`` (comma separated) before the config file.
 _HUMAN_PRINCIPAL_IDS_KEY = "human_principal_ids"
@@ -673,7 +673,7 @@ def get_human_principal_ids(data_dir=None) -> list[str]:
     human token is always rejected, even in verify-and-warn mode. They are also
     exempt from the revocation feed and from the fail-closed refusal that fires
     when the feed has never loaded. The id is not validated as belonging to a
-    human: the controller has no human_principal concept, so naming an agent
+    human: the controller has no human_principal concept, so naming an agent's
     canonical_id here silently disables that agent's revocation. Resolution is
     from ``TAOSMD_HUMAN_PRINCIPAL_IDS`` before the config file.
     """

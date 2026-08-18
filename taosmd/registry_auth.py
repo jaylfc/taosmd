@@ -170,7 +170,7 @@ class RegistryVerifier:
         design: the feed is agent-only (the controller has no human_principal
         concept), so a registry outage must not lock out controller sessions. The
         exemption is only as trustworthy as the config that supplies it: any id
-        placed in human_principal_ids is exempt from revocation, and an agent
+        placed in human_principal_ids is exempt from revocation, and an agent's
         canonical_id placed there silently disables that agent's revocation check,
         including the fail-closed refusal that fires when the feed has never loaded.
         """
