@@ -38,6 +38,10 @@ resolve to real files, so scanning ``tests/`` would produce false violations.
 The sibling ``check_deleted_symbols.py`` gate follows the same pattern: it
 restricts to ``taosmd/`` only, excluding ``tests/``.
 
+The zero-width space (U+200B) between ``WITNESS`` and ``:`` in the on-disk
+examples above is intentional: it de-marks the docstring examples so they
+are not treated as live markers.
+
 An optional ``WITNESS_GATE_ROOT`` environment variable overrides the repo root
 the gate scans (defaulting to the tree containing this script). This lets the
 gate target an arbitrary checkout, a staged tree, or a fixture directory -- useful
@@ -59,6 +63,11 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = Path(os.environ.get("WITNESS_GATE_ROOT") or _REPO_ROOT)
 WITNESS_RE = re.compile(r"#\s*WITNESS:\s*(.+)$")
+_NEAR_MISS_RE = re.compile(r"#\s*WITNESS[^:]")
+# Files whose docstrings contain de-marked illustrative examples. Greppable name.
+_DEMARKED_MARKER_EXEMPTION = frozenset({
+    "scripts/check_witness_token.py",
+})
 
 
 @dataclass
@@ -109,6 +118,24 @@ def _extract_claims(file_path: Path, repo_root: Path) -> list[WitnessClaim]:
     return claims
 
 
+def _check_near_misses(file_path: Path, repo_root: Path) -> list[Violation]:
+    rel = _relative_source(file_path, repo_root)
+    if rel in _DEMARKED_MARKER_EXEMPTION:
+        return []
+    try:
+        source = file_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    violations: list[Violation] = []
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        if _NEAR_MISS_RE.search(line):
+            claim = WitnessClaim(
+                source_file=rel, line_number=lineno, raw=line.strip()
+            )
+            violations.append(Violation(claim, "de-marked or malformed marker"))
+    return violations
+
+
 def _resolve_test_file(test_file: str, repo_root: Path) -> Path | None:
     candidate = repo_root / test_file
     if candidate.is_file():
@@ -157,6 +184,7 @@ def check_witnesses(repo_root: Path = REPO_ROOT) -> list[Violation]:
     violations: list[Violation] = []
     contents: dict[Path, str] = {}
     for source in _source_files(repo_root):
+        violations.extend(_check_near_misses(source, repo_root))
         for claim in _extract_claims(source, repo_root):
             violation = _check_claim(claim, repo_root, contents)
             if violation is not None:

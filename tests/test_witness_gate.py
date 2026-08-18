@@ -306,6 +306,32 @@ class TestWitnessGateIntegration:
         assert rc == 0
         assert "witness-gate: clean" in out
 
+    def test_de_marked_example_exits_nonzero(self, tmp_path):
+        repo = _repo(tmp_path)
+        _write(repo, TEST_TEST, GREEN_TEST)
+        _write(repo, TEST_SRC, f"# WITNESS\u200b: {TEST_TEST}::{TOKEN}\n")
+        violations = check_witnesses(repo)
+        assert len(violations) == 1
+        assert violations[0].reason == "de-marked or malformed marker"
+        rc, out = _run_main(repo)
+        assert rc == 1
+        assert "de-marked or malformed marker" in out
+
+    def test_near_miss_in_scripts_detected(self, tmp_path):
+        repo = _repo(tmp_path)
+        _write(repo, TEST_TEST, GREEN_TEST)
+        _write(
+            repo,
+            "scripts/near_miss_demo.py",
+            f"# WITNESS {TEST_TEST}::{TOKEN}\nVALUE = 1\n",
+        )
+        violations = check_witnesses(repo)
+        assert len(violations) == 1
+        assert violations[0].reason == "de-marked or malformed marker"
+        assert violations[0].claim.source_file == "scripts/near_miss_demo.py"
+        rc, out = _run_main(repo)
+        assert rc == 1
+
 
 # ----------------------------------------------------------------------
 # CLI subprocess tests: prove the real script exit codes (Layer A path)
