@@ -537,6 +537,39 @@ class TestDuplicateDefinitions:
         )
         assert _duplicate_definitions(f) == []
 
+    def test_class_in_method_does_not_collide_with_module_class(self, tmp_path):
+        """A class defined inside a method is scoped under that method, so it
+        must not collide with a same-named class at module level.  Before the
+        guard fix the dotted-scope branch matched on ``scope.startswith("class "``)
+        and the method scope ``class Outer > make`` was treated as a bare class
+        scope, producing a false duplicate."""
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "class Outer:\n"
+            "    def make(self):\n"
+            "        class Foo:\n"
+            "            def run(self): ...\n"
+            "class Foo:\n"
+            "    def run(self): ...\n"
+        )
+        assert _duplicate_definitions(f) == []
+
+    def test_same_class_in_two_sibling_methods_is_silent(self, tmp_path):
+        """The same class name defined inside two sibling methods is not a
+        duplicate: each method scopes its class differently.  Before the guard
+        fix both were collapsed to ``class Foo`` and the gate fired."""
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "class Outer:\n"
+            "    def make(self):\n"
+            "        class Foo:\n"
+            "            def run(self): ...\n"
+            "    def other(self):\n"
+            "        class Foo:\n"
+            "            def run(self): ...\n"
+        )
+        assert _duplicate_definitions(f) == []
+
     def test_closure_class_scanned_at_any_depth(self, tmp_path):
         """A nested class inside a closure-class is descended into."""
         f = tmp_path / "mod.py"
@@ -623,6 +656,29 @@ class TestDuplicateDefinitions:
                     "def b():\n"
                     "    class Foo:\n"
                     "        def _normalise_handle(self): ...\n"
+                ),
+                [],
+            ),
+            "class_in_method_vs_module_silent": (
+                (
+                    "class Outer:\n"
+                    "    def make(self):\n"
+                    "        class Foo:\n"
+                    "            def run(self): ...\n"
+                    "class Foo:\n"
+                    "    def run(self): ...\n"
+                ),
+                [],
+            ),
+            "same_class_in_two_sibling_methods_silent": (
+                (
+                    "class Outer:\n"
+                    "    def make(self):\n"
+                    "        class Foo:\n"
+                    "            def run(self): ...\n"
+                    "    def other(self):\n"
+                    "        class Foo:\n"
+                    "            def run(self): ...\n"
                 ),
                 [],
             ),

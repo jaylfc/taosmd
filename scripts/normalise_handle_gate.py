@@ -23,10 +23,11 @@ collide.  Sibling arms of the same
 ``if`` / ``elif`` / ``else`` chain and the ``body`` / ``handlers`` /
 ``orelse`` arms of one ``try`` statement are mutually exclusive and do not
 collide.  The ``try:`` / ``except ImportError:`` and ``except
-ModuleNotFoundError:`` fallback patterns are recognised and left silent.
+ModuleNotFoundError:`` fallback patterns are therefore left silent by the
+same sibling-arm rule, since at most one arm ever binds.
 Nested classes are scanned at any depth, including those defined inside a
-function body.
- """
+ function body.
+"""
 from __future__ import annotations
 
 import ast
@@ -134,7 +135,7 @@ def _collect_definitions(
             )
         elif isinstance(node, ast.ClassDef):
             new_class_path = class_path + (node.name,)
-            if scope.startswith("class ") or scope == "module":
+            if scope == "module" or " > " not in scope:
                 new_scope = "class " + ".".join(new_class_path)
             else:
                 new_scope = f"{scope} > class {node.name}"
