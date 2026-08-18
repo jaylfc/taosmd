@@ -11,6 +11,16 @@ functions -- and any other accidental redefinition -- are reported.
 ``@<name>.getter`` / ``@<name>.deleter`` accessories are legitimate same-name
 pairs and are therefore excluded.  Files that cannot be decoded as UTF-8 are
 skipped with a warning rather than allowed to crash the gate.
+
+Definitions inside module-level ``if`` / ``try`` / ``for`` / ``while`` /
+``with`` blocks are treated as module-scope, matching Python's binding rules.
+Same-name closures inside one parent function are also reported; same-name
+closures in different parents remain legal.  Sibling arms of the same
+``if`` / ``elif`` / ``else`` chain and the ``body`` / ``handlers`` /
+``orelse`` arms of one ``try`` statement are mutually exclusive and do not
+collide.  The ``try:`` / ``except ImportError:`` and ``except
+ModuleNotFoundError:`` fallback patterns are recognised and left silent.
+Nested classes are scanned at any depth.
 """
 from __future__ import annotations
 
@@ -30,6 +40,16 @@ class Duplicate:
     name: str
     scope: str
     lines: list[int] = field(default_factory=list)
+
+
+@dataclass
+class _Def:
+    scope: str
+    name: str
+    lineno: int
+    in_try: bool = False
+    in_import_error_except: bool = False
+    arm_tracker: tuple[int, str] | None = None
 
 
 def _has_overload_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -69,24 +89,171 @@ def _is_exempt(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return _has_overload_decorator(node) or _has_property_decorator(node)
 
 
+def _is_import_error_handler(handler: ast.ExceptHandler) -> bool:
+    if handler.type is None:
+        return False
+
+    def _is_import_error_node(node):
+        if isinstance(node, ast.Name):
+            return node.id in ("ImportError", "ModuleNotFoundError")
+        if isinstance(node, ast.Attribute):
+            return (
+                isinstance(node.value, ast.Name)
+                and node.value.id == "builtins"
+                and node.attr == "ImportError"
+            )
+        return False
+
+    if isinstance(handler.type, ast.Tuple):
+        return any(_is_import_error_node(elt) for elt in handler.type.elts)
+    return _is_import_error_node(handler.type)
+
+
 def _collect_definitions(
-    body: list[ast.stmt], class_path: tuple[str, ...] = ()
-) -> list[tuple[str, str, int]]:
-    """Yield ``(scope, name, lineno)`` for every non-exempt function/method.
+    body: list[ast.stmt],
+    scope: str = "module",
+    class_path: tuple[str, ...] = (),
+    in_try: bool = False,
+    in_import_error_except: bool = False,
+    arm_tracker: tuple[int, str] | None = None,
+) -> list[_Def]:
+    """Yield ``_Def`` for every non-exempt function/method.
 
     ``scope`` is ``"module"`` for a top-level function, ``"class Foo.Bar"``
-    for a method of ``Foo.Bar``.  Nested functions (closures) are
-    intentionally NOT collected: they are neither top-level functions nor
-    methods, and same-name closures in different parents are legal.
+    for a method of ``Foo.Bar``, and ``"module > outer"`` for a closure
+    inside ``outer``.  Definitions inside module-level ``if`` / ``try`` /
+    ``for`` / ``while`` / ``with`` blocks are collected with ``"module"``
+    scope, matching Python's binding rules.  Closures are collected with a
+    scope that identifies their parent function, so that same-name closures
+    in one parent are reported while same-name closures in different parents
+    remain legal.
     """
-    scope = "module" if not class_path else "class " + ".".join(class_path)
-    found: list[tuple[str, str, int]] = []
+    found: list[_Def] = []
     for node in body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if not _is_exempt(node):
-                found.append((scope, node.name, node.lineno))
+                found.append(
+                    _Def(scope, node.name, node.lineno, in_try, in_import_error_except, arm_tracker)
+                )
+            closure_scope = (
+                f"{scope} > {node.name}"
+                if scope != "module"
+                else f"module > {node.name}"
+            )
+            found.extend(
+                _collect_definitions(
+                    node.body,
+                    closure_scope,
+                    class_path=(),
+                    in_try=False,
+                    in_import_error_except=False,
+                    arm_tracker=None,
+                )
+            )
         elif isinstance(node, ast.ClassDef):
-            found.extend(_collect_definitions(node.body, class_path + (node.name,)))
+            if " > " not in scope:
+                new_class_path = class_path + (node.name,)
+                new_scope = "class " + ".".join(new_class_path)
+                found.extend(
+                    _collect_definitions(
+                        node.body,
+                        new_scope,
+                        new_class_path,
+                        in_try=False,
+                        in_import_error_except=False,
+                        arm_tracker=None,
+                    )
+                )
+        elif isinstance(
+            node,
+            (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith),
+        ):
+            if " > " not in scope:
+                if arm_tracker is None:
+                    stmt_id = id(node)
+                    body_tracker = (stmt_id, "body")
+                    orelse_tracker = (stmt_id, "orelse")
+                else:
+                    body_tracker = arm_tracker
+                    orelse_tracker = arm_tracker
+                found.extend(
+                    _collect_definitions(
+                        node.body,
+                        scope,
+                        class_path,
+                        in_try,
+                        in_import_error_except,
+                        arm_tracker=body_tracker,
+                    )
+                )
+                if hasattr(node, "orelse") and node.orelse:
+                    found.extend(
+                        _collect_definitions(
+                            node.orelse,
+                            scope,
+                            class_path,
+                            in_try,
+                            in_import_error_except,
+                            arm_tracker=orelse_tracker,
+                        )
+                    )
+        elif isinstance(node, ast.Try):
+            if " > " not in scope:
+                if arm_tracker is None:
+                    stmt_id = id(node)
+                    body_tracker = (stmt_id, "body")
+                    handler_tracker = (stmt_id, "handler")
+                    orelse_tracker = (stmt_id, "orelse")
+                    finalbody_tracker = (stmt_id, "finalbody")
+                else:
+                    body_tracker = arm_tracker
+                    handler_tracker = arm_tracker
+                    orelse_tracker = arm_tracker
+                    finalbody_tracker = arm_tracker
+                found.extend(
+                    _collect_definitions(
+                        node.body,
+                        scope,
+                        class_path,
+                        in_try=True,
+                        in_import_error_except=in_import_error_except,
+                        arm_tracker=body_tracker,
+                    )
+                )
+                for handler in node.handlers:
+                    is_ie = _is_import_error_handler(handler)
+                    found.extend(
+                        _collect_definitions(
+                            handler.body,
+                            scope,
+                            class_path,
+                            in_try=True,
+                            in_import_error_except=is_ie,
+                            arm_tracker=handler_tracker,
+                        )
+                    )
+                if node.orelse:
+                    found.extend(
+                        _collect_definitions(
+                            node.orelse,
+                            scope,
+                            class_path,
+                            in_try=True,
+                            in_import_error_except=in_import_error_except,
+                            arm_tracker=orelse_tracker,
+                        )
+                    )
+                if node.finalbody:
+                    found.extend(
+                        _collect_definitions(
+                            node.finalbody,
+                            scope,
+                            class_path,
+                            in_try=True,
+                            in_import_error_except=in_import_error_except,
+                            arm_tracker=finalbody_tracker,
+                        )
+                    )
     return found
 
 
@@ -105,15 +272,30 @@ def _duplicate_definitions(file_path: Path) -> list[Duplicate]:
     except SyntaxError:
         return []
 
-    defs: dict[tuple[str, str], list[int]] = defaultdict(list)
-    for scope, name, lineno in _collect_definitions(tree.body):
-        defs[(scope, name)].append(lineno)
+    defs: dict[tuple[str, str], list[_Def]] = defaultdict(list)
+    for defn in _collect_definitions(tree.body):
+        defs[(defn.scope, defn.name)].append(defn)
 
-    duplicates: list[Duplicate] = [
-        Duplicate(name=name, scope=scope, lines=lines)
-        for (scope, name), lines in defs.items()
-        if len(lines) > 1
-    ]
+    duplicates: list[Duplicate] = []
+    for (scope, name), def_list in defs.items():
+        if len(def_list) <= 1:
+            continue
+
+        # Sibling arms of the same control-flow statement do not collide.
+        # A top-level definition always collides with arm definitions.
+        has_top_level = any(d.arm_tracker is None for d in def_list)
+        if has_top_level:
+            duplicates.append(
+                Duplicate(name=name, scope=scope, lines=[d.lineno for d in def_list])
+            )
+            continue
+
+        stmt_ids = {d.arm_tracker[0] for d in def_list}
+        if len(stmt_ids) == 1:
+            continue
+        duplicates.append(
+            Duplicate(name=name, scope=scope, lines=[d.lineno for d in def_list])
+        )
     duplicates.sort(key=lambda d: d.lines[0])
     return duplicates
 

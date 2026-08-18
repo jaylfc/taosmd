@@ -1,0 +1,2 @@
+### Fixed
+- The duplicate-definition gate no longer fires on definitions that sit in mutually exclusive sibling arms of the same ``if``/``elif``/``else`` chain or ``try``/``except``/``else`` block. The ``except ImportError:`` and ``except ModuleNotFoundError:`` fallback patterns are recognised and left silent. Nested-class duplicate methods are now scanned at any depth, with the correct ``class Outer.Inner`` scope string.
