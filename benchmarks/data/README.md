@@ -16,16 +16,24 @@ before trusting a published number.
   `fusion_shootout.py`, `longmemeval_matrix.py`, `variations_sweep.py`.
   It is the source of the published 97.0% Recall@5 headline
   (see `benchmarks/REPRODUCE-longmemeval.md`).
-- Size: 277383467 bytes (about 265 MiB).
+- Byte size: 277383467 bytes (about 265 MiB) -- NOT YET PINNED, no verified
+  copy located on this machine; retained from prior documentation. Run
+  `stat -c %s benchmarks/data/longmemeval_s_full.json` to confirm.
 - Question count: 500.
 - sha256: `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
+  -- NOT YET PINNED, no copy has been hashed on this machine; obtain the
+  file from the upstream LongMemEval project and run
+  `shasum -a 256 benchmarks/data/longmemeval_s_full.json` to verify.
 
-To verify a copy:
+To verify a copy when available:
 
 ```bash
 shasum -a 256 benchmarks/data/longmemeval_s_full.json
-# expect: d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442
 ```
+
+*(Note: this file does not currently exist on this machine. No copy has been
+located to confirm the size or checksum above. Obtain from the upstream LongMemEval
+project and confirm the checksum before use.)*
 
 ### How to obtain it
 
