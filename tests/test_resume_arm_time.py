@@ -183,7 +183,44 @@ def test_guard_refuses_temp_path(monkeypatch, capsys):
     assert "temp directory" in str(exc.value)
 
 
-def test_guard_refuses_linked_worktree(tmp_path):
+def test_guard_refuses_linked_worktree(monkeypatch, tmp_path):
+    """main() refuses when _HELPER_PATH sits inside a linked worktree.
+
+    This goes through main() rather than the detector, because the detector
+    returning a string is not the behaviour the guard exists to provide.
+
+    _is_under_temp is neutralised deliberately, and the test is worthless
+    without that. The two refusals are checked in order, and tmp_path IS under
+    a temp root, so a fixture built there trips the TEMP refusal first and
+    never reaches the branch this test is named for. Left in, the test would
+    pass on the sibling refusal's message while the worktree refusal could be
+    deleted outright.
+    """
+    fake_wt = tmp_path / "fake-wt"
+    fake_wt.mkdir()
+    (fake_wt / ".git").write_text("gitdir: /some/real/.git/worktrees/fake\n")
+    target = fake_wt / "scripts" / "resume_arm_time.py"
+
+    monkeypatch.setattr(resume_arm_time, "_is_under_temp", lambda path: None)
+    monkeypatch.setattr(resume_arm_time, "_HELPER_PATH", str(target))
+    monkeypatch.setattr(
+        resume_arm_time.subprocess, "run", _fake_run(WATCHER_LINE, [])
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["resume_arm_time.py", "2026-08-18T00:00:00+00:00"]
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        resume_arm_time.main()
+
+    message = str(exc.value)
+    assert "is inside a git worktree" in message
+    assert str(fake_wt) in message
+    # Not the sibling refusal wearing this test's name.
+    assert "temp directory" not in message
+
+
+def test_is_in_linked_worktree_detects_git_file(tmp_path):
     """_is_in_linked_worktree returns the worktree root when .git is a file."""
     fake_wt = tmp_path / "fake-wt"
     fake_wt.mkdir()
@@ -191,6 +228,14 @@ def test_guard_refuses_linked_worktree(tmp_path):
     target = fake_wt / "scripts" / "resume_arm_time.py"
     result = resume_arm_time._is_in_linked_worktree(str(target))
     assert result == str(fake_wt)
+
+
+def test_is_in_linked_worktree_ignores_the_main_worktree(tmp_path):
+    """A .git DIRECTORY is the main worktree, where arming must keep working."""
+    main_wt = tmp_path / "main-wt"
+    (main_wt / ".git").mkdir(parents=True)
+    target = main_wt / "scripts" / "resume_arm_time.py"
+    assert resume_arm_time._is_in_linked_worktree(str(target)) is None
 
 
 # --------------------------------------------------------------------------- #
