@@ -54,8 +54,8 @@ canonical pinned copy is also kept on the project bench host under the repo's
   (64 hex, valid). Verify with: `shasum -a 256 benchmarks/data/longmemeval_oracle.json`
 - Question count: 500
 - The oracle variant has evidence-only haystacks (haystack_session_ids ==
-  answer_session_ids EXACTLY for all 500 questions), making it 15 MB against
-  `longmemeval_s_full.json`'s claimed 277 MB. The relationship between this
+  answer_session_ids EXACTLY for all 500 questions), making it 14.7 MiB against
+  `longmemeval_s_full.json`'s claimed 265 MiB. The relationship between this
   file and `longmemeval_s_full.json` is not verified here, as
   `longmemeval_s_full.json` does not exist on this machine.
 - How to obtain it: Get the LongMemEval-S oracle set from the upstream LongMemEval
