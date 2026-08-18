@@ -212,7 +212,7 @@ def _webui_dir() -> Path | None:
         # In Python 3.9+ files() returns a Traversable; we need a real Path.
         # For wheels, traverse to a concrete path via as_file context is
         # awkward to keep open; instead resolve via __file__ which always works.
-        _ = ref  # suppress unused-variable on the import above
+        _ = ref  # keeps `ref` above from tripping the unused-local rule
     except Exception:
         pass
     # Use __file__-relative path, reliable in both source and wheel.
