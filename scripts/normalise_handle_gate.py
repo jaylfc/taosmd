@@ -25,8 +25,7 @@ collide.  Sibling arms of the same
 collide.  The ``try:`` / ``except ImportError:`` and ``except
 ModuleNotFoundError:`` fallback patterns are therefore left silent by the
 same sibling-arm rule, since at most one arm ever binds.
-Nested classes are scanned at any depth, including those defined inside a
- function body.
+Nested classes are scanned at any depth, including those defined inside a function body.
 """
 from __future__ import annotations
 
