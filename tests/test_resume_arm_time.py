@@ -40,7 +40,7 @@ resume_arm_time = _load_module()
 
 def _marker(fire_type, armed_at):
     ts = datetime.datetime.fromisoformat(armed_at).strftime("%Y%m%d%H%M")
-    return f"/home/jay/.taos-fleet-tools/resume_arm_time.py#{fire_type}-{ts}"
+    return f"{resume_arm_time._HELPER_PATH}#{fire_type}-{ts}"
 
 
 class _Proc:
@@ -111,6 +111,11 @@ def test_canonical_derivation_emits_date_pinned_one_shot(monkeypatch, capsys):
     17 0 18 8 *, a date-pinned one-shot -- not the blocked PR's daily 17 0 * * *."""
     monkeypatch.setenv("TZ", "UTC")
     time.tzset()
+    monkeypatch.setattr(
+        resume_arm_time,
+        "_HELPER_PATH",
+        "/home/jay/.taos-fleet-tools/scripts/resume_arm_time.py",
+    )
     written = []
     monkeypatch.setattr(
         resume_arm_time.subprocess, "run", _fake_run(WATCHER_LINE, written)
@@ -140,8 +145,8 @@ def test_system_crontab_block_names_usr_bin_python3():
     fire = datetime.datetime(2026, 8, 18, 0, 7, 0, tzinfo=datetime.timezone.utc)
     retry = datetime.datetime(2026, 8, 18, 0, 17, 0, tzinfo=datetime.timezone.utc)
     block = resume_arm_time.system_crontab_block(fire, retry)
-    assert "/usr/bin/python3 /home/jay/.taos-fleet-tools/resume_arm_time.py --fire primary" in block
-    assert "/usr/bin/python3 /home/jay/.taos-fleet-tools/resume_arm_time.py --fire retry" in block
+    assert f"/usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire primary" in block
+    assert f"/usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire retry" in block
     # No bare `python3` token (the blocked PR emitted `python3 <path>`).
     assert " python3 " not in block
 
@@ -154,6 +159,52 @@ def test_helper_imports_getpass():
     assert "getpass" in dir(resume_arm_time)
     import getpass as _gp
     assert resume_arm_time.getpass is _gp
+
+
+# --------------------------------------------------------------------------- #
+# Helper-path guard: refuse to emit from a temp or linked-worktree location.
+# --------------------------------------------------------------------------- #
+
+def test_guard_refuses_temp_path(monkeypatch, capsys):
+    """A _HELPER_PATH under /tmp is refused with a named reason."""
+    monkeypatch.setattr(
+        resume_arm_time,
+        "_HELPER_PATH",
+        "/tmp/scratchpad/wt354/scripts/resume_arm_time.py",
+    )
+    monkeypatch.setattr(
+        resume_arm_time.subprocess, "run", _fake_run(WATCHER_LINE, [])
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["resume_arm_time.py", "2026-08-18T00:00:00+00:00"]
+    )
+    with pytest.raises(SystemExit) as exc:
+        resume_arm_time.main()
+    assert "temp directory" in str(exc.value)
+
+
+def test_guard_refuses_linked_worktree(tmp_path, monkeypatch, capsys):
+    """A _HELPER_PATH inside a linked worktree is refused with a named reason."""
+    fake_wt = Path("/home/jay/Development/fake-wt-for-test")
+    try:
+        fake_wt.mkdir(parents=True, exist_ok=True)
+        (fake_wt / ".git").write_text("gitdir: /some/real/.git/worktrees/fake\n")
+        fake_path = str(fake_wt / "scripts" / "resume_arm_time.py")
+        monkeypatch.setattr(resume_arm_time, "_HELPER_PATH", fake_path)
+        monkeypatch.setattr(
+            resume_arm_time.subprocess, "run", _fake_run(WATCHER_LINE, [])
+        )
+        monkeypatch.setattr(
+            sys, "argv", ["resume_arm_time.py", "2026-08-18T00:00:00+00:00"]
+        )
+        with pytest.raises(SystemExit) as exc:
+            resume_arm_time.main()
+        assert "git worktree" in str(exc.value)
+    finally:
+        if (fake_wt / ".git").exists():
+            (fake_wt / ".git").unlink()
+        if fake_wt.exists():
+            fake_wt.rmdir()
 
 
 # --------------------------------------------------------------------------- #
@@ -275,7 +326,7 @@ def test_do_fire_runs_as_subprocess(tmp_path, monkeypatch):
     marker = _marker("primary", armed_at)
     initial_crontab = (
         f"# taOSmd-resume: {marker}\n"
-        + f"7 0 18 8 * /usr/bin/python3 /home/jay/.taos-fleet-tools/resume_arm_time.py --fire primary {armed_at}\n"
+        + f"7 0 18 8 * /usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire primary {armed_at}\n"
         + WATCHER_LINE
     )
     state = _install_fake_crontab(tmp_path, monkeypatch, initial_crontab)

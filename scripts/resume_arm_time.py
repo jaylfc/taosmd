@@ -54,6 +54,8 @@ import subprocess
 import sys
 import time
 
+_HELPER_PATH = os.path.realpath(__file__)
+
 # The two tunables, each stating WHAT IT IS A FUNCTION OF. That is the whole point of
 # this file: a constant whose dependency is unnamed is the bug it exists to prevent.
 #
@@ -497,14 +499,52 @@ def retry_after(primary_fire, minutes, margin, lead=RETRY_LEAD_SECONDS):
     )
 
 
+def _is_under_temp(path):
+    temp_roots = ("/tmp", "/var/tmp", "/private/var/folders", "/var/folders")
+    for root in temp_roots:
+        if path == root or path.startswith(root + os.sep):
+            return root
+    return None
+
+
+def _is_in_linked_worktree(path):
+    parent = os.path.dirname(os.path.abspath(path))
+    while parent and parent != os.path.dirname(parent):
+        git_dir = os.path.join(parent, ".git")
+        if os.path.exists(git_dir):
+            if os.path.isfile(git_dir):
+                return parent
+            return None
+        parent = os.path.dirname(parent)
+    return None
+
+
+def _validate_helper_path():
+    path = _HELPER_PATH
+    tmp = _is_under_temp(path)
+    if tmp:
+        raise SystemExit(
+            f"FAIL: {_HELPER_PATH} resolves under a temp directory ({tmp}).\n"
+            "A cron line armed from a temp checkout cannot self-delete when the\n"
+            "directory is cleaned up. REFUSING to emit."
+        )
+    wt = _is_in_linked_worktree(path)
+    if wt:
+        raise SystemExit(
+            f"FAIL: {_HELPER_PATH} is inside a git worktree ({wt}).\n"
+            "Worktree checkouts are ephemeral; the cron line would pin a path\n"
+            "that vanishes when the worktree is removed. REFUSING to emit."
+        )
+
+
 def system_crontab_block(primary_fire, retry_fire):
     """System crontab lines for the resume pair, with self-deletion and path-precise markers."""
     p_min, p_hou, p_dy, p_mo = cron_fields(primary_fire)
     r_min, r_hou, r_dy, r_mo = cron_fields(retry_fire)
     p_ts = primary_fire.strftime("%Y%m%d%H%M")
     r_ts = retry_fire.strftime("%Y%m%d%H%M")
-    marker_prefix = "/home/jay/.taos-fleet-tools/resume_arm_time.py#"
-    helper = "/home/jay/.taos-fleet-tools/resume_arm_time.py"
+    marker_prefix = _HELPER_PATH + "#"
+    helper = _HELPER_PATH
 
     lines = [
         "SYSTEM CRONTAB (durable, survives session death):",
@@ -539,7 +579,7 @@ def do_fire(fire_type, timestamp_str):
         )
 
     ts = timestamp.strftime("%Y%m%d%H%M")
-    marker = f"/home/jay/.taos-fleet-tools/resume_arm_time.py#{fire_type}-{ts}"
+    marker = f"{_HELPER_PATH}#{fire_type}-{ts}"
 
     record = f"[RESUME DUE] {fire_type} fired armed_at={timestamp_str}"
 
@@ -745,6 +785,7 @@ def main():
           "           something in the SYSTEM crontab, outside the component that failed.\n"
           "           If instead you write these lines into a crontab, durability is fine but\n"
           "           recurring=false does not exist there, so re-read the ONE-SHOT line.")
+    _validate_helper_path()
     print(system_crontab_block(fire, r_fire))
 
 
