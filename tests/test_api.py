@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -190,7 +193,7 @@ def test_format_hit_prefers_similarity_over_source_score():
     assert formatted["confidence"] == 0.85
     assert formatted["source"] == "vector"
     assert formatted["timestamp"] == 1700000000
-    assert formatted["metadata"] == {"position": 7, "timestamp": 1700000000}
+    assert formatted["metadata"] == {"position": 7, "timestamp": 1700000000, "as_of": 1700000000.0, "is_current": True}
 
 
 def test_format_hit_falls_back_to_source_score():
@@ -206,6 +209,293 @@ def test_format_hit_falls_back_to_source_score():
     formatted = taosmd_api._format_hit(hit)
     assert formatted["confidence"] == 0.95
     assert formatted["source"] == "kg"
+
+
+# ---------------------------------------------------------------------------
+# Collection doc-currency metadata on the hit envelope
+# ---------------------------------------------------------------------------
+
+def _collection_hit(doc_id=None, version=None, review_by=None,
+                    indexed_at=1700000000.0, hidden_by=None, archive_span_id=42):
+    """Build a hit matching the real ``ingest_folder`` envelope shape.
+
+    ingest_batch() wraps user metadata under an outer envelope that also
+    carries ``archive_span_id`` (and, for superseded rows, ``hidden_by``).
+    The doc-currency keys (``doc_id``, ``version``, ``review_by``,
+    ``indexed_at``) live in the *inner* user-metadata dict, exactly as
+    _parse_front_matter + ingest_folder store them. This fixture mirrors
+    that shape so tests exercise the real data layout, not a hand-invented
+    one.
+    """
+    user_md: dict = {
+        "collection_id": "col-docs",
+        "file_path": "docs/intro.md",
+        "source": "collection",
+        "chunk_index": 0,
+        "file_hash": "abc123",
+        "indexed_at": indexed_at,
+    }
+    if doc_id is not None:
+        user_md["doc_id"] = doc_id
+    if version is not None:
+        user_md["version"] = version
+    if review_by is not None:
+        user_md["review_by"] = review_by
+    outer: dict = {
+        "archive_span_id": archive_span_id,
+        "metadata": user_md,
+        "created_at": indexed_at,
+    }
+    if hidden_by is not None:
+        outer["hidden_by"] = hidden_by
+    return {
+        "text": "test content",
+        "source": "vector",
+        "source_score": 0.5,
+        "metadata": outer,
+    }
+
+
+def test_format_hit_includes_front_matter_metadata():
+    """_format_hit passes through doc_id, version, review_by from user metadata.
+
+    The doc keys live in the *inner* user-metadata dict (that is how
+    ingest_folder writes them), so _format_hit must read them after the
+    unwrap, not from the outer envelope before it.
+    """
+    hit = _collection_hit(doc_id="doc-abc123", version=5, review_by="2020-01-01")
+    formatted = taosmd_api._format_hit(hit)
+    assert formatted["metadata"]["doc_id"] == "doc-abc123"
+    assert formatted["metadata"]["version"] == 5
+    assert formatted["metadata"]["review_by"] == "2020-01-01"
+    assert formatted["metadata"]["is_current"] is True
+    assert isinstance(formatted["metadata"]["as_of"], float)
+    assert formatted["metadata"]["as_of"] == 1700000000.0
+    assert formatted["metadata"]["is_past_review"] is True
+
+
+def test_format_hit_no_front_matter_no_doc_id():
+    """_format_hit without doc_id/version in user metadata leaves those keys absent."""
+    hit = _collection_hit()
+    formatted = taosmd_api._format_hit(hit)
+    assert "doc_id" not in formatted["metadata"]
+    assert "version" not in formatted["metadata"]
+    assert "is_past_review" not in formatted["metadata"]
+    assert "review_by" not in formatted["metadata"]
+    # is_current and as_of should always be present
+    assert formatted["metadata"]["is_current"] is True
+    assert isinstance(formatted["metadata"]["as_of"], float)
+
+
+def test_format_hit_review_by_in_future_is_not_past_review():
+    """_format_hit is_past_review is false when review_by is after today."""
+    hit = _collection_hit(doc_id="doc-x", version=1, review_by="2099-12-31")
+    formatted = taosmd_api._format_hit(hit)
+    assert formatted["metadata"]["is_past_review"] is False
+    assert formatted["metadata"]["review_by"] == "2099-12-31"
+
+
+def test_format_hit_superseded_row_is_not_current():
+    """A row carrying ``hidden_by`` is not current and exposes superseded_by."""
+    hit = _collection_hit(
+        doc_id="doc-x", version=1, review_by="2020-01-01",
+        hidden_by="collection-reindex:12345",
+    )
+    formatted = taosmd_api._format_hit(hit)
+    assert formatted["metadata"]["is_current"] is False
+    assert formatted["metadata"]["superseded_by"] == "collection-reindex:12345"
+
+
+def test_format_hit_non_dict_user_metadata_does_not_crash():
+    """Non-dict user metadata degrades, never raises."""
+    hit = {
+        "text": "ok",
+        "source": "vector",
+        "metadata": "not-a-dict",
+    }
+    formatted = taosmd_api._format_hit(hit)
+    assert formatted["metadata"] == {}
+
+
+def test_format_hit_no_assert_crash_under_optimization():
+    """No bare ``assert`` in _format_hit so -O doesn't gut it."""
+    tree = ast.parse(inspect.getsource(taosmd_api._format_hit))
+    assert not any(isinstance(n, ast.Assert) for n in ast.walk(tree)), (
+        "_format_hit must not use bare assert (stripped under -O)"
+    )
+
+
+def test_format_hit_as_of_is_float_without_indexed_at():
+    """as_of is always a float even without indexed_at."""
+    hit = {
+        "text": "ok",
+        "source": "vector",
+        "metadata": {
+            "agent": "test",
+            "metadata": {"file_path": "docs/intro.md"},
+            "created_at": 1700000000.0,
+        },
+    }
+    formatted = taosmd_api._format_hit(hit)
+    assert isinstance(formatted["metadata"]["as_of"], float)
+
+
+# ---------------------------------------------------------------------------
+# Contract test: public search() output shape carries doc-currency fields
+# ---------------------------------------------------------------------------
+
+def test_search_hit_metadata_always_has_doc_currency_fields(isolated_data_dir):
+    """Every hit returned by search() must carry is_current and as_of in
+    its metadata, regardless of the source path (semantic or BM25).
+
+    This is the deliberate contract test for the output-shape change:
+    is_current and as_of are now attached on every path.
+    """
+    _setup_stores(isolated_data_dir)
+    asyncio.run(taosmd.ingest_batch(
+        [{"text": "The quarterly review moved to Friday morning.",
+          "id": "hash-contract",
+          "metadata": {"file_path": "notes/review.md"}}],
+        agent="contract-agent", data_dir=str(isolated_data_dir),
+    ))
+    # Semantic path
+    hits = asyncio.run(taosmd.search(
+        "The quarterly review moved to Friday morning.",
+        agent="contract-agent", data_dir=str(isolated_data_dir),
+    ))
+    assert hits, "expected a semantic hit"
+    for h in hits:
+        assert "is_current" in h["metadata"]
+        assert "as_of" in h["metadata"]
+        assert isinstance(h["metadata"]["as_of"], float)
+    # BM25 path
+    bm25_hits = asyncio.run(taosmd.search(
+        "quarterly review", agent="contract-agent", mode="bm25",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert bm25_hits
+    for h in bm25_hits:
+        assert "is_current" in h["metadata"]
+        assert "as_of" in h["metadata"]
+        assert isinstance(h["metadata"]["as_of"], float)
+
+
+# ---------------------------------------------------------------------------
+# Coercion regression: ingest_batch -> search with malformed doc-currency
+# metadata.  These are RED against the unguarded tree (exec/tsk-x6ph7n,
+# which crashes on ISO-string timestamps and non-string review_by) and GREEN
+# on this branch where as_of/review_by are coerced defensively.
+# ---------------------------------------------------------------------------
+
+def _coerce_and_search(data_dir, metadata, text, agent="coerce-agent",
+                       query=None):
+    """Ingest one item with *metadata* via ingest_batch, then search for it.
+
+    Returns the search hits.  On the unguarded tree the search() call itself
+    raises (ValueError for a non-coercible as_of, TypeError for a non-string
+    review_by), so callers that expect hits on the fixed tree will see a
+    hard failure here on the unfixed tree.
+    """
+    _setup_stores(data_dir)
+    asyncio.run(taosmd.ingest_batch(
+        [{"text": text, "id": f"coerce-{hash(text) & 0xFFFF:04x}",
+          "metadata": dict(metadata)}],
+        agent=agent, data_dir=str(data_dir),
+    ))
+    q = query or text
+    return asyncio.run(taosmd.search(
+        q, agent=agent, mode="bm25", data_dir=str(data_dir),
+    ))
+
+
+def test_coerce_iso_string_timestamp_returns_hits(isolated_data_dir):
+    """An ISO-8601 string timestamp must degrade to as_of=0.0, not raise.
+
+    On the unfixed tree float("2020-01-01T00:00:00Z") raises ValueError at
+    api.py and search() propagates it as an error instead of returning hits.
+    """
+    marker = "zqxklbm-coerce-iso-timestamp"
+    hits = _coerce_and_search(
+        isolated_data_dir, {"timestamp": "2020-01-01T00:00:00Z"},
+        "The unique token zqxklbm-coerce-iso-timestamp was ingested.",
+        query="zqxklbm",
+    )
+    assert hits, "expected at least one hit for an ISO-string timestamp"
+    assert hits[0]["metadata"]["as_of"] == 0.0
+
+
+def test_coerce_int_review_by_returns_hits(isolated_data_dir):
+    """An int review_by must degrade to is_past_review=False, not raise.
+
+    On the unfixed tree 2020 < "2026-08-18" raises TypeError at api.py.
+    """
+    marker = "zqxklbm-coerce-int-review"
+    hits = _coerce_and_search(
+        isolated_data_dir, {"review_by": 2020},
+        "The unique token zqxklbm-coerce-int-review was ingested.",
+        query="zqxklbm",
+    )
+    assert hits, "expected at least one hit for an int review_by"
+    assert hits[0]["metadata"]["is_past_review"] is False
+    assert hits[0]["metadata"]["review_by"] == 2020
+
+
+def test_coerce_list_review_by_returns_hits(isolated_data_dir):
+    """A list review_by must degrade to is_past_review=False, not raise.
+
+    On the unfixed tree [2020, 1, 1] < "..." raises TypeError at api.py.
+    """
+    hits = _coerce_and_search(
+        isolated_data_dir, {"review_by": [2020, 1, 1]},
+        "The unique token zqxklbm-coerce-list-review was ingested.",
+        query="zqxklbm",
+    )
+    assert hits, "expected at least one hit for a list review_by"
+    assert hits[0]["metadata"]["is_past_review"] is False
+
+
+def test_coerce_str_review_by_overdue_is_past_review(isolated_data_dir):
+    """A string review_by in the past yields is_past_review=True on both trees."""
+    hits = _coerce_and_search(
+        isolated_data_dir, {"review_by": "2020-01-01"},
+        "The unique token zqxklbm-coerce-str-review was ingested.",
+        query="zqxklbm",
+    )
+    assert hits, "expected at least one hit"
+    assert hits[0]["metadata"]["is_past_review"] is True
+
+
+def test_coerce_plain_metadata_returns_hits(isolated_data_dir):
+    """Plain metadata without doc-currency keys simply returns hits."""
+    hits = _coerce_and_search(
+        isolated_data_dir, {"category": "notes"},
+        "The unique token zqxklbm-coerce-plain was ingested.",
+        query="zqxklbm",
+    )
+    assert hits, "expected at least one hit for plain metadata"
+    assert "is_past_review" not in hits[0]["metadata"]
+    assert hits[0]["metadata"]["is_current"] is True
+
+
+def test_coerce_non_string_review_by_warns(isolated_data_dir, caplog):
+    """Non-string review_by must log a warning (symmetric with as_of coercion).
+
+    A non-coercible as_of logs; a non-string review_by must also log so
+    malformed input is observable, not silently reported as "reviewed and
+    current".
+    """
+    with caplog.at_level(logging.WARNING, logger="taosmd.api"):
+        hits = _coerce_and_search(
+            isolated_data_dir, {"review_by": 2020},
+            "The unique token zqxklbm-coerce-warns was ingested.",
+            query="zqxklbm",
+        )
+    assert hits, "expected at least one hit for an int review_by"
+    assert hits[0]["metadata"]["is_past_review"] is False
+    assert any("review_by" in r.message and "not a string" in r.message
+               for r in caplog.records), (
+        f"expected a review_by warning, got: {[r.message for r in caplog.records]}"
+    )
 
 
 # ---------------------------------------------------------------------------
