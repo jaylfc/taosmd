@@ -657,6 +657,67 @@ async def a2a_channels(*, data_dir=None) -> list[dict]:
     return result
 
 
+async def a2a_sender_census(*, data_dir=None) -> dict:
+    """Return a per-sender message census across every A2A channel.
+
+    Queries all :data:`~taosmd.archive.EVENT_A2A` events and aggregates them
+    by sender.  The result maps each distinct ``from`` value to a dict with:
+
+    * ``total`` -- total messages sent by that sender across all channels
+    * ``channels`` -- mapping of channel name to message count on that channel
+
+    Senders are returned in descending order of ``total``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_sender_census()
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+
+    deleted: set[str] = set()
+    aliases: dict[str, str] = {}
+    superseded: set[int] = set()
+    if data_dir is not None:
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+        deleted = _admin.deleted_channels()
+        aliases = _admin.channel_aliases()
+        superseded = _admin.superseded_messages()
+
+    census: dict[str, dict] = {}
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        if data.get("admin_action"):
+            continue
+        row_id = row["id"]
+        if row_id in superseded:
+            continue
+        sender = data.get("from") or ""
+        if not sender:
+            continue
+        thread = data.get("thread") or row.get("app_id") or "general"
+        if thread in aliases:
+            thread = aliases[thread]
+        if thread in deleted:
+            continue
+        if sender not in census:
+            census[sender] = {"total": 0, "channels": {}}
+        entry = census[sender]
+        entry["total"] += 1
+        entry["channels"][thread] = entry["channels"].get(thread, 0) + 1
+
+    return dict(
+        sorted(census.items(), key=lambda item: item[1]["total"], reverse=True)
+    )
+
+
 async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
     """Return distinct sender names observed on ``channel``, sorted.
 
@@ -1262,8 +1323,8 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
-           "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
-           "a2a_threads", "a2a_thread_messages",
+           "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
+           "a2a_members", "a2a_threads", "a2a_thread_messages",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",

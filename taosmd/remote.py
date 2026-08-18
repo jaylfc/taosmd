@@ -253,6 +253,11 @@ class RemoteClient:
         resp = await self._run("GET", "/a2a/channels")
         return resp.get("channels", [])
 
+    async def a2a_sender_census(self, **_opts) -> dict:
+        """GET /a2a/census: return a per-sender message census from the remote bus."""
+        resp = await self._run("GET", "/a2a/census")
+        return resp.get("census", {})
+
     async def a2a_members(self, *, channel: str, **_opts) -> list[str]:
         """GET /a2a/members: return distinct sender names on ``channel``."""
         resp = await self._run("GET", "/a2a/members", params={"channel": channel})

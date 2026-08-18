@@ -1033,6 +1033,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_a2a_send()
                 elif method == "GET" and path == "/a2a/channels":
                     self._handle_a2a_channels()
+                elif method == "GET" and path == "/a2a/census":
+                    self._handle_a2a_census()
                 elif method == "GET" and path == "/a2a/members":
                     self._handle_a2a_members(query)
                 elif method == "GET" and path == "/a2a/messages":
@@ -1489,6 +1491,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_a2a_channels(self) -> None:
             channels = runner.run(service.a2a_channels(data_dir=data_dir))
             self._send_json(200, {"channels": channels})
+
+        def _handle_a2a_census(self) -> None:
+            census = runner.run(service.a2a_sender_census(data_dir=data_dir))
+            self._send_json(200, {"census": census})
 
         def _handle_a2a_members(self, qs: dict) -> None:
             channel = (qs.get("channel") or [None])[0]
