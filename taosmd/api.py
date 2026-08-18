@@ -144,12 +144,16 @@ async def _ensure_stores(data_dir=None) -> dict:
         from taosmd.claims.store import ClaimStore  # noqa: PLC0415
         claims = ClaimStore(db_path=str(path / "claims.db"))
         await claims.init()
+        from taosmd.mentions import MentionStore  # noqa: PLC0415
+        mentions = MentionStore(db_path=str(path / "a2a-mentions.db"))
+        await mentions.init()
 
         stores = {
             "archive": archive,
             "vector": vmem,
             "kg": kg,
             "claims": claims,
+            "mentions": mentions,
             "data_dir": str(path),
         }
         _stores_cache[resolved] = stores
