@@ -53,3 +53,7 @@ taosmd = "taosmd.cli:main"
 [project.urls]
 Homepage = "https://github.com/jaylfc/taosmd"
 Repository = "https://github.com/jaylfc/taosmd"
+
+[tool.ruff.lint]
+# Pyflakes (F) only: undefined names, unused imports/variables. Deliberately narrow so the linter catches the dead-import drift it was added for, without reformatting the tree or imposing style rules.
+select = ["F"]
