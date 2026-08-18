@@ -9,7 +9,6 @@ settings_schema to dynamically render config forms.
 """
 
 from __future__ import annotations
-from typing import Any
 
 
 class MemoryBackend:

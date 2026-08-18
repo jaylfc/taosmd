@@ -36,7 +36,14 @@ registry = ["pyjwt>=2.8", "cryptography>=42"]
 # Keeping both lets pip users keep using extras and uv users get tests for
 # free, without putting pyjwt/cryptography in core [project] dependencies.
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "pyjwt>=2.8", "cryptography>=42"]
+dev = ["pytest", "pytest-asyncio", "pyjwt>=2.8", "cryptography>=42", "ruff==0.16.3"]
+
+# Pyflakes rules only. This catches dead imports and dead local bindings, the
+# drift that has actually occurred here, without ruff reformatting the tree or
+# ruling on style. Widen it deliberately or not at all: adding rules to hide a
+# finding is the failure this gate exists to prevent.
+[tool.ruff.lint]
+select = ["F"]
 
 [tool.setuptools.packages.find]
 include = ["taosmd*"]

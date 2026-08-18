@@ -611,7 +611,7 @@ def _install_skill_cmd(args: argparse.Namespace) -> int:
     if not skill_src_dir.is_dir():
         # Fallback: try importlib.resources (wheel installs)
         try:
-            ref = _pkg_files("taosmd").joinpath("skills/taosmd-a2a")
+            _ref = _pkg_files("taosmd").joinpath("skills/taosmd-a2a")
             # Convert Traversable to a concrete path via __file__ approach.
             skill_src_dir = Path(__file__).parent / "skills" / "taosmd-a2a"
         except Exception:
@@ -679,7 +679,6 @@ def _review_cmd(args: argparse.Namespace) -> int:
     import asyncio
     from pathlib import Path
     from .pending_decisions import PendingDecisionsStore
-    from .knowledge_graph import TemporalKnowledgeGraph
 
     kg_path = Path(args.data_dir) / "knowledge-graph.db"
     if not kg_path.exists():

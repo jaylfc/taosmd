@@ -261,7 +261,7 @@ class TemporalKnowledgeGraph:
         synonyms collapse onto their canonical form. A warning is logged
         if the resulting predicate isn't in the vocab.
         """
-        from .predicate_vocab import normalise, validate
+        from .predicate_vocab import validate
         if strict_vocab:
             predicate = validate(predicate, strict=True)
         else:
