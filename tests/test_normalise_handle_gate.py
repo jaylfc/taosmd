@@ -18,8 +18,8 @@ Proves the duplicate-definition gate (the successor to the narrow
   ``body`` / ``handlers`` / ``orelse`` arms of one ``try`` statement are
   mutually exclusive and do not collide.
 - The ``try:`` / ``except ImportError:``, ``except ModuleNotFoundError:``,
-  and ``except builtins.ImportError:`` fallback patterns are recognised and
-  left silent.
+  and ``except builtins.ImportError:`` fallback patterns are left silent by
+  the same sibling-arm rule, since at most one arm ever binds.
 - Nested classes are scanned at any depth.
 - Files that cannot be decoded as UTF-8 are skipped with a warning, and
   files that fail to parse are left silent.
@@ -428,12 +428,11 @@ class TestDuplicateDefinitions:
         f = tmp_path / "mod.py"
         f.write_text(
             "try:\n"
-            "    import something\n"
+            "    def foo():\n"
+            "        pass\n"
             "except ModuleNotFoundError:\n"
-            "    pass\n"
-            "\n"
-            "def foo():\n"
-            "    pass\n"
+            "    def foo():\n"
+            "        pass\n"
         )
         assert _duplicate_definitions(f) == []
 
@@ -441,12 +440,11 @@ class TestDuplicateDefinitions:
         f = tmp_path / "mod.py"
         f.write_text(
             "try:\n"
-            "    import something\n"
+            "    def foo():\n"
+            "        pass\n"
             "except (ModuleNotFoundError, OSError):\n"
-            "    pass\n"
-            "\n"
-            "def foo():\n"
-            "    pass\n"
+            "    def foo():\n"
+            "        pass\n"
         )
         assert _duplicate_definitions(f) == []
 
@@ -454,12 +452,11 @@ class TestDuplicateDefinitions:
         f = tmp_path / "mod.py"
         f.write_text(
             "try:\n"
-            "    import something\n"
+            "    def foo():\n"
+            "        pass\n"
             "except builtins.ImportError:\n"
-            "    pass\n"
-            "\n"
-            "def foo():\n"
-            "    pass\n"
+            "    def foo():\n"
+            "        pass\n"
         )
         assert _duplicate_definitions(f) == []
 
@@ -532,11 +529,11 @@ class TestDuplicateDefinitions:
                 [],
             ),
             "import_error_fallback_silent": (
-                "try:\n    import something\nexcept ImportError:\n    pass\n\ndef foo(): pass\n",
+                "try:\n    def foo(): pass\nexcept ImportError:\n    def foo(): pass\n",
                 [],
             ),
             "module_not_found_error_fallback_silent": (
-                "try:\n    import something\nexcept ModuleNotFoundError:\n    pass\n\ndef foo(): pass\n",
+                "try:\n    def foo(): pass\nexcept ModuleNotFoundError:\n    def foo(): pass\n",
                 [],
             ),
             "platform_if_else_silent": (

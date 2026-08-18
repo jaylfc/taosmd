@@ -19,7 +19,8 @@ closures in different parents remain legal.  Sibling arms of the same
 ``if`` / ``elif`` / ``else`` chain and the ``body`` / ``handlers`` /
 ``orelse`` arms of one ``try`` statement are mutually exclusive and do not
 collide.  The ``try:`` / ``except ImportError:`` and ``except
-ModuleNotFoundError:`` fallback patterns are recognised and left silent.
+ModuleNotFoundError:`` fallback patterns are therefore left silent by the
+same sibling-arm rule, since at most one arm ever binds.
 Nested classes are scanned at any depth.
 """
 from __future__ import annotations
@@ -48,7 +49,6 @@ class _Def:
     name: str
     lineno: int
     in_try: bool = False
-    in_import_error_except: bool = False
     arm_tracker: tuple[int, str] | None = None
 
 
@@ -89,32 +89,11 @@ def _is_exempt(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return _has_overload_decorator(node) or _has_property_decorator(node)
 
 
-def _is_import_error_handler(handler: ast.ExceptHandler) -> bool:
-    if handler.type is None:
-        return False
-
-    def _is_import_error_node(node):
-        if isinstance(node, ast.Name):
-            return node.id in ("ImportError", "ModuleNotFoundError")
-        if isinstance(node, ast.Attribute):
-            return (
-                isinstance(node.value, ast.Name)
-                and node.value.id == "builtins"
-                and node.attr == "ImportError"
-            )
-        return False
-
-    if isinstance(handler.type, ast.Tuple):
-        return any(_is_import_error_node(elt) for elt in handler.type.elts)
-    return _is_import_error_node(handler.type)
-
-
 def _collect_definitions(
     body: list[ast.stmt],
     scope: str = "module",
     class_path: tuple[str, ...] = (),
     in_try: bool = False,
-    in_import_error_except: bool = False,
     arm_tracker: tuple[int, str] | None = None,
 ) -> list[_Def]:
     """Yield ``_Def`` for every non-exempt function/method.
@@ -133,7 +112,7 @@ def _collect_definitions(
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if not _is_exempt(node):
                 found.append(
-                    _Def(scope, node.name, node.lineno, in_try, in_import_error_except, arm_tracker)
+                    _Def(scope, node.name, node.lineno, in_try, arm_tracker)
                 )
             closure_scope = (
                 f"{scope} > {node.name}"
@@ -146,7 +125,6 @@ def _collect_definitions(
                     closure_scope,
                     class_path=(),
                     in_try=False,
-                    in_import_error_except=False,
                     arm_tracker=None,
                 )
             )
@@ -160,7 +138,6 @@ def _collect_definitions(
                         new_scope,
                         new_class_path,
                         in_try=False,
-                        in_import_error_except=False,
                         arm_tracker=None,
                     )
                 )
@@ -182,7 +159,6 @@ def _collect_definitions(
                         scope,
                         class_path,
                         in_try,
-                        in_import_error_except,
                         arm_tracker=body_tracker,
                     )
                 )
@@ -193,7 +169,6 @@ def _collect_definitions(
                             scope,
                             class_path,
                             in_try,
-                            in_import_error_except,
                             arm_tracker=orelse_tracker,
                         )
                     )
@@ -216,19 +191,16 @@ def _collect_definitions(
                         scope,
                         class_path,
                         in_try=True,
-                        in_import_error_except=in_import_error_except,
                         arm_tracker=body_tracker,
                     )
                 )
                 for handler in node.handlers:
-                    is_ie = _is_import_error_handler(handler)
                     found.extend(
                         _collect_definitions(
                             handler.body,
                             scope,
                             class_path,
                             in_try=True,
-                            in_import_error_except=is_ie,
                             arm_tracker=handler_tracker,
                         )
                     )
@@ -239,7 +211,6 @@ def _collect_definitions(
                             scope,
                             class_path,
                             in_try=True,
-                            in_import_error_except=in_import_error_except,
                             arm_tracker=orelse_tracker,
                         )
                     )
@@ -250,7 +221,6 @@ def _collect_definitions(
                             scope,
                             class_path,
                             in_try=True,
-                            in_import_error_except=in_import_error_except,
                             arm_tracker=finalbody_tracker,
                         )
                     )
