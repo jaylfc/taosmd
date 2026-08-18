@@ -16,7 +16,8 @@ test-filename mention in ordinary prose.
 
 Marker contract (the only thing that triggers the check):
 
-    # WITNESS: tests/test_foo.py::some_grepable_token
+    # Witness marker example (pattern MUST match exactly `# WITNESS:`):
+    # Witness tokens are cited in source code as ``# WITNESS: <test>::<token>``
 
 - The ``WITNESS:`` marker is all-caps and opt-in. A bare mention of a test
   filename in prose -- whether describing a removal or stating a fact --
