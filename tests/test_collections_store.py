@@ -12,6 +12,8 @@ container for content indexed from a folder. The store enforces:
 """
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from taosmd import config
@@ -206,6 +208,32 @@ def test_grantee_match_is_not_case_insensitive(store, source_dir):
     assert not store.has_grant("agent-a", col["id"])
     store.revoke(col["id"], "agent-a")
     assert store.has_grant("Agent-A", col["id"])
+
+
+def test_grantee_key_preserves_the_pre_existing_non_string_behaviour(store, source_dir):
+    """The ``isinstance`` guard in ``_grantee_key`` is load-bearing, not decoration.
+
+    ``revoke``/``has_grant`` bound the raw argument before the symmetry fix, so a
+    value sqlite binds natively reached the query and matched nothing. Routing
+    both ends through ``.strip()`` would newly raise ``AttributeError`` on those
+    callers, which is a behaviour change the fix does not intend to make. The
+    guard is what keeps it out, and nothing else pins it.
+
+    Measured on ``master`` before this change and on this branch after it: both
+    trees pass ``None`` and an int through to a non-match, and both raise
+    ``sqlite3.ProgrammingError`` on a list. The guard does not widen what sqlite
+    accepts, so that half is asserted too.
+    """
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.grant(col["id"], "agent-a")
+
+    assert store.has_grant(None, col["id"]) is False
+    assert store.has_grant(7, col["id"]) is False
+    assert store.revoke(col["id"], None)["id"] == col["id"]
+    assert store.has_grant("agent-a", col["id"]) is True  # control: still granted
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        store.revoke(col["id"], ["agent-a"])
 
 
 # ---------------------------------------------------------------------------

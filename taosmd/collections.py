@@ -148,8 +148,15 @@ def _grantee_key(canonical_id: str) -> str:
     to a different one. This is a storage key, never an authorisation decision
     about two identities that merely look alike.
 
-    Non-strings pass through untouched: ``revoke``/``has_grant`` accept any
-    argument today and simply match nothing, and that stays true.
+    The ``isinstance`` guard preserves pre-existing behaviour rather than
+    promising a wider contract: callers are typed ``str``, but ``revoke`` and
+    ``has_grant`` bound the raw argument before this change, so a value sqlite
+    can bind natively (``None``, an int) reached the query and matched nothing.
+    Without the guard those callers would newly raise ``AttributeError`` on
+    ``.strip()``. Values sqlite cannot bind (a list, a dict) raised
+    ``sqlite3.ProgrammingError`` before this change and still do; the guard
+    does not make them work. Measured on both sides, see
+    ``test_grantee_key_preserves_the_pre_existing_non_string_behaviour``.
     """
     return canonical_id.strip() if isinstance(canonical_id, str) else canonical_id
 
