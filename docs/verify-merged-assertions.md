@@ -141,7 +141,8 @@ its load-bearing surface is narrower than the other seven.
 Its docstring now states: the `assert status == 400` half is **duplicated** at
 the service layer -- `service.a2a_send` raises `ValueError` for an empty body
 independently. Disabling R8 still returns 400 (from the service-layer ValueError);
-the only thing that changes is the error text. The test asserts
+the only thing that changes is the error message: `body must be a non-empty string`.
+The test asserts
 `"blocks" in body["error"]`, which is the **message** assertion -- the only
 check that is unique to the HTTP-level invariant. The status-code assertion
 cannot fail without the service layer also failing, so a future "tidying" change

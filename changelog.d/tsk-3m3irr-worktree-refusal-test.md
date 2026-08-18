@@ -1,0 +1,4 @@
+### Fixed
+
+- `test_guard_refuses_linked_worktree` now exercises the refusal it is named for. It went through `main()`'s guard rather than calling `_is_in_linked_worktree` directly, so removing the worktree refusal from `_validate_helper_path` while leaving the detector intact left all nine tests green, and the real CLI went on emitting crontab lines pinning an ephemeral worktree path. The detector-level assertion is kept under the honest name `test_is_in_linked_worktree_detects_git_file`, joined by one covering the main worktree, where a `.git` directory must continue not to trip the guard so that arming keeps working.
+- The rewritten test neutralises `_is_under_temp` on purpose, and would be worthless without it: the two refusals are checked in order and `tmp_path` is itself under a temp root, so a fixture built there trips the temp refusal first and never reaches the branch under test. That masking is why the original test settled for the detector.

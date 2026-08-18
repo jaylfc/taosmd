@@ -41,6 +41,7 @@ import os
 import secrets
 import sqlite3
 import time
+from datetime import date
 from pathlib import Path
 
 from . import _db
@@ -514,6 +515,78 @@ def _is_ignored(
     return ignored
 
 
+#: The only front-matter keys consumed by the doc-currency contract.
+_FRONT_MATTER_KEYS = frozenset({"doc_id", "version", "review_by"})
+
+#: How many lines deep we look for the closing ``---`` delimiter. Keeps a
+#: document that opens with a thematic break (``---`` followed by prose)
+#: from being scanned as front matter all the way to the next ``---``.
+_FRONT_MATTER_MAX_LINES = 50
+
+
+def _parse_front_matter(file_path: str) -> dict:
+    """Parse doc-currency front matter from a markdown file (stdlib-only).
+
+    Recognises the standard ``---`` delimiter pair: an opening ``---`` as the
+    first line of the file, a closing ``---``, and simple ``key: value`` lines
+    in between. Only ``doc_id`` (str), ``version`` (int), and ``review_by``
+    (ISO date str) are captured; unknown keys are skipped, a ``version`` that
+    cannot be parsed as ``int`` is dropped, and a ``review_by`` that is not a
+    valid ISO date is dropped. Absent keys are omitted from the result.
+    """
+    try:
+        text = Path(file_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    if not text.startswith("---\n"):
+        return {}
+    lines = text.splitlines(keepends=True)
+    fm_lines: list[str] = []
+    closing_found = False
+    budget = min(len(lines), _FRONT_MATTER_MAX_LINES + 1)
+    for i in range(1, budget):
+        stripped = lines[i].strip()
+        if stripped == "---":
+            closing_found = True
+            break
+        fm_lines.append(lines[i])
+    if not closing_found or not fm_lines:
+        return {}
+    result: dict = {}
+    for line in fm_lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key not in _FRONT_MATTER_KEYS:
+            continue
+        # Strip surrounding quotes.
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in ('"', "'")
+        ):
+            value = value[1:-1]
+        if key == "version":
+            try:
+                result["version"] = int(value)
+            except ValueError:
+                continue
+        elif key == "review_by":
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                continue
+            result["review_by"] = value
+        else:
+            result[key] = value
+    return result
+
+
 def _loader_for(path: Path):
     """Return an instance of the loader that explicitly claims ``path``,
     or ``None`` when no registered loader does.
@@ -839,20 +912,30 @@ async def ingest_folder(
                     continue
                 if rel in prior:
                     changed.append(rel)
+                # Parse front-matter from markdown files at index time.
+                fm: dict = {}
+                if abs_path.suffix.lower() in {".md", ".markdown"}:
+                    fm = _parse_front_matter(str(abs_path))
                 for i, chunk in enumerate(chunks):
                     chunk_id = hashlib.sha256(
                         f"{collection_id}:{rel}:{file_hash}:{i}".encode("utf-8")
                     ).hexdigest()
+                    chunk_md: dict = {
+                        "collection_id": collection_id,
+                        "file_path": rel,
+                        "source": "collection",
+                        "chunk_index": i,
+                        "file_hash": file_hash,
+                        "indexed_at": time.time(),
+                    }
+                    # Add front-matter parsed fields when present.
+                    for key in _FRONT_MATTER_KEYS:
+                        if key in fm:
+                            chunk_md[key] = fm[key]
                     items.append({
                         "text": chunk,
                         "id": chunk_id,
-                        "metadata": {
-                            "collection_id": collection_id,
-                            "file_path": rel,
-                            "source": "collection",
-                            "chunk_index": i,
-                            "file_hash": file_hash,
-                        },
+                        "metadata": chunk_md,
                     })
                 indexed.append((rel, file_hash))
 

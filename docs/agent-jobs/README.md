@@ -24,7 +24,9 @@ Do not improvise.
 7. The full test suite must pass before you push:
    `python3 -m pytest -q -m "not slow"` (well over a thousand tests, all
    green; record the exact number in your PR body). Lint the files you
-   changed: `python3 -m ruff check <files>`.
+   changed: `uv run ruff check <files>`. Do not invent a substitute tool. If
+   that command cannot run, your environment is broken: report it and stop,
+   rather than working around it.
 8. Never commit IP addresses, hostnames, tokens, or credentials.
 9. STOP on any surprise: a failing test you did not cause, a merge conflict,
    a file that does not look like the job describes. Open the PR with what
@@ -57,7 +59,7 @@ against master on 2026-07-21.
 |---|---|---|---|---|
 | JOB-001 | job-001-benchmarks-em-dash-sweep.md | OPEN | minimal | punctuation only, one doc |
 | JOB-002 | job-002-cross-encoder-path-fix.md | ON HOLD, see #199 | n/a | do not start |
-| JOB-003 | job-003-http-server-dead-import.md | OPEN | minimal | delete dead code, one function |
+| JOB-003 | DONE-job-003-http-server-dead-import.md | DONE | n/a | completed in #376, kept for reference |
 | JOB-004 | job-004-eventqa-runner-exit-code.md | OPEN | low | two returns in one runner, one test file |
 | JOB-005 | DONE-job-005-collections-db-connect.md | DONE | n/a | completed, kept for reference |
 | JOB-006 | job-006-ref-fetch-part2-comment.md | OPEN | minimal | comments only, one test file |

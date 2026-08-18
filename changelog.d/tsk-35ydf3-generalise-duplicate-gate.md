@@ -1,0 +1,2 @@
+### Fixed
+- Generalised the `normalise-handle-gate` CI check from the single name `_normalise_handle` to any top-level function or method name defined more than once in the same module, so shadowed test functions (and any other accidental redefinition) are reported. The scan now also covers `tests/`. `@typing.overload` stubs, `@property` getters, and `@<name>.setter` / `@<name>.getter` / `@<name>.deleter` accessor pairs are still excluded as legitimate same-name definitions.

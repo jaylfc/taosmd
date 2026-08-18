@@ -368,41 +368,31 @@ def _stream_rejection(live_server: str, path: str, timeout: float = 3.0) -> tupl
             f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n".encode()
         )
         sock.settimeout(timeout)
-        line = b""
-        while b"\r\n" not in line:
+        data = b""
+        while b"\r\n\r\n" not in data:
             try:
-                chunk = sock.recv(128)
+                chunk = sock.recv(4096)
             except (socket.timeout, TimeoutError) as exc:
-                raise AssertionError(f"timed out reading stream status line: {exc}") from exc
+                raise AssertionError(f"timed out reading stream response: {exc}") from exc
             if not chunk:
                 break
-            line += chunk
-        status_line = line.decode("utf-8", "replace").splitlines()[0]
+            data += chunk
+
+        header_text, _, body_text = data.partition(b"\r\n\r\n")
+
+        status_line = header_text.decode("utf-8", "replace").splitlines()[0]
         status = int(status_line.split()[1])
 
         if status == 200:
             return status, None
 
-        headers_raw = b""
-        while b"\r\n\r\n" not in headers_raw:
-            try:
-                chunk = sock.recv(128)
-            except (socket.timeout, TimeoutError) as exc:
-                raise AssertionError(f"timed out reading response headers: {exc}") from exc
-            if not chunk:
-                break
-            headers_raw += chunk
-
-        header_text = headers_raw.decode("utf-8", "replace")
-        body_start = header_text.find("\r\n\r\n") + 4
-        body_bytes = header_text[body_start:].encode("utf-8")
-
         content_length = None
-        for h in header_text.splitlines()[1:]:
+        for h in header_text.decode("utf-8", "replace").splitlines()[1:]:
             if h.lower().startswith("content-length:"):
                 content_length = int(h.split(":", 1)[1].strip())
                 break
 
+        body_bytes = body_text
         if content_length is not None:
             remaining = content_length - len(body_bytes)
             while remaining > 0:
@@ -851,7 +841,7 @@ def test_http_a2a_blocks_without_body_returns_400(live_server):
     status code assertion red -- the service layer still returns 400. What
     does turn red is the **message** assertion: the HTTP-level check produces
     an error mentioning ``blocks``, whereas the service-layer ``ValueError``
-    yields the generic text ``'body' (non-empty string) is required``.
+    yields the generic text ``body must be a non-empty string``.
 
     In other words, ``assert "blocks" in body["error"]`` is the load-bearing
     assertion. A future "tidying" change to ``assert status == 400`` would

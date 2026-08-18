@@ -166,8 +166,13 @@ class RegistryVerifier:
     def authorize(self, token: str, claimed_from: str) -> dict:
         """Authorise a sender; return verified claims or raise AuthError.
 
-        Human principals skip the revocation feed fetch entirely so the
-        fail-closed revocation check never blocks controller-signed humans.
+        Human principals skip the revocation feed fetch entirely. This is safe by
+        design: the feed is agent-only (the controller has no human_principal
+        concept), so a registry outage must not lock out controller sessions. The
+        exemption is only as trustworthy as the config that supplies it: any id
+        placed in human_principal_ids is exempt from revocation, and an agent's
+        canonical_id placed there silently disables that agent's revocation check,
+        including the fail-closed refusal that fires when the feed has never loaded.
         """
         try:
             import jwt  # noqa: PLC0415

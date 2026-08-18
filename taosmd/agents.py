@@ -31,7 +31,6 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 

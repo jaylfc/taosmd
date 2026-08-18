@@ -1,0 +1,33 @@
+name: Witness token gate
+
+# Verifies that every `# WITNESS: <test>::<token>` marker declared in a
+# `taosmd/` source file resolves to a real token inside the named test file:
+# the test file must exist and `<token>` must appear in it. This catches the
+# regression where a source comment cites a test as the justification for a
+# constant, but a revert deletes the cited witness from the test while the
+# test file itself survives and the suite stays green.
+#
+# Only the explicit `WITNESS:` marker is an assertion; bare mentions of test
+# filenames in ordinary prose are ignored, so explanatory prose about a
+# removal is not flagged.
+#
+# See scripts/check_witness_token.py for the implementation.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  witness-token-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Install deps
+        run: uv sync --python 3.12
+      - name: Check that declared witness tokens resolve
+        run: python scripts/check_witness_token.py

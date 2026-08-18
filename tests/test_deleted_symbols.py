@@ -18,9 +18,12 @@ from scripts.check_deleted_symbols import (
     TRAILER,
     Violation,
     _extract_all_exports,
+    _extract_imports,
     _extract_symbols,
     _find_adding_commit,
+    _get_imports_at_ref,
     _get_symbols_at_ref,
+    _resolve_export_key,
     _run_git,
     check_deleted_symbols,
     find_removed_all_entries,
@@ -111,6 +114,60 @@ class TestExtractAllExports:
         assert "pkg/mod.py:bar" in exports
 
 
+class TestExtractImports:
+    def test_relative_import(self):
+        src = 'from .sub import Thing\n'
+        imp = _extract_imports(src, "pkg/__init__.py")
+        assert "Thing" in imp
+        assert "pkg/sub.py:Thing" in imp["Thing"]
+
+    def test_relative_import_with_alias(self):
+        src = 'from .sub import RealName as Alias\n'
+        imp = _extract_imports(src, "pkg/__init__.py")
+        assert "Alias" in imp
+        assert "pkg/sub.py:RealName" in imp["Alias"]
+
+    def test_multiple_names(self):
+        src = 'from .sub import A, B\n'
+        imp = _extract_imports(src, "pkg/__init__.py")
+        assert "pkg/sub.py:A" in imp["A"]
+        assert "pkg/sub.py:B" in imp["B"]
+
+    def test_package_form_candidate(self):
+        src = 'from .sub import Thing\n'
+        imp = _extract_imports(src, "pkg/__init__.py")
+        assert "pkg/sub/__init__.py:Thing" in imp["Thing"]
+
+    def test_from_import_module_skipped(self):
+        src = 'from . import submodule\n'
+        imp = _extract_imports(src, "pkg/__init__.py")
+        assert imp == {}
+
+    def test_absolute_import(self):
+        src = 'from pkg.sub import Thing\n'
+        imp = _extract_imports(src, "pkg/__init__.py")
+        assert "pkg/sub.py:Thing" in imp["Thing"]
+
+    def test_star_import_skipped(self):
+        src = 'from .sub import *\n'
+        imp = _extract_imports(src, "pkg/__init__.py")
+        assert imp == {}
+
+    def test_plain_import_skipped(self):
+        src = 'import os\nimport sys as system\n'
+        imp = _extract_imports(src, "pkg/mod.py")
+        assert imp == {}
+
+    def test_nested_relative(self):
+        src = 'from ..parent import Thing\n'
+        imp = _extract_imports(src, "pkg/sub/__init__.py")
+        assert "pkg/parent.py:Thing" in imp["Thing"]
+
+    def test_syntax_error_returns_empty(self):
+        imp = _extract_imports("from .\n", "pkg/mod.py")
+        assert imp == {}
+
+
 class TestFindSignalSymbols:
     def test_deleted_symbol_detected(self):
         base = {"taosmd/foo.py:bar": "def"}
@@ -166,6 +223,52 @@ class TestFindRemovedAllEntries:
         head_symbols = {}
         signal = find_removed_all_entries(base_exports, head_exports, head_symbols)
         assert signal == {}
+
+    def test_removed_reexport_def_survives_is_signal(self):
+        base_exports = {"pkg/__init__.py:Thing": "export"}
+        head_exports = {}
+        head_symbols = {"pkg/sub.py:Thing": "class"}
+        base_imports = {
+            "pkg/__init__.py": {"Thing": ["pkg/sub.py:Thing", "pkg/sub/__init__.py:Thing"]},
+        }
+        signal = find_removed_all_entries(
+            base_exports, head_exports, head_symbols, base_imports
+        )
+        assert signal == {"pkg/__init__.py:Thing": "class"}
+
+    def test_removed_reexport_aliased_def_survives_is_signal(self):
+        base_exports = {"pkg/__init__.py:Alias": "export"}
+        head_exports = {}
+        head_symbols = {"pkg/sub.py:Real": "def"}
+        base_imports = {
+            "pkg/__init__.py": {"Alias": ["pkg/sub.py:Real", "pkg/sub/__init__.py:Real"]},
+        }
+        signal = find_removed_all_entries(
+            base_exports, head_exports, head_symbols, base_imports
+        )
+        assert signal == {"pkg/__init__.py:Alias": "def"}
+
+    def test_removed_reexport_def_also_removed_is_not_signal(self):
+        base_exports = {"pkg/__init__.py:Thing": "export"}
+        head_exports = {}
+        head_symbols = {}
+        base_imports = {
+            "pkg/__init__.py": {"Thing": ["pkg/sub.py:Thing", "pkg/sub/__init__.py:Thing"]},
+        }
+        signal = find_removed_all_entries(
+            base_exports, head_exports, head_symbols, base_imports
+        )
+        assert signal == {}
+
+    def test_same_file_still_works_with_imports(self):
+        base_exports = {"pkg/mod.py:foo": "export", "pkg/mod.py:bar": "export"}
+        head_exports = {"pkg/mod.py:foo": "export"}
+        head_symbols = {"pkg/mod.py:foo": "def", "pkg/mod.py:bar": "def"}
+        base_imports = {}
+        signal = find_removed_all_entries(
+            base_exports, head_exports, head_symbols, base_imports
+        )
+        assert signal == {"pkg/mod.py:bar": "def"}
 
 
 class TestParseWaivedSymbols:
@@ -573,6 +676,263 @@ class TestAllRemovalControl:
     def test_noop_change_is_clean(self, tmp_path, monkeypatch):
         """A PR that touches neither symbols nor __all__ stays green."""
         repo = _init_repo_noop(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main(["--base", "HEAD~1"])
+        assert rc == 0
+
+
+# ----------------------------------------------------------------------
+# __all__ re-export removal: a name dropped from __all__ while its def
+# survives elsewhere (imported, not defined, in the __all__ file)
+# ----------------------------------------------------------------------
+
+
+def _init_repo_reexport_removed(tmp_path):
+    """A re-export is removed from __all__ while its import line and def survive.
+
+    Mirrors the taosmd/__init__.py pattern: __all__ names a symbol that is
+    imported from a submodule via from-import, with the definition living in
+    that submodule.
+    """
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, capture_output=True)
+
+    pkg = tmp_path / "taosmd"
+    pkg.mkdir(parents=True)
+
+    (pkg / "submodule.py").write_text("class Thing:\n    pass\n")
+    (pkg / "__init__.py").write_text(
+        'from .submodule import Thing\n\n'
+        '__all__ = ["Thing"]\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+
+    # HEAD: drop from __all__, keep import line and def
+    (pkg / "__init__.py").write_text(
+        'from .submodule import Thing\n\n'
+        '__all__ = []\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "head"], cwd=tmp_path, check=True, capture_output=True)
+
+    return tmp_path
+
+
+def _init_repo_reexport_legitimate(tmp_path):
+    """A re-export is removed from __all__ together with its import line AND definition.
+
+    This is a legitimate deletion: the def half catches it, the export half
+    must not also fire.
+    """
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, capture_output=True)
+
+    pkg = tmp_path / "taosmd"
+    pkg.mkdir(parents=True)
+
+    (pkg / "submodule.py").write_text("class Thing:\n    pass\n")
+    (pkg / "__init__.py").write_text(
+        'from .submodule import Thing\n\n'
+        '__all__ = ["Thing"]\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+
+    # HEAD: remove __all__ entry, import line, and definition
+    (pkg / "submodule.py").write_text("")
+    (pkg / "__init__.py").write_text('__all__ = []\n')
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "head"], cwd=tmp_path, check=True, capture_output=True)
+
+    return tmp_path
+
+
+def _init_repo_reexport_aliased(tmp_path):
+    """A re-export via ``as`` alias is removed from __all__ with import intact."""
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, capture_output=True)
+
+    pkg = tmp_path / "taosmd"
+    pkg.mkdir(parents=True)
+
+    (pkg / "submodule.py").write_text("class RealThing:\n    pass\n")
+    (pkg / "__init__.py").write_text(
+        'from .submodule import RealThing as Thing\n\n'
+        '__all__ = ["Thing"]\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True, capture_output=True)
+
+    (pkg / "__init__.py").write_text(
+        'from .submodule import RealThing as Thing\n\n'
+        '__all__ = []\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "head"], cwd=tmp_path, check=True, capture_output=True)
+
+    return tmp_path
+
+
+class TestResolveExportKey:
+    def test_same_file_symbol_unchanged(self):
+        head_symbols = {"pkg/mod.py:foo": "def"}
+        resolved = _resolve_export_key(
+            "pkg/mod.py:foo", {}, head_symbols
+        )
+        assert resolved == "pkg/mod.py:foo"
+
+    def test_reexport_resolved(self):
+        head_symbols = {"pkg/sub.py:RealThing": "class"}
+        imports = {
+            "pkg/__init__.py": {"Thing": ["pkg/sub.py:RealThing"]},
+        }
+        resolved = _resolve_export_key("pkg/__init__.py:Thing", imports, head_symbols)
+        assert resolved == "pkg/sub.py:RealThing"
+
+    def test_reexport_falls_back_when_def_gone(self):
+        head_symbols = {}
+        imports = {
+            "pkg/__init__.py": {"Thing": ["pkg/sub.py:Thing"]},
+        }
+        resolved = _resolve_export_key("pkg/__init__.py:Thing", imports, head_symbols)
+        assert resolved == "pkg/__init__.py:Thing"
+
+
+class TestReexportRemovalIntegration:
+    def test_reexport_removal_fails(self, tmp_path, monkeypatch):
+        repo = _init_repo_reexport_removed(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        violations, waived = check_deleted_symbols(
+            base_ref="HEAD~1",
+            repo_root=repo,
+            pr_body=None,
+            waived=None,
+        )
+        export_removed = [v for v in violations if v.kind == "export-removed"]
+        assert len(export_removed) == 1
+        assert export_removed[0].symbol == "taosmd/__init__.py:Thing"
+        assert waived == set()
+
+    def test_reexport_removal_exits_nonzero(self, tmp_path, monkeypatch, capsys):
+        repo = _init_repo_reexport_removed(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main(["--base", "HEAD~1"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "from __all__" in captured.out
+        assert "taosmd/__init__.py:Thing" in captured.out
+
+    def test_reexport_removal_passes_with_waiver(self, tmp_path, monkeypatch):
+        repo = _init_repo_reexport_removed(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main([
+            "--base", "HEAD~1",
+            "--pr-body", "Removes-Intentionally: taosmd/__init__.py:Thing",
+        ])
+        assert rc == 0
+
+    def test_reexport_aliased_removal_fails(self, tmp_path, monkeypatch):
+        repo = _init_repo_reexport_aliased(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        violations, waived = check_deleted_symbols(
+            base_ref="HEAD~1",
+            repo_root=repo,
+            pr_body=None,
+            waived=None,
+        )
+        export_removed = [v for v in violations if v.kind == "export-removed"]
+        assert len(export_removed) == 1
+        assert export_removed[0].symbol == "taosmd/__init__.py:Thing"
+
+    def test_reexport_added_by_resolves_to_definition(self, tmp_path, monkeypatch):
+        repo = _init_repo_reexport_removed(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        violations, waived = check_deleted_symbols(
+            base_ref="HEAD~1",
+            repo_root=repo,
+            pr_body=None,
+            waived=None,
+        )
+        export_removed = [v for v in violations if v.kind == "export-removed"]
+        # added_by should point to the commit, not "unknown"
+        assert export_removed[0].added_by != "unknown"
+
+
+class TestReexportRemovalControl:
+    def test_legitimate_reexport_deletion_no_export_violation(self, tmp_path, monkeypatch):
+        """Removing the __all__ entry, the import line, and the definition is
+        a legitimate deletion. The def half catches it; the export half must not."""
+        repo = _init_repo_reexport_legitimate(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        violations, waived = check_deleted_symbols(
+            base_ref="HEAD~1",
+            repo_root=repo,
+            pr_body=None,
+            waived=None,
+        )
+        deleted = [v for v in violations if v.kind == "deleted"]
+        assert len(deleted) == 1
+        assert deleted[0].symbol == "taosmd/submodule.py:Thing"
+        assert waived == set()
+        export_removed = [v for v in violations if v.kind == "export-removed"]
+        assert export_removed == []
+
+    def test_legitimate_reexport_deletion_passes_with_def_waiver(self, tmp_path, monkeypatch):
+        repo = _init_repo_reexport_legitimate(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        rc = main([
+            "--base", "HEAD~1",
+            "--pr-body", "Removes-Intentionally: taosmd/submodule.py:Thing",
+        ])
+        assert rc == 0
+
+    def test_same_file_all_removal_still_works(self, tmp_path, monkeypatch):
+        """CONTROL 2: the same-file case from #306 must keep working."""
+        repo = _init_repo_all_removed(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "REPO_ROOT", repo)
+
+        violations, waived = check_deleted_symbols(
+            base_ref="HEAD~1",
+            repo_root=repo,
+            pr_body=None,
+            waived=None,
+        )
+        export_removed = [v for v in violations if v.kind == "export-removed"]
+        assert len(export_removed) == 1
+        assert export_removed[0].symbol == "taosmd/service.py:func_b"
+
+    def test_noop_reexport_repo_is_clean(self, tmp_path, monkeypatch):
+        """A repo where __all__ re-exports match surviving defs stays green."""
+        repo = _init_repo_reexport_removed(tmp_path)
+        # Restore to base state for the head commit
+        pkg = repo / "taosmd"
+        (pkg / "__init__.py").write_text(
+            'from .submodule import Thing\n\n'
+            '__all__ = ["Thing"]\n'
+        )
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "noop"], cwd=repo, check=True, capture_output=True)
         monkeypatch.chdir(repo)
         monkeypatch.setattr(cds, "REPO_ROOT", repo)
 

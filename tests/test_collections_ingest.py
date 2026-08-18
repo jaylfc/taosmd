@@ -20,6 +20,7 @@ from taosmd import api as taosmd_api
 from taosmd import config
 from taosmd.collections import (
     CollectionStore,
+    _parse_front_matter,
     chunk_text,
     collect_files,
     ingest_folder,
@@ -584,3 +585,150 @@ def test_search_archived_collection_hidden(data_dir, source_dir):
         )
     )
     assert hits == []
+
+
+# ---------------------------------------------------------------------------
+# Front-matter parsing (_parse_front_matter + ingest_folder integration)
+# ---------------------------------------------------------------------------
+
+def _fm(tmp_path, content, name="doc.md"):
+    """Write *content* to a markdown file and return its path."""
+    p = tmp_path / name
+    p.write_text(content)
+    return p
+
+
+def test_parse_front_matter_extracts_doc_keys(tmp_path):
+    p = _fm(tmp_path, '---\ndoc_id: doc-1\nversion: 3\nreview_by: 2025-01-01\n---\nbody\n')
+    fm = _parse_front_matter(str(p))
+    assert fm == {"doc_id": "doc-1", "version": 3, "review_by": "2025-01-01"}
+
+
+def test_parse_front_matter_strips_quotes(tmp_path):
+    p = _fm(tmp_path, '---\ndoc_id: "doc-1"\nversion: "7"\nreview_by: "2025-06-15"\n---\nbody\n')
+    fm = _parse_front_matter(str(p))
+    assert fm["doc_id"] == "doc-1"
+    assert fm["version"] == 7
+    assert fm["review_by"] == "2025-06-15"
+
+
+def test_parse_front_matter_skips_unknown_keys(tmp_path):
+    p = _fm(tmp_path, '---\nauthor: Jay\ntitle: Guide\nversion: 2\n---\nbody\n')
+    fm = _parse_front_matter(str(p))
+    assert fm == {"version": 2}
+    assert "author" not in fm
+    assert "title" not in fm
+
+
+def test_parse_front_matter_version_non_int_is_skipped(tmp_path):
+    """version must be int or absent, never str."""
+    p = _fm(tmp_path, '---\nversion: 2.5\n---\nbody\n')
+    fm = _parse_front_matter(str(p))
+    assert "version" not in fm
+
+
+def test_parse_front_matter_review_by_invalid_date_is_skipped(tmp_path):
+    """review_by must be a valid ISO date."""
+    p = _fm(tmp_path, '---\nreview_by: not-a-date\n---\nbody\n')
+    fm = _parse_front_matter(str(p))
+    assert "review_by" not in fm
+
+
+def test_parse_front_matter_review_by_valid_iso(tmp_path):
+    p = _fm(tmp_path, '---\nreview_by: 2025-12-31\n---\nbody\n')
+    fm = _parse_front_matter(str(p))
+    assert fm["review_by"] == "2025-12-31"
+
+
+def test_parse_front_matter_no_front_matter(tmp_path):
+    p = _fm(tmp_path, "# Title\n\nNo front matter here.\n")
+    assert _parse_front_matter(str(p)) == {}
+
+
+def test_parse_front_matter_empty_block(tmp_path):
+    p = _fm(tmp_path, '---\n---\nbody\n')
+    assert _parse_front_matter(str(p)) == {}
+
+
+def test_parse_front_matter_thematic_break_not_captured(tmp_path):
+    """A document that opens with a thematic break (---) must not have its
+    prose scanned as front matter, even if a later --- appears."""
+    text = (
+        "---\n\n"
+        "# Title\n\n"
+        "Some prose with version: 2 in it.\n"
+        "Author: Jay\n\n"
+        "---\n\n"
+        "more content\n"
+    )
+    p = _fm(tmp_path, text)
+    fm = _parse_front_matter(str(p))
+    assert "version" not in fm
+    assert "doc_id" not in fm
+    assert "review_by" not in fm
+
+
+def test_parse_front_matter_closing_delimiter_within_budget(tmp_path):
+    """A genuine front-matter block within the line budget is parsed."""
+    lines = ["---"]
+    for i in range(10):
+        lines.append(f"doc_id: doc-{i}")
+    lines.append("review_by: 2025-01-01")
+    lines.append("---")
+    lines.append("body")
+    p = _fm(tmp_path, "\n".join(lines) + "\n")
+    fm = _parse_front_matter(str(p))
+    assert fm["doc_id"] == "doc-9"
+    assert fm["review_by"] == "2025-01-01"
+
+
+def test_ingest_folder_front_matter_reaches_search(data_dir, source_dir):
+    """End-to-end: front matter survives ingest_folder -> search -> _format_hit
+    with the real data shape."""
+    _patch_embedder(data_dir)
+    (source_dir / "doc.md").write_text(
+        '---\ndoc_id: doc-widget\nversion: 3\n'
+        'review_by: 2020-01-01\n---\n'
+        "# Widget\n\nThe widget's unique sprocket design is patented.\n"
+    )
+    store, col = _make_collection(data_dir, source_dir)
+    store.grant(col["id"], "dev")
+    asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+    hits = asyncio.run(
+        taosmd_api.search(
+            "patented sprocket", agent="dev", mode="bm25",
+            collections=[col["id"]], collections_only=True, data_dir=data_dir,
+        )
+    )
+    assert hits
+    top = hits[0]
+    md = top["metadata"]
+    assert md["doc_id"] == "doc-widget"
+    assert md["version"] == 3
+    assert md["review_by"] == "2020-01-01"
+    assert md["is_current"] is True
+    assert isinstance(md["as_of"], float)
+    assert md["is_past_review"] is True
+
+
+def test_ingest_folder_markdown_extension_front_matter(data_dir, source_dir):
+    """.markdown files also get front-matter parsing."""
+    _patch_embedder(data_dir)
+    (source_dir / "doc.markdown").write_text(
+        "---\ndoc_id: doc-md-ext\nversion: 1\nreview_by: 2025-01-01\n---\n"
+        "# Markdown ext\n\nContent with the unique word frobnicatesmark.\n"
+    )
+    store, col = _make_collection(data_dir, source_dir)
+    store.grant(col["id"], "dev")
+    asyncio.run(ingest_folder(col["id"], data_dir=data_dir))
+    hits = asyncio.run(
+        taosmd_api.search(
+            "frobnicatesmark", agent="dev", mode="bm25",
+            collections=[col["id"]], collections_only=True, data_dir=data_dir,
+        )
+    )
+    assert hits
+    md = hits[0]["metadata"]
+    assert md["doc_id"] == "doc-md-ext"
+    assert md["version"] == 1
+    assert md["review_by"] == "2025-01-01"
