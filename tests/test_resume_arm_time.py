@@ -147,6 +147,9 @@ def test_system_crontab_block_names_usr_bin_python3():
     block = resume_arm_time.system_crontab_block(fire, retry)
     assert f"/usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire primary" in block
     assert f"/usr/bin/python3 {resume_arm_time._HELPER_PATH} --fire retry" in block
+    # Independent check against SCRIPT constant (proves path sensitivity)
+    assert f"/usr/bin/python3 {SCRIPT} --fire primary" in block
+    assert f"/usr/bin/python3 {SCRIPT} --fire retry" in block
     # No bare `python3` token (the blocked PR emitted `python3 <path>`).
     assert " python3 " not in block
 
