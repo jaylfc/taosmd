@@ -56,6 +56,45 @@ import time
 
 _HELPER_PATH = os.path.realpath(__file__)
 
+
+def _is_under_temp(path):
+    temp_roots = ("/tmp", "/var/tmp", "/private/var/folders", "/var/folders")
+    for root in temp_roots:
+        if path == root or path.startswith(root + os.sep):
+            return root
+    return None
+
+
+def _is_in_linked_worktree(path):
+    parent = os.path.dirname(os.path.abspath(path))
+    while parent and parent != os.path.dirname(parent):
+        git_dir = os.path.join(parent, ".git")
+        if os.path.exists(git_dir):
+            if os.path.isfile(git_dir):
+                return parent
+            return None
+        parent = os.path.dirname(parent)
+    return None
+
+
+def _validate_helper_path():
+    path = _HELPER_PATH
+    tmp = _is_under_temp(path)
+    if tmp:
+        raise SystemExit(
+            f"FAIL: {_HELPER_PATH} resolves under a temp directory ({tmp}).\n"
+            "A cron line armed from a temp checkout cannot self-delete when the\n"
+            "directory is cleaned up. REFUSING to emit."
+        )
+    wt = _is_in_linked_worktree(path)
+    if wt:
+        raise SystemExit(
+            f"FAIL: {_HELPER_PATH} is inside a git worktree ({wt}).\n"
+            "Worktree checkouts are ephemeral; the cron line would pin a path\n"
+            "that vanishes when the worktree is removed. REFUSING to emit."
+        )
+
+
 # The two tunables, each stating WHAT IT IS A FUNCTION OF. That is the whole point of
 # this file: a constant whose dependency is unnamed is the bug it exists to prevent.
 #
@@ -747,6 +786,7 @@ def main():
           "           something in the SYSTEM crontab, outside the component that failed.\n"
           "           If instead you write these lines into a crontab, durability is fine but\n"
           "           recurring=false does not exist there, so re-read the ONE-SHOT line.")
+    _validate_helper_path()
     print(system_crontab_block(fire, r_fire))
 
 

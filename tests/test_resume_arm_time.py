@@ -111,6 +111,11 @@ def test_canonical_derivation_emits_date_pinned_one_shot(monkeypatch, capsys):
     17 0 18 8 *, a date-pinned one-shot -- not the blocked PR's daily 17 0 * * *."""
     monkeypatch.setenv("TZ", "UTC")
     time.tzset()
+    monkeypatch.setattr(
+        resume_arm_time,
+        "_HELPER_PATH",
+        "/home/jay/.taos-fleet-tools/scripts/resume_arm_time.py",
+    )
     written = []
     monkeypatch.setattr(
         resume_arm_time.subprocess, "run", _fake_run(WATCHER_LINE, written)
@@ -154,6 +159,38 @@ def test_helper_imports_getpass():
     assert "getpass" in dir(resume_arm_time)
     import getpass as _gp
     assert resume_arm_time.getpass is _gp
+
+
+# --------------------------------------------------------------------------- #
+# Helper-path guard: refuse to emit from a temp or linked-worktree location.
+# --------------------------------------------------------------------------- #
+
+def test_guard_refuses_temp_path(monkeypatch, capsys):
+    """A _HELPER_PATH under /tmp is refused with a named reason."""
+    monkeypatch.setattr(
+        resume_arm_time,
+        "_HELPER_PATH",
+        "/tmp/scratchpad/wt354/scripts/resume_arm_time.py",
+    )
+    monkeypatch.setattr(
+        resume_arm_time.subprocess, "run", _fake_run(WATCHER_LINE, [])
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["resume_arm_time.py", "2026-08-18T00:00:00+00:00"]
+    )
+    with pytest.raises(SystemExit) as exc:
+        resume_arm_time.main()
+    assert "temp directory" in str(exc.value)
+
+
+def test_guard_refuses_linked_worktree(tmp_path):
+    """_is_in_linked_worktree returns the worktree root when .git is a file."""
+    fake_wt = tmp_path / "fake-wt"
+    fake_wt.mkdir()
+    (fake_wt / ".git").write_text("gitdir: /some/real/.git/worktrees/fake\n")
+    target = fake_wt / "scripts" / "resume_arm_time.py"
+    result = resume_arm_time._is_in_linked_worktree(str(target))
+    assert result == str(fake_wt)
 
 
 # --------------------------------------------------------------------------- #
