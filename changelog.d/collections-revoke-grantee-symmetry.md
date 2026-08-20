@@ -1,0 +1,2 @@
+### Fixed
+- Revoking a collection grant now removes it when the id carries surrounding whitespace. ``grant`` stored ``canonical_id.strip()`` while ``revoke`` and ``has_grant`` matched the raw argument, so passing one padded id to both calls granted query access that could not be taken back: the DELETE matched no rows and still returned the collection, and the CLI printed the grant as live. Both ends now derive the stored spelling the same way. The match stays case-sensitive on purpose, since ``has_grant`` gates which collections join the search scope.

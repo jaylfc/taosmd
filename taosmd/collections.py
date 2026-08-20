@@ -134,6 +134,33 @@ class CollectionBusyError(RuntimeError):
     ``indexing`` (mapped to HTTP 409 by the endpoint)."""
 
 
+def _grantee_key(canonical_id: str) -> str:
+    """Storage spelling of a grantee id, applied identically on write and read.
+
+    ``grant`` has always written ``canonical_id.strip()`` while ``revoke`` and
+    ``has_grant`` matched the raw argument, so one padded id could be granted
+    and then not revoked: the DELETE matched nothing and still returned the
+    collection. Both ends now go through here, so they agree by construction.
+
+    Whitespace only, deliberately. ``has_grant`` decides which collections join
+    ``search_agents`` in :func:`taosmd.api.search`, so any wider rule (folding
+    case, stripping a leading ``@``) would serve content granted to one identity
+    to a different one. This is a storage key, never an authorisation decision
+    about two identities that merely look alike.
+
+    The ``isinstance`` guard preserves pre-existing behaviour rather than
+    promising a wider contract: callers are typed ``str``, but ``revoke`` and
+    ``has_grant`` bound the raw argument before this change, so a value sqlite
+    can bind natively (``None``, an int) reached the query and matched nothing.
+    Without the guard those callers would newly raise ``AttributeError`` on
+    ``.strip()``. Values sqlite cannot bind (a list, a dict) raised
+    ``sqlite3.ProgrammingError`` before this change and still do; the guard
+    does not make them work. Measured on both sides, see
+    ``test_grantee_key_preserves_the_pre_existing_non_string_behaviour``.
+    """
+    return canonical_id.strip() if isinstance(canonical_id, str) else canonical_id
+
+
 def _new_collection_id() -> str:
     """``col-`` + 12 lowercase hex. Matches the agent-name grammar
     (``^[a-z][a-z0-9_-]{0,62}$``) so the id can double as the agent name
@@ -371,7 +398,7 @@ class CollectionStore:
         self._conn.execute(
             "INSERT OR IGNORE INTO collection_grants "
             "(canonical_id, scope, collection_id, created_at) VALUES (?, ?, ?, ?)",
-            (canonical_id.strip(), GRANT_SCOPE, collection_id, time.time()),
+            (_grantee_key(canonical_id), GRANT_SCOPE, collection_id, time.time()),
         )
         self._conn.commit()
         return self.get(collection_id)
@@ -381,7 +408,7 @@ class CollectionStore:
         self._conn.execute(
             "DELETE FROM collection_grants "
             "WHERE canonical_id = ? AND scope = ? AND collection_id = ?",
-            (canonical_id, GRANT_SCOPE, collection_id),
+            (_grantee_key(canonical_id), GRANT_SCOPE, collection_id),
         )
         self._conn.commit()
         return self.get(collection_id)
@@ -390,7 +417,7 @@ class CollectionStore:
         row = self._conn.execute(
             "SELECT 1 FROM collection_grants "
             "WHERE canonical_id = ? AND scope = ? AND collection_id = ?",
-            (canonical_id, GRANT_SCOPE, collection_id),
+            (_grantee_key(canonical_id), GRANT_SCOPE, collection_id),
         ).fetchone()
         return row is not None
 
