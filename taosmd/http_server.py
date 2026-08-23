@@ -856,6 +856,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "/a2a/admin/rename-channel",
                 "/a2a/admin/supersede-message",
                 "/a2a/admin/prune-receipts",
+                "/a2a/admin/set-channel-acl",
+                "/a2a/admin/get-channel-acl",
             )
 
         def _check_admin_token(self) -> bool:
@@ -1186,6 +1188,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_admin_a2a_rename_channel()
                 elif method == "POST" and path == "/a2a/admin/supersede-message":
                     self._handle_admin_a2a_supersede_message()
+                elif method == "POST" and path == "/a2a/admin/set-channel-acl":
+                    self._handle_admin_a2a_set_channel_acl()
+                elif method == "GET" and path == "/a2a/admin/channel-acl":
+                    self._handle_admin_a2a_get_channel_acl()
                 elif method == "GET" and _serve_dashboard and self._try_serve_static(parts.path):
                     return  # static asset served
                 elif method == "GET" and _serve_dashboard:
@@ -1656,6 +1662,43 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         "a2a verify-and-warn: accepting unverified post from %r: %s",
                         from_, warn_reason,
                     )
+            # --- Per-channel ACL enforcement ---
+            # Default: allow everyone (zero behavior change on deploy).
+            # Only enforce when the channel has an explicit ACL entry in the config.
+            _thread = thread
+            from taosmd import config as _config2
+            # Use get_acl which normalizes; check raw config to distinguish
+            # "channel not configured" (default *) from "channel configured with *".
+            raw_data = _config2._read(data_dir)
+            raw_acls = raw_data.get(_config2._ACL_SECTION_KEY, {}) if isinstance(raw_data, dict) else {}
+            if _thread and isinstance(raw_acls, dict) and _thread in raw_acls:
+                # Channel has explicit ACL config → enforce read/post allowlists
+                acl = raw_acls[_thread]
+                read_list = acl.get("read", ["*"])
+                post_list = acl.get("post", ["*"])
+                # Normalize: ensure lists, handle "*" wildcard
+                if not isinstance(read_list, list):
+                    read_list = [read_list]
+                if not isinstance(post_list, list):
+                    post_list = [post_list]
+                # Determine the verified sender identity
+                if _registry_verifier is not None and auth.startswith("Bearer ") and token:
+                    try:
+                        import jwt as _jwt  # noqa: PLC0415
+                        unverified = _jwt.decode(token, options={"verify_signature": False})
+                        verified_identity = unverified.get("sub", "") or ""
+                    except Exception:
+                        verified_identity = ""
+                    if not verified_identity:
+                        verified_identity = _from
+                else:
+                    verified_identity = _from
+                # Check post allowlist: if '*' is not in the post list,
+                # the sender's verified identity must be in it.
+                if "*" not in post_list and verified_identity not in post_list:
+                    self._send_json(403, {"error": f"post denied for {_thread!r}; identity {verified_identity!r} not in post allowlist"})
+                    return
+            # -----------------------------------------------------------------
             result = runner.run(
                 service.a2a_send(
                     sender=from_, body=body_text,
@@ -1668,6 +1711,41 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_a2a_messages(self, qs: dict) -> None:
             thread = (qs.get("thread") or [None])[0]
+            # --- Per-channel ACL enforcement for reads ---
+            # Check if the thread has explicit ACL config; if so, verify the
+            # reader's identity is in the read allowlist.
+            from taosmd import config as _config2
+            raw_data = _config2._read(data_dir)
+            raw_acls = raw_data.get(_config2._ACL_SECTION_KEY, {}) if isinstance(raw_data, dict) else {}
+            if thread and isinstance(raw_acls, dict) and thread in raw_acls:
+                acl = raw_acls[thread]
+                read_list = acl.get("read", ["*"])
+                if not isinstance(read_list, list):
+                    read_list = [read_list]
+                # Determine the verified reader identity
+                auth = self.headers.get("Authorization", "")
+                if _registry_verifier is not None and auth.startswith("Bearer "):
+                    token = auth[len("Bearer "):].strip()
+                    try:
+                        import jwt as _jwt  # noqa: PLC0415
+                        unverified = _jwt.decode(token, options={"verify_signature": False})
+                        reader_identity = unverified.get("sub", "") or ""
+                    except Exception:
+                        reader_identity = ""
+                    if not reader_identity:
+                        # Identity not verifiable → reject if ACL is explicit
+                        self._send_json(403, {"error": f"read denied for {thread!r}; identity not verified and ACL is configured"})
+                        return
+                else:
+                    # No registry verifier or no token → identity not verified
+                    # → reject if ACL is explicit
+                    self._send_json(403, {"error": f"read denied for {thread!r}; identity not verified and ACL is configured"})
+                    return
+                # Verify reader is in the read allowlist
+                if "*" not in read_list and reader_identity not in read_list:
+                    self._send_json(403, {"error": f"read denied for {thread!r}; identity {reader_identity!r} not in read allowlist"})
+                    return
+            # -----------------------------------------------------------------
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
             fields_raw = (qs.get("fields") or [None])[0]
@@ -1755,6 +1833,26 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     raise _BadRequest(
                         "'reader' query parameter is required when no registry verifier is configured"
                     )
+            # --- Per-channel ACL enforcement for reads ---
+            # Check if any channel has explicit ACL config; if so, verify the
+            # reader's identity is in the read allowlist.
+            from taosmd import config as _config2
+            raw_data = _config2._read(data_dir)
+            raw_acls = raw_data.get(_config2._ACL_SECTION_KEY, {}) if isinstance(raw_data, dict) else {}
+            # Collect all channels that have explicit ACL config
+            restricted_channels = [ch for ch in raw_acls if isinstance(raw_acls[ch], dict)]
+            if restricted_channels:
+                # Check all restricted channels; the mentions feed returns messages
+                # across channels, so we verify the reader can read each restricted channel.
+                for ch in restricted_channels:
+                    acl = raw_acls[ch]
+                    read_list = acl.get("read", ["*"])
+                    if not isinstance(read_list, list):
+                        read_list = [read_list]
+                    if "*" not in read_list and reader not in read_list:
+                        self._send_json(403, {"error": f"read denied for {ch!r}; identity {reader!r} not in read allowlist"})
+                        return
+            # ---------------------------------------------------------------
             messages = runner.run(
                 service.a2a_mentions_feed(reader, since=since, limit=limit_i, data_dir=data_dir)
             )
@@ -1783,7 +1881,28 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 last_ts = time.time()
 
             subscriber_agent = self._get_authenticated_agent_id()
-
+            # --- Per-channel ACL enforcement for reads ---
+            # Check if the thread has explicit ACL config; if so, verify the
+            # subscriber's identity is in the read allowlist.
+            thread = (qs.get("thread") or [None])[0]
+            from taosmd import config as _config2
+            raw_data = _config2._read(data_dir)
+            raw_acls = raw_data.get(_config2._ACL_SECTION_KEY, {}) if isinstance(raw_data, dict) else {}
+            if thread and isinstance(raw_acls, dict) and thread in raw_acls:
+                acl = raw_acls[thread]
+                read_list = acl.get("read", ["*"])
+                if not isinstance(read_list, list):
+                    read_list = [read_list]
+                # subscriber_agent is the verified identity from registry JWT,
+                # or None if no registry verifier is configured.
+                if subscriber_agent is None:
+                    # Identity not verified and ACL is configured → reject
+                    self._send_json(403, {"error": f"read denied for {thread!r}; identity not verified and ACL is configured"})
+                    return
+                if "*" not in read_list and subscriber_agent not in read_list:
+                    self._send_json(403, {"error": f"read denied for {thread!r}; identity {subscriber_agent!r} not in read allowlist"})
+                    return
+            # -----------------------------------------------------------------
             # Send SSE response headers before entering the poll loop.
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -1832,6 +1951,38 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"threads": threads})
 
         def _handle_a2a_thread_messages(self, thread: str, qs: dict) -> None:
+            # --- Per-channel ACL enforcement for reads ---
+            # Check if the thread has explicit ACL config; if so, verify the
+            # reader's identity is in the read allowlist.
+            from taosmd import config as _config2
+            raw_data = _config2._read(data_dir)
+            raw_acls = raw_data.get(_config2._ACL_SECTION_KEY, {}) if isinstance(raw_data, dict) else {}
+            if thread and isinstance(raw_acls, dict) and thread in raw_acls:
+                acl = raw_acls[thread]
+                read_list = acl.get("read", ["*"])
+                if not isinstance(read_list, list):
+                    read_list = [read_list]
+                # Determine the verified reader identity
+                auth = self.headers.get("Authorization", "")
+                if _registry_verifier is not None and auth.startswith("Bearer "):
+                    token = auth[len("Bearer "):].strip()
+                    try:
+                        import jwt as _jwt  # noqa: PLC0415
+                        unverified = _jwt.decode(token, options={"verify_signature": False})
+                        reader_identity = unverified.get("sub", "") or ""
+                    except Exception:
+                        reader_identity = ""
+                    if not reader_identity:
+                        self._send_json(403, {"error": f"read denied for {thread!r}; identity not verified and ACL is configured"})
+                        return
+                else:
+                    self._send_json(403, {"error": f"read denied for {thread!r}; identity not verified and ACL is configured"})
+                    return
+                # Verify reader is in the read allowlist
+                if "*" not in read_list and reader_identity not in read_list:
+                    self._send_json(403, {"error": f"read denied for {thread!r}; identity {reader_identity!r} not in read allowlist"})
+                    return
+            # -----------------------------------------------------------------
             before_raw = (qs.get("before") or [None])[0]
             after_raw = (qs.get("after") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
@@ -1949,6 +2100,52 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 service.a2a_prune_receipts(older_than_ts, data_dir=data_dir)
             )
             self._send_json(200, result)
+
+        # ----- A2A channel ACL admin endpoints --------------------------------
+
+        def _handle_admin_a2a_set_channel_acl(self) -> None:
+            """POST /a2a/admin/set-channel-acl -- set ACL for a channel.
+
+            Body: ``{"channel": "name", "read": ["id1", "id2"], "post": ["id3"]}``.
+            Each of ``read`` and ``post`` may contain canonical IDs or the
+            wildcard ``"*"`` to allow all identities.
+            """
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            channel = body.get("channel")
+            if not isinstance(channel, str) or not channel:
+                self._send_json(400, {"error": "'channel' (non-empty string) is required"})
+                return
+            read_ids = body.get("read", ["*"])
+            post_ids = body.get("post", ["*"])
+            from taosmd import config as _config
+            _config.set_acl(data_dir=data_dir, channel=channel,
+                            read_ids=read_ids, post_ids=post_ids)
+            self._send_json(200, {"ok": True, "channel": channel})
+
+        def _handle_admin_a2a_get_channel_acl(self) -> None:
+            """GET /a2a/admin/channel-acl -- get ACL for a channel.
+
+            Query param: ``?channel=<name>``.
+            Returns the read/post allowlist for the named channel, or
+            ``{"read": ["*"], "post": ["*]`` when the channel has no explicit
+            ACL (default-open behaviour).
+            """
+            if not self._check_admin_token():
+                return
+            from taosmd import config as _config
+            from urllib.parse import parse_qs
+            parts = urlsplit(self.path)
+            qs = parse_qs(parts.query)
+            channel = (qs.get("channel") or [None])[0]
+            if not isinstance(channel, str) or not channel:
+                # Return all channels ACL info (only those explicitly set)
+                acls = _config.get_acl(data_dir=data_dir, channel=None)
+                self._send_json(200, {"acls": acls})
+                return
+            acl = _config.get_acl(data_dir=data_dir, channel=channel)
+            self._send_json(200, {"channel": channel, "acl": acl})
 
         # ----- task graph handlers ----------------------------------------
 

@@ -67,6 +67,12 @@ _HUMAN_PRINCIPAL_IDS_KEY = "human_principal_ids"
 _COLLECTIONS_SECTION_KEY = "collections"
 _COLLECTIONS_ALLOWED_ROOTS_KEY = "allowed_roots"
 
+# Per-channel ACL for the A2A bus. Maps channel name to {read, post} identities.
+# Each value is a list of canonical IDs, or the special token "*" meaning allow
+# all. When a channel has no entry in this section the default is "*" for both
+# read and post (zero-behavior-change on deploy).
+_ACL_SECTION_KEY = "acls"
+
 MANAGED_BY_STANDALONE = "standalone"
 MANAGED_BY_TAOS = "taos"
 
@@ -716,8 +722,94 @@ def set_human_principal_ids(ids, *, clear: bool = False, data_dir=None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Collections: allowed roots
+# Per-channel ACL for the A2A bus
 # ---------------------------------------------------------------------------
+
+def get_acl(data_dir=None, channel: str = None) -> dict:
+    """Return the ACL for *channel*, defaulting to ``{"read": ["*"], "post": ["*]""}.
+
+    The returned dict always has ``read`` and ``post`` keys whose values are
+    lists of canonical IDs (or ``["*"]`` meaning allow all).
+
+    Resolution order:
+    1. ``TAOSMD_ACL_CHANNELS`` env var (JSON string)
+    2. ``acls`` key in ``~/.taosmd/config.json``
+    """
+    # Try environment variable first
+    env = os.environ.get("TAOSMD_ACL_CHANNELS")
+    if env is not None and env.strip():
+        try:
+            env_acls = json.loads(env)
+            if isinstance(env_acls, dict) and channel is not None:
+                channel_acl = env_acls.get(channel)
+                if channel_acl and isinstance(channel_acl, dict):
+                    return _normalize_acl(channel_acl)
+            if isinstance(env_acls, dict):
+                return _normalize_acl(env_acls)
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("taosmd: invalid TAOSMD_ACL_CHANNELS env var")
+    # Fall back to config file
+    data = _read(data_dir)
+    acls = data.get(_ACL_SECTION_KEY, {})
+    if isinstance(acls, dict):
+        if channel is not None:
+            channel_acl = acls.get(channel)
+            if channel_acl and isinstance(channel_acl, dict):
+                return _normalize_acl(channel_acl)
+            # Channel not configured → default *
+            return {"read": ["*"], "post": ["*"]}
+        return _normalize_acl(acls)
+    # No config at all → default *
+    return {"read": ["*"], "post": ["*"]}
+
+
+def set_acl(data_dir=None, channel: str = None, read_ids: list | None = None,
+            post_ids: list | None = None) -> None:
+    """Set the ACL for *channel*.
+
+    After persisting, a runtime config change; existing channels remain
+    unaffected unless explicitly configured.
+
+    Args:
+        data_dir: config data directory
+        channel: channel name
+        read_ids: list of canonical IDs allowed to read, or ``["*"]`` to allow all
+        post_ids: list of canonical IDs allowed to post, or ``["*"]`` to allow all
+    """
+    if channel is None:
+        raise ValueError("channel is required")
+    read_ids = read_ids or ["*"]
+    post_ids = post_ids or ["*"]
+    _validate_acl_ids(read_ids, "read")
+    _validate_acl_ids(post_ids, "post")
+    data = _read(data_dir)
+    section = data.get(_ACL_SECTION_KEY, {})
+    if not isinstance(section, dict):
+        section = {}
+    section[channel] = {"read": read_ids, "post": post_ids}
+    data[_ACL_SECTION_KEY] = section
+    _write(data, data_dir)
+
+
+def _normalize_acl(channel_acl: dict) -> dict:
+    """Ensure ``read`` and ``post`` keys exist and are lists."""
+    read = channel_acl.get("read", ["*"])
+    post = channel_acl.get("post", ["*"])
+    if not isinstance(read, list):
+        read = [read]
+    if not isinstance(post, list):
+        post = [post]
+    return {"read": read, "post": post}
+
+
+def _validate_acl_ids(ids: list, field: str) -> None:
+    """Validate that *ids* contains strings or the '*' wildcard."""
+    if not isinstance(ids, list):
+        raise ValueError(f"{field} must be a list, got {type(ids).__name__}")
+    for i in ids:
+        if i != "*" and (not isinstance(i, str) or not i.strip()):
+            raise ValueError(f"{field} entries must be non-empty strings or '*', got {i!r}")
+
 
 def get_collections_allowed_roots(data_dir=None) -> list[str]:
     """Return the configured collections allowed-roots list (default empty).
