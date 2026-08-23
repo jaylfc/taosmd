@@ -6,9 +6,9 @@ unless the change carries an explicit "Docs-Reviewed: <why>" trailer.
 
 Two layers:
   invariants  -- deterministic sanity checks (Layer A). Currently: every
-                 scripts/ tinyagentos/ docs/ desktop/ path mentioned in the
-                 configured doc set actually exists on disk, AND every protected
-                 doc still contains its declared required section headings.
+                  scripts/ tinyagentos/ docs/ desktop/ taosmd/ path mentioned in the
+                  configured doc set actually exists on disk, AND every protected
+                  doc still contains its declared required section headings.
                  Layer A runs regardless of what changed, so a doc emptied of
                  the sections it exists to hold fails the gate even when no code
                  rule fires (the "gutting hole").
@@ -53,7 +53,23 @@ DEFAULT_TRAILER = "Docs-Reviewed:"
 # "tinyagentos/" inside "/home/<user>/tinyagentos/data/" in a deploy-layout
 # table), which would otherwise falsely flag deploy-time paths that never
 # exist in the repo itself.
-_TOKEN_RE = re.compile(r"(?<![\w/])(?:scripts|tinyagentos|docs|desktop)/[^\s`\"'|]+")
+_TOKEN_RE = re.compile(r"(?<![\w/])(?:scripts|tinyagentos|docs|desktop|taosmd)/[^\s`\"'|]+")
+
+# Runtime data-dir paths and generated files under taosmd/ that must not be
+# treated as repo-relative source references. These would otherwise match
+# when the prefix is embedded in a larger path (e.g. ~/.taosmd/config.json),
+# producing false positives for paths that never exist in the repo tree.
+_EXCLUDED_TOKEN_RE = re.compile(
+    r"^taosmd/(?:"
+    r"archive|"
+    r"archive-index\.db|"
+    r"config\.json|"
+    r"knowledge-graph\.db|"
+    r"vector-memory\.db|"
+    r"project\.toml|"
+    r"_build_info\.py"
+    r")(?:/|$)"
+)
 
 # Chars that mark a token as a glob pattern or a <placeholder> rather than a
 # concrete repo path -- these are never asserted to exist.
@@ -84,7 +100,7 @@ def extract_path_tokens(text: str) -> list[str]:
     tokens = []
     for m in _TOKEN_RE.finditer(text):
         cleaned = _clean_token(m.group(0))
-        if cleaned:
+        if cleaned and not _EXCLUDED_TOKEN_RE.match(cleaned):
             tokens.append(cleaned)
     return tokens
 
@@ -129,10 +145,11 @@ def _missing_headings(repo_root: Path, doc: str, required: list[str]) -> list[st
 
 
 def check_referenced_paths(repo_root: Path, files_to_scan: list[str], config: dict) -> list[str]:
-    """Layer A: every scripts/tinyagentos/docs/desktop path token mentioned in
+    """Layer A: every scripts/tinyagentos/docs/desktop/taosmd path token mentioned in
     the configured doc set must exist on disk. A scan-target file that itself
     does not exist (e.g. a local-only, gitignored doc) is silently skipped
-    rather than treated as a failure."""
+    rather than treated as a failure. Runtime data-dir paths and generated
+    files under taosmd/ are excluded via _EXCLUDED_TOKEN_RE."""
     failures: list[str] = []
     for rel in files_to_scan:
         doc_path = repo_root / rel
@@ -312,10 +329,13 @@ def _parse_name_status(output: str) -> list[tuple[str, str]]:
             continue
         parts = line.split("\t")
         status = parts[0]
-        # Renames/copies (R100, C100, ...) carry old + new path; the new path
-        # is what matters for both triggering and satisfying a rule.
         path = parts[-1]
-        changed.append((status[0], path))
+        if status.startswith("R") or status.startswith("C"):
+            old_path = parts[1]
+            changed.append(("D", old_path))
+            changed.append(("A", path))
+        else:
+            changed.append((status[0], path))
     return changed
 
 
@@ -330,6 +350,30 @@ def _git_changed_base(base_ref: str) -> list[tuple[str, str]]:
 def _git_commit_messages(base_ref: str) -> list[str]:
     out = _run_git(["log", f"{base_ref}..HEAD", "--format=%B%x00"])
     return [m for m in out.split("\x00") if m.strip()]
+
+
+def _check_conflict_markers(
+    repo_root: Path, changed_paths: list[str], ref: str | None = None, cached: bool = False
+) -> list[str]:
+    """Greps each changed file for unresolved merge-conflict markers.
+
+    For ``--staged`` the index is searched (``--cached``); for ``--base`` the
+    given ref (usually ``HEAD``) is searched. A file that does not exist in the
+    searched tree is silently skipped."""
+    failures: list[str] = []
+    for path in changed_paths:
+        args = ["git", "grep", "-n", "-E", r"^(<<<<<<< |=======$|>>>>>>> )"]
+        if cached:
+            args.insert(4, "--cached")
+        elif ref:
+            args.append(ref)
+        args.extend(["--", path])
+        result = subprocess.run(args, cwd=repo_root, capture_output=True, text=True)
+        if result.returncode == 0:
+            failures.append(
+                f"conflict-marker -- {path} contains unresolved merge conflict markers"
+            )
+    return failures
 
 
 def get_trailer(config: dict) -> str:
@@ -382,6 +426,11 @@ def main(argv: list[str] | None = None) -> int:
         commit_messages = _git_commit_messages(args.base)
 
     failures = evaluate_rules(changed, commit_messages, config, REPO_ROOT)
+    all_paths = [path for _status, path in changed]
+    if args.staged:
+        failures.extend(_check_conflict_markers(REPO_ROOT, all_paths, cached=True))
+    else:
+        failures.extend(_check_conflict_markers(REPO_ROOT, all_paths, ref="HEAD"))
     return _report(failures)
 
 

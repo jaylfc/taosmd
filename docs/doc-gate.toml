@@ -65,7 +65,7 @@ referenced_paths_scan = [
 # Docs-Reviewed trailer for purely-internal additions under taosmd/docs/.
 name = "changelog"
 when_changed = ["taosmd/**"]
-require_doc = ["CHANGELOG.md"]
+require_doc = ["CHANGELOG.md", "changelog.d/*.md"]
 hint = "changes under taosmd/ that alter user-visible or API behaviour require a CHANGELOG entry"
 
 [[rules]]

@@ -7,6 +7,12 @@ Covers the two defects this port closes:
   HOLE 2 -- a rule satisfied by a doc touch is content-asserted, so a
             one-character edit cannot mask a gutted section.
 
+Plus the tsk-t2lsre fix-forward set (5 items from card tsk-t2lsre):
+  1. rename/C bypass -- R/C expands to D + A so structural rules fire
+  2. changelog.d convention -- changelog.d/*.md added to require_doc
+  3. taosmd/ Layer A scope -- taosmd/ tokens checked, data-dir paths excluded
+  4. conflict-marker invariant -- changed files grepped for unresolved markers
+
 The red proofs in this file mirror the evidence blocks required by the merge
 gate (DOC-GATE FAIL: ... / exit 1).
 """
@@ -21,6 +27,7 @@ from scripts.check_doc_gate import (
     _glob_match,
     _is_test_path,
     _match_any,
+    _parse_name_status,
     _missing_headings,
     _read_headings,
     check_required_headings,
@@ -75,7 +82,7 @@ referenced_paths_scan = []
 [[rules]]
 name = "changelog"
 when_changed = ["taosmd/**"]
-require_doc = ["CHANGELOG.md"]
+require_doc = ["CHANGELOG.md", "changelog.d/*.md"]
 hint = "changelog required"
 
 [[rules]]
@@ -170,6 +177,32 @@ class TestExtractPathTokens:
         tok = extract_path_tokens("copy to /home/u/tinyagentos/data/x")
         assert tok == []
 
+    def test_includes_taosmd_module(self):
+        tok = extract_path_tokens("see taosmd/http_server.py for details")
+        assert tok == ["taosmd/http_server.py"]
+
+    def test_excludes_data_dir_paths(self):
+        text = (
+            "runtime paths: ~/.taosmd/config.json, taosmd/archive, "
+            "taosmd/archive-index.db, taosmd/knowledge-graph.db, "
+            "taosmd/vector-memory.db, taosmd/project.toml"
+        )
+        tok = extract_path_tokens(text)
+        assert "taosmd/config.json" not in tok
+        assert "taosmd/archive" not in tok
+        assert "taosmd/archive-index.db" not in tok
+        assert "taosmd/knowledge-graph.db" not in tok
+        assert "taosmd/vector-memory.db" not in tok
+        assert "taosmd/project.toml" not in tok
+
+    def test_excludes_generated_build_info(self):
+        tok = extract_path_tokens("see taosmd/_build_info.py")
+        assert "taosmd/_build_info.py" not in tok
+
+    def test_taosmd_in_other_prefix_not_matched(self):
+        tok = extract_path_tokens("see foo/taosmd/x.py")
+        assert tok == []
+
 
 class TestIsTestPath:
     def test_pytest_module(self):
@@ -181,6 +214,32 @@ class TestIsTestPath:
 
     def test_real_code(self):
         assert not _is_test_path("taosmd/http_server.py")
+
+
+class TestParseNameStatus:
+    def test_add_unchanged(self):
+        assert _parse_name_status("A\tnewfile.py") == [("A", "newfile.py")]
+
+    def test_delete_unchanged(self):
+        assert _parse_name_status("D\tdeleted.py") == [("D", "deleted.py")]
+
+    def test_modify_unchanged(self):
+        assert _parse_name_status("M\tmodified.py") == [("M", "modified.py")]
+
+    def test_rename_expands_to_d_and_a(self):
+        result = _parse_name_status("R100\ttaosmd/http_server.py\ttaosmd/http_server_renamed.py")
+        assert ("D", "taosmd/http_server.py") in result
+        assert ("A", "taosmd/http_server_renamed.py") in result
+        assert len(result) == 2
+
+    def test_copy_expands_to_d_and_a(self):
+        result = _parse_name_status("C100\ttaosmd/http_server.py\ttaosmd/http_server_copy.py")
+        assert ("D", "taosmd/http_server.py") in result
+        assert ("A", "taosmd/http_server_copy.py") in result
+
+    def test_regular_statuses_unchanged(self):
+        result = _parse_name_status("A\tnewfile.py\nM\tmodified.py\nD\tdeleted.py")
+        assert result == [("A", "newfile.py"), ("M", "modified.py"), ("D", "deleted.py")]
 
 
 class TestMissingHeadings:
@@ -296,6 +355,31 @@ class TestEvaluateRules:
         assert evaluate_rules([("A", "taosmd/test_newmod.py")], [], cfg, repo) == []
         assert evaluate_rules([("A", "taosmd/newmod.py")], [], cfg, repo) != []
 
+    def test_rename_out_of_guarded_surface_fires_rules(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        cfg = _load_cfg(repo)
+        # Rename out of taosmd/ is emitted as D (old) + A (new) by _parse_name_status.
+        fails = evaluate_rules(
+            [("D", "taosmd/http_server.py"), ("A", "taosmd/http_server_renamed.py")],
+            [],
+            cfg,
+            repo,
+        )
+        assert any("changelog" in f for f in fails)
+        assert any("a2a-handlers" in f for f in fails)
+
+    def test_benign_rename_outside_guarded_surface_is_clean(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        cfg = _load_cfg(repo)
+        fails = evaluate_rules([("D", "README.md"), ("A", "README_NEW.md")], [], cfg, repo)
+        assert fails == []
+
+    def test_changelog_d_fragment_satisfies_changelog_rule(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        cfg = _load_cfg(repo)
+        changed = [("A", "taosmd/retrieval.py"), ("M", "changelog.d/tsk-xxx-add-thing.md")]
+        assert evaluate_rules(changed, [], cfg, repo) == []
+
 
 # ----------------------------------------------------------------------
 # end-to-end via main(): invariants (Layer A) and diff-gate --staged (Layer B)
@@ -391,3 +475,101 @@ class TestMainIntegration:
         monkeypatch.setattr(dg, "REPO_ROOT", repo)
         rc = main(["--config", cfg, "diff-gate", "--base", "HEAD~1"])
         assert rc == 0
+
+    def test_diff_gate_staged_rename_out_of_guarded_surface_fails(self, tmp_path, monkeypatch, capsys):
+        # PROVE IT RED: rename taosmd/http_server.py -> old path is D, new path
+        # is A, so both changelog and a2a-handlers must fire.
+        repo = _init_repo(tmp_path)
+        _git(repo, "mv", "taosmd/http_server.py", "taosmd/http_server_renamed.py")
+        _git(repo, "add", ".")
+        cfg = str(repo / "docs" / "doc-gate.toml")
+        monkeypatch.setattr(dg, "REPO_ROOT", repo)
+        rc = main(["--config", cfg, "diff-gate", "--staged"])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "changelog" in out
+        assert "a2a-handlers" in out
+
+    def test_diff_gate_staged_benign_rename_outside_taosmd_is_clean(self, tmp_path, monkeypatch, capsys):
+        # PROVE IT GREEN: a rename outside taosmd/ does not trip any rule.
+        repo = _init_repo(tmp_path)
+        (repo / "docs" / "extra.md").write_text("# Extra\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-m", "add extra")
+        _git(repo, "mv", "docs/extra.md", "docs/extra_renamed.md")
+        _git(repo, "add", ".")
+        cfg = str(repo / "docs" / "doc-gate.toml")
+        monkeypatch.setattr(dg, "REPO_ROOT", repo)
+        rc = main(["--config", cfg, "diff-gate", "--staged"])
+        assert rc == 0
+        assert "doc-gate: clean" in capsys.readouterr().out
+
+    def test_diff_gate_staged_conflict_markers_fail(self, tmp_path, monkeypatch, capsys):
+        # PROVE IT RED: a file with conflict markers fails the gate.
+        repo = _init_repo(tmp_path)
+        (repo / "taosmd" / "http_server.py").write_text(
+            "def handler():\n    pass\n<<<<<<< HEAD\n# conflict\n=======\n# other\n>>>>>>> branch\n"
+        )
+        _git(repo, "add", ".")
+        cfg = str(repo / "docs" / "doc-gate.toml")
+        monkeypatch.setattr(dg, "REPO_ROOT", repo)
+        rc = main(["--config", cfg, "diff-gate", "--staged"])
+        assert rc == 1
+        assert "conflict-marker" in capsys.readouterr().out
+
+    def test_diff_gate_staged_no_conflict_markers_green(self, tmp_path, monkeypatch, capsys):
+        # PROVE IT GREEN: clean files pass.
+        repo = _init_repo(tmp_path)
+        (repo / "taosmd" / "retrieval.py").write_text("def retrieve():\n    pass\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-m", "add retrieval")
+        (repo / "taosmd" / "retrieval.py").write_text("def retrieve():\n    pass\n# touched\n")
+        _git(repo, "add", ".")
+        cfg = str(repo / "docs" / "doc-gate.toml")
+        monkeypatch.setattr(dg, "REPO_ROOT", repo)
+        rc = main(["--config", cfg, "diff-gate", "--staged"])
+        assert rc == 0
+        assert "doc-gate: clean" in capsys.readouterr().out
+
+    def test_diff_gate_base_conflict_markers_fail(self, tmp_path, monkeypatch, capsys):
+        # PROVE IT RED via --base path (CI flow): markers committed then
+        # diffed against HEAD~1 still fire.
+        repo = _init_repo(tmp_path)
+        (repo / "taosmd" / "http_server.py").write_text(
+            "def handler():\n    pass\n<<<<<<< HEAD\n# conflict\n=======\n# other\n>>>>>>> branch\n"
+        )
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-m", "add conflict markers")
+        cfg = str(repo / "docs" / "doc-gate.toml")
+        monkeypatch.setattr(dg, "REPO_ROOT", repo)
+        rc = main(["--config", cfg, "diff-gate", "--base", "HEAD~1"])
+        assert rc == 1
+        assert "conflict-marker" in capsys.readouterr().out
+
+    def test_invariants_taosmd_module_reference_now_fails(self, tmp_path, monkeypatch, capsys):
+        # PROVE IT RED: an invented taosmd/ module reference now fails invariants.
+        repo = _init_repo(tmp_path)
+        (repo / "docs" / "test.md").write_text("see taosmd/NOPE-NOT-REAL.py\n")
+        cfg = repo / "docs" / "doc-gate-test.toml"
+        cfg.write_text(
+            "[gate]\ntrailer = \"Docs-Reviewed:\"\n\n[invariants]\nreferenced_paths_scan = [\"docs/test.md\"]\n"
+        )
+        monkeypatch.setattr(dg, "REPO_ROOT", repo)
+        rc = main(["--config", str(cfg), "invariants"])
+        assert rc == 1
+        assert "taosmd/NOPE-NOT-REAL.py" in capsys.readouterr().out
+
+    def test_invariants_taosmd_data_dir_paths_excluded(self, tmp_path, monkeypatch, capsys):
+        # PROVE IT GREEN: data-dir paths and generated files are excluded.
+        repo = _init_repo(tmp_path)
+        (repo / "docs" / "test.md").write_text(
+            "runtime paths: ~/.taosmd/config.json, taosmd/archive, taosmd/_build_info.py\n"
+        )
+        cfg = repo / "docs" / "doc-gate-test.toml"
+        cfg.write_text(
+            "[gate]\ntrailer = \"Docs-Reviewed:\"\n\n[invariants]\nreferenced_paths_scan = [\"docs/test.md\"]\n"
+        )
+        monkeypatch.setattr(dg, "REPO_ROOT", repo)
+        rc = main(["--config", str(cfg), "invariants"])
+        assert rc == 0
+        assert "doc-gate: clean" in capsys.readouterr().out
