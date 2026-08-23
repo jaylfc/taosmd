@@ -66,8 +66,12 @@ WITNESS_RE = re.compile(r"#\s*WITNESS:\s*(.+)$")
 # A near-miss resembles a WITNESS marker whose separator is broken -- a
 # zero-width character (e.g. U+200B) lodged between WITNESS and the colon,
 # or the colon replaced. Requiring the ``::`` payload keeps ordinary prose
-# mentioning WITNESS from being mistaken for a malformed marker.
-_NEAR_MISS_RE = re.compile(r"#\s*WITNESS[^:](?=.*::)")
+# mentioning WITNESS from being mistaken for a malformed marker. The regex
+# ``#\s*WITNESS[^:](?=[^:]*:)`` also catches prose carrying a plain colon
+# (e.g. a colon appearing after WITNESS text without ``::``) without ``::``,
+# which master's ``(?=.*::)`` does not -- this is the "widening" noted in the
+# regression table.
+_NEAR_MISS_RE = re.compile(r"#\s*WITNESS[^:](?=[^:]*:)")
 # Documented examples of a de-marked marker in this file's own docstring.
 # They are intentionally de-marked and must not be reported; every other line
 # in the same file (e.g. an appended genuine marker) still is. Greppable name.

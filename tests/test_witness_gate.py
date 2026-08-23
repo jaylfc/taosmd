@@ -335,7 +335,7 @@ class TestWitnessGateIntegration:
     def test_near_miss_regex_spares_prose_arms(self, tmp_path):
         # WEAKNESS 1: a tightened near-miss regex must not flag ordinary prose
         # that merely mentions WITNESS, while still catching de-marked (ZWSP)
-        # and malformed markers. All three arms live in one test so a loosening
+        # and malformed markers. All four arms live in one test so a loosening
         # that silences the prose cannot silence the de-marked arms either.
         # Arm A -- prose in taosmd/ mentioning WITNESS but no ``::`` is clean.
         repo = _repo(tmp_path / "a")
@@ -366,6 +366,17 @@ class TestWitnessGateIntegration:
         violations = check_witnesses(repo)
         assert len(violations) == 1
         assert violations[0].claim.source_file == "scripts/gate_demo.py"
+        assert violations[0].reason == "de-marked or malformed marker"
+        rc, _out = _run_main(repo)
+        assert rc == 1
+
+        # Arm D -- de-marked (ZWSP) marker in taosmd/ with no ``::`` payload
+        # must still exit 1 (regression guard).
+        repo = _repo(tmp_path / "d")
+        _write(repo, TEST_TEST, GREEN_TEST)
+        _write(repo, TEST_SRC, f"# WITNESS\u200b: {TEST_TEST}\n")
+        violations = check_witnesses(repo)
+        assert len(violations) == 1
         assert violations[0].reason == "de-marked or malformed marker"
         rc, _out = _run_main(repo)
         assert rc == 1
