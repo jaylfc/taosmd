@@ -43,6 +43,72 @@ logger = logging.getLogger(__name__)
 # because Python dict operations are GIL-protected.
 _remote_cache: dict[tuple[str, str | None], object] = {}
 
+_alarm_key_cleared: dict[str, set[str]] = {}  # data_dir -> set of cleared alarm keys
+_digest_buffers: dict[str, dict[str, list[dict]]] = {}  # data_dir -> {thread -> [msg summaries since last flush]}
+
+
+def _sha256_body(body: str) -> str:
+    """Return sha256 hex digest of *body*. Used as default alarm fingerprint."""
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def _get_cleared_keys(data_dir: str) -> set[str]:
+    """Return the set of cleared alarm keys for *data_dir*, initializing if needed."""
+    key = str(data_dir)
+    if key not in _alarm_key_cleared:
+        _alarm_key_cleared[key] = set()
+    return _alarm_key_cleared[key]
+
+
+def _get_digest_buffer(data_dir: str, thread: str) -> list[dict]:
+    """Return the digest buffer for *thread* in *data_dir*, initializing if needed."""
+    key = str(data_dir)
+    if key not in _digest_buffers:
+        _digest_buffers[key] = {}
+    if thread not in _digest_buffers[key]:
+        _digest_buffers[key][thread] = []
+    return _digest_buffers[key][thread]
+
+
+def clear_alarm_key(data_dir=None, *, alarm_key: str) -> dict:
+    """Re-arm an alarm key so new alarms with that key are stored (not deduped).
+
+    Returns ``{"ok": True}``.
+    """
+    data_dir_str = str(data_dir) if data_dir else ""
+    cleared = _get_cleared_keys(data_dir_str)
+    cleared.add(alarm_key)
+    return {"ok": True}
+
+
+def _flush_digest(data_dir: str, thread: str) -> list[dict] | None:
+    """Flush the digest buffer for *thread* in *data_dir* if 30 min have passed.
+
+    Returns a digest event dict (kind="digest") or ``None`` when no flush happened.
+    """
+    buf = _digest_buffers.get(str(data_dir), {}).get(thread, [])
+    if not buf:
+        return None
+    now = time.time()
+    # If 30 minutes have passed since the earliest message, flush
+    if now - buf[0]["ts"] >= 30 * 60:
+        # Batched ids and bodies
+        ids = [m["id"] for m in buf]
+        bodies = [m["body"] for m in buf]
+        digest_event = {
+            "id": max(ids) if ids else 0,
+            "from": "system",
+            "kind": "digest",
+            "body": f"digest: {len(buf)} messages",
+            "thread": thread,
+            "digest_of_ids": ids,
+            "digest_of_bodies": bodies,
+        }
+        # Clear the buffer
+        _digest_buffers[str(data_dir)][thread] = []
+        return digest_event
+    return None
+
 
 def _get_remote(data_dir=None):
     """Return a cached :class:`~taosmd.remote.RemoteClient` when a server URL
@@ -413,6 +479,8 @@ async def a2a_send(
     refs: list | None = None,
     blocks: list | None = None,
     recipient: str | None = None,
+    alarm_key: str | None = None,
+    alarm_fingerprint: str | None = None,
     data_dir=None,
 ) -> dict:
     """Post a message onto the agent-to-agent bus.
@@ -432,6 +500,18 @@ async def a2a_send(
     is stored in the archive payload and indexed as a mention so the
     recipient can retrieve it via GET /a2a/mentions.
 
+    ``alarm_key`` is an optional stable subject+condition string (e.g.
+    ``dead-session:@taOSmd-dev``). When provided, the message is treated as
+    an alarm. If a same-(key, fingerprint) alarm already exists within the
+    key's min-interval, the message is NOT stored and the receipt includes
+    ``{"deduped": true}``. The fingerprint defaults to sha256 of ``body``,
+    unless an explicit ``alarm_fingerprint`` is given.
+
+    ``alarm_fingerprint`` is an optional deterministic hash of the material
+    fields of the body. When not provided, it defaults to
+    ``sha256(body)``. The server only compares fingerprints; the author
+    decides what material fields to include.
+
     Returns ``{"id", "from", "thread", "reply_to"}`` plus ``refs`` and/or
     ``blocks`` when those were supplied.
 
@@ -447,6 +527,47 @@ async def a2a_send(
         return await remote.a2a_send(
             sender, body, thread=thread, reply_to=reply_to,
             refs=refs, blocks=blocks, recipient=recipient,
+            alarm_key=alarm_key, alarm_fingerprint=alarm_fingerprint,
+        )
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+
+    # ---- alarm_key deduplication ----
+    deduped = False
+    if alarm_key is not None:
+        # Compute fingerprint: explicit override or sha256 of body
+        fingerprint = alarm_fingerprint or _sha256_body(body)
+
+        # If the key has been cleared, it is re-armed and not deduped
+        cleared_keys = _get_cleared_keys(str(data_dir) if data_dir else "")
+        if alarm_key in cleared_keys:
+            deduped = False
+        else:
+            # Check for existing same (key, fingerprint) alarm within min-interval
+            min_interval = 30 * 60  # 30 minutes, matches digest boundary
+            now = time.time()
+            rows = await archive.query(
+                event_type=EVENT_A2A,
+                limit=100_000,
+            )
+            for row in rows:
+                try:
+                    data = json.loads(row.get("data_json", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                existing_key = data.get("alarm_key")
+                existing_fp = data.get("alarm_fingerprint")
+                if existing_key == alarm_key and existing_fp == fingerprint:
+                    if now - float(row.get("timestamp", 0)) < min_interval:
+                        deduped = True
+                        break
+
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_send(
+            sender, body, thread=thread, reply_to=reply_to,
+            refs=refs, blocks=blocks, recipient=recipient,
+            alarm_key=alarm_key, alarm_fingerprint=alarm_fingerprint,
         )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
@@ -456,7 +577,11 @@ async def a2a_send(
         from .admin import A2AAdminState  # noqa: PLC0415
         _admin = A2AAdminState(data_dir)
         thread = _admin.resolve_channel(thread)
-    data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to}
+    data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to,
+        "kind": "alarm" if alarm_key else "chat"}
+    if alarm_key is not None:
+        data["alarm_key"] = alarm_key
+        data["alarm_fingerprint"] = alarm_fingerprint or _sha256_body(body)
     if recipient is not None:
         data["recipient"] = recipient
     if refs is not None:
@@ -470,7 +595,20 @@ async def a2a_send(
         app_id=thread,
         summary=body[:200],
     )
+    # Track non-mention owned-thread traffic for digest coalescing.
+    # Messages without a recipient are non-mention; they batch into a per-thread
+    # digest flushed on a 30-min boundary.
+    if recipient is None:
+        buffer = _get_digest_buffer(str(data_dir) if data_dir else "", thread)
+        buffer.append({
+            "id": row_id,
+            "from": sender,
+            "body": body,
+            "ts": time.time(),
+        })
     receipt = {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to}
+    if deduped:
+        receipt["deduped"] = True
     if recipient is not None:
         receipt["recipient"] = recipient
     if refs is not None:
@@ -519,6 +657,15 @@ async def a2a_feed(
         return await remote.a2a_feed(thread=thread, since=since, limit=limit)
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
+
+    # Flush digest buffers on 30-min boundary if any non-mention traffic
+    # has accumulated; collect any flushed digest events.
+    data_dir_str = str(data_dir) if data_dir else ""
+    flushed: list[dict] = []
+    for thread_key in list(_digest_buffers.get(data_dir_str, {}).keys()):
+        event = _flush_digest(data_dir_str, thread_key)
+        if event is not None:
+            flushed.append(event)
 
     # Apply admin alias resolution: reads of a new channel name include history
     # from the old name. Resolve thread through the alias map so callers
@@ -593,6 +740,8 @@ async def a2a_feed(
         if "blocks" in data:
             msg["blocks"] = data["blocks"]
         result.append(msg)
+    # Prepend any flushed digest events (they arrive on the 30-min boundary)
+    result = flushed + result
     return result
 
 

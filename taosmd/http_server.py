@@ -1095,6 +1095,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_a2a_receipts(query)
                 elif method == "POST" and path == "/a2a/admin/prune-receipts":
                     self._handle_admin_a2a_prune_receipts()
+                elif method == "POST" and path.startswith("/a2a/alarms/"):
+                    # /a2a/alarms/{key}/clear - re-arm an alarm key
+                    rest = path[len("/a2a/alarms/"):]
+                    if rest.endswith("/clear"):
+                        key = rest[: -len("/clear")]
+                        if not key:
+                            self._send_json(400, {"error": "alarm key required"})
+                        else:
+                            result = service.clear_alarm_key(data_dir=data_dir, alarm_key=key)
+                            self._send_json(200, result)
+                    else:
+                        self._send_json(404, {"error": "alarm clear endpoint requires /clear suffix"})
                 # Task graph endpoints — prefix matching for /tasks/{id} paths
                 elif method == "POST" and path == "/tasks":
                     self._handle_task_create()
