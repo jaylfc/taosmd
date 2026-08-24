@@ -341,6 +341,19 @@ class ArchiveStore:
             result["data"] = {}
         return result
 
+    async def update_event_data_json(self, event_id: int, data: dict) -> None:
+        """Update the data_json for an existing index row.
+
+        Used by one-shot migrations that backfill fields (e.g. message kind)
+        onto historical archive events. The JSONL source files are never
+        modified; only the derived index is updated.
+        """
+        self._conn.execute(
+            "UPDATE archive_index SET data_json = ? WHERE id = ?",
+            (json.dumps(data, default=str), event_id),
+        )
+        self._conn.commit()
+
     async def count(
         self,
         event_type: str | None = None,
