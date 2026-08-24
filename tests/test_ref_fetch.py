@@ -364,7 +364,7 @@ class TestServiceFetchByRefRouting:
         result = asyncio.run(svc.fetch_by_ref(ref, agent="test", data_dir="/tmp"))
         assert result["bytes"] == "aGVsbG8="
 
-    def test_local_path_passes_data_dir_to_ref_fetch(self, monkeypatch):
+    def test_local_path_passes_data_dir_to_ref_fetch(self, tmp_path, monkeypatch):
         from taosmd import config as cfg
         from taosmd import service as svc
 
@@ -377,6 +377,12 @@ class TestServiceFetchByRefRouting:
         monkeypatch.setattr(svc, "_get_remote", lambda data_dir: None)
         monkeypatch.setattr(cfg, "get_files_url", lambda data_dir=None: "http://ctrl:8000")
         monkeypatch.setattr("taosmd.ref_fetch.fetch_by_ref", fake_fetch)
+
+        ref = {"uri": "taos://proj/files/hello.txt", "sha256": "abc"}
+        data_dir = str(tmp_path)
+        result = asyncio.run(svc.fetch_by_ref(ref, agent="test", data_dir=data_dir))
+        assert captured["data_dir"] == data_dir
+        assert result["bytes"] == "aGVsbG8="
 
     def test_service_fetch_by_ref_does_not_raise_when_files_url_unset_but_registry_set(self, tmp_path, monkeypatch):
         from taosmd import service as svc
