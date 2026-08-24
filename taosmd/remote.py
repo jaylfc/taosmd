@@ -212,12 +212,15 @@ class RemoteClient:
         reply_to: str | None = None,
         refs: list | None = None,
         blocks: list | None = None,
+        alarm_key: str | None = None,
+        alarm_fingerprint: str | None = None,
         **_opts,
     ) -> dict:
         """POST /a2a/send: post a message to the remote A2A bus.
 
         Returns the send receipt ``{"id", "from", "thread", "reply_to"}``
-        plus ``refs``/``blocks`` when supplied (taOSmd #211).
+        plus ``refs``/``blocks``/``kind``/``alarm_key``/``alarm_fingerprint``
+        when supplied.
         """
         payload: dict = {"from": sender, "body": body, "thread": thread}
         if reply_to is not None:
@@ -226,7 +229,21 @@ class RemoteClient:
             payload["refs"] = refs
         if blocks is not None:
             payload["blocks"] = blocks
+        if alarm_key is not None:
+            payload["alarm_key"] = alarm_key
+        if alarm_fingerprint is not None:
+            payload["alarm_fingerprint"] = alarm_fingerprint
         return await self._run("POST", "/a2a/send", payload)
+
+    async def a2a_alarms_clear(
+        self,
+        alarm_key: str,
+        **_opts,
+    ) -> dict:
+        """POST /a2a/alarms/{key}/clear: re-arm the alarm dedup for a key."""
+        return await self._run(
+            "POST", f"/a2a/alarms/{alarm_key}/clear", {},
+        )
 
     async def a2a_feed(
         self,

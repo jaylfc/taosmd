@@ -78,6 +78,15 @@ CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
     content_rowid='id',
     tokenize='porter unicode61'
 );
+
+CREATE TABLE IF NOT EXISTS a2a_alarm_state (
+    alarm_key TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    last_fire_ts REAL,
+    last_cleared_ts REAL,
+    PRIMARY KEY (alarm_key, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_alarm_state_key_fp ON a2a_alarm_state(alarm_key, fingerprint);
 """
 
 
@@ -351,6 +360,35 @@ class ArchiveStore:
         self._conn.execute(
             "UPDATE archive_index SET data_json = ? WHERE id = ?",
             (json.dumps(data, default=str), event_id),
+        )
+        self._conn.commit()
+
+    async def record_alarm_dedup(
+        self, alarm_key: str, fingerprint: str, now: float, cleared_ts: float | None = None,
+    ) -> None:
+        self._conn.execute(
+            """INSERT INTO a2a_alarm_state (alarm_key, fingerprint, last_fire_ts, last_cleared_ts)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(alarm_key, fingerprint) DO UPDATE SET
+                   last_fire_ts = excluded.last_fire_ts,
+                   last_cleared_ts = excluded.last_cleared_ts""",
+            (alarm_key, fingerprint, now, cleared_ts),
+        )
+        self._conn.commit()
+
+    async def get_alarm_dedup(self, alarm_key: str, fingerprint: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT last_fire_ts, last_cleared_ts FROM a2a_alarm_state WHERE alarm_key = ? AND fingerprint = ?",
+            (alarm_key, fingerprint),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"last_fire_ts": row[0], "last_cleared_ts": row[1]}
+
+    async def clear_alarm_key(self, alarm_key: str, now: float) -> None:
+        self._conn.execute(
+            "UPDATE a2a_alarm_state SET last_cleared_ts = ? WHERE alarm_key = ?",
+            (now, alarm_key),
         )
         self._conn.commit()
 

@@ -194,9 +194,12 @@ def _archive_index_baseline(conn: sqlite3.Connection) -> None:
 
 
 def _archive_index_project(conn: sqlite3.Connection) -> None:
-    # Subsumes the old back-fill in ArchiveStore.init, which probed with
-    # `SELECT project FROM archive_index LIMIT 1` inside a bare try/except.
     add_column(conn, "archive_index", "project", "TEXT")
+
+
+def _archive_index_alarm_state(conn: sqlite3.Connection) -> None:
+    from taosmd.archive import A2A_ALARM_STATE_SCHEMA  # noqa: PLC0415
+    exec_script(conn, A2A_ALARM_STATE_SCHEMA)
 
 
 _ARCHIVE_INDEX: tuple[Migration, ...] = (
@@ -207,6 +210,10 @@ _ARCHIVE_INDEX: tuple[Migration, ...] = (
     Migration(
         2, "archive_index_project", _archive_index_project,
         lambda c: has_column(c, "archive_index", "project"),
+    ),
+    Migration(
+        3, "archive_index_alarm_state", _archive_index_alarm_state,
+        lambda c: table_exists(c, "a2a_alarm_state"),
     ),
 )
 

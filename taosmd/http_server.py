@@ -1104,6 +1104,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_a2a_receipts(query)
                 elif method == "POST" and path == "/a2a/admin/prune-receipts":
                     self._handle_admin_a2a_prune_receipts()
+                elif method == "POST" and path.startswith("/a2a/alarms/") and path.endswith("/clear"):
+                    key = path[len("/a2a/alarms/"):-len("/clear")]
+                    self._handle_a2a_alarms_clear(key)
                 # Task graph endpoints — prefix matching for /tasks/{id} paths
                 elif method == "POST" and path == "/tasks":
                     self._handle_task_create()
@@ -1567,6 +1570,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             kind = body.get("kind", "chat")
             if kind is None:
                 kind = "chat"
+            alarm_key = body.get("alarm_key")
+            alarm_fingerprint = body.get("alarm_fingerprint")
             if not isinstance(from_, str) or not from_:
                 raise _BadRequest("'from' (non-empty string) is required")
             if not isinstance(kind, str) or kind not in _A2A_KINDS:
@@ -1681,6 +1686,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     sender=from_, body=body_text,
                     thread=thread, reply_to=reply_to,
                     refs=refs, blocks=blocks, kind=kind,
+                    alarm_key=alarm_key, alarm_fingerprint=alarm_fingerprint,
                     data_dir=data_dir,
                 )
             )
@@ -1972,6 +1978,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 older_than_ts = time.time() - 30 * 24 * 3600
             result = runner.run(
                 service.a2a_prune_receipts(older_than_ts, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_alarms_clear(self, key: str) -> None:
+            """POST /a2a/alarms/{key}/clear -- re-arm the alarm dedup for key."""
+            import urllib.parse as _up
+            key = _up.unquote(key)
+            if not key:
+                self._send_json(404, {"error": "alarm key required"})
+                return
+            result = runner.run(
+                service.a2a_alarms_clear(key, data_dir=data_dir)
             )
             self._send_json(200, result)
 
