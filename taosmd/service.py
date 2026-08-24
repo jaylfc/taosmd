@@ -404,6 +404,9 @@ async def fetch_by_ref(ref: dict, *, agent: str, data_dir=None) -> dict:
     }
 
 
+_A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "system"})
+
+
 async def a2a_send(
     sender: str,
     body: str,
@@ -413,6 +416,7 @@ async def a2a_send(
     refs: list | None = None,
     blocks: list | None = None,
     recipient: str | None = None,
+    kind: str = "chat",
     data_dir=None,
 ) -> dict:
     """Post a message onto the agent-to-agent bus.
@@ -423,6 +427,10 @@ async def a2a_send(
     ``thread`` defaults to ``"general"``; ``reply_to`` is optional and
     should be the string ID of the message being replied to.
 
+    ``kind`` is one of ``chat``, ``alarm``, ``ack``, ``digest``,
+    ``receipt``, ``review``, ``system`` (default ``chat``). It is stored
+    on the envelope and returned in every read path.
+
     ``refs`` and ``blocks`` are optional first-class envelope fields
     (taOSmd #211). When provided they are stored verbatim in the archive
     payload and echoed back in the receipt and on feed/SSE reads. When
@@ -432,8 +440,8 @@ async def a2a_send(
     is stored in the archive payload and indexed as a mention so the
     recipient can retrieve it via GET /a2a/mentions.
 
-    Returns ``{"id", "from", "thread", "reply_to"}`` plus ``refs`` and/or
-    ``blocks`` when those were supplied.
+    Returns ``{"id", "from", "thread", "reply_to", "kind"}`` plus ``refs``
+    and/or ``blocks`` when those were supplied.
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
@@ -442,11 +450,15 @@ async def a2a_send(
         raise ValueError("sender must be a non-empty string")
     if not isinstance(body, str) or not body:
         raise ValueError("body must be a non-empty string")
+    if kind not in _A2A_KINDS:
+        raise ValueError(
+            f"'kind' must be one of {sorted(_A2A_KINDS)}; got {kind!r}"
+        )
     remote = _get_remote(data_dir)
     if remote is not None:
         return await remote.a2a_send(
             sender, body, thread=thread, reply_to=reply_to,
-            refs=refs, blocks=blocks, recipient=recipient,
+            refs=refs, blocks=blocks, recipient=recipient, kind=kind,
         )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
@@ -456,7 +468,7 @@ async def a2a_send(
         from .admin import A2AAdminState  # noqa: PLC0415
         _admin = A2AAdminState(data_dir)
         thread = _admin.resolve_channel(thread)
-    data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to}
+    data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to, "kind": kind}
     if recipient is not None:
         data["recipient"] = recipient
     if refs is not None:
@@ -470,7 +482,7 @@ async def a2a_send(
         app_id=thread,
         summary=body[:200],
     )
-    receipt = {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to}
+    receipt = {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to, "kind": kind}
     if recipient is not None:
         receipt["recipient"] = recipient
     if refs is not None:
@@ -585,6 +597,7 @@ async def a2a_feed(
             "body": data.get("body"),
             "thread": msg_thread,
             "reply_to": data.get("reply_to"),
+            "kind": data.get("kind") or "chat",
         }
         # First-class envelope fields (taOSmd #211): stored verbatim,
         # omitted from output when absent (no null noise).
@@ -739,6 +752,44 @@ async def a2a_sender_census(*, data_dir=None) -> dict:
     return dict(
         sorted(census.items(), key=lambda item: item[1]["total"], reverse=True)
     )
+
+
+async def a2a_migrate_kinds(*, data_dir=None) -> dict:
+    """One-shot migration: backfill ``kind`` on historical A2A messages.
+
+    Messages that already have a ``kind`` field are left untouched. Messages
+    without one are tagged by their body-prefix convention:
+    ``[AUTOMATED`` -> ``alarm``, ``[AUTO-ACK]`` -> ``ack``,
+    ``[REVIEW]`` -> ``review``, everything else -> ``chat``.
+
+    Returns ``{"migrated": int, "alarm": int, "ack": int, "review": int,
+    "chat": int}``. Idempotent: running twice yields ``migrated == 0``.
+    """
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+    counts = {"migrated": 0, "alarm": 0, "ack": 0, "review": 0, "chat": 0}
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        if data.get("kind"):
+            continue
+        body = data.get("body", "") or ""
+        if body.startswith("[AUTOMATED"):
+            kind = "alarm"
+        elif body.startswith("[AUTO-ACK]"):
+            kind = "ack"
+        elif body.startswith("[REVIEW]"):
+            kind = "review"
+        else:
+            kind = "chat"
+        data["kind"] = kind
+        await archive.update_event_data_json(row["id"], data)
+        counts[kind] += 1
+        counts["migrated"] += 1
+    return counts
 
 
 async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
@@ -905,6 +956,7 @@ async def a2a_thread_messages(
             "body": data.get("body"),
             "thread": msg_thread,
             "reply_to": data.get("reply_to"),
+            "kind": data.get("kind") or "chat",
         }
         if "refs" in data:
             msg["refs"] = data["refs"]
@@ -1034,6 +1086,7 @@ async def a2a_mentions_feed(
             "thread": data.get("thread") or row.get("app_id") or "general",
             "reply_to": data.get("reply_to"),
             "thread_root": thread_roots.get(row["id"]),
+            "kind": data.get("kind") or "chat",
         }
         result.append(msg)
 
@@ -1586,7 +1639,7 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
            "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
            "a2a_members", "a2a_threads", "a2a_thread_messages",
-           "a2a_mentions_feed", "can_read",
+           "a2a_mentions_feed", "a2a_migrate_kinds", "can_read",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",

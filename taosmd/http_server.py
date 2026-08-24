@@ -239,10 +239,19 @@ DEFAULT_PORT = 7900
 _A2A_REF_KINDS = frozenset({"doc", "report", "spec", "log"})
 _A2A_MAX_REFS = 8
 _A2A_MAX_MESSAGE_BYTES = 64 * 1024  # 64 KB total (body+refs+blocks)
+_A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "system"})
 
 # Cursor pagination limits for /a2a/threads/{thread}/messages.
 _A2A_MSG_DEFAULT_LIMIT = 50
 _A2A_MSG_MAX_LIMIT = 200
+
+
+def _validate_a2a_params(qs: dict, allowed: frozenset[str]) -> None:
+    unknown = set(qs.keys()) - allowed
+    if unknown:
+        raise _BadRequest(
+            f"unknown query parameters: {sorted(unknown)}; allowed: {sorted(allowed)}"
+        )
 
 
 # `since` on the A2A feed endpoints is an epoch timestamp in seconds, not a
@@ -1059,9 +1068,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "POST" and path == "/a2a/send":
                     self._handle_a2a_send()
                 elif method == "GET" and path == "/a2a/channels":
-                    self._handle_a2a_channels()
+                    self._handle_a2a_channels(query)
                 elif method == "GET" and path == "/a2a/census":
-                    self._handle_a2a_census()
+                    self._handle_a2a_census(query)
                 elif method == "GET" and path == "/a2a/members":
                     self._handle_a2a_members(query)
                 elif method == "GET" and path == "/a2a/messages":
@@ -1529,15 +1538,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             )
             self._send_json(200, result)
 
-        def _handle_a2a_channels(self) -> None:
+        def _handle_a2a_channels(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset())
             channels = runner.run(service.a2a_channels(data_dir=data_dir))
             self._send_json(200, {"channels": channels})
 
-        def _handle_a2a_census(self) -> None:
+        def _handle_a2a_census(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset())
             census = runner.run(service.a2a_sender_census(data_dir=data_dir))
             self._send_json(200, {"census": census})
 
         def _handle_a2a_members(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"channel"}))
             channel = (qs.get("channel") or [None])[0]
             if not channel:
                 raise _BadRequest("'channel' query parameter is required")
@@ -1552,8 +1564,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             reply_to = body.get("reply_to")
             refs = body.get("refs")
             blocks = body.get("blocks")
+            kind = body.get("kind", "chat") or "chat"
             if not isinstance(from_, str) or not from_:
                 raise _BadRequest("'from' (non-empty string) is required")
+            if not isinstance(kind, str) or kind not in _A2A_KINDS:
+                raise _BadRequest(
+                    "'kind' must be one of "
+                    f"{sorted(_A2A_KINDS)}; got {kind!r}"
+                )
             # --- Envelope field validation (taOSmd #211) ---
             # refs: optional list of dicts, <=8 items, kind in the enum.
             if refs is not None:
@@ -1564,8 +1582,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 for i, ref in enumerate(refs):
                     if not isinstance(ref, dict):
                         raise _BadRequest(f"'refs[{i}]' must be an object")
-                    kind = ref.get("kind")
-                    if kind not in _A2A_REF_KINDS:
+                    ref_kind = ref.get("kind")
+                    if ref_kind not in _A2A_REF_KINDS:
                         raise _BadRequest(
                             f"'refs[{i}].kind' must be one of {sorted(_A2A_REF_KINDS)}"
                         )
@@ -1660,13 +1678,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 service.a2a_send(
                     sender=from_, body=body_text,
                     thread=thread, reply_to=reply_to,
-                    refs=refs, blocks=blocks,
+                    refs=refs, blocks=blocks, kind=kind,
                     data_dir=data_dir,
                 )
             )
             self._send_json(200, result)
 
         def _handle_a2a_messages(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"thread", "since", "limit", "fields", "format"}))
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
@@ -1705,6 +1724,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_mentions(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"since", "limit", "reader"}))
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
             try:
@@ -1776,6 +1796,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             subscribers that carry no identifying token produce no delivered
             mark.
             """
+            _validate_a2a_params(qs, frozenset({"thread", "since"}))
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             last_ts = _parse_since(since_raw)
@@ -1825,6 +1846,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return
 
         def _handle_a2a_threads(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"principal"}))
             principal = (qs.get("principal") or [None])[0]
             threads = runner.run(
                 service.a2a_threads(principal=principal, data_dir=data_dir)
@@ -1832,6 +1854,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"threads": threads})
 
         def _handle_a2a_thread_messages(self, thread: str, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"before", "after", "limit"}))
             before_raw = (qs.get("before") or [None])[0]
             after_raw = (qs.get("after") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
