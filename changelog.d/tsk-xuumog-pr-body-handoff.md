@@ -1,0 +1,2 @@
+### Added
+- `docs/handoffs/tsk-xuumog-exec-pr-body-generator.md`: a hand-off reporting that the exec PR body generator (the `Files:` block and acceptance narrative) lives outside `jaylfc/taosmd` in the taOS executor/lane system, and prescribing that it derive the block from `git diff --stat "$(git merge-base HEAD origin/master)"..HEAD` at PR-open time. Measured on `exec/tsk-r44fqf` (#357): the correct list is 2 files / 13+3, matching `gh api repos/jaylfc/taosmd/pulls/357/files` exactly, where the shipped body carried a 24-file manifest pasted from the mentions-feed work.
