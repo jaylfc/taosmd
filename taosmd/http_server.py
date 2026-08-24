@@ -827,6 +827,29 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             except Exception:  # noqa: BLE001
                 return None
 
+        def _enforce_channel_acl(self, channel: str, permission: str) -> bool:
+            """Enforce per-channel ACL for *channel* and *permission*.
+
+            Returns True when the request is allowed.  Returns False and
+            writes a 403 response when the request is denied.
+            """
+            acl = _config.get_acl(data_dir, channel)
+            allowlist = acl.get(permission, ["*"])
+            if "*" in allowlist:
+                return True
+            verified_id = self._get_authenticated_agent_id()
+            if verified_id is None:
+                self._send_json(403, {
+                    "error": f"{permission} denied for {channel!r}; identity not verified and ACL is configured"
+                })
+                return False
+            if verified_id not in allowlist:
+                self._send_json(403, {
+                    "error": f"{permission} denied for {channel!r}; identity {verified_id!r} not in {permission} allowlist"
+                })
+                return False
+            return True
+
         @staticmethod
         def _is_admin_route(method: str, path: str) -> bool:
             """Return True for admin write routes (#154).
@@ -856,6 +879,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "/a2a/admin/rename-channel",
                 "/a2a/admin/supersede-message",
                 "/a2a/admin/prune-receipts",
+                "/a2a/admin/set-channel-acl",
+                "/a2a/admin/channel-acl",
             )
 
         def _check_admin_token(self) -> bool:
@@ -1186,6 +1211,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_admin_a2a_rename_channel()
                 elif method == "POST" and path == "/a2a/admin/supersede-message":
                     self._handle_admin_a2a_supersede_message()
+                elif method == "POST" and path == "/a2a/admin/set-channel-acl":
+                    self._handle_admin_a2a_set_channel_acl()
+                elif method == "GET" and path == "/a2a/admin/channel-acl":
+                    self._handle_admin_a2a_get_channel_acl()
                 elif method == "GET" and _serve_dashboard and self._try_serve_static(parts.path):
                     return  # static asset served
                 elif method == "GET" and _serve_dashboard:
@@ -1656,6 +1685,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         "a2a verify-and-warn: accepting unverified post from %r: %s",
                         from_, warn_reason,
                     )
+            if not self._enforce_channel_acl(thread, "post"):
+                return
             result = runner.run(
                 service.a2a_send(
                     sender=from_, body=body_text,
@@ -1679,6 +1710,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'limit' must be an integer") from exc
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
+            if thread and not self._enforce_channel_acl(thread, "read"):
+                return
             messages = runner.run(
                 service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
             )
@@ -1841,6 +1874,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if not self._enforce_channel_acl(thread, "read"):
+                return
             result = runner.run(
                 service.a2a_thread_messages(
                     thread=thread, before=before, after=after,
@@ -1949,6 +1984,36 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 service.a2a_prune_receipts(older_than_ts, data_dir=data_dir)
             )
             self._send_json(200, result)
+
+        def _handle_admin_a2a_set_channel_acl(self) -> None:
+            """POST /a2a/admin/set-channel-acl -- set ACL for a channel."""
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            channel = body.get("channel")
+            if not isinstance(channel, str) or not channel:
+                raise _BadRequest("'channel' (non-empty string) is required")
+            read_ids = body.get("read")
+            post_ids = body.get("post")
+            if read_ids is not None and not isinstance(read_ids, list):
+                raise _BadRequest("'read' must be a list when provided")
+            if post_ids is not None and not isinstance(post_ids, list):
+                raise _BadRequest("'post' must be a list when provided")
+            clear = body.get("clear", False)
+            _config.set_acl(
+                data_dir, channel=channel,
+                read_ids=read_ids, post_ids=post_ids, clear=clear,
+            )
+            self._send_json(200, {"ok": True, "channel": channel})
+
+        def _handle_admin_a2a_get_channel_acl(self) -> None:
+            """GET /a2a/admin/channel-acl?channel=<name> -- return ACL for a channel."""
+            qs = parse_qs(urlsplit(self.path).query)
+            channel = (qs.get("channel") or [None])[0]
+            if not channel:
+                raise _BadRequest("'channel' query parameter is required")
+            acl = _config.get_acl(data_dir, channel)
+            self._send_json(200, {"channel": channel, "acl": acl})
 
         # ----- task graph handlers ----------------------------------------
 
@@ -2487,7 +2552,8 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
           "POST /shelves, POST /shelves/{id}/archive, "
           "POST /shelves/{id}/unarchive, "
           "POST /a2a/admin/delete-channel, POST /a2a/admin/rename-channel, "
-          "POST /a2a/admin/supersede-message")
+          "POST /a2a/admin/supersede-message, "
+          "POST /a2a/admin/set-channel-acl, GET /a2a/admin/channel-acl")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

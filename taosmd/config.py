@@ -66,6 +66,8 @@ _HUMAN_PRINCIPAL_IDS_KEY = "human_principal_ids"
 # one of these directories. Empty (the default) means collections are off.
 _COLLECTIONS_SECTION_KEY = "collections"
 _COLLECTIONS_ALLOWED_ROOTS_KEY = "allowed_roots"
+# Per-channel ACL for the A2A bus.
+_ACL_SECTION_KEY = "acls"
 
 MANAGED_BY_STANDALONE = "standalone"
 MANAGED_BY_TAOS = "taos"
@@ -780,6 +782,104 @@ def set_collections_allowed_roots(roots, *, clear: bool = False, data_dir=None) 
     _write(data, data_dir)
 
 
+# ---------------------------------------------------------------------------
+# A2A per-channel ACL
+# ---------------------------------------------------------------------------
+
+def get_acl(data_dir=None, channel=None):
+    """Return the ACL for *channel*, defaulting to ``{"read": ["*"], "post": ["*"]}``.
+
+    Resolution order:
+
+    1. ``TAOSMD_ACL_CHANNELS`` env var (JSON string)
+    2. ``acls`` key in ``~/.taosmd/config.json``
+
+    When *channel* is ``None`` the default ACL is returned.  When *channel*
+    is provided the channel-specific ACL is returned if configured, otherwise
+    the default ACL.
+    """
+    env = os.environ.get("TAOSMD_ACL_CHANNELS")
+    if env is not None:
+        env = env.strip()
+        if env:
+            try:
+                env_acls = json.loads(env)
+                if isinstance(env_acls, dict):
+                    if channel is not None and channel in env_acls:
+                        return _normalize_acl(env_acls[channel])
+                    return {"read": ["*"], "post": ["*"]}
+            except json.JSONDecodeError:
+                logger.warning("taosmd: invalid TAOSMD_ACL_CHANNELS env var")
+    data = _read(data_dir)
+    acls = data.get(_ACL_SECTION_KEY, {})
+    if isinstance(acls, dict):
+        if channel is not None and channel in acls:
+            return _normalize_acl(acls[channel])
+    return {"read": ["*"], "post": ["*"]}
+
+
+def set_acl(data_dir=None, channel=None, read_ids=None, post_ids=None, clear=False):
+    """Set the ACL for *channel*.
+
+    Args:
+        data_dir: taOSmd data directory.
+        channel: channel name (required unless ``clear`` is True).
+        read_ids: list of identity strings allowed to read.
+        post_ids: list of identity strings allowed to post.
+        clear: when True, remove the channel's ACL entry.
+
+    Raises:
+        ValueError: when ``clear`` is False and an id list contains a
+            non-empty string.
+    """
+    if clear:
+        data = _read(data_dir)
+        section = data.get(_ACL_SECTION_KEY, {})
+        if isinstance(section, dict) and channel in section:
+            del section[channel]
+            if not section:
+                data.pop(_ACL_SECTION_KEY, None)
+            else:
+                data[_ACL_SECTION_KEY] = section
+            _write(data, data_dir)
+        return
+    if read_ids is not None:
+        _validate_acl_ids(read_ids, "read")
+    if post_ids is not None:
+        _validate_acl_ids(post_ids, "post")
+    data = _read(data_dir)
+    section = data.get(_ACL_SECTION_KEY, {})
+    if not isinstance(section, dict):
+        section = {}
+    entry = {}
+    if read_ids is not None:
+        entry["read"] = list(read_ids)
+    if post_ids is not None:
+        entry["post"] = list(post_ids)
+    if entry:
+        section[channel] = entry
+        data[_ACL_SECTION_KEY] = section
+        _write(data, data_dir)
+
+
+def _normalize_acl(channel_acl):
+    read = channel_acl.get("read", ["*"])
+    post = channel_acl.get("post", ["*"])
+    if not isinstance(read, list):
+        read = ["*"]
+    if not isinstance(post, list):
+        post = ["*"]
+    return {"read": [str(x) for x in read], "post": [str(x) for x in post]}
+
+
+def _validate_acl_ids(ids, field):
+    if not isinstance(ids, list):
+        raise ValueError(f"{field} must be a list")
+    for i, id_ in enumerate(ids):
+        if not isinstance(id_, str) or not id_:
+            raise ValueError(f"{field}[{i}] must be a non-empty string")
+
+
 __all__ = [
     "get_memory_model",
     "set_memory_model",
@@ -812,4 +912,6 @@ __all__ = [
     "set_generator_profile",
     "get_collections_allowed_roots",
     "set_collections_allowed_roots",
+    "get_acl",
+    "set_acl",
 ]
