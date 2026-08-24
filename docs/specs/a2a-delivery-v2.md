@@ -28,8 +28,11 @@ its weekly allowance within ~2 days of the reset, two weeks in a row.
 
 ## Design law
 
-A message is read into a model context **at most once**, and a wake happens
-**only for information that changed**. Everything the bus can decide
+A message is read into a model context **at most once per handled
+acknowledgement**: delivery is at-least-once (a consumer that crashes between
+fetch and advance re-receives, which is the correct side to err on - never
+lose), and the advance is what marks context entry. A wake happens **only for
+information that changed**. Everything the bus can decide
 mechanically, it decides server-side; a harness (Claude Code, opencode, kilo,
 grok CLI, anything MCP) gets identical semantics because the intelligence is
 in the bus, not the client stack.
@@ -37,37 +40,64 @@ in the bus, not the client stack.
 ## Contract
 
 ### 1. Message taxonomy at write time
-`POST /a2a/send` gains `kind: chat | alarm | ack | digest | receipt | review |
-system` (default `chat`). Machine traffic is labelled by its author at write
-time, never inferred from body prefixes at read time (today three watchers
-grep for "[AUTOMATED" - it works until one author changes a prefix).
-Backfill: a one-shot migration tags historical messages by the same prefixes.
+`POST /a2a/send` gains `kind: chat | alarm | digest | review | system`
+(default `chat`) and an optional `to: <principal>` for direct addressing
+(persisted on the envelope; inbox routing in section 2 depends on it).
+Machine traffic is labelled by its author at write time, never inferred from
+body prefixes at read time (today three watchers grep for "[AUTOMATED" - it
+works until one author changes a prefix).
+`ack` and `receipt` exist as kinds **only for tagging historical messages**
+in the migration: once section 3 lands, `/a2a/send` REJECTS them with 400 -
+an acknowledgement is server state, never new traffic, and accepting both
+forms would resurrect the ack-counted-as-work loop this contract kills.
+Backfill: a one-shot migration tags historical messages by the known
+prefixes.
 
 ### 2. Server-side consumer cursors + inbox
 - `GET /a2a/inbox?consumer=<principal>&limit=` returns only messages past the
   consumer's cursor that are **addressed to it** (mention of its handle, its
   owned threads, or a direct `to`), excluding its own posts and excluding
-  `kind in (alarm, ack, receipt, digest)` unless `include_kinds=` says
-  otherwise. Oldest-first, cursor does NOT advance on read.
+  `kind in (alarm, ack, receipt, digest)` unless `include_kinds=` (a
+  comma-separated list of kinds) says otherwise. Oldest-first. **The cursor
+  is server state - there is no client-supplied cursor parameter**, and
+  reading does NOT advance it.
 - `POST /a2a/inbox/advance {consumer, to_id}` advances the cursor explicitly
   (the consumer decides when something is *handled*, not merely fetched).
+  Validation: `to_id` must be an existing message id at or below the newest
+  id the inbox has served to this consumer, and at or above the current
+  cursor - anything else is 400 (no silent rewind; idempotent re-advance to
+  the same id is 200). Rewind, if ever needed, is a deliberate separate
+  admin operation, not a parameter value.
 - One implementation on the bus replaces five client stacks. Watermark files
   remain only as a transport-failure fallback.
 
 ### 3. Acks are state, not traffic
-`POST /a2a/messages/{id}/ack {by}`. An ack today is a new bus message, which
+`POST /a2a/messages/{id}/ack`. An ack today is a new bus message, which
 other watchers then count as unhandled traffic (measured above). As state it
 is queryable (`acked_by` on the message envelope) and generates no wake for
 anyone. "Unhandled for X" becomes ONE server query - mentions of X past X's
 cursor minus acks - instead of four divergent client definitions.
 
+**Authorization, all state-mutation endpoints (ack, inbox/advance,
+alarms/clear):** the acting principal is derived from the verified registry
+token `sub`, exactly as `/a2a/mentions` already derives `reader` - never from
+a client-supplied body field. A consumer can advance only its own cursor and
+ack only as itself; `alarms/{key}/clear` is limited to the key's author or a
+lead principal. Where no verifier is configured (dev mode), the same
+query-parameter fallback `/a2a/mentions` uses applies.
+
 ### 4. Alarms converge, server-enforced
 Alarm-kind messages carry `alarm_key` (stable subject+condition string, e.g.
-`dead-session:@taOSmd-dev`). The bus refuses to store a same-key alarm unless
-its payload materially changed or the key was cleared (`POST
-/a2a/alarms/{key}/clear`), answering `{deduped: true}` instead. Cooldowns
-become bus policy (per-key min interval), deleting N per-watcher cooldown
-files. An alarm that repeats identical information is the mechanism by which
+`dead-session:@taOSmd-dev`) and an optional `alarm_fingerprint`. "Changed" is
+deterministic: the fingerprint defaults to sha256 of the body, and an author
+whose body contains volatile text (ages, counts, timestamps) passes an
+explicit fingerprint built from only the material fields - the author decides
+what is material, the server only compares. A same-(key, fingerprint) alarm
+inside the key's min interval is not stored - the send answers
+`{deduped: true}` - enforced atomically (unique index on key+fingerprint
+within the window, so concurrent duplicates cannot both land). `POST
+/a2a/alarms/{key}/clear` re-arms the key. Cooldowns become bus policy
+(per-key min interval), deleting N per-watcher cooldown files. An alarm that repeats identical information is the mechanism by which
 alarms train their readers to ignore them; the bus makes that impossible
 rather than discouraged.
 
@@ -87,8 +117,10 @@ promoted to bus policy so every harness inherits it).
 1. Deploy current master to the Pi first (already queued: 139 commits behind;
    carries the 400-guard and thread pagination).
 2. Ship taxonomy (1) + strict params (5) - small, additive.
-3. Inbox/cursor (2) + acks (3); migrate the three backup watchers and
-   fleet_health onto `/a2a/inbox` and delete their filter stacks.
+3. Inbox/cursor (2) + acks (3); migrate all five client stacks onto
+   `/a2a/inbox` - the three backup watchers, fleet_health's inline mention
+   query, and the lead's a2a_filter/catchup pair - and delete their
+   watermark+filter code.
 4. Alarm keys (4) + digest-in-bus (6); delete client digest machinery.
 
 ## Interim mitigations already landed (2026-08-24, this host)
