@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import time
 
 from . import api as _api
@@ -1133,6 +1134,111 @@ async def can_read(reader: str, msg: dict, data_dir=None) -> bool:
     return True
 
 
+async def a2a_inbox(
+    consumer: str,
+    *,
+    limit: int = 50,
+    include_kinds: list | None = None,
+    data_dir=None,
+) -> list[dict]:
+    """Return messages past ``consumer``'s cursor that are addressed to it.
+
+    A message is addressed when at least one of:
+    - the consumer's handle is mentioned in the body
+    - the message is in a thread owned by the consumer (thread name == consumer)
+    - the message has a direct ``recipient`` matching the consumer
+
+    The consumer's own posts are always excluded.  By default kinds
+    ``alarm``, ``ack``, ``receipt``, and ``digest`` are excluded; pass
+    ``include_kinds`` to widen the set.  Results are oldest-first.  Reading
+    does NOT advance the cursor.
+    """
+    if not isinstance(consumer, str) or not consumer:
+        raise ValueError("consumer must be a non-empty string")
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    cursor = await archive.get_a2a_inbox_cursor(consumer)
+
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+
+    excluded_kinds = {"alarm", "ack", "receipt", "digest"}
+    if include_kinds is not None:
+        excluded_kinds -= set(include_kinds)
+    allowed_kinds = _A2A_KINDS - excluded_kinds
+
+    norm_consumer = _normalise_handle(consumer)
+    mention_re = re.compile(r'(?<![\w/])@([a-zA-Z0-9_-]+)')
+
+    result = []
+    for row in rows:
+        if row["id"] <= cursor:
+            continue
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        sender = data.get("from") or ""
+        if sender == consumer:
+            continue
+        kind = data.get("kind") or "chat"
+        if kind not in allowed_kinds:
+            continue
+        body = data.get("body") or ""
+        thread = data.get("thread") or row.get("app_id") or "general"
+        recipient = data.get("recipient")
+        addressed = False
+        if recipient == consumer:
+            addressed = True
+        elif thread == consumer:
+            addressed = True
+        else:
+            for m in mention_re.finditer(body):
+                if _normalise_handle(m.group(1)) == norm_consumer:
+                    addressed = True
+                    break
+        if not addressed:
+            continue
+        msg = {
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": sender,
+            "body": body,
+            "thread": thread,
+            "reply_to": data.get("reply_to"),
+            "kind": kind,
+        }
+        if "refs" in data:
+            msg["refs"] = data["refs"]
+        if "blocks" in data:
+            msg["blocks"] = data["blocks"]
+        result.append(msg)
+
+    result.sort(key=lambda m: (m["ts"], m["id"]))
+    limit_i = max(1, min(limit, 1000))
+    return result[:limit_i]
+
+
+async def a2a_inbox_advance(
+    consumer: str,
+    to_id: int,
+    *,
+    data_dir=None,
+) -> dict:
+    """Advance ``consumer``'s inbox cursor to ``to_id``.
+
+    The cursor is persisted in the archive store so it survives restarts
+    and is visible to every process sharing the same data dir.
+    """
+    if not isinstance(consumer, str) or not consumer:
+        raise ValueError("consumer must be a non-empty string")
+    if not isinstance(to_id, int) or to_id < 0:
+        raise ValueError("to_id must be a non-negative integer")
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    await archive.set_a2a_inbox_cursor(consumer, to_id)
+    return {"ok": True}
+
+
 async def a2a_record_delivered(
     message_id: int, agent_id: str, *, ts: float | None = None, data_dir=None
 ) -> dict:
@@ -1640,6 +1746,7 @@ __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "
            "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
            "a2a_members", "a2a_threads", "a2a_thread_messages",
            "a2a_mentions_feed", "a2a_migrate_kinds", "can_read",
+           "a2a_inbox", "a2a_inbox_advance",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
