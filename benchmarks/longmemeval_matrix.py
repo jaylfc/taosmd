@@ -131,9 +131,9 @@ async def run_question(item, top_k, config):
     # top-k results. We do NOT add new session IDs from outside top-k.
     if kg and results:
         await expand_from_results(kg, results, max_hops=2, max_expanded=5)
-        # Graph expansion provides additional context but does NOT expand
-        # the retrieved set beyond top-k. It's useful for QA accuracy (L2/L3
-        # context assembly) but doesn't change Recall@k by design.
+        # Result deliberately discarded: v02_graph_cost is a cost probe at
+        # unchanged Recall@k. Expansion does NOT widen the retrieved set
+        # beyond top-k, so it cannot change the metric by design.
 
     recall_hit = any(aid in retrieved_session_ids for aid in answer_session_ids)
 
