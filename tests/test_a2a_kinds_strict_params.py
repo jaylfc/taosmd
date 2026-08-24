@@ -167,6 +167,16 @@ def test_http_a2a_send_kind_system_roundtrips(live_server):
     assert body["messages"][0]["kind"] == "system"
 
 
+def test_http_a2a_send_empty_kind_returns_400(live_server):
+    """An explicit empty-string kind is invalid, never silently coerced to chat."""
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": "msg", "thread": "kind-empty", "kind": ""},
+    )
+    assert status == 400, body
+    assert "kind" in body["error"].lower()
+
+
 def test_http_a2a_send_unknown_kind_returns_400(live_server):
     """POST /a2a/send with an unknown kind must 400 naming the allowed set."""
     status, body = _post(

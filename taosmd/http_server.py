@@ -1564,7 +1564,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             reply_to = body.get("reply_to")
             refs = body.get("refs")
             blocks = body.get("blocks")
-            kind = body.get("kind", "chat") or "chat"
+            kind = body.get("kind", "chat")
+            if kind is None:
+                kind = "chat"
             if not isinstance(from_, str) or not from_:
                 raise _BadRequest("'from' (non-empty string) is required")
             if not isinstance(kind, str) or kind not in _A2A_KINDS:
