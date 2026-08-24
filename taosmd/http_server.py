@@ -1641,7 +1641,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         # even in warn mode -- see the comment block above.
                         logger.warning(
                             "a2a auth: rejecting presented-credential failure "
-                            "from %r in warn mode: %s", from_, exc,
+                            "from %r (regardless of enforce mode): %s", from_, exc,
                         )
                         self._send_json(403, {"error": f"registry auth: {exc}"})
                         return
