@@ -487,16 +487,18 @@ If neither token is set, the admin surface fails closed (403).
 `POST /a2a/send` can verify sender identity against a taOS registry. Three
 config keys control it (`taosmd/config.py`): `registry_url` (the registry base
 URL; without it the verifier is dormant and every message is accepted as
-before), `registry_token` (the token used to poll the auth-gated revoked
-feed), and `a2a_auth_enforce` (mode flip). The mode can also be set with the
-`TAOSMD_A2A_AUTH_ENFORCE` environment variable (`1`, `true`, or `yes` enable
-enforce; the env var wins over the config key). Default is verify-and-warn:
-an auth failure is logged as a warning and the message is still accepted, so
-a deployment can observe violations before flipping enforcement. In enforce
-mode a missing token returns `401` and a bad token or missing grant returns
-`403`, and the message is dropped. Independent of registry auth, when the
-server has `server_token` configured every `/a2a/*` endpoint requires a
-matching `Authorization: Bearer <token>` header.
+before) and `registry_token` (the token used to poll the auth-gated revoked
+feed) are a pair -- set `registry_url` without `registry_token` and sends will
+fail at runtime because the revocation feed cannot be fetched. The third key,
+`a2a_auth_enforce`, flips between verify-and-warn and enforce mode. The mode
+can also be set with the `TAOSMD_A2A_AUTH_ENFORCE` environment variable (`1`,
+`true`, or `yes` enable enforce; the env var wins over the config key). Default
+is verify-and-warn: an auth failure is logged as a warning and the message is
+still accepted, so a deployment can observe violations before flipping
+enforcement. In enforce mode a missing token returns `401` and a bad token or
+missing grant returns `403`, and the message is dropped. Independent of registry
+auth, when the server has `server_token` configured every `/a2a/*` endpoint
+requires a matching `Authorization: Bearer <token>` header.
 
 Each message in `/a2a/messages` and the SSE stream has shape:
 `{"id", "ts", "from", "body", "thread", "reply_to"}`

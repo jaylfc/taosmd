@@ -792,6 +792,22 @@ def test_banner_lan_enforce_strips_no_auth(tmp_path):
     assert "(no auth)" not in listening
 
 
+def test_banner_half_config_warns_about_missing_registry_token(tmp_path):
+    """registry_url set without registry_token -> startup diagnostic names both keys."""
+    lines = _serve_banner("127.0.0.1", tmp_path, {
+        "TAOSMD_REGISTRY_URL": "http://reg.test",
+    })
+    _require_provenance(lines)
+    half_config_lines = [
+        l for l in lines
+        if "registry_token" in l.lower() and "registry_url" in l.lower()
+    ]
+    assert half_config_lines, (
+        "expected half-config diagnostic naming registry_url and registry_token, "
+        f"got banner lines: {lines}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Task graph HTTP tests
 # ---------------------------------------------------------------------------
