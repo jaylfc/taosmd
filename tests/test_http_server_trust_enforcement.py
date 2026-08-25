@@ -172,17 +172,45 @@ def test_warn_no_token_accepted(warn_server, caplog):
                for r in caplog.records)
 
 
-def test_warn_invalid_token_accepted(warn_server, caplog):
-    """Invalid token: message accepted and warning logged in warn mode."""
+def test_warn_invalid_token_rejected(warn_server, caplog):
+    """Invalid (presented-but-unverifiable) token: 403 even in warn mode.
+
+    This is a presented-credential failure, not a migration gap: a token that
+    was supplied but does not verify is treated as an active impersonation
+    attempt and rejected regardless of the enforce flag.
+    """
     import logging
     with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
         status, body = _post_send(warn_server, "any-agent", "hello", token="not-a-jwt")
-    assert status == 200, body
-    assert any("verify-and-warn" in r.message for r in caplog.records)
+    assert status == 403, body
+    # A rejected request must not reach the service layer.
+    s2, t2 = _get(warn_server, "/a2a/messages?thread=general&limit=100")
+    assert s2 == 200
+    assert json.loads(t2)["messages"] == []
+
+
+def test_warn_mismatched_sub_rejected(warn_server):
+    """Agent token with sub != from is 403 EVEN in warn mode.
+
+    A presented credential that proves identity but mismatches the claimed
+    handle is a presented-credential failure, always 403 regardless of mode.
+    """
+    token = _mint("agent-OTHER")
+    status, body = _post_send(warn_server, "agent-1", "hello", token=token)
+    assert status == 403, body
+    # A rejected request must not reach the service layer.
+    s2, t2 = _get(warn_server, "/a2a/messages?thread=general&limit=100")
+    assert s2 == 200
+    assert json.loads(t2)["messages"] == []
 
 
 def test_warn_valid_token_no_grant_accepted(warn_server, caplog):
-    """Valid token but no grant: message accepted and warning logged in warn mode."""
+    """Valid token but no grant: warn-and-accept in warn mode (blocker fix).
+
+    Grant failure is an authorization gap, not a credential failure: the
+    identity is proven and nothing is being impersonated. It must follow the
+    same warn-or-enforce path as a missing token.
+    """
     import logging
     token = _mint("agent-no-grant")
     with caplog.at_level(logging.WARNING, logger="taosmd.http_server"):
@@ -192,6 +220,11 @@ def test_warn_valid_token_no_grant_accepted(warn_server, caplog):
         "verify-and-warn" in r.message and "no a2a_send grant" in r.message
         for r in caplog.records
     )
+    # Unlike presented-credential failures, a grant failure in warn mode
+    # still persists the message (warn-and-accept, not reject).
+    s2, t2 = _get(warn_server, "/a2a/messages?thread=general&limit=100")
+    assert s2 == 200
+    assert len(json.loads(t2)["messages"]) == 1
 
 
 def test_warn_valid_token_and_grant_no_warning(warn_server, caplog):
