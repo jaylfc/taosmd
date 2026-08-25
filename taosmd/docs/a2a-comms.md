@@ -30,6 +30,12 @@ If neither succeeds, install it from PyPI:
 pip install taosmd
 ```
 
+If you plan to use registry auth (set `registry_url`), install the extra instead:
+
+```
+pip install "taosmd[registry]"
+```
+
 or, for the latest unreleased changes, from GitHub:
 
 ```
@@ -494,7 +500,12 @@ enforce; the env var wins over the config key). Default is verify-and-warn:
 an auth failure is logged as a warning and the message is still accepted, so
 a deployment can observe violations before flipping enforcement. In enforce
 mode a missing token returns `401` and a bad token or missing grant returns
-`403`, and the message is dropped. Independent of registry auth, when the
+`403`, and the message is dropped.
+
+Registry auth requires the `pyjwt` and `cryptography` packages, which are not
+installed by default. If you set `registry_url`, install the `[registry]` extra:
+`pip install "taosmd[registry]"`. The server will fail loudly at startup if the
+extra is missing. Independent of registry auth, when the
 server has `server_token` configured every `/a2a/*` endpoint requires a
 matching `Authorization: Bearer <token>` header.
 

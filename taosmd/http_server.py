@@ -693,6 +693,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         _registry_url = _config.get_registry_url(data_dir)
         if _registry_url:
             from . import registry_auth  # noqa: PLC0415 - optional path
+            registry_auth._require_jwt()
             # The revoked and grants feeds are admin-gated (#710/#719): send the
             # configured taOS local token on them; pin the issuer.
             _registry_admin_token = _config.get_registry_token(data_dir)
