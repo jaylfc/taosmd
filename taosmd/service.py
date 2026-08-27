@@ -606,6 +606,8 @@ async def a2a_feed(
             msg["refs"] = data["refs"]
         if "blocks" in data:
             msg["blocks"] = data["blocks"]
+        if "acked_by" in data:
+            msg["acked_by"] = data["acked_by"]
         result.append(msg)
     return result
 
@@ -963,6 +965,8 @@ async def a2a_thread_messages(
             msg["refs"] = data["refs"]
         if "blocks" in data:
             msg["blocks"] = data["blocks"]
+        if "acked_by" in data:
+            msg["acked_by"] = data["acked_by"]
         messages.append(msg)
 
     def _cursor_val(cursor):
@@ -1335,6 +1339,43 @@ async def a2a_prune_receipts(
     receipt_store = stores["receipts"]
     n = await receipt_store.prune(older_than_ts)
     return {"pruned": n}
+
+
+async def a2a_ack(message_id: int, by: str, *, data_dir=None) -> dict:
+    """Record that a principal has acknowledged a message, as server state.
+
+    Per the A2A delivery contract v2 (section 3), an acknowledgement is
+    never a new bus message: it mutates the message envelope in place by
+    appending ``by`` to an ``acked_by`` list on the archived event, via
+    :meth:`taosmd.archive.ArchiveStore.update_event_data_json`. The JSONL
+    source files are never touched; only the derived index is updated.
+
+    Idempotent: acking the same message twice by the same principal leaves
+    exactly one entry in ``acked_by``. The ``acked_by`` list is surfaced
+    on the envelope by the existing read paths (``a2a_feed`` and
+    ``a2a_thread_messages``).
+
+    The composed "unhandled for X" query (mentions past X's cursor minus
+    acks) is deferred to slice 2c, which needs 2a's server-side cursor.
+
+    Returns ``{"id", "acked_by", "ok"}``.
+    """
+    if not isinstance(by, str) or not by:
+        raise ValueError("by must be a non-empty string")
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    stored = await archive.get_event(message_id)
+    if stored is None:
+        raise ValueError(f"message {message_id} not found")
+    data = dict(stored.get("data") or {})
+    acked_by = data.get("acked_by")
+    if not isinstance(acked_by, list):
+        acked_by = []
+    if by not in acked_by:
+        acked_by = [*acked_by, by]
+    data["acked_by"] = acked_by
+    await archive.update_event_data_json(message_id, data)
+    return {"id": message_id, "acked_by": acked_by, "ok": True}
 
 
 async def task_create(
@@ -1753,7 +1794,7 @@ __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "
            "admin_a2a_delete_channel", "admin_a2a_rename_channel",
            "admin_a2a_supersede_message",
            "a2a_record_delivered", "a2a_record_seen", "a2a_get_receipts",
-           "a2a_get_receipt", "a2a_prune_receipts",
+           "a2a_get_receipt", "a2a_prune_receipts", "a2a_ack",
            "collections_create", "collections_list", "collections_get",
            "collections_index_start", "collections_index_run",
            "collections_index_background", "collections_link",
