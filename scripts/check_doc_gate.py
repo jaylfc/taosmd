@@ -219,8 +219,7 @@ def _is_test_path(path: str) -> bool:
     etc.), so adding or removing one must not trip a doc-gate structural rule.
     Covers frontend co-located tests and Python test modules (#171)."""
     base = path.rsplit("/", 1)[-1]
-    # Match both "/__tests__/" and root-level "__tests__/" paths
-    if "/__tests__/" in path or (len(path) >= len("__tests__/") and path.startswith("__tests__/")):
+    if "/__tests__/" in path or "__tests__/" in path:
         return True
     if base.startswith("test_") and base.endswith(".py"):
         return True
@@ -234,7 +233,6 @@ def _is_test_path(path: str) -> bool:
             ".spec.ts",
             ".spec.js",
         )
-    )
     )
 
 
