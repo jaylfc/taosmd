@@ -406,6 +406,7 @@ async def fetch_by_ref(ref: dict, *, agent: str, data_dir=None) -> dict:
 
 
 _A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "system"})
+_A2A_ALARM_MIN_INTERVAL = 5.0
 
 
 async def a2a_send(
@@ -418,6 +419,8 @@ async def a2a_send(
     blocks: list | None = None,
     recipient: str | None = None,
     kind: str = "chat",
+    alarm_key: str | None = None,
+    alarm_fingerprint: str | None = None,
     data_dir=None,
 ) -> dict:
     """Post a message onto the agent-to-agent bus.
@@ -432,6 +435,13 @@ async def a2a_send(
     ``receipt``, ``review``, ``system`` (default ``chat``). It is stored
     on the envelope and returned in every read path.
 
+    ``alarm_key`` and ``alarm_fingerprint`` apply to ``kind="alarm"``
+    messages. When ``alarm_fingerprint`` is omitted the server computes
+    ``sha256(body)``. A same-(key, fingerprint) alarm within the
+    module-level min interval is not stored: the send answers
+    ``{"deduped": true}``. The dedup guarantee relies on the single
+    service loop serialising the read and write calls.
+
     ``refs`` and ``blocks`` are optional first-class envelope fields
     (taOSmd #211). When provided they are stored verbatim in the archive
     payload and echoed back in the receipt and on feed/SSE reads. When
@@ -442,7 +452,8 @@ async def a2a_send(
     recipient can retrieve it via GET /a2a/mentions.
 
     Returns ``{"id", "from", "thread", "reply_to", "kind"}`` plus ``refs``
-    and/or ``blocks`` when those were supplied.
+    and/or ``blocks`` when those were supplied. For deduped alarms returns
+    ``{"deduped": true, "kind": "alarm"}``.
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
@@ -460,6 +471,7 @@ async def a2a_send(
         return await remote.a2a_send(
             sender, body, thread=thread, reply_to=reply_to,
             refs=refs, blocks=blocks, recipient=recipient, kind=kind,
+            alarm_key=alarm_key, alarm_fingerprint=alarm_fingerprint,
         )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
@@ -469,6 +481,27 @@ async def a2a_send(
         from .admin import A2AAdminState  # noqa: PLC0415
         _admin = A2AAdminState(data_dir)
         thread = _admin.resolve_channel(thread)
+
+    # Alarm dedup: server-enforced, store-backed. The single service loop
+    # serialises the read and write below, so no two alarms race.
+    deduped = False
+    if kind == "alarm" and isinstance(alarm_key, str) and alarm_key:
+        fp = alarm_fingerprint if isinstance(alarm_fingerprint, str) and alarm_fingerprint else None
+        if fp is None:
+            fp = hashlib.sha256(body.encode()).hexdigest()
+        now = time.time()
+        state = await archive.get_alarm_dedup(alarm_key, fp)
+        if state is not None:
+            last_fire = state["last_fire_ts"] or 0.0
+            last_cleared = state["last_cleared_ts"] or 0.0
+            if last_fire > (now - _A2A_ALARM_MIN_INTERVAL) and last_cleared < last_fire:
+                deduped = True
+        if not deduped:
+            await archive.record_alarm_dedup(alarm_key, fp, now)
+
+    if deduped:
+        return {"deduped": True, "kind": "alarm"}
+
     data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to, "kind": kind}
     if recipient is not None:
         data["recipient"] = recipient
@@ -476,6 +509,11 @@ async def a2a_send(
         data["refs"] = refs
     if blocks is not None:
         data["blocks"] = blocks
+    if kind == "alarm" and alarm_key is not None:
+        data["alarm_key"] = alarm_key
+        fp = alarm_fingerprint if isinstance(alarm_fingerprint, str) and alarm_fingerprint else None
+        if fp is not None:
+            data["alarm_fingerprint"] = fp
     row_id = await archive.record(
         event_type=EVENT_A2A,
         data=data,
@@ -610,6 +648,28 @@ async def a2a_feed(
             msg["acked_by"] = data["acked_by"]
         result.append(msg)
     return result
+
+
+async def a2a_alarms_clear(alarm_key: str, *, data_dir=None) -> dict:
+    """Clear the dedup cooldown for an alarm key.
+
+    The next same-key alarm will store, after which the cooldown re-applies
+    to subsequent duplicates. The guarantee relies on the single service
+    loop serialising reads and writes.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if not isinstance(alarm_key, str) or not alarm_key:
+        raise ValueError("alarm_key must be a non-empty string")
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_alarms_clear(alarm_key)
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    now = time.time()
+    await archive.clear_alarm_key(alarm_key, now)
+    return {"cleared": True, "key": alarm_key}
 
 
 async def a2a_channels(*, data_dir=None) -> list[dict]:
@@ -1786,7 +1846,7 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
            "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
            "a2a_members", "a2a_threads", "a2a_thread_messages",
-           "a2a_mentions_feed", "a2a_migrate_kinds", "can_read",
+           "a2a_mentions_feed", "a2a_migrate_kinds", "a2a_alarms_clear", "can_read",
            "a2a_inbox", "a2a_inbox_advance",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",

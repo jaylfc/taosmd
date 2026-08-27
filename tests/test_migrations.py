@@ -421,7 +421,7 @@ def test_status_reports_pending_for_an_unstamped_legacy_store(tmp_path):
     # The baseline is already present, so it is reported as detected rather
     # than as a step that would run.
     assert st["detected_baseline"] == 1
-    assert st["pending"] == ["archive_index_project"]
+    assert st["pending"] == ["archive_index_project", "archive_index_alarm_state"]
 
     migrations.migrate(conn, "archive_index")
     st = migrations.status(conn, "archive_index")
@@ -714,3 +714,66 @@ def test_shipped_registry_passes_its_own_validation():
     """The invariant holds for what we actually ship, not just for fixtures."""
     for db, migs in migrations.REGISTRY.items():
         migrations._validate_registry(db, migs)
+
+
+def test_archive_index_alarm_state_migration_runs_when_table_is_missing(tmp_path):
+    """A live database that predates the alarm state table gains it via migration 3.
+
+    This is the upgrade path for existing deployments: the baseline schema
+    creates the table for fresh databases, but an older store that already
+    has archive_index and project but lacks a2a_alarm_state must pick it up
+    from migration 3.
+    """
+    path = tmp_path / "archive-index.db"
+    conn = _db.connect(path)
+    # Build the baseline schema minus the alarm state table by running the
+    # original (pre-alarm) baseline and then dropping the table.
+    baseline_without_alarm = """
+CREATE TABLE IF NOT EXISTS archive_index (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    event_type TEXT NOT NULL,
+    agent_name TEXT,
+    app_id TEXT,
+    project TEXT,
+    summary TEXT NOT NULL DEFAULT '',
+    file_path TEXT NOT NULL,
+    line_number INTEGER NOT NULL,
+    data_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_archive_ts ON archive_index(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_archive_type ON archive_index(event_type);
+CREATE INDEX IF NOT EXISTS idx_archive_agent ON archive_index(agent_name);
+CREATE INDEX IF NOT EXISTS idx_archive_app ON archive_index(app_id);
+
+CREATE TABLE IF NOT EXISTS archive_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
+    summary,
+    content,
+    content_rowid='id',
+    tokenize='porter unicode61'
+);
+"""
+    conn.executescript(baseline_without_alarm)
+    conn.execute("PRAGMA user_version = 2")
+    conn.execute(
+        "INSERT INTO archive_index "
+        "(timestamp, event_type, agent_name, app_id, project, summary,"
+        " file_path, line_number, data_json) "
+        "VALUES (1.0, 'turn', 'a', 'app', 'proj', 's', 'f.jsonl', 1, '{}')"
+    )
+    conn.commit()
+
+    assert not migrations.table_exists(conn, "a2a_alarm_state")
+
+    migrations.migrate(conn, "archive_index")
+
+    assert migrations.table_exists(conn, "a2a_alarm_state")
+    assert _user_version(conn) == migrations.latest_version("archive_index")
+    row = conn.execute("SELECT project, summary FROM archive_index").fetchone()
+    assert tuple(row) == ("proj", "s"), "existing data must survive the migration"
+    conn.close()
