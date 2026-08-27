@@ -24,7 +24,9 @@ Do not improvise.
 7. The full test suite must pass before you push:
    `python3 -m pytest -q -m "not slow"` (well over a thousand tests, all
    green; record the exact number in your PR body). Lint the files you
-   changed: `python3 -m ruff check <files>`.
+   changed: `uv run ruff check <files>`. Do not invent a substitute tool. If
+   that command cannot run, your environment is broken: report it and stop,
+   rather than working around it.
 8. Never commit IP addresses, hostnames, tokens, or credentials.
 9. STOP on any surprise: a failing test you did not cause, a merge conflict,
    a file that does not look like the job describes. Open the PR with what
@@ -40,8 +42,22 @@ Do not improvise.
 - Tests are plain pytest functions in tests/, no test classes. Mirror the
   style of the file you are editing.
 - Type hints use the modern `X | None` form, not `Optional[X]`.
-- `ruff` is the linter. Some findings in files you did not touch are known
-  and pre-existing: never "fix" code outside your allowed files.
+- `ruff` is the linter, pinned at `ruff==0.16.3`. Run it as `uv run ruff check`
+  so you get the pinned version rather than whatever is on your PATH.
+- CHANGED 2026-08-18 (PR #379), and this affects you if your job touches
+  `tests/` or `benchmarks/`: CI now runs
+  `uv run ruff check taosmd/ tests/ benchmarks/`, where it used to check
+  `taosmd/` alone. All three trees are currently CLEAN, exit code 0. So the
+  old advice that findings outside your files are "known and pre-existing"
+  NO LONGER HOLDS for those three directories: there are none, and any
+  finding you introduce turns CI red on your first push. Before you push,
+  run that exact command and read its exit code directly. Do not read an
+  exit code off the end of a pipeline, and do not use the test suite to
+  decide whether lint passes: lint and tests are separate CI steps, so a
+  fully green suite tells you nothing about the lint step.
+- Findings in files you did not touch may still exist ELSEWHERE in the repo
+  (for example `scripts/`, which CI does not lint). Never "fix" code outside
+  your allowed files.
 - docs/research-report.md and docs/benchmarks.md carry benchmark numbers with
   strict provenance rules. NEVER change a number in either file.
 - The A2A bus, registry auth, and grants verifier are security surfaces.
@@ -57,7 +73,7 @@ against master on 2026-07-21.
 |---|---|---|---|---|
 | JOB-001 | job-001-benchmarks-em-dash-sweep.md | OPEN | minimal | punctuation only, one doc |
 | JOB-002 | job-002-cross-encoder-path-fix.md | ON HOLD, see #199 | n/a | do not start |
-| JOB-003 | job-003-http-server-dead-import.md | OPEN | minimal | delete dead code, one function |
+| JOB-003 | DONE-job-003-http-server-dead-import.md | DONE | n/a | completed in #376, kept for reference |
 | JOB-004 | job-004-eventqa-runner-exit-code.md | OPEN | low | two returns in one runner, one test file |
 | JOB-005 | DONE-job-005-collections-db-connect.md | DONE | n/a | completed, kept for reference |
 | JOB-006 | job-006-ref-fetch-part2-comment.md | OPEN | minimal | comments only, one test file |

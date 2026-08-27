@@ -1,6 +1,11 @@
 # JOB-002: Make CrossEncoderReranker's default model path cwd-independent
 
-**Status: ON HOLD (re-verified 2026-08-14). DO NOT START THIS JOB.**
+**Status: ON HOLD (re-verified 2026-08-18 on master ec80d41b). DO NOT START THIS JOB.**
+
+Both halves of that status were re-checked today rather than carried: `taosmd/cross_encoder.py`
+still defaults `onnx_path` to the relative `"models/cross-encoder-onnx"` in
+`CrossEncoderReranker.__init__`, so the bug is real, and issue #199 is still open, so the
+supersession still holds. Nothing here changed; only the date on the claim did.
 
 The bug this job describes is still real: `taosmd/cross_encoder.py` line 21
 still defaults `onnx_path` to the relative `"models/cross-encoder-onnx"`.
@@ -103,7 +108,7 @@ def _default_onnx_path() -> str:
 7. `python3 -m pytest tests/test_cross_encoder_path.py -q` (3 passed), then
    the FULL suite `python3 -m pytest -q -m "not slow"` (all green; the
    existing reranker tests prove explicit-path behavior is unchanged), then
-   `python3 -m ruff check taosmd/cross_encoder.py tests/test_cross_encoder_path.py`.
+   `uv run ruff check taosmd/cross_encoder.py tests/test_cross_encoder_path.py`.
 8. One commit, push, open the PR. PR body: the bug (cwd-dependent default),
    the fix (repo-root-resolved default, explicit arg untouched), test counts.
 

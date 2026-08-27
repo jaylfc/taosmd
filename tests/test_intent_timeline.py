@@ -2,7 +2,6 @@
 
 import re
 
-import pytest
 from taosmd.intent_classifier import (
     classify_intent,
     get_search_strategy,

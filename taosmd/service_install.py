@@ -125,13 +125,19 @@ def uninstall_systemd() -> int:
 
     Returns 0 on success, non-zero on error.
     """
-    rc = _run_systemctl(["disable", "--now", _SYSTEMD_UNIT_NAME])
-    # rc may be non-zero if the unit was never enabled; tolerate that.
+    _rc = _run_systemctl(["disable", "--now", _SYSTEMD_UNIT_NAME])
+    # The return code is deliberately discarded: it is non-zero when the unit
+    # was never enabled, which is not an error for an uninstall.
     unit_path = Path.home() / ".config" / "systemd" / "user" / _SYSTEMD_UNIT_NAME
     if unit_path.exists():
-        unit_path.unlink()
+        try:
+            unit_path.unlink()
+        except OSError:
+            return 1
         print(f"Removed unit file: {unit_path}")
-        _run_systemctl(["daemon-reload"])
+        rc = _run_systemctl(["daemon-reload"])
+        if rc != 0:
+            return rc
     else:
         print("Unit file not found, nothing to remove.")
     print("taosmd service stopped and uninstalled.")

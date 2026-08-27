@@ -15,7 +15,6 @@ import gzip
 import hashlib
 import json
 import logging
-import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -140,6 +139,23 @@ class ArchiveStore:
             """INSERT INTO archive_settings (key, value) VALUES ('user_tracking_enabled', ?)
                ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
             ("true" if enabled else "false",),
+        )
+        self._conn.commit()
+
+    async def get_a2a_inbox_cursor(self, consumer: str) -> int:
+        """Return the last-seen message id for ``consumer``'s inbox, or 0."""
+        row = self._conn.execute(
+            "SELECT value FROM archive_settings WHERE key = ?",
+            (f"a2a_inbox_cursor_{consumer}",),
+        ).fetchone()
+        return int(row["value"]) if row else 0
+
+    async def set_a2a_inbox_cursor(self, consumer: str, cursor_id: int) -> None:
+        """Persist ``consumer``'s inbox cursor to ``cursor_id``."""
+        self._conn.execute(
+            """INSERT INTO archive_settings (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (f"a2a_inbox_cursor_{consumer}", str(cursor_id)),
         )
         self._conn.commit()
 
@@ -341,6 +357,19 @@ class ArchiveStore:
         except (json.JSONDecodeError, TypeError):
             result["data"] = {}
         return result
+
+    async def update_event_data_json(self, event_id: int, data: dict) -> None:
+        """Update the data_json for an existing index row.
+
+        Used by one-shot migrations that backfill fields (e.g. message kind)
+        onto historical archive events. The JSONL source files are never
+        modified; only the derived index is updated.
+        """
+        self._conn.execute(
+            "UPDATE archive_index SET data_json = ? WHERE id = ?",
+            (json.dumps(data, default=str), event_id),
+        )
+        self._conn.commit()
 
     async def count(
         self,

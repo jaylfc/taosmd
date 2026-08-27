@@ -117,7 +117,7 @@ async def run_question(item, top_k, config):
 async def run_benchmark(limit: int = 500, top_k: int = 5):
     print("=" * 74)
     print(f"LongMemEval-S Enhanced Retrieval Experiments — Recall@{top_k}")
-    print(f"Model: all-MiniLM-L6-v2 (ONNX) — same as MemPalace")
+    print("Model: all-MiniLM-L6-v2 (ONNX) — same as MemPalace")
     print(f"Target: beat 96.6% (MemPalace) on {limit} questions")
     print("=" * 74)
 
@@ -168,7 +168,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
         overall = total_recall / total_questions * 100
 
         print(f"\n  Result: {total_recall}/{total_questions} ({overall:.1f}%) in {total_time:.0f}s")
-        print(f"  By category:")
+        print("  By category:")
         for qtype, data in sorted(results_by_type.items()):
             pct = data["hits"] / data["total"] * 100
             print(f"    {qtype:35s} {data['hits']:3d}/{data['total']:<3d} ({pct:.1f}%)")

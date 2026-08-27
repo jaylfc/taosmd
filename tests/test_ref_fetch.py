@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
-import urllib.parse
 
 import pytest
 
@@ -237,7 +235,6 @@ class TestFetchByRef:
             # The real fetch path uses _NoRedirect which returns None from
             # redirect_request, preventing the 302 from being followed.
             # Origin B must NOT receive the Authorization header.
-            auth_leaked = False
             try:
                 asyncio.run(
                     svc.fetch_by_ref(ref, agent="test", data_dir="/tmp")
@@ -355,7 +352,6 @@ class TestServiceFetchByRefRouting:
     def test_local_path_when_no_remote(self, monkeypatch):
         from taosmd import config as cfg
         from taosmd import service as svc
-        from taosmd.ref_fetch import fetch_by_ref as _orig_fetch
 
         async def fake_fetch(ref, fetcher, agent, data_dir=None):
             return b"hello"
@@ -368,7 +364,7 @@ class TestServiceFetchByRefRouting:
         result = asyncio.run(svc.fetch_by_ref(ref, agent="test", data_dir="/tmp"))
         assert result["bytes"] == "aGVsbG8="
 
-    def test_local_path_passes_data_dir_to_ref_fetch(self, monkeypatch):
+    def test_local_path_passes_data_dir_to_ref_fetch(self, tmp_path, monkeypatch):
         from taosmd import config as cfg
         from taosmd import service as svc
 
@@ -383,8 +379,12 @@ class TestServiceFetchByRefRouting:
         monkeypatch.setattr("taosmd.ref_fetch.fetch_by_ref", fake_fetch)
 
         ref = {"uri": "taos://proj/files/hello.txt", "sha256": "abc"}
+        data_dir = str(tmp_path)
+        result = asyncio.run(svc.fetch_by_ref(ref, agent="test", data_dir=data_dir))
+        assert captured["data_dir"] == data_dir
+        assert result["bytes"] == "aGVsbG8="
+
     def test_service_fetch_by_ref_does_not_raise_when_files_url_unset_but_registry_set(self, tmp_path, monkeypatch):
-        from taosmd import config as cfg
         from taosmd import service as svc
 
         async def fake_fetch(ref, fetcher, agent, data_dir=None):

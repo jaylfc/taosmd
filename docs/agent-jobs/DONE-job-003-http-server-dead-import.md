@@ -1,9 +1,15 @@
 # JOB-003: Remove the dead importlib block in _webui_dir
 
-**Status: OPEN (re-verified 2026-08-14).** The dead try block is still in
-`taosmd/http_server.py`, now at `_webui_dir()` around line 165 rather than
-112. `_pkg_files` (imported at line 155) still has exactly one user, the dead
-block itself, so step 4 will tell you to remove that import too.
+**Status: DONE (2026-08-18).** Landed as PR #376, merged in `b036af07`. Kept
+for reference; do not start it. The dead try block is gone from `_webui_dir()`,
+the `_pkg_files` import went with it because that block was its only user, and
+the docstring now describes what the function actually does. A test in
+`tests/test_http_server.py` pins the `__file__`-relative resolution, and it
+discriminates: mutating the candidate path moves it from passing to failing.
+
+The job description below is preserved as written, so the line numbers and the
+quoted function body describe the code BEFORE the fix and no longer match the
+tree. That is the point of keeping it, not a defect in it.
 
 Read docs/agent-jobs/README.md first and follow its absolute rules.
 
@@ -65,6 +71,6 @@ def _webui_dir() -> Path | None:
    it.
 5. `python3 -m pytest -q -m "not slow"` (all green; the webui-serving tests
    cover this function), and
-   `python3 -m ruff check taosmd/http_server.py` (the F401 finding for
+   `uv run ruff check taosmd/http_server.py` (the F401 finding for
    `_ir` must be gone; do not fix any OTHER findings).
 6. One commit, push, open the PR.

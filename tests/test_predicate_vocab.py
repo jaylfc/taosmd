@@ -10,7 +10,6 @@ import pytest
 from taosmd.predicate_vocab import (
     ALLOWED_PREDICATES,
     PREDICATE_CATEGORIES,
-    SYNONYMS,
     categories,
     extract_with_vocab,
     is_allowed,

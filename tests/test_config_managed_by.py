@@ -1,5 +1,4 @@
 """Tests for managed_by and serve_dashboard config keys."""
-import os
 import pytest
 from taosmd import config as cfg
 

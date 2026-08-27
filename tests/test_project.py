@@ -1,13 +1,10 @@
 """Tests for project identity fingerprinting."""
 from __future__ import annotations
 
-import os
 import subprocess
 
-import pytest
 
 from taosmd.project import (
-    ProjectInfo,
     ProjectResolver,
     _get_git_remote,
     _hash_remote,

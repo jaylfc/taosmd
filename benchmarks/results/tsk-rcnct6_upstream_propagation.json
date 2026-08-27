@@ -1,0 +1,11 @@
+{
+    "measurement": "upstream usage-window rollover propagation",
+    "target_constant": "MIN_LEAD_SECONDS",
+    "target_location": "MIN_LEAD_SECONDS constant in the out-of-repo resume-arm-time helper",
+    "status": "UNMEASURED",
+    "reason": "No live Anthropic credentials available in this environment. The measurement requires polling https://api.anthropic.com/api/oauth/usage across a real 5h reset boundary (bounded wait).",
+    "procedure": "At a reset boundary, poll the live Anthropic usage API https://api.anthropic.com/api/oauth/usage each second and record the wall-clock delta between the nominal resets_at and the first response serving the new five_hour window (detected by resets_at changing). See measure_at_boundary() in benchmarks/measure_upstream_propagation.py.",
+    "recorded_at": "2026-08-17T23:05:00+00:00",
+    "measured_samples": [],
+    "script": "benchmarks/measure_upstream_propagation.py"
+}

@@ -248,10 +248,35 @@ class RemoteClient:
         resp = await self._run("GET", "/a2a/messages", params=params)
         return resp.get("messages", [])
 
+    async def a2a_mentions_feed(
+        self,
+        reader: str,
+        *,
+        since: float | None = None,
+        limit: int = 50,
+        **_opts,
+    ) -> list[dict]:
+        """GET /a2a/mentions: return messages mentioning ``reader`` plus reply chains.
+
+        Returns the ``messages`` list from the server response. Requires
+        registry auth on the server side; ``reader`` is forwarded as a query
+        parameter so the server returns the requested user's mentions.
+        """
+        params: dict = {"reader": reader, "limit": limit}
+        if since is not None:
+            params["since"] = since
+        resp = await self._run("GET", "/a2a/mentions", params=params)
+        return resp.get("messages", [])
+
     async def a2a_channels(self, **_opts) -> list[dict]:
         """GET /a2a/channels: return a summary of every channel on the remote bus."""
         resp = await self._run("GET", "/a2a/channels")
         return resp.get("channels", [])
+
+    async def a2a_sender_census(self, **_opts) -> dict:
+        """GET /a2a/census: return a per-sender message census from the remote bus."""
+        resp = await self._run("GET", "/a2a/census")
+        return resp.get("census", {})
 
     async def a2a_members(self, *, channel: str, **_opts) -> list[str]:
         """GET /a2a/members: return distinct sender names on ``channel``."""
@@ -276,6 +301,62 @@ class RemoteClient:
             params["after"] = after
         resp = await self._run("GET", f"/a2a/threads/{thread}/messages", params=params)
         return resp
+
+    async def a2a_record_delivered(
+        self, message_id: int, agent_id: str, *, ts: float | None = None, **_opts,
+    ) -> dict:
+        """POST /a2a/receipts: record message delivery to an agent.
+
+        Returns ``{"ok": True}``.
+        """
+        body: dict = {"message_id": message_id, "agent_id": agent_id}
+        if ts is not None:
+            body["ts"] = ts
+        return await self._run("POST", "/a2a/receipts", body)
+
+    async def a2a_record_seen(
+        self, message_id: int, agent_id: str, *, ts: float | None = None, **_opts,
+    ) -> dict:
+        """PATCH /a2a/receipts: mark a message as seen by an agent.
+
+        Returns ``{"ok": True}``.
+        """
+        body: dict = {"message_id": message_id, "agent_id": agent_id}
+        if ts is not None:
+            body["ts"] = ts
+        return await self._run("PATCH", "/a2a/receipts", body)
+
+    async def a2a_get_receipts(self, message_id: int, **_opts) -> dict:
+        """GET /a2a/messages/{id}/receipts: return all receipts for a message.
+
+        Returns ``{"delivered": [...], "read": [...]}``.
+        """
+        return await self._run("GET", f"/a2a/messages/{message_id}/receipts")
+
+    async def a2a_get_receipt(
+        self, message_id: int, agent_id: str, **_opts,
+    ) -> dict | None:
+        """GET /a2a/receipts?message_id=X&agent=Y: return a single receipt.
+
+        Returns ``None`` when no receipt exists.
+        """
+        resp = await self._run(
+            "GET", "/a2a/receipts",
+            params={"message_id": message_id, "agent": agent_id},
+        )
+        if isinstance(resp, dict) and resp.get("error"):
+            return None
+        return resp
+
+    async def a2a_prune_receipts(self, older_than_ts: float, **_opts) -> dict:
+        """POST /a2a/admin/prune-receipts: prune receipts older than a timestamp.
+
+        Converts the absolute timestamp to ``ttl_days`` for the HTTP API.
+        Returns ``{"pruned": int}``.
+        """
+        import time as _time  # noqa: PLC0415
+        ttl_days = (_time.time() - older_than_ts) / 86400
+        return await self._run("POST", "/a2a/admin/prune-receipts", {"ttl_days": ttl_days})
 
     async def stats(self, *, agent: str, **_opts) -> dict:
         """Best-effort stats for ``agent`` on the remote server.

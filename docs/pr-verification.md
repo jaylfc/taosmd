@@ -97,3 +97,24 @@ in the checks list.
 `[dependency-groups]`). If `uv run pytest` reports "Failed to spawn: pytest", the environment
 is wrong and any test result from it is meaningless. Say so rather than forcing the deps in
 by hand, because a hand-forced environment hides the same breakage from the next person.
+
+## Documentation drift gate
+
+A pull request that changes feature code, an A2A handler, or contributor-surface files
+(`.github/workflows/`, `pyproject.toml`) must also touch the doc that covers it, or carry a
+`Docs-Reviewed: <why>` trailer. The check is `scripts/check_doc_gate.py`, wired in GitHub
+Actions as `.github/workflows/doc-gate.yml`; the rule set lives in `docs/doc-gate.toml`.
+
+The gate has two layers. Layer A (`invariants`) always runs against the tree: it verifies
+that path tokens mentioned in shipped docs still exist, and that every protected doc still
+contains the section headings declared under `[invariants.required_headings]` in
+`docs/doc-gate.toml`. This is what catches a doc that has been silently gutted -- emptied of
+the sections it exists to hold -- even when the change triggers no code rule. Layer B
+(`diff-gate`) is the per-change rule engine: a rule fires on an added or deleted file (and,
+for rules with `on_modify = true`, on a modification too), and is satisfied by editing its
+`require_doc` file *with its required sections still present*, or by a `Docs-Reviewed:`
+trailer. A touched doc is content-asserted, so a one-character edit cannot mask a gutted
+section.
+
+This gate applies to its own PR: adding `.github/workflows/doc-gate.yml` is a change to
+`.github/workflows/`, so this section is the matching doc update.

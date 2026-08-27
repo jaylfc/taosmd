@@ -1,7 +1,13 @@
 # JOB-006: Repair the mangled Part 2 comment block in tests/test_ref_fetch.py
 
-**Status: OPEN (verified 2026-08-14).** Comments only. No code changes, no
-behaviour changes, no new tests. If you find yourself editing an executable
+**Status: OPEN (re-verified 2026-08-18 on master b13304c9).** Comments only. No
+code changes, no behaviour changes, no new tests.
+
+**LINE NUMBERS IN THIS FILE HAVE MOVED AND WILL MOVE AGAIN.** PR #379 removed six
+lines from `tests/test_ref_fetch.py` on 2026-08-18, so the column-0 comment this job
+describes as "line 260" is now **line 257**, and the false sentence quoted below now
+begins on **line 262**. Find both by CONTENT, not by line number: grep for `Part 2`
+and for `reads like the control`. Both were confirmed still present today. If you find yourself editing an executable
 line, you have gone wrong: stop and re-read this file.
 
 Read docs/agent-jobs/README.md first and follow its absolute rules.
@@ -17,7 +23,7 @@ PR #273 added an explanatory comment above "Part 2" of
 `test_redirect_no_authorization_leak`. It landed malformed. Three separate
 problems, all in one block:
 
-1. **A comment at column 0 inside a method body.** Line 260 starts at the
+1. **A comment at column 0 inside a method body.** That comment (line 257 today) starts at the
    left margin while every line around it is indented 8 spaces. Python allows
    this (comments are not statements) so nothing fails, but it reads as if
    the method ended there.

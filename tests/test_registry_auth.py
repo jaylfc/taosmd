@@ -263,6 +263,123 @@ def test_verifier_fails_closed_when_revocation_never_loaded():
         v.authorize(token, "agent-1")
 
 
+# --- staleness_bound: fail-closed expiry of the cached revocation set ---------
+
+
+def test_verifier_staleness_bound_defaults_to_six_refresh_intervals():
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: "pk",
+        revoked_loader=lambda: set(),
+        refresh_interval=300,
+    )
+    assert v._staleness_bound == 6 * 300
+
+
+def test_verifier_staleness_bound_fails_closed_after_bound():
+    """When refresh fails and cache age exceeds staleness_bound, fail closed.
+
+    With refresh_interval=300 and staleness_bound=30, advancing 31s triggers a
+    refresh (31 > 30), the refresh fails, and the cache is too stale (31 > 30)
+    so authorize raises AuthError instead of tolerating.
+    """
+    priv_pem, pub_pem = _keypair()
+    state = {"fail": False}
+
+    def revoked_loader():
+        if state["fail"]:
+            raise OSError("registry unreachable")
+        return set()
+
+    clock = _FakeClock()
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: pub_pem, revoked_loader=revoked_loader,
+        refresh_interval=300, clock=clock,
+        staleness_bound=30,
+    )
+    token = _sign(priv_pem, {"sub": "agent-1"})
+    v.authorize(token, "agent-1")  # primes cache
+
+    state["fail"] = True
+    clock.advance(31)  # cache_age=31 > staleness_bound=30, < refresh_interval=300
+    with pytest.raises(registry_auth.AuthError, match="stale"):
+        v.authorize(token, "agent-1")
+
+
+def test_verifier_staleness_bound_age_equal_to_bound_remains_valid():
+    """Age exactly equal to staleness_bound is still valid (strict > comparison).
+
+    At cache_age == staleness_bound, the stale predicate is False, so no refresh
+    is attempted and the cached revocation set is returned directly.
+    """
+    priv_pem, pub_pem = _keypair()
+    state = {"fail": False}
+
+    def revoked_loader():
+        if state["fail"]:
+            raise OSError("registry unreachable")
+        return {"agent-revoked"}
+
+    clock = _FakeClock()
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: pub_pem, revoked_loader=revoked_loader,
+        refresh_interval=300, clock=clock,
+        staleness_bound=30,
+    )
+    token_ok = _sign(priv_pem, {"sub": "agent-ok"})
+    token_revoked = _sign(priv_pem, {"sub": "agent-revoked"})
+    v.authorize(token_ok, "agent-ok")  # primes cache with revoked set
+
+    state["fail"] = True
+    clock.advance(30)  # cache_age == staleness_bound: not stale, cache returned
+    # Revoked agent still rejected via the cached set
+    with pytest.raises(registry_auth.AuthError):
+        v.authorize(token_revoked, "agent-revoked")
+    # Non-revoked agent still accepted
+    v.authorize(token_ok, "agent-ok")
+
+
+def test_verifier_staleness_bound_triggers_refresh_before_refresh_interval():
+    """When staleness_bound < refresh_interval, refresh is attempted after the
+    bound expires even though the normal refresh interval hasn't elapsed."""
+    priv_pem, pub_pem = _keypair()
+    calls = {"revoked": 0}
+
+    def revoked_loader():
+        calls["revoked"] += 1
+        return set()
+
+    clock = _FakeClock()
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: pub_pem, revoked_loader=revoked_loader,
+        refresh_interval=300, clock=clock,
+        staleness_bound=30,
+    )
+    token = _sign(priv_pem, {"sub": "agent-1"})
+    v.authorize(token, "agent-1")
+    assert calls["revoked"] == 1
+
+    clock.advance(31)  # cache_age=31 > staleness_bound=30 -> stale -> refresh
+    v.authorize(token, "agent-1")
+    assert calls["revoked"] == 2
+
+
+def test_verifier_from_url_accepts_staleness_bound():
+    """verifier_from_url threads staleness_bound through to RegistryVerifier."""
+    import json
+
+    def fake_opener(url, token=None):
+        if url.endswith(registry_auth.PUBKEY_PATH):
+            return json.dumps({"pubkey": _PEM})
+        if url.endswith(registry_auth.REVOKED_PATH):
+            return json.dumps([])
+        raise AssertionError(f"unexpected url: {url}")
+
+    v = registry_auth.verifier_from_url(
+        "http://taos:8000", opener=fake_opener, staleness_bound=42, expected_iss=None,
+    )
+    assert v._staleness_bound == 42
+
+
 # --- response parsers (tolerant of the registry's exact JSON shape) ----------
 
 _PEM = ("-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n"
@@ -402,3 +519,150 @@ def test_http_get_omits_authorization_header_without_token(monkeypatch):
     monkeypatch.setattr(registry_auth.urllib.request, "urlopen", fake_urlopen)
     registry_auth._http_get("http://reg/x")
     assert captured["auth"] is None
+
+
+# --- Human principal support -------------------------------------------------
+
+
+def test_authorize_sender_accepts_human_with_matching_sub():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "human-1"})
+
+    claims = registry_auth.authorize_sender(
+        token, "human-1", public_key=pub_pem, revoked={"agent-revoked"},
+        human_principal_ids={"human-1"},
+    )
+
+    assert claims["sub"] == "human-1"
+
+
+def test_authorize_sender_skips_revoked_check_for_human():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "human-1"})
+
+    claims = registry_auth.authorize_sender(
+        token, "human-1", public_key=pub_pem, revoked={"human-1"},
+        human_principal_ids={"human-1"},
+    )
+
+    assert claims["sub"] == "human-1"
+
+
+def test_authorize_sender_rejects_human_sub_mismatch():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "human-1"})
+
+    with pytest.raises(registry_auth.HumanAuthError):
+        registry_auth.authorize_sender(
+            token, "human-2", public_key=pub_pem, revoked=set(),
+            human_principal_ids={"human-1"},
+        )
+
+
+def test_authorize_sender_agent_sub_mismatch_is_plain_auth_error():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "agent-1"})
+
+    with pytest.raises(registry_auth.AuthError):
+        registry_auth.authorize_sender(
+            token, "agent-2", public_key=pub_pem, revoked=set(),
+            human_principal_ids=set(),
+        )
+
+
+def test_authorize_sender_agent_sub_mismatch_with_human_from_is_rejected():
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "agent-1"})
+
+    with pytest.raises(registry_auth.AuthError):
+        registry_auth.authorize_sender(
+            token, "human-1", public_key=pub_pem, revoked=set(),
+            human_principal_ids={"human-1"},
+        )
+
+
+def test_verifier_skips_revoked_fetch_for_human():
+    priv_pem, pub_pem = _keypair()
+    calls = {"revoked": 0}
+
+    def revoked_loader():
+        calls["revoked"] += 1
+        raise OSError("registry unreachable")
+
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: pub_pem,
+        revoked_loader=revoked_loader,
+        refresh_interval=300,
+        human_principal_ids={"human-1"},
+    )
+    token = _sign(priv_pem, {"sub": "human-1"})
+    claims = v.authorize(token, "human-1")
+    assert claims["sub"] == "human-1"
+    assert calls["revoked"] == 0
+
+
+def test_verifier_rejects_human_sub_mismatch_even_with_empty_revoked():
+    priv_pem, pub_pem = _keypair()
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: pub_pem,
+        revoked_loader=lambda: set(),
+        human_principal_ids={"human-1"},
+    )
+    token = _sign(priv_pem, {"sub": "human-1"})
+    with pytest.raises(registry_auth.HumanAuthError):
+        v.authorize(token, "human-2")
+
+
+def test_verifier_is_human():
+    v = registry_auth.RegistryVerifier(
+        pubkey_loader=lambda: "pk",
+        revoked_loader=lambda: set(),
+        human_principal_ids={"human-1", "user-alice"},
+    )
+    assert v.is_human("human-1")
+    assert v.is_human("user-alice")
+    assert not v.is_human("agent-1")
+
+
+def test_decode_and_verify_is_single_entry_point_for_human_and_agent():
+    """Both principal types flow through decode_and_verify (one crypto path)."""
+    priv_pem, pub_pem = _keypair()
+    good_human = _sign(priv_pem, {"sub": "human-1", "iss": "taos-registry"})
+    good_agent = _sign(priv_pem, {"sub": "agent-1", "iss": "taos-registry"})
+    bad_human = "not-a-jwt"
+    bad_agent = "not-a-jwt"
+
+    # Both good tokens pass decode_and_verify
+    registry_auth.decode_and_verify(good_human, pub_pem)
+    registry_auth.decode_and_verify(good_agent, pub_pem)
+
+    # Both bad tokens fail with the same AuthError from decode_and_verify
+    with pytest.raises(registry_auth.AuthError):
+        registry_auth.decode_and_verify(bad_human, pub_pem)
+    with pytest.raises(registry_auth.AuthError):
+        registry_auth.decode_and_verify(bad_agent, pub_pem)
+
+
+def test_authorize_sender_logs_human_auth_error(caplog):
+    priv_pem, pub_pem = _keypair()
+    token = _sign(priv_pem, {"sub": "human-1"})
+
+    with pytest.raises(registry_auth.HumanAuthError):
+        registry_auth.authorize_sender(
+            token, "human-2", public_key=pub_pem, revoked=set(),
+            human_principal_ids={"human-1"},
+        )
+    assert any("human principal 'human-1' sub/from mismatch" in r.message
+               for r in caplog.records)
+
+
+def test_registry_verifier_logs_human_principal_set(caplog):
+    import logging
+    with caplog.at_level(logging.INFO, logger="taosmd.registry_auth"):
+        registry_auth.RegistryVerifier(
+            pubkey_loader=lambda: "pk",
+            revoked_loader=lambda: set(),
+            human_principal_ids={"human-1", "user-alice"},
+        )
+    assert any("resolved human principal set: ['human-1', 'user-alice']" in r.message
+               for r in caplog.records)

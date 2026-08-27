@@ -460,7 +460,6 @@ async def prime(
     ]
 
     header = "=== taOSmd Task Briefing ===\n"
-    tail = ""
     if project:
         header += f"Project: {project}\n"
     header += "\n"

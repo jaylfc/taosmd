@@ -126,15 +126,15 @@ async def run_recall_benchmark(limit: int = 50, top_k: int = 5, question_type: s
     print(f"\n  Overall: {total_recall}/{total_questions} ({overall:.1f}%)")
     print(f"  Time: {total_time:.1f}s ({total_time/total_questions:.1f}s/question)")
 
-    print(f"\n  By category:")
+    print("\n  By category:")
     for qtype, data in sorted(results_by_type.items()):
         pct = data["hits"] / data["total"] * 100 if data["total"] > 0 else 0
         print(f"    {qtype:30s} {data['hits']:3d}/{data['total']:<3d} ({pct:.1f}%)")
 
     print(f"\n  Comparison (Recall@{top_k}):")
-    print(f"    MemPalace (raw, all-MiniLM-L6):    96.6%")
-    print(f"    MemPalace (AAAK compressed):        84.2%")
-    print(f"    MemPalace (room-based):             89.4%")
+    print("    MemPalace (raw, all-MiniLM-L6):    96.6%")
+    print("    MemPalace (AAAK compressed):        84.2%")
+    print("    MemPalace (room-based):             89.4%")
     print(f"    taOSmd (NPU, Qwen3-Embed-0.6B):    {overall:.1f}%")
     print(f"{'='*70}")
 

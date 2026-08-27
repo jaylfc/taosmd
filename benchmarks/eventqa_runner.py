@@ -720,12 +720,12 @@ async def run(args: argparse.Namespace) -> None:
             "work (PR #191).",
             file=sys.stderr,
         )
-        return
+        sys.exit(1)
 
     rows = load_eventqa_rows(args.tier, args.contexts)
     if not rows:
         print("  ERROR: no rows loaded for tier", args.tier, file=sys.stderr)
-        return
+        sys.exit(1)
 
     llm_client = None
     if args.llm:

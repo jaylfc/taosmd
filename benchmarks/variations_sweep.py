@@ -149,7 +149,7 @@ async def run_sweep(sample_size: int = 100, top_k: int = 5, full_verify: int = 5
     results.sort(key=lambda x: x["score"], reverse=True)
 
     print(f"\n{'─'*74}")
-    print(f"Phase 1 Rankings (top 10):")
+    print("Phase 1 Rankings (top 10):")
     for i, r in enumerate(results[:10]):
         marker = " <<<" if r["score"] > results[0]["score"] - 0.5 else ""
         print(f"  {i+1:2d}. {r['name']:<35s} {r['score']:5.1f}%{marker}")
@@ -194,7 +194,7 @@ async def run_sweep(sample_size: int = 100, top_k: int = 5, full_verify: int = 5
 
     # Final summary
     print(f"\n{'='*74}")
-    print(f"FINAL VERIFIED RESULTS")
+    print("FINAL VERIFIED RESULTS")
     print(f"{'='*74}")
     for v in verified:
         print(f"  {v['name']:<40s} {v['score']:5.1f}% ({v['hits']}/{v['total']})")

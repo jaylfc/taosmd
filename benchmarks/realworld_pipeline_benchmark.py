@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from taosmd import (
     VectorMemory, KnowledgeGraph, Archive, SessionCatalog,
-    CrystalStore, retrieve,
+    retrieve,
 )
 from taosmd.memory_extractor import extract_facts_from_text
 from taosmd.query_expansion import expand_query_fast
@@ -170,7 +170,7 @@ async def run_question_full_pipeline(item, top_k, use_fanout=False):
             continue
         sid = session_ids[si] if si < len(session_ids) else f"s{si}"
 
-        ingest_result = await ingest_session(text, sid, vmem, kg, archive)
+        await ingest_session(text, sid, vmem, kg, archive)
         vmem_id_row = vmem._conn.execute(
             "SELECT id FROM vector_memory ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -247,7 +247,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     print("=" * 74)
     print(f"Real-World Pipeline Benchmark — Recall@{top_k}")
     print(f"Model: all-MiniLM-L6-v2 (ONNX) | {limit} questions")
-    print(f"Tests the FULL taOSmd stack, not just vector search")
+    print("Tests the FULL taOSmd stack, not just vector search")
     print("=" * 74)
 
     with open(DATA_PATH) as f:

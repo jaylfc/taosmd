@@ -28,10 +28,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import re
+import time
 
 from . import api as _api
 from . import config as _config
 from .archive import EVENT_A2A
+from .mentions import MentionStore, _normalise_handle
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +368,7 @@ async def fetch_by_ref(ref: dict, *, agent: str, data_dir=None) -> dict:
         return await remote.fetch_by_ref(ref, agent=agent)
 
     from . import config as _config
-    from .ref_fetch import HashMismatchError, NotFoundError, RefFetchError, UnauthorizedError, fetch_by_ref as _fetch_by_ref
+    from .ref_fetch import NotFoundError, RefFetchError, UnauthorizedError, fetch_by_ref as _fetch_by_ref
 
     registry_token = _config.get_registry_token(data_dir)
 
@@ -401,6 +405,9 @@ async def fetch_by_ref(ref: dict, *, agent: str, data_dir=None) -> dict:
     }
 
 
+_A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "system"})
+
+
 async def a2a_send(
     sender: str,
     body: str,
@@ -409,6 +416,8 @@ async def a2a_send(
     reply_to: str | None = None,
     refs: list | None = None,
     blocks: list | None = None,
+    recipient: str | None = None,
+    kind: str = "chat",
     data_dir=None,
 ) -> dict:
     """Post a message onto the agent-to-agent bus.
@@ -419,13 +428,21 @@ async def a2a_send(
     ``thread`` defaults to ``"general"``; ``reply_to`` is optional and
     should be the string ID of the message being replied to.
 
+    ``kind`` is one of ``chat``, ``alarm``, ``ack``, ``digest``,
+    ``receipt``, ``review``, ``system`` (default ``chat``). It is stored
+    on the envelope and returned in every read path.
+
     ``refs`` and ``blocks`` are optional first-class envelope fields
     (taOSmd #211). When provided they are stored verbatim in the archive
     payload and echoed back in the receipt and on feed/SSE reads. When
     absent they are omitted from output entirely (no null noise).
 
-    Returns ``{"id", "from", "thread", "reply_to"}`` plus ``refs`` and/or
-    ``blocks`` when those were supplied.
+    ``recipient`` is an optional explicit mention target; when provided it
+    is stored in the archive payload and indexed as a mention so the
+    recipient can retrieve it via GET /a2a/mentions.
+
+    Returns ``{"id", "from", "thread", "reply_to", "kind"}`` plus ``refs``
+    and/or ``blocks`` when those were supplied.
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
@@ -434,11 +451,15 @@ async def a2a_send(
         raise ValueError("sender must be a non-empty string")
     if not isinstance(body, str) or not body:
         raise ValueError("body must be a non-empty string")
+    if kind not in _A2A_KINDS:
+        raise ValueError(
+            f"'kind' must be one of {sorted(_A2A_KINDS)}; got {kind!r}"
+        )
     remote = _get_remote(data_dir)
     if remote is not None:
         return await remote.a2a_send(
             sender, body, thread=thread, reply_to=reply_to,
-            refs=refs, blocks=blocks,
+            refs=refs, blocks=blocks, recipient=recipient, kind=kind,
         )
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
@@ -448,7 +469,9 @@ async def a2a_send(
         from .admin import A2AAdminState  # noqa: PLC0415
         _admin = A2AAdminState(data_dir)
         thread = _admin.resolve_channel(thread)
-    data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to}
+    data = {"from": sender, "body": body, "thread": thread, "reply_to": reply_to, "kind": kind}
+    if recipient is not None:
+        data["recipient"] = recipient
     if refs is not None:
         data["refs"] = refs
     if blocks is not None:
@@ -460,11 +483,25 @@ async def a2a_send(
         app_id=thread,
         summary=body[:200],
     )
-    receipt = {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to}
+    receipt = {"id": row_id, "from": sender, "thread": thread, "reply_to": reply_to, "kind": kind}
+    if recipient is not None:
+        receipt["recipient"] = recipient
     if refs is not None:
         receipt["refs"] = refs
     if blocks is not None:
         receipt["blocks"] = blocks
+    # Index @handle mentions for the A2A mention feed (#211).
+    stored = await archive.get_event(row_id)
+    ts = stored["timestamp"] if stored else time.time()
+    mentions = stores.get("mentions")
+    if isinstance(mentions, MentionStore):
+        await mentions.record_mentions(
+            message_id=row_id,
+            body=body,
+            thread=thread,
+            ts=ts,
+            recipient=recipient,
+        )
     return receipt
 
 
@@ -499,7 +536,6 @@ async def a2a_feed(
     # Apply admin alias resolution: reads of a new channel name include history
     # from the old name. Resolve thread through the alias map so callers
     # querying the canonical name see both old and new messages.
-    resolved_thread = thread
     alias_sources: list[str] = []
     if data_dir is not None:
         from .admin import A2AAdminState  # noqa: PLC0415
@@ -562,6 +598,7 @@ async def a2a_feed(
             "body": data.get("body"),
             "thread": msg_thread,
             "reply_to": data.get("reply_to"),
+            "kind": data.get("kind") or "chat",
         }
         # First-class envelope fields (taOSmd #211): stored verbatim,
         # omitted from output when absent (no null noise).
@@ -569,6 +606,8 @@ async def a2a_feed(
             msg["refs"] = data["refs"]
         if "blocks" in data:
             msg["blocks"] = data["blocks"]
+        if "acked_by" in data:
+            msg["acked_by"] = data["acked_by"]
         result.append(msg)
     return result
 
@@ -655,6 +694,105 @@ async def a2a_channels(*, data_dir=None) -> list[dict]:
         })
     result.sort(key=lambda c: c["last_ts"], reverse=True)
     return result
+
+
+async def a2a_sender_census(*, data_dir=None) -> dict:
+    """Return a per-sender message census across every A2A channel.
+
+    Queries all :data:`~taosmd.archive.EVENT_A2A` events and aggregates them
+    by sender.  The result maps each distinct ``from`` value to a dict with:
+
+    * ``total`` -- total messages sent by that sender across all channels
+    * ``channels`` -- mapping of channel name to message count on that channel
+
+    Senders are returned in descending order of ``total``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_sender_census()
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+
+    deleted: set[str] = set()
+    aliases: dict[str, str] = {}
+    superseded: set[int] = set()
+    if data_dir is not None:
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+        deleted = _admin.deleted_channels()
+        aliases = _admin.channel_aliases()
+        superseded = _admin.superseded_messages()
+
+    census: dict[str, dict] = {}
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        if data.get("admin_action"):
+            continue
+        row_id = row["id"]
+        if row_id in superseded:
+            continue
+        sender = data.get("from") or ""
+        if not sender:
+            continue
+        thread = data.get("thread") or row.get("app_id") or "general"
+        if thread in aliases:
+            thread = aliases[thread]
+        if thread in deleted:
+            continue
+        if sender not in census:
+            census[sender] = {"total": 0, "channels": {}}
+        entry = census[sender]
+        entry["total"] += 1
+        entry["channels"][thread] = entry["channels"].get(thread, 0) + 1
+
+    return dict(
+        sorted(census.items(), key=lambda item: item[1]["total"], reverse=True)
+    )
+
+
+async def a2a_migrate_kinds(*, data_dir=None) -> dict:
+    """One-shot migration: backfill ``kind`` on historical A2A messages.
+
+    Messages that already have a ``kind`` field are left untouched. Messages
+    without one are tagged by their body-prefix convention:
+    ``[AUTOMATED`` -> ``alarm``, ``[AUTO-ACK]`` -> ``ack``,
+    ``[REVIEW]`` -> ``review``, everything else -> ``chat``.
+
+    Returns ``{"migrated": int, "alarm": int, "ack": int, "review": int,
+    "chat": int}``. Idempotent: running twice yields ``migrated == 0``.
+    """
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+    counts = {"migrated": 0, "alarm": 0, "ack": 0, "review": 0, "chat": 0}
+    for row in rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        if data.get("kind"):
+            continue
+        body = data.get("body", "") or ""
+        if body.startswith("[AUTOMATED"):
+            kind = "alarm"
+        elif body.startswith("[AUTO-ACK]"):
+            kind = "ack"
+        elif body.startswith("[REVIEW]"):
+            kind = "review"
+        else:
+            kind = "chat"
+        data["kind"] = kind
+        await archive.update_event_data_json(row["id"], data)
+        counts[kind] += 1
+        counts["migrated"] += 1
+    return counts
 
 
 async def a2a_members(*, channel: str, data_dir=None) -> list[str]:
@@ -821,11 +959,14 @@ async def a2a_thread_messages(
             "body": data.get("body"),
             "thread": msg_thread,
             "reply_to": data.get("reply_to"),
+            "kind": data.get("kind") or "chat",
         }
         if "refs" in data:
             msg["refs"] = data["refs"]
         if "blocks" in data:
             msg["blocks"] = data["blocks"]
+        if "acked_by" in data:
+            msg["acked_by"] = data["acked_by"]
         messages.append(msg)
 
     def _cursor_val(cursor):
@@ -854,6 +995,387 @@ async def a2a_thread_messages(
     limit_i = max(1, min(limit, 200))
     messages = messages[:limit_i]
     return {"thread": thread, "messages": messages}
+
+
+async def a2a_mentions_feed(
+    reader: str,
+    *,
+    since: float | None = None,
+    limit: int = 50,
+    data_dir=None,
+) -> list[dict]:
+    """Return messages that mention ``reader`` plus their reply_to chains.
+
+    Each item has shape ``{"id", "ts", "from", "body", "thread",
+    "reply_to", "thread_root"}``. Results are ordered oldest-first and
+    capped by ``limit``.
+
+    Thread-scoped visibility (#211 anti-bypass): a mention grants access
+    to the mentioned message and the full reply_to chain rooted at it,
+    but not to unrelated sibling messages in the same channel.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if not isinstance(limit, int) or math.isnan(limit) or math.isinf(limit) or limit <= 0:
+        raise ValueError("limit must be a positive finite integer")
+    if since is not None and (math.isnan(since) or math.isinf(since)):
+        raise ValueError("since must be a finite float timestamp or None")
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_mentions_feed(reader, since=since, limit=limit)
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    mentions_store = stores["mentions"]
+
+    norm_reader = _normalise_handle(reader)
+    mentioned_rows = await mentions_store.get_mentioned_message_ids(
+        norm_reader, since=since, limit=limit,
+    )
+    mentioned_ids = {r["message_id"] for r in mentioned_rows}
+    if not mentioned_ids:
+        return []
+
+    all_rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+    msg_thread: dict[int, str] = {}
+    children: dict[int, list[dict]] = {}
+    for row in all_rows:
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        thread = data.get("thread") or row.get("app_id") or "general"
+        msg_thread[row["id"]] = thread
+        reply_to = data.get("reply_to")
+        if reply_to is not None:
+            try:
+                parent_id = int(reply_to)
+                children.setdefault(parent_id, []).append(row)
+            except (TypeError, ValueError):
+                continue
+
+    reply_chain_ids = set(mentioned_ids)
+    queue = list(mentioned_ids)
+    while queue:
+        parent_id = queue.pop()
+        for child_row in children.get(parent_id, []):
+            if child_row["id"] in reply_chain_ids:
+                continue
+            child_thread = msg_thread.get(child_row["id"])
+            parent_thread = msg_thread.get(parent_id)
+            if child_thread and parent_thread and child_thread == parent_thread:
+                reply_chain_ids.add(child_row["id"])
+                queue.append(child_row["id"])
+
+    thread_roots: dict[int, int] = {}
+    for mid in reply_chain_ids:
+        root = await _find_thread_root(mid, archive)
+        if root is not None:
+            thread_roots[mid] = root
+
+    result = []
+    for row in all_rows:
+        if row["id"] not in reply_chain_ids:
+            continue
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if data.get("admin_action"):
+            continue
+        msg = {
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": data.get("from"),
+            "body": data.get("body"),
+            "thread": data.get("thread") or row.get("app_id") or "general",
+            "reply_to": data.get("reply_to"),
+            "thread_root": thread_roots.get(row["id"]),
+            "kind": data.get("kind") or "chat",
+        }
+        result.append(msg)
+
+    result.sort(key=lambda m: m["ts"])
+    return result[:limit]
+
+
+async def _find_thread_root(message_id: int, archive) -> int | None:
+    """Walk reply_to links upward to find the root message ID."""
+    visited: set[int] = set()
+    current_id = message_id
+    while current_id:
+        if current_id in visited:
+            break
+        visited.add(current_id)
+        row = await archive.get_event(current_id)
+        if not row:
+            break
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            break
+        reply_to = data.get("reply_to")
+        if reply_to is None:
+            return current_id
+        try:
+            current_id = int(reply_to)
+        except (TypeError, ValueError):
+            break
+    return None
+
+
+async def can_read(reader: str, msg: dict, data_dir=None) -> bool:
+    """Thread-scoped read guard (#211 anti-bypass).
+
+    ``canRead(reader, msg) = channelACL(reader, msg.thread) OR
+    mentionGrant(reader, threadRoot(msg))``
+
+    A mention grants visibility of the mentioned message and its full
+    reply_to chain, but never widens channel access. Channel ACL
+    enforcement (tsk-dp6fyv) plugs into the ``channelACL`` slot; until
+    then it is effectively always-true for compatibility.
+    """
+    return True
+
+
+async def a2a_inbox(
+    consumer: str,
+    *,
+    limit: int = 50,
+    include_kinds: list | None = None,
+    data_dir=None,
+) -> list[dict]:
+    """Return messages past ``consumer``'s cursor that are addressed to it.
+
+    A message is addressed when at least one of:
+    - the consumer's handle is mentioned in the body
+    - the message is in a thread owned by the consumer (thread name == consumer)
+    - the message has a direct ``recipient`` matching the consumer
+
+    The consumer's own posts are always excluded.  By default kinds
+    ``alarm``, ``ack``, ``receipt``, and ``digest`` are excluded; pass
+    ``include_kinds`` to widen the set.  Results are oldest-first.  Reading
+    does NOT advance the cursor.
+    """
+    if not isinstance(consumer, str) or not consumer:
+        raise ValueError("consumer must be a non-empty string")
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    cursor = await archive.get_a2a_inbox_cursor(consumer)
+
+    rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
+
+    excluded_kinds = {"alarm", "ack", "receipt", "digest"}
+    if include_kinds is not None:
+        excluded_kinds -= set(include_kinds)
+    allowed_kinds = _A2A_KINDS - excluded_kinds
+
+    norm_consumer = _normalise_handle(consumer)
+    mention_re = re.compile(r'(?<![\w/])@([a-zA-Z0-9_-]+)')
+
+    result = []
+    for row in rows:
+        if row["id"] <= cursor:
+            continue
+        try:
+            data = json.loads(row.get("data_json", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        sender = data.get("from") or ""
+        if sender == consumer:
+            continue
+        kind = data.get("kind") or "chat"
+        if kind not in allowed_kinds:
+            continue
+        body = data.get("body") or ""
+        thread = data.get("thread") or row.get("app_id") or "general"
+        recipient = data.get("recipient")
+        addressed = False
+        if recipient == consumer:
+            addressed = True
+        elif thread == consumer:
+            addressed = True
+        else:
+            for m in mention_re.finditer(body):
+                if _normalise_handle(m.group(1)) == norm_consumer:
+                    addressed = True
+                    break
+        if not addressed:
+            continue
+        msg = {
+            "id": row["id"],
+            "ts": row["timestamp"],
+            "from": sender,
+            "body": body,
+            "thread": thread,
+            "reply_to": data.get("reply_to"),
+            "kind": kind,
+        }
+        if "refs" in data:
+            msg["refs"] = data["refs"]
+        if "blocks" in data:
+            msg["blocks"] = data["blocks"]
+        result.append(msg)
+
+    result.sort(key=lambda m: (m["ts"], m["id"]))
+    limit_i = max(1, min(limit, 1000))
+    return result[:limit_i]
+
+
+async def a2a_inbox_advance(
+    consumer: str,
+    to_id: int,
+    *,
+    data_dir=None,
+) -> dict:
+    """Advance ``consumer``'s inbox cursor to ``to_id``.
+
+    The cursor is persisted in the archive store so it survives restarts
+    and is visible to every process sharing the same data dir.
+    """
+    if not isinstance(consumer, str) or not consumer:
+        raise ValueError("consumer must be a non-empty string")
+    if not isinstance(to_id, int) or to_id < 0:
+        raise ValueError("to_id must be a non-negative integer")
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    await archive.set_a2a_inbox_cursor(consumer, to_id)
+    return {"ok": True}
+
+
+async def a2a_record_delivered(
+    message_id: int, agent_id: str, *, ts: float | None = None, data_dir=None
+) -> dict:
+    """Record that a message was delivered to an agent.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.record_delivered`.
+    ``ts`` defaults to ``time.time()`` when not supplied.
+    Returns ``{"ok": True}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if ts is None:
+        ts = time.time()
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_record_delivered(message_id, agent_id, ts=ts)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    await receipt_store.record_delivered(message_id, agent_id, ts)
+    return {"ok": True}
+
+
+async def a2a_record_seen(
+    message_id: int, agent_id: str, *, ts: float | None = None, data_dir=None
+) -> dict:
+    """Record that an agent has seen a message.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.record_seen`.
+    ``ts`` defaults to ``time.time()`` when not supplied.
+    Returns ``{"ok": True}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if ts is None:
+        ts = time.time()
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_record_seen(message_id, agent_id, ts=ts)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    await receipt_store.record_seen(message_id, agent_id, ts)
+    return {"ok": True}
+
+
+async def a2a_get_receipts(message_id: int, *, data_dir=None) -> dict:
+    """Return delivery and read receipts for a message.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.get_receipts_for_message`.
+    Returns ``{"delivered": [...], "read": [...]}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_get_receipts(message_id)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    return await receipt_store.get_receipts_for_message(message_id)
+
+
+async def a2a_get_receipt(
+    message_id: int, agent_id: str, *, data_dir=None
+) -> dict | None:
+    """Return a single receipt or ``None`` when not found.
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.get_receipt`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_get_receipt(message_id, agent_id)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    return await receipt_store.get_receipt(message_id, agent_id)
+
+
+async def a2a_prune_receipts(
+    older_than_ts: float, *, data_dir=None
+) -> dict:
+    """Prune receipts older than ``older_than_ts`` (by delivered_at).
+
+    Thin wrapper over :func:`taosmd.receipts.ReceiptStore.prune`.
+    Returns ``{"pruned": int}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_prune_receipts(older_than_ts)
+    stores = await _api._ensure_stores(data_dir)
+    receipt_store = stores["receipts"]
+    n = await receipt_store.prune(older_than_ts)
+    return {"pruned": n}
+
+
+async def a2a_ack(message_id: int, by: str, *, data_dir=None) -> dict:
+    """Record that a principal has acknowledged a message, as server state.
+
+    Per the A2A delivery contract v2 (section 3), an acknowledgement is
+    never a new bus message: it mutates the message envelope in place by
+    appending ``by`` to an ``acked_by`` list on the archived event, via
+    :meth:`taosmd.archive.ArchiveStore.update_event_data_json`. The JSONL
+    source files are never touched; only the derived index is updated.
+
+    Idempotent: acking the same message twice by the same principal leaves
+    exactly one entry in ``acked_by``. The ``acked_by`` list is surfaced
+    on the envelope by the existing read paths (``a2a_feed`` and
+    ``a2a_thread_messages``).
+
+    The composed "unhandled for X" query (mentions past X's cursor minus
+    acks) is deferred to slice 2c, which needs 2a's server-side cursor.
+
+    Returns ``{"id", "acked_by", "ok"}``.
+    """
+    if not isinstance(by, str) or not by:
+        raise ValueError("by must be a non-empty string")
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    stored = await archive.get_event(message_id)
+    if stored is None:
+        raise ValueError(f"message {message_id} not found")
+    data = dict(stored.get("data") or {})
+    acked_by = data.get("acked_by")
+    if not isinstance(acked_by, list):
+        acked_by = []
+    if by not in acked_by:
+        acked_by = [*acked_by, by]
+    data["acked_by"] = acked_by
+    await archive.update_event_data_json(message_id, data)
+    return {"id": message_id, "acked_by": acked_by, "ok": True}
 
 
 async def task_create(
@@ -1262,13 +1784,17 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
-           "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_members",
-           "a2a_threads", "a2a_thread_messages",
+           "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
+           "a2a_members", "a2a_threads", "a2a_thread_messages",
+           "a2a_mentions_feed", "a2a_migrate_kinds", "can_read",
+           "a2a_inbox", "a2a_inbox_advance",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
            "admin_a2a_delete_channel", "admin_a2a_rename_channel",
            "admin_a2a_supersede_message",
+           "a2a_record_delivered", "a2a_record_seen", "a2a_get_receipts",
+           "a2a_get_receipt", "a2a_prune_receipts", "a2a_ack",
            "collections_create", "collections_list", "collections_get",
            "collections_index_start", "collections_index_run",
            "collections_index_background", "collections_link",

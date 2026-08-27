@@ -13,7 +13,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import pytest
 
@@ -313,3 +312,68 @@ def test_a2a_setup_guide_contains_join_step():
     """Guide mentions a JOIN message."""
     text = taosmd.a2a_setup_guide()
     assert "JOIN" in text or "join" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# service.a2a_sender_census
+# ---------------------------------------------------------------------------
+
+def test_a2a_sender_census_counts_per_sender(isolated_data_dir):
+    """a2a_sender_census returns total and per-channel counts per sender."""
+    dd = str(isolated_data_dir)
+
+    asyncio.run(service.a2a_send("alice", "a1", thread="t1", data_dir=dd))
+    asyncio.run(service.a2a_send("bob", "b1", thread="t1", data_dir=dd))
+    asyncio.run(service.a2a_send("alice", "a2", thread="t2", data_dir=dd))
+    asyncio.run(service.a2a_send("alice", "a3", thread="t1", data_dir=dd))
+
+    census = asyncio.run(service.a2a_sender_census(data_dir=dd))
+    assert "alice" in census
+    assert census["alice"]["total"] == 3
+    assert census["alice"]["channels"]["t1"] == 2
+    assert census["alice"]["channels"]["t2"] == 1
+    assert census["bob"]["total"] == 1
+    assert census["bob"]["channels"]["t1"] == 1
+
+
+def test_a2a_sender_census_sorted_by_total_desc(isolated_data_dir):
+    """Senders are returned in descending order of total message count."""
+    dd = str(isolated_data_dir)
+
+    asyncio.run(service.a2a_send("zara", "z1", thread="t1", data_dir=dd))
+    asyncio.run(service.a2a_send("alice", "a1", thread="t1", data_dir=dd))
+    asyncio.run(service.a2a_send("zara", "z2", thread="t1", data_dir=dd))
+
+    census = asyncio.run(service.a2a_sender_census(data_dir=dd))
+    senders = list(census.keys())
+    assert senders == ["zara", "alice"]
+
+
+def test_a2a_sender_census_empty_store(isolated_data_dir):
+    """a2a_sender_census returns an empty dict when no messages exist."""
+    census = asyncio.run(service.a2a_sender_census(data_dir=str(isolated_data_dir)))
+    assert census == {}
+
+
+# ---------------------------------------------------------------------------
+# HTTP /a2a/census
+# ---------------------------------------------------------------------------
+
+def test_http_a2a_census_returns_census(live_server):
+    """GET /a2a/census returns a census dict with sender totals."""
+    _http_post(f"{live_server}/a2a/send", {"from": "alice", "body": "hi", "thread": "census-ch"})
+    _http_post(f"{live_server}/a2a/send", {"from": "bob", "body": "hey", "thread": "census-ch"})
+    _http_post(f"{live_server}/a2a/send", {"from": "alice", "body": "again", "thread": "census-ch"})
+
+    status, body = _get(f"{live_server}/a2a/census")
+    assert status == 200, body
+    assert "alice" in body["census"]
+    assert body["census"]["alice"]["total"] == 2
+    assert body["census"]["bob"]["total"] == 1
+
+
+def test_http_a2a_census_empty(live_server):
+    """GET /a2a/census on an empty server returns empty census."""
+    status, body = _get(f"{live_server}/a2a/census")
+    assert status == 200, body
+    assert body["census"] == {}

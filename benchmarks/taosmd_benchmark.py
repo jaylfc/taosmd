@@ -8,9 +8,7 @@ Usage: .venv/bin/python benchmarks/taosmd_benchmark.py
 """
 
 import asyncio
-import json
 import time
-from pathlib import Path
 
 import httpx
 
@@ -278,10 +276,10 @@ async def run_benchmark():
         # Check services
         print("\nChecking services...")
         try:
-            kg_resp = await client.get(f"{BASE}/api/kg/stats")
-            print(f"  Knowledge Graph: OK")
+            await client.get(f"{BASE}/api/kg/stats")
+            print("  Knowledge Graph: OK")
         except Exception:
-            print(f"  Knowledge Graph: UNAVAILABLE")
+            print("  Knowledge Graph: UNAVAILABLE")
             return
 
         qmd_available = False
@@ -291,7 +289,7 @@ async def run_benchmark():
                 qmd_available = True
                 print(f"  QMD Vector Search: OK ({qmd_resp.json().get('backend', 'unknown')})")
         except Exception:
-            print(f"  QMD Vector Search: UNAVAILABLE (will benchmark KG only)")
+            print("  QMD Vector Search: UNAVAILABLE (will benchmark KG only)")
 
         # Seed data
         print("\nSeeding test data...")
@@ -342,20 +340,20 @@ async def run_benchmark():
 
         avg_kg = sum(kg_scores) / len(kg_scores) if kg_scores else 0
         avg_kg_lat = sum(kg_latencies) / len(kg_latencies) if kg_latencies else 0
-        print(f"\n  Knowledge Graph (structured triples):")
+        print("\n  Knowledge Graph (structured triples):")
         print(f"    Average precision: {avg_kg:.0%}")
         print(f"    Average latency:   {avg_kg_lat:.0f}ms")
 
         if qmd_scores:
             avg_qmd = sum(qmd_scores) / len(qmd_scores) if qmd_scores else 0
             avg_qmd_lat = sum(qmd_latencies) / len(qmd_latencies) if qmd_latencies else 0
-            print(f"\n  QMD Vector Search (semantic embeddings):")
+            print("\n  QMD Vector Search (semantic embeddings):")
             print(f"    Average precision: {avg_qmd:.0%}")
             print(f"    Average latency:   {avg_qmd_lat:.0f}ms")
 
             avg_comb = sum(combined_scores) / len(combined_scores) if combined_scores else 0
             avg_comb_lat = sum(combined_latencies) / len(combined_latencies) if combined_latencies else 0
-            print(f"\n  Combined (KG + QMD):")
+            print("\n  Combined (KG + QMD):")
             print(f"    Average precision: {avg_comb:.0%}")
             print(f"    Average latency:   {avg_comb_lat:.0f}ms")
 
@@ -363,11 +361,11 @@ async def run_benchmark():
                 improvement = ((avg_comb - avg_qmd) / avg_qmd * 100) if avg_qmd > 0 else 0
                 print(f"\n  -> Combined improves over QMD alone by {improvement:.0f}%")
             elif avg_comb > avg_kg:
-                print(f"\n  -> Combined improves over KG alone")
+                print("\n  -> Combined improves over KG alone")
             else:
-                print(f"\n  -> No clear improvement from combining (may need more diverse test data)")
+                print("\n  -> No clear improvement from combining (may need more diverse test data)")
         else:
-            print(f"\n  QMD not available — KG-only benchmark complete.")
+            print("\n  QMD not available — KG-only benchmark complete.")
 
         # KG stats
         stats = (await client.get(f"{BASE}/api/kg/stats")).json()

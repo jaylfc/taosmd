@@ -1,0 +1,36 @@
+name: Trailing newline gate
+
+# Verifies that every file in scope ends with exactly one `0x0a`. A file whose
+# last byte is not a newline silently concatenates the next appended entry onto
+# its final line, so two unrelated release notes merge into one corrupted line
+# when `changelog.d/` fragments are collected. A file ending in `0x0a0a` is the
+# same defect from the other side: a blank line at EOF that grows on every
+# append.
+#
+# The defect has shipped repeatedly because nothing rejects it. It is invisible
+# to the test suite (no test reads the real tree), invisible in review (the
+# missing byte does not render), and harmless-looking in isolation, so this gate
+# is the thing that makes it fail loudly on a pull request.
+#
+# Scope is deliberately narrow: `changelog.d/*.md` and `benchmarks/data/README.md`.
+#
+# See scripts/check_trailing_newline.py for the implementation.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  trailing-newline-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Install deps
+        run: uv sync --python 3.12
+      - name: Check that files in scope end with exactly one newline
+        run: python scripts/check_trailing_newline.py

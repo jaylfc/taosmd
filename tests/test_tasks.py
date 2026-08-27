@@ -11,7 +11,6 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
@@ -343,7 +342,7 @@ def test_prime_under_cap(data_dir):
 
 def test_prime_sections_present(data_dir):
     """prime() text mentions ready, in-progress, and blocked sections."""
-    t_ready = run(tasks_mod.create_task("Ready task", created_by="x", data_dir=data_dir))
+    run(tasks_mod.create_task("Ready task", created_by="x", data_dir=data_dir))
     t_ip = run(tasks_mod.create_task("In-progress task", created_by="x", data_dir=data_dir))
     run(tasks_mod.update_task(t_ip["id"], status="in_progress", data_dir=data_dir))
 

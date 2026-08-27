@@ -42,3 +42,13 @@ def test_clear_returns_none(data_dir):
 def test_set_empty_string_raises(data_dir):
     with pytest.raises(ValueError):
         config.set_registry_token("", data_dir=data_dir)
+
+
+def test_positional_path_raises_typeerror(data_dir):
+    with pytest.raises(TypeError):
+        config.set_registry_token("tok", "/tmp/probe-datadir")
+
+
+def test_keyword_data_dir_still_writes_value(data_dir):
+    config.set_registry_token("tok", data_dir=data_dir)
+    assert config.get_registry_token(data_dir) == "tok"

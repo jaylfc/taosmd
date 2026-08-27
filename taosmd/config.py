@@ -52,6 +52,18 @@ _SERVE_DASHBOARD_KEY = "serve_dashboard"
 _GENERATOR_PROFILE_KEY = "generator_profile"
 # Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
 _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
+# Maximum age (seconds) of a cached revocation set before refresh failures fail
+# closed. Defaults to 6 * refresh_interval inside RegistryVerifier.
+_REGISTRY_STALENESS_BOUND_KEY = "registry_staleness_bound"
+# Canonical IDs of human principals (controller sessions). These IDs skip the
+# registry revocation check and the grants check; a sub/from mismatch on a
+# human token is always rejected, even in verify-and-warn mode. They are also
+# exempt from the fail-closed refusal that fires when the revocation feed has
+# never loaded. The id is not validated as belonging to a human: the controller
+# has no human_principal concept. Naming an agent's canonical_id here silently
+# disables that agent's revocation. The set resolves from
+# ``TAOSMD_HUMAN_PRINCIPAL_IDS`` (comma separated) before the config file.
+_HUMAN_PRINCIPAL_IDS_KEY = "human_principal_ids"
 # Section under which collections settings live. ``allowed_roots`` is the
 # safety line of the collections contract: source paths must resolve inside
 # one of these directories. Empty (the default) means collections are off.
@@ -109,7 +121,7 @@ def get_memory_model(data_dir=None) -> str | None:
     return None
 
 
-def set_memory_model(model: str, clear: bool = False, data_dir=None) -> None:
+def set_memory_model(model: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the global memory model.
 
     Args:
@@ -138,7 +150,7 @@ def get_generator_profile(data_dir=None) -> str | None:
     return None
 
 
-def set_generator_profile(profile_id: str, clear: bool = False, data_dir=None) -> None:
+def set_generator_profile(profile_id: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the active global generator-profile id.
 
     Args:
@@ -167,7 +179,7 @@ def get_default_recipe(data_dir=None) -> str | None:
     return None
 
 
-def set_default_recipe(recipe_id: str, clear: bool = False, data_dir=None) -> None:
+def set_default_recipe(recipe_id: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the global default recipe id (or clear it).
 
     Args:
@@ -305,7 +317,7 @@ def get_server_url(data_dir=None) -> str | None:
     return None
 
 
-def set_server_url(url: str, clear: bool = False, data_dir=None) -> None:
+def set_server_url(url: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the remote server URL.
 
     Args:
@@ -352,7 +364,7 @@ def get_registry_url(data_dir=None) -> str | None:
     return None
 
 
-def set_registry_url(url: str, clear: bool = False, data_dir=None) -> None:
+def set_registry_url(url: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the agent-registry base URL (or clear it).
 
     Args:
@@ -395,7 +407,7 @@ def get_registry_token(data_dir=None) -> str | None:
     return None
 
 
-def set_registry_token(token: str, clear: bool = False, data_dir=None) -> None:
+def set_registry_token(token: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the registry auth token (or clear it).
 
     Args:
@@ -438,7 +450,7 @@ def get_files_url(data_dir=None) -> str | None:
     return None
 
 
-def set_files_url(url: str, clear: bool = False, data_dir=None) -> None:
+def set_files_url(url: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the taOS Files base URL (or clear it).
 
     Args:
@@ -484,7 +496,7 @@ def get_server_token(data_dir=None) -> str | None:
     return None
 
 
-def set_server_token(token: str, clear: bool = False, data_dir=None) -> None:
+def set_server_token(token: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the remote server bearer token.
 
     Args:
@@ -529,7 +541,7 @@ def get_admin_token(data_dir=None) -> str | None:
     return None
 
 
-def set_admin_token(token: str, clear: bool = False, data_dir=None) -> None:
+def set_admin_token(token: str, *, clear: bool = False, data_dir=None) -> None:
     """Persist the admin bearer token.
 
     Args:
@@ -647,6 +659,123 @@ def set_a2a_auth_enforce(value: bool, data_dir=None) -> None:
     _write(data, data_dir)
 
 
+def get_registry_staleness_bound(data_dir=None) -> float | None:
+    """Return the configured revocation staleness bound in seconds, or ``None``.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_REGISTRY_STALENESS_BOUND`` environment variable
+    2. ``registry_staleness_bound`` key in ``~/.taosmd/config.json``
+
+    When set, a cached revocation set older than this many seconds is considered
+    stale: a refresh is attempted, and if it fails auth fails closed instead of
+    tolerating the old set indefinitely. When unset (``None``), the verifier
+    defaults to ``6 * refresh_interval`` (30 min with the default 5-min refresh).
+    """
+    env = os.environ.get("TAOSMD_REGISTRY_STALENESS_BOUND")
+    if env and env.strip():
+        try:
+            val = float(env.strip())
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    val = _read(data_dir).get(_REGISTRY_STALENESS_BOUND_KEY)
+    if val is not None:
+        try:
+            fval = float(val)
+            if fval > 0:
+                return fval
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def set_registry_staleness_bound(value: float, *, clear: bool = False,
+                                 data_dir=None) -> None:
+    """Persist the revocation staleness bound in seconds (or clear it).
+
+    Args:
+        value: Staleness bound in seconds (must be positive). Ignored when
+            ``clear`` is True.
+        clear: when True, remove the setting (verifier reverts to its default
+            of ``6 * refresh_interval``).
+
+    Raises:
+        ValueError: when ``clear`` is False and ``value`` is not a positive
+            number.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_REGISTRY_STALENESS_BOUND_KEY, None)
+    else:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(
+                "staleness_bound must be a positive number (or pass clear=True)"
+            )
+        data[_REGISTRY_STALENESS_BOUND_KEY] = float(value)
+    _write(data, data_dir)
+
+
+# ---------------------------------------------------------------------------
+# Human principal IDs (controller sessions)
+# ---------------------------------------------------------------------------
+
+def get_human_principal_ids(data_dir=None) -> list[str]:
+    """Return the configured human principal IDs, or [] if unset.
+
+    Resolution order (first non-empty wins):
+
+    1. ``TAOSMD_HUMAN_PRINCIPAL_IDS`` environment variable (comma-separated)
+    2. ``human_principal_ids`` list in ``~/.taosmd/config.json``
+
+    These IDs belong to human principals (controller sessions). They skip the
+    registry revocation check and the grants check; a sub/from mismatch on a
+    human token is always rejected, even in verify-and-warn mode. They are also
+    exempt from the revocation feed and from the fail-closed refusal that fires
+    when the feed has never loaded. The id is not validated as belonging to a
+    human: the controller has no human_principal concept, so naming an agent's
+    canonical_id here silently disables that agent's revocation. Resolution is
+    from ``TAOSMD_HUMAN_PRINCIPAL_IDS`` before the config file.
+    """
+    env = os.environ.get("TAOSMD_HUMAN_PRINCIPAL_IDS")
+    if env and env.strip():
+        return [p.strip() for p in env.split(",") if p.strip()]
+    ids = _read(data_dir).get(_HUMAN_PRINCIPAL_IDS_KEY)
+    if isinstance(ids, list):
+        return [str(i) for i in ids if isinstance(i, str) and str(i).strip()]
+    return []
+
+
+def set_human_principal_ids(ids, *, clear: bool = False, data_dir=None) -> None:
+    """Persist the human principal IDs list (or clear it).
+
+    Args:
+        ids: List of human principal canonical ID strings. Ignored when
+            ``clear`` is True.
+        clear: when True, remove the setting.
+
+    Raises:
+        ValueError: when ``clear`` is False and ``ids`` is not a list of
+            non-empty strings.
+    """
+    data = _read(data_dir)
+    if clear:
+        data.pop(_HUMAN_PRINCIPAL_IDS_KEY, None)
+    else:
+        if not isinstance(ids, list):
+            raise ValueError("ids must be a list of strings (or pass clear=True)")
+        cleaned = []
+        for i in ids:
+            if not isinstance(i, str):
+                raise ValueError(f"human principal id must be a string, got {type(i).__name__}")
+            s = i.strip()
+            if s:
+                cleaned.append(s)
+        data[_HUMAN_PRINCIPAL_IDS_KEY] = cleaned
+    _write(data, data_dir)
+
+
 # ---------------------------------------------------------------------------
 # Collections: allowed roots
 # ---------------------------------------------------------------------------
@@ -680,7 +809,7 @@ def get_collections_allowed_roots(data_dir=None) -> list[str]:
     return [r.strip() for r in roots if isinstance(r, str) and r.strip()]
 
 
-def set_collections_allowed_roots(roots, clear: bool = False, data_dir=None) -> None:
+def set_collections_allowed_roots(roots, *, clear: bool = False, data_dir=None) -> None:
     """Persist the collections allowed-roots list (or clear it).
 
     Args:
@@ -736,6 +865,10 @@ __all__ = [
     "set_serve_dashboard",
     "get_a2a_auth_enforce",
     "set_a2a_auth_enforce",
+    "get_registry_staleness_bound",
+    "set_registry_staleness_bound",
+    "get_human_principal_ids",
+    "set_human_principal_ids",
     "MANAGED_BY_STANDALONE",
     "MANAGED_BY_TAOS",
     "get_generator_profile",

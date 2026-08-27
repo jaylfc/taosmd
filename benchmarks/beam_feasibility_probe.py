@@ -94,7 +94,7 @@ async def main():
     print("  --- extrapolation (one conversation; a full BEAM run is 100 of these) ---")
     print(f"    this split full ingest (x100 convs): ~{embed_s*100/60:.1f} min embed")
     if SPLIT == "100K":
-        print(f"    1M tier is ~10x heavier per conversation; 10M ~100x")
+        print("    1M tier is ~10x heavier per conversation; 10M ~100x")
     print(f"  VERDICT INPUTS: tokens/conv={est_tokens}, embed_s/conv={embed_s:.1f}, RSS={rss_mb:.0f}MB")
 
 

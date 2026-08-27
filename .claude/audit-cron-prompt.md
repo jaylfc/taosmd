@@ -90,9 +90,11 @@ uncommitted tree or a stale STATUS.md.
 
 ### Resume pair protocol (every pause, no exceptions)
 
+**That path is repo-relative and it is the ONLY copy: run it from the taosmd working directory.** Since #354 the script derives its own location from `__file__`, so an out-of-repo copy or symlink under `~/.taos-team/` or `~/.taos-fleet-tools/` is not a convenience, it is a second document that drifts. One did: for weeks those paths resolved to a checkout fifteen commits behind master, so the armed pair ran a pre-#354 script while every path involved still resolved successfully. Resolving a path proves a file is REACHABLE, never that its contents are CURRENT. `tests/test_docs_name_in_repo_helper_path.py` fails if any doc here names an out-of-repo copy.
+
 1. **Delete any still-pending resume/retry crons from earlier pauses first.**
 2. **Create the RETRY one-shot FIRST**, at the RETRY CRON line printed by
-   `python3 ~/.taos-team/resume_arm_time.py <resets_at>`. Its prompt starts by
+   `python3 scripts/resume_arm_time.py <resets_at>`. Its prompt starts by
    checking whether the primary already ran (tail of the conversation + the
    taosmd-progress channel) and exits in one line if so.
 3. **Create the PRIMARY one-shot** at the primary time from **the SAME

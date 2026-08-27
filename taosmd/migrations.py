@@ -59,9 +59,9 @@ migration**, because the schema constant cannot deliver it.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence, Union
+from typing import Callable, Sequence, Union
 
 __all__ = [
     "Migration",
@@ -302,6 +302,22 @@ _VECTOR_MEMORY: tuple[Migration, ...] = (
 )
 
 
+# --- a2a-receipts.db ----------------------------------------------------
+
+def _a2a_receipts_baseline(conn: sqlite3.Connection) -> None:
+    from taosmd.receipts import SCHEMA  # noqa: PLC0415
+
+    exec_script(conn, SCHEMA)
+
+
+_A2A_RECEIPTS: tuple[Migration, ...] = (
+    Migration(
+        1, "a2a_receipts_baseline", _a2a_receipts_baseline,
+        lambda c: table_exists(c, "a2a_receipts"),
+    ),
+)
+
+
 # --- knowledge-graph.db ------------------------------------------------
 
 def _knowledge_graph_baseline(conn: sqlite3.Connection) -> None:
@@ -357,6 +373,7 @@ _COLLECTIONS: tuple[Migration, ...] = (
 
 #: Logical database name -> ordered migration steps.
 REGISTRY: dict[str, tuple[Migration, ...]] = {
+    "a2a_receipts": _A2A_RECEIPTS,
     "archive_index": _ARCHIVE_INDEX,
     "claims": _CLAIMS,
     "collections": _COLLECTIONS,
@@ -394,6 +411,7 @@ for _db_name, _db_migs in REGISTRY.items():
 
 #: Logical database name -> filename inside the data directory.
 DB_FILES: dict[str, str] = {
+    "a2a_receipts": "a2a-receipts.db",
     "archive_index": "archive-index.db",
     "claims": "claims.db",
     "collections": "collections.db",

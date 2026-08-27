@@ -267,7 +267,7 @@ async def main():
     if args.limit:
         ku = ku[:args.limit]
 
-    print(f"=== LongMemEval-KU supersede benchmark ===")
+    print("=== LongMemEval-KU supersede benchmark ===")
     print(f"config={args.config}  model={args.model}  questions={len(ku)}")
     print()
 

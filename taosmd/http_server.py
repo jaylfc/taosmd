@@ -106,6 +106,7 @@ Endpoints
                             ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
                             ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
 ``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400)
+``GET  /a2a/mentions``    ``?since=&limit=&reader=``                  -> ``{"messages": [...]}`` (requires registry auth; ``reader`` is derived from the verified token ``sub``, or supplied as a query parameter when no verifier is configured)
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream); ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400
 ``GET  /a2a/threads``      ``?principal=``                  -> ``{"threads": [...]}`` thread list for the principal, ordered by latest activity desc; each entry has ``thread``, ``kind``, ``participants``, ``last_message: {id, ts, from, body_preview}`` (see notes below)
 ``GET  /a2a/threads/{thread}/messages`` ``?before=&after=&limit=`` -> ``{"thread", "messages": [...]}`` cursor-paginated message envelope, oldest-first
@@ -187,10 +188,10 @@ import json
 import logging
 import math
 import mimetypes
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.resources import files as _pkg_files
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -203,19 +204,9 @@ from . import __version__, capabilities, config as _config, service
 def _webui_dir() -> Path | None:
     """Return the path to the built webui, or None if absent.
 
-    Tries importlib.resources first (works in wheel installs); falls back to
-    a path relative to this file (works in editable / source installs).
+    Resolved via a path relative to this file, reliable in both wheel and
+    source installs.
     """
-    try:
-        ref = _pkg_files("taosmd").joinpath("webui")
-        # In Python 3.9+ files() returns a Traversable; we need a real Path.
-        import importlib.resources as _ir  # noqa: PLC0415
-        # For wheels, traverse to a concrete path via as_file context is
-        # awkward to keep open; instead resolve via __file__ which always works.
-        _ = ref  # suppress unused-variable on the import above
-    except Exception:
-        pass
-    # Use __file__-relative path, reliable in both source and wheel.
     candidate = Path(__file__).parent / "webui"
     if (candidate / "index.html").exists():
         return candidate
@@ -249,10 +240,19 @@ DEFAULT_PORT = 7900
 _A2A_REF_KINDS = frozenset({"doc", "report", "spec", "log"})
 _A2A_MAX_REFS = 8
 _A2A_MAX_MESSAGE_BYTES = 64 * 1024  # 64 KB total (body+refs+blocks)
+_A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "system"})
 
 # Cursor pagination limits for /a2a/threads/{thread}/messages.
 _A2A_MSG_DEFAULT_LIMIT = 50
 _A2A_MSG_MAX_LIMIT = 200
+
+
+def _validate_a2a_params(qs: dict, allowed: frozenset[str]) -> None:
+    unknown = set(qs.keys()) - allowed
+    if unknown:
+        raise _BadRequest(
+            f"unknown query parameters: {sorted(unknown)}; allowed: {sorted(allowed)}"
+        )
 
 
 # `since` on the A2A feed endpoints is an epoch timestamp in seconds, not a
@@ -697,10 +697,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             # The revoked and grants feeds are admin-gated (#710/#719): send the
             # configured taOS local token on them; pin the issuer.
             _registry_admin_token = _config.get_registry_token(data_dir)
+            _human_principal_ids = set(_config.get_human_principal_ids(data_dir))
+            _staleness_bound = _config.get_registry_staleness_bound(data_dir)
             _registry_verifier = registry_auth.verifier_from_url(
                 _registry_url,
                 revoked_token=_registry_admin_token,
                 expected_iss=registry_auth.REGISTRY_ISS,
+                human_principal_ids=_human_principal_ids,
+                staleness_bound=_staleness_bound,
             )
             _grants_verifier = registry_auth.grants_verifier_from_url(
                 _registry_url,
@@ -802,6 +806,39 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return auth[len("Bearer "):].strip() == _server_token
             return False
 
+        def _get_authenticated_agent_id(self) -> str | None:
+            """Return the agent identity from a verified registry token, or None.
+
+            The token is verified via ``_registry_verifier.authorize``; the
+            claimed identity is the token's own ``sub`` claim, so the
+            ``sub == claimed_from`` policy is satisfied by construction and
+            only the signature/revocation/issuer checks actually filter.  A
+            forged token (bad signature) raises ``AuthError`` and yields
+            ``None``; a valid token yields its ``sub``.  When no registry
+            verifier is configured (standalone) it yields ``None``: receipt
+            writes require an authenticated identity, never a body claim.
+            """
+            if _registry_verifier is None:
+                return None
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer "):
+                return None
+            token = auth[len("Bearer "):].strip()
+            if not token:
+                return None
+            from . import registry_auth as _ra  # noqa: PLC0415
+            try:
+                import jwt as _jwt  # noqa: PLC0415
+                unverified = _jwt.decode(token, options={"verify_signature": False})
+                claimed = unverified.get("sub", "") or ""
+                claims = _registry_verifier.authorize(token, claimed)
+                sub = claims.get("sub", "") or ""
+                return sub if sub else None
+            except _ra.AuthError:
+                return None
+            except Exception:  # noqa: BLE001
+                return None
+
         @staticmethod
         def _is_admin_route(method: str, path: str) -> bool:
             """Return True for admin write routes (#154).
@@ -830,6 +867,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "/a2a/admin/delete-channel",
                 "/a2a/admin/rename-channel",
                 "/a2a/admin/supersede-message",
+                "/a2a/admin/prune-receipts",
             )
 
         def _check_admin_token(self) -> bool:
@@ -963,6 +1001,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def do_DELETE(self) -> None:  # noqa: N802
             self._dispatch("DELETE")
 
+        def do_PATCH(self) -> None:  # noqa: N802
+            self._dispatch("PATCH")
+
         def _dispatch(self, method: str) -> None:
             parts = urlsplit(self.path)
             path = parts.path.rstrip("/") or "/"
@@ -1030,11 +1071,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "POST" and path == "/a2a/send":
                     self._handle_a2a_send()
                 elif method == "GET" and path == "/a2a/channels":
-                    self._handle_a2a_channels()
+                    self._handle_a2a_channels(query)
+                elif method == "GET" and path == "/a2a/census":
+                    self._handle_a2a_census(query)
                 elif method == "GET" and path == "/a2a/members":
                     self._handle_a2a_members(query)
                 elif method == "GET" and path == "/a2a/messages":
                     self._handle_a2a_messages(query)
+                elif method == "GET" and path == "/a2a/mentions":
+                    self._handle_a2a_mentions(query)
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
@@ -1050,6 +1095,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         self._send_json(404, {"error": "thread name required"})
                     else:
                         self._handle_a2a_thread_messages(thread, query)
+                # ----- A2A receipt endpoints --------------------------------
+                elif method == "POST" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts_delivered()
+                elif method == "PATCH" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts_seen()
+                elif method == "GET" and path.startswith("/a2a/messages/") and path.endswith("/receipts"):
+                    msg_id = path[len("/a2a/messages/"):-len("/receipts")]
+                    self._handle_a2a_message_receipts(msg_id)
+                elif method == "GET" and path == "/a2a/receipts":
+                    self._handle_a2a_receipts(query)
+                elif method == "POST" and path == "/a2a/admin/prune-receipts":
+                    self._handle_admin_a2a_prune_receipts()
                 # Task graph endpoints — prefix matching for /tasks/{id} paths
                 elif method == "POST" and path == "/tasks":
                     self._handle_task_create()
@@ -1484,11 +1541,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             )
             self._send_json(200, result)
 
-        def _handle_a2a_channels(self) -> None:
+        def _handle_a2a_channels(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset())
             channels = runner.run(service.a2a_channels(data_dir=data_dir))
             self._send_json(200, {"channels": channels})
 
+        def _handle_a2a_census(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset())
+            census = runner.run(service.a2a_sender_census(data_dir=data_dir))
+            self._send_json(200, {"census": census})
+
         def _handle_a2a_members(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"channel"}))
             channel = (qs.get("channel") or [None])[0]
             if not channel:
                 raise _BadRequest("'channel' query parameter is required")
@@ -1503,8 +1567,16 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             reply_to = body.get("reply_to")
             refs = body.get("refs")
             blocks = body.get("blocks")
+            kind = body.get("kind", "chat")
+            if kind is None:
+                kind = "chat"
             if not isinstance(from_, str) or not from_:
                 raise _BadRequest("'from' (non-empty string) is required")
+            if not isinstance(kind, str) or kind not in _A2A_KINDS:
+                raise _BadRequest(
+                    "'kind' must be one of "
+                    f"{sorted(_A2A_KINDS)}; got {kind!r}"
+                )
             # --- Envelope field validation (taOSmd #211) ---
             # refs: optional list of dicts, <=8 items, kind in the enum.
             if refs is not None:
@@ -1515,8 +1587,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 for i, ref in enumerate(refs):
                     if not isinstance(ref, dict):
                         raise _BadRequest(f"'refs[{i}]' must be an object")
-                    kind = ref.get("kind")
-                    if kind not in _A2A_REF_KINDS:
+                    ref_kind = ref.get("kind")
+                    if ref_kind not in _A2A_REF_KINDS:
                         raise _BadRequest(
                             f"'refs[{i}].kind' must be one of {sorted(_A2A_REF_KINDS)}"
                         )
@@ -1548,19 +1620,28 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         "'body' (non-empty string) is required when 'blocks' is present"
                     )
             # Registry auth (opt-in): when a verifier is configured, run the
-            # identity + grant checks and collect any failure reason.
-            # In enforce mode (a2a_auth_enforce=true) failures are rejected with
-            # 401/403. In verify-and-warn mode (default) failures are logged as
-            # a WARNING but the message is accepted, allowing operators to observe
-            # violations before enabling hard enforcement.
+            # identity + grant checks. Two failure classes:
+            #   1. Missing Bearer token -> the only tolerated class in
+            #      verify-and-warn mode (agent not migrated yet). Warn-and-
+            #      accept (200) when enforce is off; 401 when on.
+            #   2. Presented-credential failure (bad signature, issuer
+            #      mismatch, revoked id, sub != from) -> always 403 regardless
+            #      of the enforce flag. A matched-sub proof that fails is an
+            #      active impersonation attempt; tolerating it for migration
+            #      keeps the exact attack window open that the design exists to
+            #      close.
+            # Grant failure (valid token, no active grant) is NOT a credential
+            # failure: identity is proven and nothing is being impersonated, so
+            # it follows the same warn-or-enforce path as a missing token.
             if _registry_verifier is not None:
                 from . import registry_auth  # noqa: PLC0415 - optional path
                 auth = self.headers.get("Authorization", "")
                 token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
 
                 # Compute warn_reason (None = auth passed) and the status/message
-                # to use in enforce mode. We collect these without returning early
-                # so the enforce vs. warn decision is made in one place below.
+                # to use in enforce mode. Presented-credential failures return
+                # immediately; grant failures fall through to the single
+                # enforce-or-warn decision below.
                 warn_reason: str | None = None
                 _reject_status: int = 403
                 _reject_msg: str = ""
@@ -1572,22 +1653,47 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 else:
                     try:
                         _registry_verifier.authorize(token, from_)
+                    except registry_auth.HumanAuthError as exc:
+                        logger.warning("human principal %r rejected: %s", from_, exc)
+                        self._send_json(403, {"error": f"registry auth: {exc}"})
+                        return
                     except registry_auth.AuthError as exc:
-                        warn_reason = str(exc)
-                        _reject_status = 403
-                        _reject_msg = f"registry auth: {exc}"
+                        # Class 2: presented-credential failure. Always reject,
+                        # even in warn mode -- see the comment block above.
+                        _registry_url_cfg = _config.get_registry_url(data_dir)
+                        _registry_token_cfg = _config.get_registry_token(data_dir)
+                        if _registry_url_cfg is not None and _registry_token_cfg is None:
+                            msg = (
+                                "registry auth: registry_token is unset "
+                                "(registry_url is set without registry_token; "
+                                "set it with `taosmd config set-registry-token ...` "
+                                "or clear registry_url)"
+                            )
+                        else:
+                            msg = f"registry auth: {exc}"
+                        logger.warning(
+                            "a2a auth: rejecting presented-credential failure "
+                            "from %r (regardless of enforce mode): %s", from_, msg,
+                        )
+                        self._send_json(403, {"error": msg})
+                        return
 
                 # Grant check: token proves identity; grant proves permission.
+                # Human principals (controller sessions) have no registry grant,
+                # so the grants check is skipped for them.
                 if warn_reason is None and _grants_verifier is not None:
-                    try:
-                        if not _grants_verifier.has_grant(from_):
-                            warn_reason = "no a2a_send grant"
+                    if not _registry_verifier.is_human(from_):
+                        try:
+                            if not _grants_verifier.has_grant(from_):
+                                warn_reason = "no a2a_send grant"
+                                _reject_status = 403
+                                _reject_msg = f"registry auth: no active grant for {from_!r}"
+                        except registry_auth.AuthError as exc:
+                            warn_reason = str(exc)
                             _reject_status = 403
-                            _reject_msg = f"registry auth: no active grant for {from_!r}"
-                    except registry_auth.AuthError as exc:
-                        warn_reason = str(exc)
-                        _reject_status = 403
-                        _reject_msg = f"registry auth: {exc}"
+                            _reject_msg = f"registry auth: {exc}"
+                    else:
+                        logger.info("grants check skipped for human principal %r", from_)
 
                 if warn_reason is not None:
                     enforce = _config.get_a2a_auth_enforce(data_dir)
@@ -1602,13 +1708,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 service.a2a_send(
                     sender=from_, body=body_text,
                     thread=thread, reply_to=reply_to,
-                    refs=refs, blocks=blocks,
+                    refs=refs, blocks=blocks, kind=kind,
                     data_dir=data_dir,
                 )
             )
             self._send_json(200, result)
 
         def _handle_a2a_messages(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"thread", "since", "limit", "fields", "format"}))
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
@@ -1646,6 +1753,63 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return
             self._send_json(200, {"messages": messages})
 
+        def _handle_a2a_mentions(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"since", "limit", "reader"}))
+            since_raw = (qs.get("since") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            try:
+                since = float(since_raw) if since_raw is not None else None
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'since' must be a float timestamp") from exc
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            # Auth: when a registry verifier is configured, the caller's
+            # verified identity is the reader. Unauthenticated requests
+            # return 401. When no verifier is configured (standalone), a
+            # ?reader= query parameter is accepted for testing.
+            if _registry_verifier is not None:
+                auth = self.headers.get("Authorization", "")
+                token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+                if not token:
+                    self._send_json(401, {"error": "registry auth: Bearer token required"})
+                    return
+                qp_reader = (qs.get("reader") or [None])[0]
+                try:
+                    from . import registry_auth as _ra  # noqa: PLC0415
+                    import jwt as _jwt  # noqa: PLC0415
+                    from .mentions import _normalise_handle  # noqa: PLC0415
+                    unverified = _jwt.decode(token, options={"verify_signature": False})
+                    raw_sub = unverified.get("sub", "") or ""
+                except Exception:  # noqa: BLE001
+                    raw_sub = ""
+                norm_qp_reader = _normalise_handle(qp_reader) if qp_reader is not None else None
+                claimed = norm_qp_reader or raw_sub
+                try:
+                    claims = _registry_verifier.authorize(token, claimed)
+                    token_sub = claims.get("sub", "")
+                except _ra.AuthError as exc:
+                    self._send_json(403, {"error": f"registry auth: {exc}"})
+                    return
+                if qp_reader is not None:
+                    if _normalise_handle(qp_reader) != _normalise_handle(token_sub):
+                        self._send_json(403, {"error": "registry auth: reader mismatch"})
+                        return
+                    reader = qp_reader
+                else:
+                    reader = token_sub
+            else:
+                reader = (qs.get("reader") or [None])[0]
+                if not reader:
+                    raise _BadRequest(
+                        "'reader' query parameter is required when no registry verifier is configured"
+                    )
+            messages = runner.run(
+                service.a2a_mentions_feed(reader, since=since, limit=limit_i, data_dir=data_dir)
+            )
+            self._send_json(200, {"messages": messages})
+
         def _handle_a2a_stream(self, qs: dict) -> None:
             """Server-Sent Events stream for the A2A bus.
 
@@ -1655,12 +1819,21 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             is a quick, bounded archive query; the sleep happens here in
             the request thread, never inside the service loop. Disconnects
             are detected via write errors and exit the loop cleanly.
+
+            When the subscriber's identity is known (authenticated proxy
+            path, ``sub`` claim present in the Bearer token) a delivered
+            receipt is written after each frame lands on the wire. Raw-bus
+            subscribers that carry no identifying token produce no delivered
+            mark.
             """
+            _validate_a2a_params(qs, frozenset({"thread", "since"}))
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             last_ts = _parse_since(since_raw)
             if last_ts is None:
                 last_ts = time.time()
+
+            subscriber_agent = self._get_authenticated_agent_id()
 
             # Send SSE response headers before entering the poll loop.
             self.send_response(200)
@@ -1684,6 +1857,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                             frame = f"data: {json.dumps(msg)}\n\n"
                             self.wfile.write(frame.encode("utf-8"))
                             last_ts = msg["ts"]
+                            if subscriber_agent is not None:
+                                runner.run(
+                                    service.a2a_record_delivered(
+                                        msg["id"],
+                                        subscriber_agent,
+                                        ts=time.time(),
+                                        data_dir=data_dir,
+                                    )
+                                )
                         self.wfile.flush()
                     else:
                         self.wfile.write(b": keepalive\n\n")
@@ -1694,6 +1876,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return
 
         def _handle_a2a_threads(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"principal"}))
             principal = (qs.get("principal") or [None])[0]
             threads = runner.run(
                 service.a2a_threads(principal=principal, data_dir=data_dir)
@@ -1701,6 +1884,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"threads": threads})
 
         def _handle_a2a_thread_messages(self, thread: str, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"before", "after", "limit"}))
             before_raw = (qs.get("before") or [None])[0]
             after_raw = (qs.get("after") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
@@ -1715,6 +1899,107 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     thread=thread, before=before, after=after,
                     limit=limit_i, data_dir=data_dir,
                 )
+            )
+            self._send_json(200, result)
+
+        # ----- A2A receipt handlers -----------------------------------------
+
+        def _handle_a2a_receipts_delivered(self) -> None:
+            """POST /a2a/receipts -- record that a message was delivered.
+
+            ``agent_id`` is derived from the verified registry token, never
+            from the request body.  ``message_id`` comes from the body.
+            """
+            body = self._read_json_body()
+            message_id_raw = body.get("message_id")
+            if message_id_raw is None:
+                raise _BadRequest("'message_id' is required")
+            try:
+                message_id = int(message_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            agent_id = self._get_authenticated_agent_id()
+            if agent_id is None:
+                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                return
+            runner.run(
+                service.a2a_record_delivered(message_id, agent_id, data_dir=data_dir)
+            )
+            self._send_json(200, {"ok": True})
+
+        def _handle_a2a_receipts_seen(self) -> None:
+            """PATCH /a2a/receipts -- record that an agent has seen a message.
+
+            ``agent_id`` is derived from the verified registry token, never
+            from the request body.  ``message_id`` comes from the body.
+            """
+            body = self._read_json_body()
+            message_id_raw = body.get("message_id")
+            if message_id_raw is None:
+                raise _BadRequest("'message_id' is required")
+            try:
+                message_id = int(message_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            agent_id = self._get_authenticated_agent_id()
+            if agent_id is None:
+                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                return
+            runner.run(
+                service.a2a_record_seen(message_id, agent_id, data_dir=data_dir)
+            )
+            self._send_json(200, {"ok": True})
+
+        def _handle_a2a_message_receipts(self, msg_id_str: str) -> None:
+            """GET /a2a/messages/{id}/receipts -- all receipts for one message."""
+            try:
+                message_id = int(msg_id_str)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("message id must be an integer") from exc
+            result = runner.run(
+                service.a2a_get_receipts(message_id, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_receipts(self, qs: dict) -> None:
+            """GET /a2a/receipts?message_id=X&agent=Y -- a single receipt."""
+            message_id_raw = (qs.get("message_id") or [None])[0]
+            agent_id = (qs.get("agent") or [None])[0]
+            if message_id_raw is None or agent_id is None:
+                raise _BadRequest("'message_id' and 'agent' query parameters are required")
+            try:
+                message_id = int(message_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            receipt = runner.run(
+                service.a2a_get_receipt(message_id, agent_id, data_dir=data_dir)
+            )
+            if receipt is None:
+                self._send_json(404, {"error": "receipt not found"})
+                return
+            self._send_json(200, receipt)
+
+        def _handle_admin_a2a_prune_receipts(self) -> None:
+            """POST /a2a/admin/prune-receipts -- admin-only prune.
+
+            Accepts ``ttl_days`` (days) and converts to an absolute epoch
+            timestamp before delegating to the service layer, matching the
+            default path which also uses ``time.time() - N * 86400``.
+            """
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            ttl_days = body.get("ttl_days")
+            if ttl_days is not None:
+                try:
+                    ttl_days = float(ttl_days)
+                except (TypeError, ValueError):
+                    raise _BadRequest("'ttl_days' must be a number when provided")
+                older_than_ts = time.time() - ttl_days * 86400
+            else:
+                older_than_ts = time.time() - 30 * 24 * 3600
+            result = runner.run(
+                service.a2a_prune_receipts(older_than_ts, data_dir=data_dir)
             )
             self._send_json(200, result)
 
@@ -2226,13 +2511,32 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     """
     httpd = make_server(host, port, data_dir)
     bound_host, bound_port = httpd.server_address[:2]
+    _enforce = _config.get_a2a_auth_enforce(data_dir)
+    _registry_url = _config.get_registry_url(data_dir)
+    _registry_token = _config.get_registry_token(data_dir)
+    if _registry_url is None:
+        mode = "OFF (no registry_url: senders are self-claimed)"
+    elif _enforce:
+        mode = "ENFORCE"
+    else:
+        mode = "WARN (verify-and-warn)"
+    if _registry_url is not None and _registry_token is None:
+        print(
+            "WARNING: registry_url is set but registry_token is unset; "
+            "sends will be rejected. Set it with "
+            "`taosmd config set-registry-token ...` or clear registry_url.",
+            file=sys.stderr,
+        )
     where = "localhost only" if bound_host in {"127.0.0.1", "::1"} else "LAN-reachable (no auth)"
+    if _registry_url is not None and _enforce:
+        where = where.replace(" (no auth)", "")
     print(f"taosmd HTTP API listening on http://{bound_host}:{bound_port} ({where})")
+    print(f"A2A registry auth mode: {mode}")
     print(f"Inspection UI (read-only): http://{bound_host}:{bound_port}/")
     print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, "
           "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
-          "POST /a2a/send, GET /a2a/messages, GET /a2a/stream, "
+          "POST /a2a/send, GET /a2a/messages, GET /a2a/mentions, GET /a2a/stream, "
           "GET /a2a/channels, GET /a2a/members, "
           "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
           "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove, "

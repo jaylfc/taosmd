@@ -246,10 +246,21 @@ def _config_show() -> int:
     token = config.get_server_token()
     admin_token = config.get_admin_token()
     model = config.get_memory_model()
+    registry_url = config.get_registry_url()
+    registry_token = config.get_registry_token()
     print(f"server_url   : {url or '(unset, local mode)'}")
     print(f"server_token : {'(set)' if token else '(unset)'}")
     print(f"admin_token  : {'(set)' if admin_token else '(unset, falls back to server_token)'}")
     print(f"memory_model : {model or '(default)'}")
+    print(f"registry_url : {registry_url or '(unset)'}")
+    print(f"registry_token : {'(set)' if registry_token else '(unset)'}")
+    if registry_url is not None and registry_token is None:
+        print(
+            "WARNING: registry_url is set but registry_token is unset; "
+            "sends will be rejected. Set it with "
+            "`taosmd config set-registry-token ...` or clear registry_url.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -611,7 +622,7 @@ def _install_skill_cmd(args: argparse.Namespace) -> int:
     if not skill_src_dir.is_dir():
         # Fallback: try importlib.resources (wheel installs)
         try:
-            ref = _pkg_files("taosmd").joinpath("skills/taosmd-a2a")
+            _ref = _pkg_files("taosmd").joinpath("skills/taosmd-a2a")
             # Convert Traversable to a concrete path via __file__ approach.
             skill_src_dir = Path(__file__).parent / "skills" / "taosmd-a2a"
         except Exception:
@@ -679,7 +690,6 @@ def _review_cmd(args: argparse.Namespace) -> int:
     import asyncio
     from pathlib import Path
     from .pending_decisions import PendingDecisionsStore
-    from .knowledge_graph import TemporalKnowledgeGraph
 
     kg_path = Path(args.data_dir) / "knowledge-graph.db"
     if not kg_path.exists():

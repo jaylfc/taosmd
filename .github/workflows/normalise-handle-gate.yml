@@ -1,0 +1,29 @@
+name: Normalise handle gate
+
+# Fails if any top-level function or method name is defined more than once
+# in the same module under ``taosmd/`` or ``tests/`` (e.g. shadowed test
+# functions).  ``@typing.overload`` stubs and ``@property`` getter /
+# ``@<name>.setter`` / ``@<name>.getter`` / ``@<name>.deleter`` accessor
+# pairs are excluded.  Files that cannot be decoded as UTF-8 are skipped
+# with a warning.
+#
+# See scripts/normalise_handle_gate.py for the implementation.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  normalise-handle-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Install deps
+        run: uv sync --python 3.12
+      - name: Check for duplicate definitions in taosmd/ and tests/
+        run: python scripts/normalise_handle_gate.py
