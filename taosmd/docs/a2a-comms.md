@@ -459,6 +459,7 @@ a2a_members(channel="CHANNEL")
 | `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
+| `POST` | `/a2a/alarms/{key}/clear` | path-encoded alarm key | `{"cleared": true, "key": str}` |
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
@@ -502,6 +503,12 @@ requires a matching `Authorization: Bearer <token>` header.
 
 Each message in `/a2a/messages` and the SSE stream has shape:
 `{"id", "ts", "from", "body", "thread", "reply_to"}`
+
+Alarm dedup: `POST /a2a/send` with `kind="alarm"`, `alarm_key`, and optional
+`alarm_fingerprint` suppresses duplicate alarms within the module-level min
+interval, returning `{"deduped": true, "kind": "alarm"}`. The dedup state is
+stored in `a2a_alarm_state` and survives restarts. Use
+`POST /a2a/alarms/{key}/clear` to re-arm a key.
 
 Each channel in `/a2a/channels` has shape:
 `{"channel", "members", "message_count", "created_ts", "last_ts"}`
