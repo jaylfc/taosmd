@@ -1,0 +1,90 @@
+# Documentation-drift gate configuration for taosmd.
+#
+# Read by scripts/check_doc_gate.py. Rules are data: add more [[rules]]
+# entries here to cover new feature areas without touching the script.
+#
+# Precision over recall: `when_changed` only triggers a rule on a structural
+# change (a file added or deleted) by default, never a plain modification, to
+# keep the gate precise -- a noisy gate gets disabled, so false positives are
+# worse than an occasional missed doc update. A rule opts into modifications
+# with `on_modify = true` (taOS card tsk-sxuexd); this repo's A2A-handler and
+# contributor-surface rules do, because a *modification* to those files (or to
+# the doc that protects them) must still trip a doc check.
+#
+# Every protected doc carries declared required section HEADINGS under
+# [invariants.required_headings]. Layer A asserts these on every run, so gutting
+# a doc (deleting a declared section) fails the gate even when no code rule
+# fires. Layer B also re-asserts them whenever a rule is satisfied by a doc
+# edit, so a one-character touch cannot mask a gutted section (taOS #2383).
+
+[gate]
+trailer = "Docs-Reviewed:"
+
+[invariants]
+# Key user-facing docs that reference repo paths (docs/ or scripts/).
+# Every matched token must exist on disk; a missing target means a stale
+# link in shipped documentation.
+referenced_paths_scan = [
+    "README.md",
+    "docs/multi-agent.md",
+    "docs/collections.md",
+    "docs/serve-service.md",
+    "docs/INSTALL-AGENT-PROMPT.md",
+    "docs/benchmarks.md",
+]
+
+# Required section headings per protected doc, asserted by Layer A on every
+# run and re-asserted by Layer B whenever the doc is touched to satisfy a
+# fired rule. Delete any heading below (or the section it heads) and the gate
+# fails. Matched as a substring of a markdown heading line, so rewording a
+# heading out of existence is enough to trip it.
+[invariants.required_headings]
+"taosmd/docs/a2a-comms.md" = [
+    "# A2A Comms: Agent-to-Agent Channels via taOSmd",
+    "## What this does",
+    "## Step 1: Ensure taOSmd is installed",
+    "## Step 5: Invite the user's other agents",
+    "## Querying the bus",
+    "## Reference",
+    "### HTTP endpoints",
+    "### Admin token (separate from the data plane)",
+    "### Registry auth (verify-and-warn)",
+    "### MCP tools",
+]
+"docs/pr-verification.md" = [
+    "# PR verification on taOSmd",
+    "## The split",
+    "## The zero-token layer",
+]
+
+[[rules]]
+# New, removed, or renamed code under the taosmd package may alter the
+# user-visible API or behaviour, so a CHANGELOG entry is required. Fires on
+# add/delete only (not modification): a routine edit under taosmd/ that does
+# not alter the API surface should not ping every contributor. Use a
+# Docs-Reviewed trailer for purely-internal additions under taosmd/docs/.
+name = "changelog"
+when_changed = ["taosmd/**"]
+require_doc = ["CHANGELOG.md", "changelog.d/*.md"]
+hint = "changes under taosmd/ that alter user-visible or API behaviour require a CHANGELOG entry"
+
+[[rules]]
+# The A2A bus handlers live in http_server.py and service.py, documented in
+# taosmd/docs/a2a-comms.md. on_modify = true so a modification to either
+# handler (or to the doc itself) trips the rule; the doc is then content-
+# asserted against [invariants.required_headings].
+name = "a2a-handlers"
+when_changed = ["taosmd/http_server.py", "taosmd/service.py", "taosmd/docs/a2a-comms.md"]
+on_modify = true
+require_doc = ["taosmd/docs/a2a-comms.md"]
+hint = "changes to the A2A handlers (taosmd/http_server.py, taosmd/service.py) require docs coverage in taosmd/docs/a2a-comms.md"
+
+[[rules]]
+# CI workflows and pyproject.toml are contributor-surface configuration,
+# documented in docs/pr-verification.md (this rule fires on that doc itself,
+# so gutting a required section here is caught, not just add/delete).
+name = "contributor-surface"
+when_changed = [".github/workflows/**", "pyproject.toml", "docs/pr-verification.md"]
+on_modify = true
+require_doc = ["docs/pr-verification.md"]
+hint = "changes to .github/workflows or pyproject require docs/pr-verification.md reviewed"
