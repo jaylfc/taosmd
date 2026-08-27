@@ -142,6 +142,23 @@ class ArchiveStore:
         )
         self._conn.commit()
 
+    async def get_a2a_inbox_cursor(self, consumer: str) -> int:
+        """Return the last-seen message id for ``consumer``'s inbox, or 0."""
+        row = self._conn.execute(
+            "SELECT value FROM archive_settings WHERE key = ?",
+            (f"a2a_inbox_cursor_{consumer}",),
+        ).fetchone()
+        return int(row["value"]) if row else 0
+
+    async def set_a2a_inbox_cursor(self, consumer: str, cursor_id: int) -> None:
+        """Persist ``consumer``'s inbox cursor to ``cursor_id``."""
+        self._conn.execute(
+            """INSERT INTO archive_settings (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (f"a2a_inbox_cursor_{consumer}", str(cursor_id)),
+        )
+        self._conn.commit()
+
     # ------------------------------------------------------------------
     # Recording
     # ------------------------------------------------------------------
