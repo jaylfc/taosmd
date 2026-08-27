@@ -209,8 +209,13 @@ class TestIsTestPath:
     def test_frontend_spec(self):
         assert _is_test_path("dashboard/src/App.test.tsx")
 
-    def test_real_code(self):
-        assert not _is_test_path("taosmd/http_server.py")
+    def test_root_level_tests_path(self):
+        assert _is_test_path("__tests__/test_foo.ts")
+        assert _is_test_path("subdir/__tests__/test_bar.js")
+
+    def test_dot_spec_js_extension(self):
+        assert _is_test_path("test_file.spec.js")
+        assert _is_test_path("my/app.test.jsx.spec.js")
 
 
 class TestParseNameStatus:
@@ -270,6 +275,17 @@ class TestEvaluateRules:
         cfg = _load_cfg(repo)
         fails = evaluate_rules([("M", "taosmd/retrieval.py")], [], cfg, repo)
         assert fails == []
+
+    def test_t_typechange_fires_rules_without_on_modify(self, tmp_path):
+        # T (typechange) under taosmd/** should trigger changelog rule
+        # also triggers a2a-handlers rule since http_server.py is in its when_changed
+        repo = _init_repo(tmp_path)
+        cfg = _load_cfg(repo)
+        fails = evaluate_rules([("T", "taosmd/http_server.py")], [], cfg, repo)
+        assert len(fails) == 2
+        fail_msgs = " ".join(fails)
+        assert "changelog" in fail_msgs
+        assert "a2a-handlers" in fail_msgs
 
     def test_changelog_fires_on_add(self, tmp_path):
         repo = _init_repo(tmp_path)
