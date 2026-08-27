@@ -200,6 +200,45 @@ def test_server_builds_verifier_with_token_and_pinned_issuer(tmp_path, monkeypat
         httpd.server_close()
 
 
+def test_half_config_send_error_mentions_registry_token(tmp_path, monkeypatch):
+    """registry_url set without registry_token -> send error names registry_token."""
+    from taosmd import config
+
+    data_dir = tmp_path / "half-cfg"
+    data_dir.mkdir()
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+
+    config.set_registry_url("http://reg.test", data_dir=str(data_dir))
+    # registry_token intentionally unset
+
+    class HalfConfigVerifier:
+        def authorize(self, token, claimed_from):
+            raise registry_auth.AuthError("revocation feed unavailable")
+        def is_human(self, canonical_id):
+            return False
+
+    httpd = http_server.make_server("127.0.0.1", 0, data_dir=str(data_dir),
+                                    verifier=HalfConfigVerifier())
+    httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
+    host, port = httpd.server_address[:2]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://{host}:{port}"
+        token = pyjwt.encode({"sub": "agent-1"}, PRIV_PEM, algorithm="EdDSA")
+        status, body = _post_send(base, "agent-1", "hello", token=token)
+        assert status == 403
+        error_msg = body.get("error", "")
+        assert "registry_token" in error_msg.lower(), (
+            f"expected error to mention registry_token, got: {error_msg}"
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+        httpd.service_loop.close()
+
+
 # ---------------------------------------------------------------------------
 # Project-scoped grant binding (taOS#744)
 # ---------------------------------------------------------------------------

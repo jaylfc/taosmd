@@ -188,6 +188,7 @@ import json
 import logging
 import math
 import mimetypes
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1659,11 +1660,22 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     except registry_auth.AuthError as exc:
                         # Class 2: presented-credential failure. Always reject,
                         # even in warn mode -- see the comment block above.
+                        _registry_url_cfg = _config.get_registry_url(data_dir)
+                        _registry_token_cfg = _config.get_registry_token(data_dir)
+                        if _registry_url_cfg is not None and _registry_token_cfg is None:
+                            msg = (
+                                "registry auth: registry_token is unset "
+                                "(registry_url is set without registry_token; "
+                                "set it with `taosmd config set-registry-token ...` "
+                                "or clear registry_url)"
+                            )
+                        else:
+                            msg = f"registry auth: {exc}"
                         logger.warning(
                             "a2a auth: rejecting presented-credential failure "
-                            "from %r (regardless of enforce mode): %s", from_, exc,
+                            "from %r (regardless of enforce mode): %s", from_, msg,
                         )
-                        self._send_json(403, {"error": f"registry auth: {exc}"})
+                        self._send_json(403, {"error": msg})
                         return
 
                 # Grant check: token proves identity; grant proves permission.
@@ -2501,12 +2513,20 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     bound_host, bound_port = httpd.server_address[:2]
     _enforce = _config.get_a2a_auth_enforce(data_dir)
     _registry_url = _config.get_registry_url(data_dir)
+    _registry_token = _config.get_registry_token(data_dir)
     if _registry_url is None:
         mode = "OFF (no registry_url: senders are self-claimed)"
     elif _enforce:
         mode = "ENFORCE"
     else:
         mode = "WARN (verify-and-warn)"
+    if _registry_url is not None and _registry_token is None:
+        print(
+            "WARNING: registry_url is set but registry_token is unset; "
+            "sends will be rejected. Set it with "
+            "`taosmd config set-registry-token ...` or clear registry_url.",
+            file=sys.stderr,
+        )
     where = "localhost only" if bound_host in {"127.0.0.1", "::1"} else "LAN-reachable (no auth)"
     if _registry_url is not None and _enforce:
         where = where.replace(" (no auth)", "")

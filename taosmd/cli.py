@@ -246,10 +246,21 @@ def _config_show() -> int:
     token = config.get_server_token()
     admin_token = config.get_admin_token()
     model = config.get_memory_model()
+    registry_url = config.get_registry_url()
+    registry_token = config.get_registry_token()
     print(f"server_url   : {url or '(unset, local mode)'}")
     print(f"server_token : {'(set)' if token else '(unset)'}")
     print(f"admin_token  : {'(set)' if admin_token else '(unset, falls back to server_token)'}")
     print(f"memory_model : {model or '(default)'}")
+    print(f"registry_url : {registry_url or '(unset)'}")
+    print(f"registry_token : {'(set)' if registry_token else '(unset)'}")
+    if registry_url is not None and registry_token is None:
+        print(
+            "WARNING: registry_url is set but registry_token is unset; "
+            "sends will be rejected. Set it with "
+            "`taosmd config set-registry-token ...` or clear registry_url.",
+            file=sys.stderr,
+        )
     return 0
 
 
