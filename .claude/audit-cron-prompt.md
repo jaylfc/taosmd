@@ -1,12 +1,246 @@
 # Audit cron (re-arm every session)
 
-Project rule: every working session arms an HOURLY monitor cron with the prompt
-below (in Claude Code: CronCreate, schedule `13 * * * *`, durable). The :13 slot
-stays off the :00/:30 herd and away from the Pi sweep at :15/:45. (Jay, Jun 30:
-cadence moved from 30-min to hourly; the bus check now sweeps ALL channels and a
-repo check was added below.) Session crons die with the session and auto-expire after 7 days, which
-is why this file exists: the prompt is canonical here, not in anyone's memory.
+Project rule: every working session arms an HOURLY monitor cron whose prompt is
+"run `.claude/audit-cron-prompt.md`" (in Claude Code: **CronCreate**, schedule
+`13 * * * *`). The :13 slot stays off the :00/:30 herd and away from the Pi sweep
+at :15/:45. Session crons die with the session and auto-expire after 7 days,
+which is why this file exists: the prompt is canonical here, not in anyone's
+memory. (The original wording also passed `durable`; that flag is a documented
+no-op, every cron is session-only, so do not rely on it.)
+
+**The WHY for every rule below lives in `.claude/audit-cron-rationale.md`.** Read
+that file before CHANGING a rule or when a guard fires and you want to know what
+it caught. Do not simplify a rule here on the grounds that it looks arbitrary:
+several were re-derived wrongly two or three times before landing.
+
+Keep each run PROPORTIONATE: if nothing changed since the last run, say so in one
+line and stop.
 
 ---
 
-Combined HOURLY monitor for the taosmd repo working directory. Keep each run PROPORTIONATE: if nothing changed since the last run, say so in one line and stop. STEP 0a - USAGE GATE (FIRST): read the REAL shared account usage, never local estimates (a local ccusage estimate read 16 percent when the true shared figure was 78). PREFERRED SOURCE (updated Jul 28): the LOCAL fleet watcher file /home/jay/.taos-usage/current.json, written every 10 min by ~/.taos-usage/watch.sh from api.anthropic.com/api/oauth/usage - real percentages against the true limit. Shape: {five_hour:{utilization,resets_at}, seven_day:{...}}. The OLD Pi path /home/jay/.taos-usage.json: NOTHING IS KNOWN TO CONSUME IT, and when last observed cold (2026-07-22, ~147h stale as of Jul 28) it reported 5h 28 / 7d 97, wildly wrong - do NOT read it. That is a CONSUMER-side claim and it is stated this way on purpose (@taOSc-dev, bus 2779): the earlier wording was 'DEAD', which is not falsifiable and therefore survived three weeks of a LIVE PRODUCER, because usage_publish.sh writes that exact path fresh on every run. A producer-side fact cannot retire a consumer-side observation; if you retire this, name which sense you are falsifying, and do not report its numbers even with a staleness caveat, because a stale number quoted with a caveat still anchors a decision. Legacy note, the old source was: the shared monitor file /home/jay/.taos-usage.json on the Pi (published by the taOS session at :08/:38 and at its stage boundaries; shape {fetched_at, source, five_hour:{utilization, resets_at}, seven_day:{...}}). Staleness rule: if fetched_at is older than 35 minutes, treat the file as dead and fall back to the direct API. SECOND STALENESS RULE, and this one is not about mtime (learned 2026-07-29 01:42Z): ALWAYS check the file's resets_at against `date -u`. If resets_at is in the PAST, the utilization figure describes a window that has ALREADY ROLLED and must NOT be used to gate, no matter how recent the file's mtime is. The watcher writes every 10 minutes, so for up to 10 minutes after every reset the file reads fresh by mtime and reports the OLD window's number: at 01:42Z it showed 5h 100 percent with a resets_at of 01:39:59Z, three minutes in the past, which would have hard-stopped a session whose quota had just refilled. File freshness is not window validity. Wait for the next write, or fetch the live figure, before gating. THE REMEDY IS NARROWER THAN IT LOOKS, AND GETTING THIS WRONG MAKES THE BUG CONFIRM ITSELF (measured 2026-08-16 03:02Z, the FIFTH firing): `~/.taos-team/usage_publish.sh` DOES NOT WRITE `/home/jay/.taos-usage/current.json`. Read the script: in 39 lines it has exactly two write operations, `printf > /tmp/usage.json` at line 30 and `scp /tmp/usage.json "$PI":/home/jay/.taos-usage.json` at line 36. The file the gate reads is written by a DIFFERENT component, `~/.taos-usage/watch.sh --once`, from the SYSTEM crontab at minutes 6,16,26,36,46,56. So "re-run usage_publish.sh and believe only that" is correct ONLY if you believe its STDOUT. If you re-read `current.json` afterwards, which is the natural move and the one a careful agent makes, you get the IDENTICAL stale numbers back and it reads as independent confirmation of the stale figure. Measured: at 03:02Z the publisher printed `five_hour 0.0 resets 07:59:59Z / PUBLISHED FRESH` while the file still read `18.0 resets 03:00:00Z` with its mtime frozen at 02:56:02. Gate on the publisher's stdout, never on a re-read of the file. Note also that the publisher writes the Pi path this same prompt declares DEAD a few sentences above; that "dead" observation was true on 2026-07-28 but the publisher revives that path on every run, so the two statements need reconciling by whoever owns the watcher. THE SCHEDULED COLLISION, and this is why the trap keeps firing rather than being bad luck: the resume-pair protocol below armed the PRIMARY wake at resets_at plus 2 minutes, while the watcher writes at minutes 6,16,26,36,46,56. For any reset on the hour the primary therefore fires at :02 with the last write at :56 and the next at :06, so it lands INSIDE the stale window every single time, by construction. Every recorded firing fits: 21:02Z, 02:02Z, 02:02:09Z on the 7d reset itself, 03:02Z, and the original 01:42Z case (reset 01:39:59, last write 01:36, next 01:46). Two rules written in different parts of this same prompt, one saying arm at plus-2 and one saying the file is stale for up to 10 minutes after a reset, were never reconciled, which is the same two-documents defect that has cost this fleet repeatedly. THE FIX IS NOT A NUMBER AT ALL, and the two numbers before it were both wrong in the same way. Arm the primary by DERIVING the time from the watcher's real cron spec: `python3 scripts/resume_arm_time.py <resets_at>` prints the first watcher tick strictly following the reset, plus a margin, plus the 5-field cron line and the crontab line it read as evidence. THAT PATH IS REPO-RELATIVE AND IT IS THE ONLY COPY: run it from the taosmd working directory. Since #354 the script derives its own location from `__file__`, so an out-of-repo copy or symlink under `~/.taos-team/` or `~/.taos-fleet-tools/` is not a convenience, it is a second document that drifts. One did: for weeks those paths resolved to a checkout fifteen commits behind master, so the armed pair ran a pre-#354 script while every path involved still resolved successfully. Resolving a path proves the file is REACHABLE, never that its contents are CURRENT. `tests/test_docs_name_in_repo_helper_path.py` fails if any doc here names an out-of-repo copy. That derivation is correct for ANY phase and ANY cadence, including a non-uniform tick list, and it FAILS LOUD rather than falling back to a constant if the watcher line is absent. CORRECTED SAME DAY BY @taOSc-dev (bus 2776), and the correction is the more instructive half: my first fix was plus-SEVEN, which is a PHASE correction and not the class deletion I claimed. Let r be the resets_at minute mod 10. The next write lands 6-r minutes later for r<6 and 16-r for r>=6, giving waits of 6,5,4,3,2,1,10,9,8,7 for r=0..9. A plus-7 arm therefore still wakes INSIDE the stale window for r in {6,7,8} and clears it by under a minute at r=9. I verified that table independently rather than taking it on trust, and it is correct. Worse, BOTH of our real windows sit on the marginal phase: five_hour resets at 07:59:59 and seven_day at 01:59:59, minute 59, so r=9 and wait=7 for both. So plus-7 was tuned against the very instances it was derived from and is marginal on both gates in production, which is exactly the defect this note was written to name, committed one layer down by the person naming it. Plus-11 covers every phase with at least a minute of margin. NOTE that @taOSc-dev's own argument understated this: they wrote that seven_day resets on the hour at r=0 where plus-7 already works, but seven_day resets at :59:59 like five_hour, so it is r=9 as well. WHICH RULE IS LOAD-BEARING, since these are easy to confuse: the STDOUT rule is the correctness fix and the offset is only a latency and legibility property. If you never trust the file, the phase you wake in cannot make you wrong, it can only cost you a confusing read. Do not describe the offset as deleting the failure class; the stdout rule does that. A guard that fires predictably is a scheduling bug wearing a vigilance costume: the correct response is to stop scheduling into the hole, not to keep catching it. The file is a FLOOR, not the truth: it lags active burn by up to half an hour, so before CITING a utilization number or making a gating decision mid-work, fetch the live figure from the direct API; use the file only as the cheap first read. WARNING: never use the Pi-local ~/.claude/.credentials.json token as the fallback source; it belongs to a DIFFERENT account and reports wrong numbers. The Mac Keychain credentials are the correct fallback identity. Direct fallback: OAuth token from the Mac Keychain (security find-generic-password -s "Claude Code-credentials" -w, JSON field .claudeAiOauth.accessToken; on the Pi: ~/.claude/.credentials.json), then GET https://api.anthropic.com/api/oauth/usage with Authorization: Bearer <token> and header anthropic-beta: oauth-2025-04-20. NEVER print or store the token. five_hour.utilization is the shared number; also read weekly utilization. WEEKLY GATE (Jay, Jun 12): when seven_day.utilization crosses 90-95 before the long weekly pause, prepare the hand-holding job pack for Jay's weaker coding agents (1-2 years outdated knowledge, no design judgment) so work continues while the strong sessions are dark. Format and rules live in docs/agent-jobs/README.md (mirrors the proven taOS docs/agent-jobs pack): absolute-rules README + repo facts they will not know + one fully spelled-out file per job (exact branch, commit message, PR title, allowed files, step-by-step with code, verification, STOP conditions). Only contained low-risk jobs; they PR to master and NEVER merge; the primary session reviews on wake. Refresh the pack (close out completed jobs, add new ones) each time the weekly gate trips. USAGE CADENCE (Jay, Jun 13 2026, SUPERSEDES the old finish-stage threshold below): do NOT stop work early on the 5-hour window; the monitor + resume-pair exist so we KEEP working. Proceed while below 90 percent. Treat ~90 percent as the SOFT WIND-DOWN target (begin the clean handoff, leaving a little headroom for crons). 98 percent is the HARD STOP. At or over ~90 percent, the audit/freshness cron and all other crons go MONITOR-ONLY: publish usage, skip non-essential sweep commits and retriggers, act on a cron only if essential, until usage resets. The soft wind-down at ~90 is: stop new work, run the clean-handoff protocol, then schedule the RESUME PAIR and go quiet. HANDOFF-DOC SWEEP (mandatory at EVERY wind-down, every pause, not only the weekly one): before going quiet, bring the durable handoff docs current so the waking session and any interim crew read truth, not yesterday. Check and update as needed: (a) STATUS.md (the first doc read on arrival) -- Current state, In flight, Queued next, and the Last updated stamp; (b) the MEMORY.md dev-status index line + the project_taosmd_dev_status.md body; (c) CHANGELOG.md for anything shipped since the last entry; (d) docs/research-report.md per its skill if any experiment landed; (e) README/AGENTS only if a user-facing surface or architecture fact changed. Commit and push these straight to master (plain jaylfc commits, no AI attribution, no em dashes) BEFORE silencing monitors. Working tree must be clean and fully pushed at wind-down: never go dark with uncommitted state or a stale STATUS.md. Resume pair protocol (every usage pause, no exceptions): (1) before scheduling, delete any still-pending resume or retry crons from earlier pauses (list scheduled jobs and cancel the stale ones); (2) create the RETRY one-shot first, at the RETRY CRON line printed by that same `resume_arm_time.py` run (CHANGED 2026-08-16, tsk-fd3kes: it was a flat resets_at+22min, and a flat retry beside a DERIVED primary silently re-creates the original staleness bug. Widen the watcher to */30 and the primary moves to 08:31 while the retry sits at 08:21, so the RETRY FIRES FIRST: the safety net becomes the primary, at a time derived from nothing, and it looks fine because the primary next to it is visibly derived. RED-tested both ways. Take BOTH cron lines from ONE invocation, never two, or the pair's ordering rests on the crontab not changing in between), whose prompt starts by checking whether the primary wake already ran (tail of the conversation + the taosmd-progress channel) and exits in one line if so; (3) create the PRIMARY one-shot at the time printed by `python3 scripts/resume_arm_time.py <resets_at>` (CHANGED 2026-08-16 three times: plus-2, then plus-7, then plus-11, before concluding that any CONSTANT is the bug. Derive it), embedding the retry cron id, and its first step is to delete the retry now that the wake succeeded. One-shots auto-delete after firing, so the only cleanup ever needed is the unfired sibling. Rationale: wakes sometimes time out just after a quota refresh; the retry is the safety net. (4) ALERT THE HUMANS AND THE OTHER AGENT before going quiet: post one [WINDDOWN] line to the general channel tagging @hermes (Jay's personal assistant, who can reach him by phone) and the sibling agent (@taOS or @taOSmd-dev), stating the utilization, the reset time, and the armed resume pair. The allowance is SHARED, so the first agent to detect an approaching limit alerts the bus immediately, it may save the sibling a wasted turn of running into the wall. Symmetrically, treat an incoming [WINDDOWN] from the sibling as your own early warning: check the gate at your next stage boundary. (5) SILENCE THE LIVE MONITORS as the last wind-down step: stop the bus watcher and any result/log monitors (TaskStop), because every monitor event wakes the session and burns tokens even when ignored; everything they watch lands durably in logs and bus history anyway. The PRIMARY resume re-arms them on wake (bus watcher per a2a-session-setup.md, plus a fresh monitor for whatever chains are still running) and reads the backlog it slept through. Below 90 percent: keep working normally, do not finish-stage or hold early (the old 70-90 finish-stage rule is retired per the cadence rule above). Re-check usage at stage boundaries, but only ACT on the >=90 soft wind-down or the 98 hard stop. STEP 0a-bis - ARM-AT-START RESUME PAIR (every fire, idempotent): a session that dies at a hard limit never reaches its wind-down, so the resume pair must already exist BEFORE that happens. On every audit fire: read the current window resets_at (usage source above); if no resume pair is armed for THIS resets_at, arm one (retry one-shot at the RETRY CRON time from the same `resume_arm_time.py` invocation, NOT a flat resets_at+22min (see the ordering note in STEP 0a's resume-pair protocol), whose first step checks if the primary already ran and no-ops if so; primary one-shot at the time from `resume_arm_time.py` (NOT a hardcoded offset, see the scheduled-collision note in STEP 0a) that deletes the retry first, gates, re-arms monitors, reads backlog, processes results, then re-arms the audit cron and the NEXT window's pair). Delete stale resume/retry crons left over from prior windows. Both one-shots auto-delete on firing, so only an unfired sibling ever needs cleanup. Canonical on the taOS side in AGENT_HANDOFF.md; this is the taOSmd mirror. A HOLD SUSPENDS PRODUCING, NEVER RECEIVING (added 2026-08-16, after a measured 15-hour miss): at EVERY band including the 98 hard stop, STEP 4's bus sweep, the heartbeat touch and the ADDRESSED drain STILL RUN. Only the producing steps (reviews, commits, merges, cards, probes) stop. Do NOT collapse this pass to STEP 0a because usage is high. Measured cost of getting this wrong: across the 2026-08-14/16 hard stop this cron fired thirteen times, read usage and nothing else each time, and bus 2757 announcing PR #282 went unread for 15 hours; #283 likewise. Reading the bus costs a few hundred tokens, which is less than the sentence explaining why you skipped it. The failure is invisible from inside - checkpoint clean, tree clean, crons alive, thirteen tidy one-line reports, and the only signal that anything was wrong sat on the bus that was not being read. @taOS-website-dev named the general form at bus 2770 and I corroborated it at 2772: a stop that cannot hear "do not stop" is not a pause, it is a disconnection, and it cannot be revoked by anyone. If the band forbids acting on what the sweep finds, still READ it and still record what is owed; hand it to the next wake in the checkpoint. STEP 0b - RATE-LIMIT RECOVERY CHECK: look for work a rate limit interrupted since the last audit: background agents that returned only a session-limit message; worktrees under .claude/worktrees/ with uncommitted changes or unpushed local commits (git status --porcelain + git log origin/<branch>..HEAD per worktree); pushed branches with no PR; bus handoff lines without completions. Salvage each (test/commit/push/PR or redispatch a continuation agent with the original spec) before anything else. STEP 1 - docs freshness: git fetch origin; git log --since="40 minutes ago" --oneline origin/master + gh pr list --state merged --limit 5; check README.md, CHANGELOG.md, AGENTS.md, STATUS.md, docs/*.md (esp. benchmarks.md), the http_server.py endpoint docstring table, taosmd/skills/taosmd-a2a/ against those changes; fix small drift straight to master (plain commits as jaylfc, no AI attribution, no em dashes, taOSmd in prose / lowercase only for package-CLI-repo refs, never commit IPs/credentials); branch+PR for big rewrites. STEP 2 - RESEARCH REPORT: if docs/research-report.md exists, check it against new results in benchmarks/results and benchmarks.md since its last revision-log entry: unrecorded findings, pre-registered experiments whose results have landed (move them with their kill criterion quoted verbatim), index rows missing or stale. Follow the repo skill .claude/skills/research-report/SKILL.md exactly. If the report does not exist yet, note its first edition is pending and skip. STEP 3 - memory: update the session memory dev-status block and its index line if stale. STEP 4 - bus (ALL CHANNELS, Jay Jun 30): do not check just one feed. HEARTBEAT FIRST (rulebook v1.6, Jul 26): touch ~/.taosmd-agent/heartbeat at the START of this step, every fire. THEN VERIFY THE BACKUP ITSELF IS ALIVE (Jul 27 incident: a peer agent's basename-filtered cron reinstall silently wiped my backup entry within hours of install - three leads share this user account and all three scripts are named backup_watch.py): check `crontab -l | grep taosmd-agent/backup_watch` returns the 51 */2 line; if missing, re-add it with PATH-PRECISE dedup (grep -v "taosmd-agent/backup_watch", never the bare basename) and report the wipe on the agent-rules thread. A backup watch whose schedule can vanish silently needs a liveness check that does not depend on the backup itself running; this is it. An independent backup poller runs from the SYSTEM crontab (51 */2 * * *, ~/.taosmd-agent/backup_watch.py, no model tokens): if it finds unhandled bus traffic while this heartbeat is >90 min stale it posts ONE automated alert to agent-rules (6h cooldown) telling @taOS-dev/Jay the session is dead. If you are reading this after such an alert, read the backup's watermark file for where handling stopped. NOTE ON THE ACTUAL API (verified Jul 21): the bus has no `channel` field. Channels are stored in `thread`, so the message filter is `GET /a2a/messages?thread=<name>`; `?channel=` is NOT a supported parameter and is SILENTLY DROPPED, which makes a per-channel sweep return the unfiltered global feed once per channel (over-inclusive, not blind, but wasteful and it hides the fact that no filtering happened). PREFERRED SWEEP (TOKEN DISCIPLINE, Jay-directed via A2A 1915/1916, adopted 2026-07-29): `GET /a2a/messages?since=<float epoch>&limit=200`, then group by the `thread` field. `since=` works on the RAW endpoint, no proxy and no bearer needed. MEASURED on this box 2026-07-29: `since=` (90 min window) returned **4,329 bytes** against **860,914 bytes** for `limit=500`, a 199x reduction for identical coverage (cross-checked: both returned the same set of messages newer than the watermark). Carry a watermark of the last handled message id between runs and set `since` a little before it. **ALWAYS ALSO PASS AN EXPLICIT `limit`**: a BARE read (no limit at all) returns only the most recent ~50 and looks IDENTICAL to a complete one, which is how a peer lead silently ate a 37-message window containing the three answers it was waiting on. IMPORTANT CORRECTION (measured, A2A 1916): the ~50 cap applies to BARE reads ONLY - explicit limits of 50/60/200/500 are all honoured exactly, so a sweep that passed any explicit limit was never truncating and needs no re-deriving. The message timestamp field is **`ts`**, NOT `created_at`: a client-side filter reading `created_at` gets None, defaults to 0, and returns a confident EMPTY result. Then check the oldest returned id against the last-handled id from the previous fire: if the oldest is beyond it, messages fell off the end and the read is NOT complete - say so in the report rather than treating it as quiet.** Measured headroom (Jul 27): busiest real hour was 29 messages, so 500 is ~17x headroom, but the check matters more than the number because traffic is bursty and the failure is silent; use `GET /a2a/channels` only to confirm the thread names. Scan for anything addressed to or relevant to @taOSmd / @taOSmd-dev (handoffs, decisions, requests, [WINDDOWN]s, and replies that landed in the wrong thread). HANDLE or SURFACE items for us: a trivial ack can be answered; substantive work is logged to STATUS and reported, never silently dropped. Record docs-relevant decisions. Do not derail a monitor run into long bus threads. STEP 5 - repo (gh, Jay Jun 30): we auto-merge overnight, so bot reviews can land post-merge and must be swept. Check via gh for new or updated PRs, new issues, and BOT reviews + comments (coderabbitai, kilo-code-bot, qodo-code-review) on open AND recently-merged PRs. Triage genuine findings vs nitpicks; fix small real ones straight to master or a follow-up PR, flag the rest in STATUS. EXTERNAL-CONTRIBUTOR BACKSTOP (Jay via @taOS-dev, Jul 21): external contributors who are not on the bus (hognek today) raise contract questions as issues on the PRIVATE repo jaylfc/taos-agent-commons, labelled contract-question. @taOS-dev sweeps that repo and relays to whichever agent owns the contract, so we do NOT poll it properly and do NOT read the bodies. But their relay is a single point of failure (their session died once during a machine migration), and a channel that silently stops while still looking like a route is worse than no route. So: on this same repo pass, glance at the ISSUE TITLES only (`gh issue list --repo jaylfc/taos-agent-commons --limit 10 --json number,title,labels`). Access verified Jul 21, we can read it. If a title is clearly aimed at taOSmd and no relay has arrived on the bus within a couple of hours, assume the relay is down and answer directly on the issue. Note this is temporary scaffolding that retires when external contributors can hold an identity on the bus. SEPARATELY, and worth telling contributors: jaylfc/taosmd is PUBLIC with issues enabled and this STEP 5 already sweeps its issues hourly, so a taOSmd contract question opened there reaches us directly within the hour with no relay and no single point of failure. STEP 6 - FORK FRESHNESS (Jay Jul 8, run AT MOST once per day - only on the 09:xx fire, skip on every other hour): check upstream for updates to our forks and dependencies and SURFACE new ones. Do NOT action infra ourselves: the Pi and its NPU runtime are @taOS-dev's to deploy; our job is to notice, flag, and coordinate, not to touch their live host. (a) NPU runtime rknn-llm: gh api repos/airockchip/rknn-llm/releases/latest - flag anything newer than the last known (release-v1.3.0, 2026-06-17); NPU model support rides these (gemma4 + qwen3.5 RK3588 support landed in 1.3.0), so a new release may unlock more of taosmd's models on NPU (see the npu-model-watch memory for the running retest intent). (b) rkllama: is jaylfc/rkllama main behind upstream notpunchnox/rkllama (new upstream commits/PRs worth considering, respecting the per-model-locking history in reference_fork_maintenance), and is the Pi deployment behind our main. (c) qmd: gh api repos/tobi/qmd/tags - a tag newer than v2.5.3 (especially v2.5.4) is the trigger to rebase @jaylfc/qmd onto it and republish per project_qmd_upstream_strategy, then rotate the npm token. When something moved: post a one-line surface to the bus for @taOS-dev (their infra) or note it in STATUS (our forks/packages) and tell Jay; when nothing moved, one line. Output: one short line when nothing changed; otherwise recovered, checked, fixed, skipped.
+## STEP 0a - USAGE GATE (first)
+
+Read the REAL shared account usage, never a local estimate (a local ccusage
+estimate read 16 percent when the true shared figure was 78).
+
+- **Source: `/home/jay/.taos-usage/current.json`**, written every 10 min by
+  `~/.taos-usage/watch.sh` from the system crontab at minutes 6,16,26,36,46,56.
+  Shape `{five_hour:{utilization,resets_at}, seven_day:{...}}`.
+- **NEVER read `/home/jay/.taos-usage.json`** (the old Pi path) and never report
+  its numbers even with a staleness caveat: a stale number quoted with a caveat
+  still anchors a decision. If you want to retire this, name which sense you are
+  falsifying (it is a CONSUMER-side claim; a producer-side fact cannot retire it).
+- **Validity check 1 (mtime):** if `fetched_at` is older than 35 minutes, treat
+  the file as dead and fall back to the direct API.
+- **Validity check 2 (window), ALWAYS:** compare `resets_at` to `date -u`. If
+  `resets_at` is in the PAST, the number describes a window that has ALREADY
+  ROLLED and must not gate anything, no matter how recent the mtime is. File
+  freshness is not window validity.
+- **If you re-publish, gate on `~/.taos-team/usage_publish.sh` STDOUT ONLY. Never
+  re-read `current.json` to confirm it.** That script does not write that file
+  (in 39 lines it has exactly two writes: `printf > /tmp/usage.json` and an `scp`
+  of that file to the Pi path; `current.json` is written by a DIFFERENT
+  component, `~/.taos-usage/watch.sh --once`), so the natural re-read returns
+  the IDENTICAL stale numbers and reads as independent confirmation of them.
+  **This stdout rule is the correctness fix**; the resume-arm offset below is
+  only a latency and legibility property.
+- **Direct API fallback:** OAuth token from the Mac Keychain
+  (`security find-generic-password -s "Claude Code-credentials" -w`, JSON field
+  `.claudeAiOauth.accessToken`; on the Pi `~/.claude/.credentials.json`), then
+  `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer
+  <token>` and header `anthropic-beta: oauth-2025-04-20`. **NEVER print or store
+  the token.** **NEVER use the Pi-local `~/.claude/.credentials.json` as the
+  fallback SOURCE** - it belongs to a different account and reports wrong numbers.
+- The file is a **FLOOR**, not the truth: it lags active burn by up to half an
+  hour. Before CITING a utilization number or gating mid-work, fetch the live
+  figure; use the file only as the cheap first read.
+
+### Bands (Jay, Jun 13; supersedes the old 70-90 finish-stage rule)
+
+- **Below 90:** work normally. Do not finish-stage or hold early. Re-check at
+  stage boundaries but only ACT on the bands below.
+- **~90 = SOFT WIND-DOWN:** stop new work, run the handoff sweep, arm the resume
+  pair, go quiet. All crons become MONITOR-ONLY: publish usage, skip
+  non-essential sweep commits and retriggers, act only if essential.
+- **98 = HARD STOP.**
+- **`seven_day` crossing 90-95 before the weekly pause:** refresh the
+  hand-holding job pack for Jay's weaker coding agents (1-2 years outdated
+  knowledge, no design judgment) so work continues while strong sessions are
+  dark. Format in `docs/agent-jobs/README.md`: absolute-rules README + repo facts
+  they will not know + one fully spelled-out file per job (exact branch, commit
+  message, PR title, allowed files, step-by-step with code, verification, STOP
+  conditions). Contained low-risk jobs only; they PR to master and NEVER merge.
+- **A HOLD SUSPENDS PRODUCING, NEVER RECEIVING.** At EVERY band including the 98
+  hard stop, STEP 4's bus sweep, the heartbeat touch and the ADDRESSED drain
+  STILL RUN. Only the producing steps (reviews, commits, merges, cards, probes)
+  stop. **Do not collapse this pass to STEP 0a because usage is high** - that
+  cost 15 hours of unread bus across the 2026-08-14/16 stop. If the band forbids
+  acting on what the sweep finds, still READ it, record what is owed, and hand it
+  to the next wake. A stop that cannot hear "do not stop" is a disconnection.
+
+### Handoff-doc sweep (mandatory at EVERY wind-down and pause)
+
+Bring the durable docs current before going quiet: (a) `STATUS.md` - Current
+state, In flight, Queued next, Last updated stamp; (b) the `MEMORY.md` dev-status
+index line + the `project_taosmd_dev_status.md` body; (c) `CHANGELOG.md`;
+(d) `docs/research-report.md` per its skill if an experiment landed; (e)
+README/AGENTS only if a user-facing surface or architecture fact changed. Commit
+and push straight to master BEFORE silencing monitors. Never go dark with an
+uncommitted tree or a stale STATUS.md.
+
+### Resume pair protocol (every pause, no exceptions)
+
+**That path is repo-relative and it is the ONLY copy: run it from the taosmd working directory.** Since #354 the script derives its own location from `__file__`, so an out-of-repo copy or symlink under `~/.taos-team/` or `~/.taos-fleet-tools/` is not a convenience, it is a second document that drifts. One did: for weeks those paths resolved to a checkout fifteen commits behind master, so the armed pair ran a pre-#354 script while every path involved still resolved successfully. Resolving a path proves a file is REACHABLE, never that its contents are CURRENT. `tests/test_docs_name_in_repo_helper_path.py` fails if any doc here names an out-of-repo copy.
+
+1. **Delete any still-pending resume/retry crons from earlier pauses first.**
+2. **Create the RETRY one-shot FIRST**, at the RETRY CRON line printed by
+   `python3 scripts/resume_arm_time.py <resets_at>`. Its prompt starts by
+   checking whether the primary already ran (tail of the conversation + the
+   taosmd-progress channel) and exits in one line if so.
+3. **Create the PRIMARY one-shot** at the primary time from **the SAME
+   invocation**, embedding the retry cron id; its first step is to delete the
+   retry now that the wake succeeded.
+   - **Take BOTH cron lines from ONE invocation, never two**, or the pair's
+     ordering rests on the crontab not changing in between.
+   - **Never a constant.** +2, +7 and +11 were each tried and each was wrong in
+     the same way; a flat retry beside a derived primary can fire FIRST, making
+     the safety net the primary at a time derived from nothing. `resume_arm_time.py`
+     is correct for any phase and any cadence and fails loud if the watcher line
+     is absent.
+4. **Alert the humans and the sibling BEFORE going quiet:** one `[WINDDOWN]` line
+   to the general channel tagging @hermes (Jay's assistant, can reach him by
+   phone) and the sibling agent, stating utilization, reset time, and the armed
+   pair. The allowance is SHARED. Treat an incoming `[WINDDOWN]` as your own
+   early warning and check the gate at your next stage boundary.
+5. **LAST, silence the live monitors** (TaskStop the bus watcher and any
+   result/log monitors): every monitor event wakes the session and burns tokens
+   even when ignored, and everything they watch lands durably anyway. The PRIMARY
+   re-arms them on wake per `a2a-session-setup.md` and reads the slept-through
+   backlog.
+
+## STEP 0a-bis - ARM-AT-START RESUME PAIR (every fire, idempotent)
+
+A session that dies at a hard limit never reaches its wind-down, so the pair must
+exist BEFORE that happens. Read the current window's `resets_at`; if no pair is
+armed for THIS `resets_at`, arm one per the protocol above. Delete stale pairs
+from prior windows. Both one-shots auto-delete on firing, so only an unfired
+sibling ever needs cleanup. (Canonical on the taOS side in `AGENT_HANDOFF.md`;
+this is the taOSmd mirror.)
+
+## STEP 0b - RATE-LIMIT RECOVERY CHECK
+
+Look for work a rate limit interrupted since the last audit, and salvage it
+before anything else: background agents that returned only a session-limit
+message; worktrees under `.claude/worktrees/` with uncommitted changes or
+unpushed local commits (`git status --porcelain` + `git log origin/<branch>..HEAD`
+per worktree); pushed branches with no PR; bus handoff lines without completions.
+Test/commit/push/PR each, or redispatch a continuation agent with the original
+spec.
+
+## STEP 1 - DOCS FRESHNESS
+
+`git fetch origin`; `git log --since="40 minutes ago" --oneline origin/master`;
+`gh pr list --state merged --limit 5`. Check `README.md`, `CHANGELOG.md`,
+`AGENTS.md`, `STATUS.md`, `docs/*.md` (esp. `benchmarks.md`), the
+`http_server.py` endpoint docstring table, and `taosmd/skills/taosmd-a2a/`
+against those changes. Fix small drift straight to master; branch + PR for big
+rewrites. Commit rules: plain commits as jaylfc, no AI attribution, no em dashes,
+"taOSmd" in prose (lowercase only for package/CLI/repo refs), never commit IPs or
+credentials.
+
+## STEP 2 - RESEARCH REPORT
+
+If `docs/research-report.md` exists, check it against new results in
+`benchmarks/results` and `benchmarks.md` since its last revision-log entry:
+unrecorded findings, pre-registered experiments whose results have landed (move
+them with their kill criterion quoted verbatim), index rows missing or stale.
+Follow `.claude/skills/research-report/SKILL.md` exactly. If the report does not
+exist yet, note that its first edition is pending and skip.
+
+## STEP 3 - MEMORY
+
+Update the session memory dev-status block and its index line if stale.
+
+## STEP 4 - BUS (ALL CHANNELS)
+
+- **HEARTBEAT FIRST, every fire:** touch `~/.taosmd-agent/heartbeat`.
+- **Then verify the backup itself is alive:** `crontab -l | grep
+  taosmd-agent/backup_watch` must return the `51 */2` line. If it is missing,
+  re-add it with **PATH-PRECISE dedup** (`grep -v "taosmd-agent/backup_watch"`,
+  **never the bare basename** - three leads share this user account and all three
+  scripts are named `backup_watch.py`, and a peer's basename-filtered reinstall
+  silently wiped this entry once), then report the wipe on the agent-rules
+  thread. An independent poller (`51 */2 * * *`, `~/.taosmd-agent/backup_watch.py`,
+  no model tokens) posts ONE alert to agent-rules (6h cooldown) if it finds
+  unhandled traffic while this heartbeat is >90 min stale. If you are reading
+  this after such an alert, read the backup's watermark file for where handling
+  stopped.
+- **Sweep with `~/.taos-team/a2a_catchup.sh`** (since-watermark, filtered, always
+  ends in one summary line). **To find out what a thread IS, use
+  `a2a_catchup.sh --threads`** - metadata only, no bodies, watermark untouched.
+  **Never read a raw page with bodies printed**; that is the burn these tools
+  replace (one such read cost ~8k tokens to learn a thread was irrelevant).
+- **API facts (verified):** the bus has no `channel` field. Channels live in
+  `thread`, so the filter is `?thread=<name>`; **`?channel=` is silently
+  dropped**, which makes a per-channel sweep return the unfiltered global feed
+  once per channel. The timestamp field is **`ts`, NOT `created_at`** - a
+  client-side `created_at` filter gets None, defaults to 0, and returns a
+  confident EMPTY result. Prefer `?since=<float epoch>&limit=200` (measured 199x
+  smaller than `limit=500` for identical coverage). **ALWAYS pass an explicit
+  `limit`:** a BARE read returns only the most recent ~50 and looks IDENTICAL to
+  a complete one (a peer lead silently ate a 37-message window this way).
+  Explicit limits of 50/60/200/500 are all honoured exactly.
+- **Completeness check:** compare the oldest returned id against the last-handled
+  id from the previous fire. If the oldest is beyond it, messages fell off the
+  end and the read is NOT complete - say so, rather than reporting quiet.
+- Scan for anything addressed to or relevant to @taOSmd / @taOSmd-dev (handoffs,
+  decisions, requests, `[WINDDOWN]`s, and replies that landed in the wrong
+  thread). Answer trivial acks; log substantive work to STATUS and report it,
+  never drop it silently. Record docs-relevant decisions. Do not derail a monitor
+  run into long bus threads.
+
+## STEP 5 - REPO (gh)
+
+We auto-merge overnight, so bot reviews can land post-merge and must be swept.
+Check for new or updated PRs, new issues, and BOT reviews + comments
+(coderabbitai, kilo-code-bot, qodo-code-review) on open AND recently-merged PRs.
+Triage genuine findings vs nitpicks; fix small real ones straight to master or a
+follow-up PR, flag the rest in STATUS.
+
+**External-contributor backstop:** contributors not on the bus raise contract
+questions as `contract-question` issues on the PRIVATE repo
+`jaylfc/taos-agent-commons`. @taOS-dev sweeps that repo and relays, so we do not
+poll it properly and do not read the bodies - but their relay is a single point
+of failure, and a channel that silently stops while still looking like a route is
+worse than no route. So glance at the **TITLES ONLY**: `gh issue list --repo
+jaylfc/taos-agent-commons --limit 10 --json number,title,labels`. If a title is
+clearly aimed at taOSmd and no relay has arrived on the bus within a couple of
+hours, assume the relay is down and answer directly on the issue. Temporary
+scaffolding; retires when external contributors can hold a bus identity. Worth
+telling contributors: `jaylfc/taosmd` is PUBLIC with issues enabled and this step
+already sweeps it hourly, so a question opened there reaches us within the hour
+with no relay and no single point of failure.
+
+## STEP 6 - FORK FRESHNESS (at most once a day: only on the 09:xx fire)
+
+Skip on every other hour. **Surface, do NOT action infra ourselves** - the Pi and
+its NPU runtime are @taOS-dev's to deploy; our job is to notice, flag and
+coordinate, not to touch their live host.
+
+- **rknn-llm:** `gh api repos/airockchip/rknn-llm/releases/latest` - flag
+  anything newer than release-v1.3.0 (2026-06-17). NPU model support rides these
+  releases (gemma4 + qwen3.5 RK3588 support landed in 1.3.0), so a new one may
+  unlock more of taosmd's models on NPU.
+- **rkllama:** is `jaylfc/rkllama` main behind upstream `notpunchnox/rkllama`,
+  and is the Pi deployment behind our main? Respect the per-model-locking history.
+- **qmd:** `gh api repos/tobi/qmd/tags` - a tag newer than v2.5.3 (especially
+  v2.5.4) triggers a rebase of `@jaylfc/qmd` onto it and a republish, then rotate
+  the npm token.
+
+Something moved: one-line surface to the bus for @taOS-dev (their infra) or a
+STATUS note (our forks/packages), and tell Jay. Nothing moved: one line.
+
+---
+
+**Output:** one short line when nothing changed; otherwise recovered, checked,
+fixed, skipped.
