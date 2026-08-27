@@ -1,0 +1,2 @@
+### Fixed
+- `scripts/check_doc_gate.py` now treats `T` (typechange) as a structural change that triggers doc-gate rules, closing the bypass where a regular file becoming a symlink or submodule could bypass guard rules. Also fixed `_is_test_path` to correctly detect root-level `__tests__/` paths and added `.spec.js` to test file extensions. This prevents false positives from typechanges while properly handling modifications and maintaining consistent rule application.
