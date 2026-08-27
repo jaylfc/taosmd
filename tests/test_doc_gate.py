@@ -377,6 +377,23 @@ class TestEvaluateRules:
         changed = [("A", "taosmd/retrieval.py"), ("M", "changelog.d/tsk-xxx-add-thing.md")]
         assert evaluate_rules(changed, [], cfg, repo) == []
 
+    def test_typechange_status_on_guarded_path_trips_rules(self, tmp_path):
+        # RED: a typechange (T) on taosmd/http_server.py must trip both changelog and a2a-handlers
+        repo = _init_repo(tmp_path)
+        cfg = _load_cfg(repo)
+        # This test will FAIL on unpatched master (before T is added to structural paths)
+        # and PASS after the fix.
+        fails = evaluate_rules([("T", "taosmd/http_server.py")], [], cfg, repo)
+        assert any("changelog" in f for f in fails)
+        assert any("a2a-handlers" in f for f in fails)
+
+    def test_typechange_satisfied_by_doc(self, tmp_path):
+        # GREEN: a typechange (T) on taosmd/http_server.py is satisfied if doc is touched
+        repo = _init_repo(tmp_path)
+        cfg = _load_cfg(repo)
+        changed = [("T", "taosmd/http_server.py"), ("M", "taosmd/docs/a2a-comms.md"), ("M", "changelog.d/tsk-xxx-add-thing.md")]
+        assert evaluate_rules(changed, [], cfg, repo) == []
+
 
 # ----------------------------------------------------------------------
 # end-to-end via main(): invariants (Layer A) and diff-gate --staged (Layer B)

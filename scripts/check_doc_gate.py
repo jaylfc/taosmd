@@ -256,7 +256,7 @@ def evaluate_rules(
     all_paths = [path for _status, path in changed_status]
     structural_paths_default = [
         path for status, path in changed_status
-        if status in ("A", "D") and not _is_test_path(path)
+        if status in ("A", "D", "T") and not _is_test_path(path)
     ]
 
     trailer_present = any(
@@ -278,7 +278,7 @@ def evaluate_rules(
         if on_modify:
             structural_paths = [
                 path for status, path in changed_status
-                if status in ("A", "D", "M") and not _is_test_path(path)
+                if status in ("A", "D", "M", "T") and not _is_test_path(path)
             ]
         else:
             structural_paths = structural_paths_default
