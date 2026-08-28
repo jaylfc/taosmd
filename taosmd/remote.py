@@ -375,6 +375,66 @@ class RemoteClient:
         ttl_days = (_time.time() - older_than_ts) / 86400
         return await self._run("POST", "/a2a/admin/prune-receipts", {"ttl_days": ttl_days})
 
+    async def a2a_create_thread(
+        self,
+        thread: str,
+        participants: list[str],
+        agent: str,
+        **_opts,
+    ) -> dict:
+        """POST /a2a/threads: create a thread with initial participants.
+
+        The caller (``agent``) is added as an owner; ``participants`` are
+        added as members. Returns ``{"thread", "created", "active_members"}``.
+        """
+        payload = {"thread": thread, "participants": participants, "agent": agent}
+        resp = await self._run("POST", "/a2a/threads", payload)
+        return resp
+
+    async def a2a_list_members(
+        self,
+        thread: str,
+        **_opts,
+    ) -> list[dict]:
+        """GET /a2a/threads/{thread}/members: list active members of a thread."""
+        resp = await self._run("GET", f"/a2a/threads/{thread}/members")
+        return resp.get("members", [])
+
+    async def a2a_add_member(
+        self,
+        thread: str,
+        principal_id: str,
+        agent: str,
+        **_opts,
+    ) -> dict:
+        """POST /a2a/threads/{thread}/members: add a member to a thread.
+
+        Caller must be an owner. Returns ``{"thread", "principal_id", "added"}``.
+        """
+        payload = {"principal_id": principal_id, "agent": agent}
+        resp = await self._run(
+            "POST", f"/a2a/threads/{thread}/members", payload,
+        )
+        return resp
+
+    async def a2a_remove_member(
+        self,
+        thread: str,
+        principal_id: str,
+        agent: str,
+        **_opts,
+    ) -> dict:
+        """DELETE /a2a/threads/{thread}/members/{principal}: remove a member.
+
+        Caller must be an owner. Cannot remove the last owner.
+        Returns ``{"thread", "principal_id", "removed"}``.
+        """
+        body = {"agent": agent}
+        resp = await self._run(
+            "DELETE", f"/a2a/threads/{thread}/members/{principal_id}", body,
+        )
+        return resp
+
     async def stats(self, *, agent: str, **_opts) -> dict:
         """Best-effort stats for ``agent`` on the remote server.
 

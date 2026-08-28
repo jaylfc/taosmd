@@ -110,6 +110,10 @@ Endpoints
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream); ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400
 ``GET  /a2a/threads``      ``?principal=``                  -> ``{"threads": [...]}`` thread list for the principal, ordered by latest activity desc; each entry has ``thread``, ``kind``, ``participants``, ``last_message: {id, ts, from, body_preview}`` (see notes below)
 ``GET  /a2a/threads/{thread}/messages`` ``?before=&after=&limit=`` -> ``{"thread", "messages": [...]}`` cursor-paginated message envelope, oldest-first
+``POST /a2a/threads``                 ``{"thread", "participants", "agent"}`` -> ``{"thread", "created", "active_members"}`` create a thread with initial participants (caller becomes owner)
+``GET  /a2a/threads/{thread}/members``           -> ``{"members": [...]}`` active members of a thread (owners + members); empty for open/legacy threads
+``POST /a2a/threads/{thread}/members`` ``{"principal_id", "agent"}`` -> ``{"thread", "principal_id", "added"}`` add a member (caller must be owner)
+``DELETE /a2a/threads/{thread}/members/{principal}`` ``{"agent"}`` -> ``{"thread", "principal_id", "removed"}`` remove a member (caller must be owner; last owner cannot be removed)
 ``GET  /a2a/channels``                                     -> ``{"channels": [...]}``
 ``GET  /a2a/members``      ``?channel=<name>``             -> ``{"members": [...]}``
 ``POST /tasks``            ``{"title", "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [...], "created_by"}`` -> task object
@@ -1084,18 +1088,44 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
+                elif method == "POST" and path == "/a2a/threads":
+                    self._handle_a2a_create_thread()
                 elif method == "GET" and path == "/a2a/threads":
                     self._handle_a2a_threads(query)
                 elif method == "GET" and path.startswith("/a2a/threads/"):
                     rest = path[len("/a2a/threads/"):]
-                    if rest.endswith("/messages"):
-                        thread = rest[: -len("/messages")]
+                    if rest.endswith("/members"):
+                        thread = rest[: -len("/members")]
+                        if not thread:
+                            self._send_json(404, {"error": "thread name required"})
+                        else:
+                            self._handle_a2a_list_members(thread, query)
                     else:
-                        thread = rest
+                        if rest.endswith("/messages"):
+                            thread = rest[: -len("/messages")]
+                        else:
+                            thread = rest
+                        if not thread:
+                            self._send_json(404, {"error": "thread name required"})
+                        else:
+                            self._handle_a2a_thread_messages(thread, query)
+                elif method == "POST" and path.startswith("/a2a/threads/") and path.endswith("/members"):
+                    rest = path[len("/a2a/threads/"):]
+                    thread = rest[: -len("/members")]
                     if not thread:
                         self._send_json(404, {"error": "thread name required"})
                     else:
-                        self._handle_a2a_thread_messages(thread, query)
+                        self._handle_a2a_add_member(thread)
+                elif method == "DELETE" and path.startswith("/a2a/threads/") and "/members/" in path:
+                    rest = path[len("/a2a/threads/"):]
+                    sep = "/members/"
+                    idx = rest.index(sep)
+                    thread = rest[:idx]
+                    principal = rest[idx + len(sep):]
+                    if not thread or not principal:
+                        self._send_json(404, {"error": "thread name and principal required"})
+                    else:
+                        self._handle_a2a_remove_member(thread, principal)
                 # ----- A2A receipt endpoints --------------------------------
                 elif method == "POST" and path == "/a2a/receipts":
                     self._handle_a2a_receipts_delivered()
@@ -1905,6 +1935,71 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 service.a2a_thread_messages(
                     thread=thread, before=before, after=after,
                     limit=limit_i, data_dir=data_dir,
+                )
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_create_thread(self) -> None:
+            """POST /a2a/threads: create a thread with initial participants."""
+            body = self._read_json_body()
+            thread = body.get("thread")
+            participants = body.get("participants")
+            agent = body.get("agent")
+            if not isinstance(thread, str) or not thread:
+                raise _BadRequest("'thread' (non-empty string) is required")
+            if not isinstance(participants, list) or not participants:
+                raise _BadRequest("'participants' (non-empty list) is required")
+            if not isinstance(agent, str) or not agent:
+                raise _BadRequest("'agent' (non-empty string) is required")
+            result = runner.run(
+                service.a2a_create_thread(
+                    thread=thread,
+                    participants=participants,
+                    agent=agent,
+                    data_dir=data_dir,
+                )
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_list_members(self, thread: str, qs: dict) -> None:
+            """GET /a2a/threads/{thread}/members: list active members."""
+            _validate_a2a_params(qs, frozenset())
+            members = runner.run(
+                service.a2a_list_members(thread=thread, data_dir=data_dir)
+            )
+            self._send_json(200, {"members": members})
+
+        def _handle_a2a_add_member(self, thread: str) -> None:
+            """POST /a2a/threads/{thread}/members: add a member to a thread."""
+            body = self._read_json_body()
+            principal_id = body.get("principal_id")
+            agent = body.get("agent")
+            if not isinstance(principal_id, str) or not principal_id:
+                raise _BadRequest("'principal_id' (non-empty string) is required")
+            if not isinstance(agent, str) or not agent:
+                raise _BadRequest("'agent' (non-empty string) is required")
+            result = runner.run(
+                service.a2a_add_member(
+                    thread=thread,
+                    principal_id=principal_id,
+                    agent=agent,
+                    data_dir=data_dir,
+                )
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_remove_member(self, thread: str, principal: str) -> None:
+            """DELETE /a2a/threads/{thread}/members/{principal}: remove a member."""
+            body = self._read_json_body()
+            agent = body.get("agent")
+            if not isinstance(agent, str) or not agent:
+                raise _BadRequest("'agent' (non-empty string) is required")
+            result = runner.run(
+                service.a2a_remove_member(
+                    thread=thread,
+                    principal_id=principal,
+                    agent=agent,
+                    data_dir=data_dir,
                 )
             )
             self._send_json(200, result)
