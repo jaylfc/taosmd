@@ -1216,7 +1216,13 @@ async def a2a_inbox(
     ``alarm``, ``ack``, ``receipt``, and ``digest`` are excluded; pass
     ``include_kinds`` to widen the set.  Results are oldest-first.  Reading
     does NOT advance the cursor.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
     """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_inbox(consumer, limit=limit, include_kinds=include_kinds)
     if not isinstance(consumer, str) or not consumer:
         raise ValueError("consumer must be a non-empty string")
     stores = await _api._ensure_stores(data_dir)
@@ -1275,6 +1281,8 @@ async def a2a_inbox(
             msg["refs"] = data["refs"]
         if "blocks" in data:
             msg["blocks"] = data["blocks"]
+        if "acked_by" in data:
+            msg["acked_by"] = data["acked_by"]
         result.append(msg)
 
     result.sort(key=lambda m: (m["ts"], m["id"]))
@@ -1292,7 +1300,13 @@ async def a2a_inbox_advance(
 
     The cursor is persisted in the archive store so it survives restarts
     and is visible to every process sharing the same data dir.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
     """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_inbox_advance(consumer, to_id)
     if not isinstance(consumer, str) or not consumer:
         raise ValueError("consumer must be a non-empty string")
     if not isinstance(to_id, int) or to_id < 0:
@@ -1301,6 +1315,31 @@ async def a2a_inbox_advance(
     archive = stores["archive"]
     await archive.set_a2a_inbox_cursor(consumer, to_id)
     return {"ok": True}
+
+
+async def a2a_inbox_unhandled(
+    consumer: str,
+    *,
+    limit: int = 50,
+    data_dir=None,
+) -> list[dict]:
+    """Return unhandled messages for ``consumer``: addressed messages past the
+    consumer's cursor that the consumer has NOT yet acknowledged.
+
+    This is the composed "unhandled for X" query: it combines the server-side
+    cursor from :func:`a2a_inbox` with the ack state from :func:`a2a_ack`
+    so callers see only the messages that still need attention.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_inbox_unhandled(consumer, limit=limit)
+    if not isinstance(consumer, str) or not consumer:
+        raise ValueError("consumer must be a non-empty string")
+    msgs = await a2a_inbox(consumer, limit=limit, data_dir=data_dir)
+    return [m for m in msgs if consumer not in (m.get("acked_by") or [])]
 
 
 async def a2a_record_delivered(
@@ -1419,7 +1458,13 @@ async def a2a_ack(message_id: int, by: str, *, data_dir=None) -> dict:
     acks) is deferred to slice 2c, which needs 2a's server-side cursor.
 
     Returns ``{"id", "acked_by", "ok"}``.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
     """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_ack(message_id, by)
     if not isinstance(by, str) or not by:
         raise ValueError("by must be a non-empty string")
     stores = await _api._ensure_stores(data_dir)
@@ -1847,7 +1892,7 @@ __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "
            "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
            "a2a_members", "a2a_threads", "a2a_thread_messages",
            "a2a_mentions_feed", "a2a_migrate_kinds", "a2a_alarms_clear", "can_read",
-           "a2a_inbox", "a2a_inbox_advance",
+           "a2a_inbox", "a2a_inbox_advance", "a2a_inbox_unhandled",
            "task_create", "task_list", "task_ready", "task_prime",
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",

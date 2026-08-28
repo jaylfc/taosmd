@@ -459,6 +459,10 @@ a2a_members(channel="CHANNEL")
 | `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
+| `GET`  | `/a2a/inbox` | `?consumer=&limit=&include_kinds=` | `{"messages": [...]}`; `consumer` is derived from the verified token `sub` when registry auth is configured, otherwise required as a query parameter |
+| `POST` | `/a2a/inbox/advance` | body JSON `{"to_id": int}` | `{"ok": true}`; consumer derived from verified token `sub` |
+| `POST` | `/a2a/ack` | body JSON `{"message_id": int}` | `{"id", "acked_by", "ok"}`; `by` derived from verified token `sub` |
+| `GET`  | `/a2a/inbox/unhandled` | `?consumer=&limit=` | `{"messages": [...]}`; composed query: messages past cursor minus acks |
 | `POST` | `/a2a/alarms/{key}/clear` | path-encoded alarm key | `{"cleared": true, "key": str}` |
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
