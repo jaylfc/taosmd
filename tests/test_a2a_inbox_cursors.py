@@ -53,7 +53,15 @@ def _setup_stores(data_dir):
 
 
 def _seed_inbox_fixture(data_dir):
-    """Create 20 messages: 4 addressed to alice, rest not addressed or excluded."""
+    """Create 20 messages: 8 addressed to alice, of which 4 survive the default
+    kind filter.
+
+    Messages 5 to 8 mention ``@alice`` on purpose.  They are addressed by every
+    other rule the query applies, so the ONLY thing that can keep them out of
+    the result is the default kind exclusion.  If that filter is removed the
+    fixture yields 8 instead of 4, which is what makes gate (a) discriminate
+    the kind half rather than assert it vacuously.
+    """
     dd = str(data_dir)
     consumer = "alice"
 
@@ -63,10 +71,10 @@ def _seed_inbox_fixture(data_dir):
         ("alice", "self post", "general", None, "chat"),          # 2: self-post -> EXCLUDED
         ("bob", "in your thread", "alice", None, "chat"),         # 3: owned thread -> ADDRESSED
         ("bob", "for alice", "general", "alice", "chat"),         # 4: direct recipient -> ADDRESSED
-        ("bob", "alarm!", "general", None, "alarm"),              # 5: alarm-kind -> EXCLUDED
-        ("bob", "ack this", "general", None, "ack"),              # 6: ack-kind -> EXCLUDED
-        ("bob", "receipt", "general", None, "receipt"),           # 7: receipt-kind -> EXCLUDED
-        ("bob", "digest", "general", None, "digest"),             # 8: digest-kind -> EXCLUDED
+        ("bob", "@alice alarm!", "general", None, "alarm"),       # 5: addressed, alarm-kind -> EXCLUDED
+        ("bob", "@alice ack this", "general", None, "ack"),       # 6: addressed, ack-kind -> EXCLUDED
+        ("bob", "@alice receipt", "general", None, "receipt"),    # 7: addressed, receipt-kind -> EXCLUDED
+        ("bob", "@alice digest", "general", None, "digest"),      # 8: addressed, digest-kind -> EXCLUDED
         ("bob", "random chat", "general", None, "chat"),          # 9: not addressed
         ("bob", "another chat", "general", None, "chat"),         # 10: not addressed
         ("charlie", "hey @bob", "general", None, "chat"),         # 11: mentions bob, not alice
@@ -95,8 +103,9 @@ def _seed_inbox_fixture(data_dir):
 # ---------------------------------------------------------------------------
 
 def test_a2a_inbox_excludes_self_and_alarm_kind(inbox_data_dir):
-    """Exactly 4 of 20 messages are addressed to alice; self-posts and alarm
-    kinds are excluded by default."""
+    """8 of 20 messages are addressed to alice and exactly 4 are returned;
+    self-posts are excluded, and so are the alarm, ack, receipt and digest
+    kinds, which is the only reason messages 5 to 8 are absent."""
     _setup_stores(inbox_data_dir)
     dd = str(inbox_data_dir)
     _seed_inbox_fixture(inbox_data_dir)
@@ -118,6 +127,32 @@ def test_a2a_inbox_excludes_self_and_alarm_kind(inbox_data_dir):
     assert "ack" not in kinds
     assert "receipt" not in kinds
     assert "digest" not in kinds
+
+    # The four excluded-kind messages are addressed to alice by mention, so
+    # their absence is attributable to the kind filter and nothing else.
+    assert "@alice alarm!" not in bodies
+    assert "@alice ack this" not in bodies
+    assert "@alice receipt" not in bodies
+    assert "@alice digest" not in bodies
+
+
+def test_a2a_inbox_include_kinds_widens_the_default_exclusion(inbox_data_dir):
+    """``include_kinds`` re-admits a kind the default excludes, and only that
+    kind."""
+    _setup_stores(inbox_data_dir)
+    dd = str(inbox_data_dir)
+    _seed_inbox_fixture(inbox_data_dir)
+
+    widened = asyncio.run(
+        service.a2a_inbox("alice", limit=50, include_kinds=["alarm"], data_dir=dd)
+    )
+
+    assert len(widened) == 5
+    bodies = {m["body"] for m in widened}
+    assert "@alice alarm!" in bodies
+    assert "@alice ack this" not in bodies
+    assert "@alice receipt" not in bodies
+    assert "@alice digest" not in bodies
 
 
 # ---------------------------------------------------------------------------
