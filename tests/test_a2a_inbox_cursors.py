@@ -53,7 +53,8 @@ def _setup_stores(data_dir):
 
 
 def _seed_inbox_fixture(data_dir):
-    """Create 20 messages: 4 addressed to alice, rest not addressed or excluded.
+    """Create 20 messages: 8 addressed to alice, of which 4 survive the default
+    kind filter.
 
     Messages 5 to 8 mention ``@alice`` on purpose.  They are addressed by every
     other rule the query applies, so the ONLY thing that can keep them out of
@@ -102,8 +103,9 @@ def _seed_inbox_fixture(data_dir):
 # ---------------------------------------------------------------------------
 
 def test_a2a_inbox_excludes_self_and_alarm_kind(inbox_data_dir):
-    """Exactly 4 of 20 messages are addressed to alice; self-posts and alarm
-    kinds are excluded by default."""
+    """8 of 20 messages are addressed to alice and exactly 4 are returned;
+    self-posts are excluded, and so are the alarm, ack, receipt and digest
+    kinds, which is the only reason messages 5 to 8 are absent."""
     _setup_stores(inbox_data_dir)
     dd = str(inbox_data_dir)
     _seed_inbox_fixture(inbox_data_dir)
