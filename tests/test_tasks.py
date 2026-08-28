@@ -285,6 +285,75 @@ def test_remove_edge_already_removed(data_dir):
 
 
 # ---------------------------------------------------------------------------
+# list_edges
+# ---------------------------------------------------------------------------
+
+
+def test_list_edges_empty(data_dir):
+    """No edges -> empty list."""
+    result = run(tasks_mod.list_edges(data_dir=data_dir))
+    assert result == []
+
+
+def test_list_edges_returns_active_edges(data_dir):
+    """list_edges returns active (non-soft-deleted) edges."""
+    a = run(tasks_mod.create_task("A", created_by="x", data_dir=data_dir))
+    b = run(tasks_mod.create_task("B", created_by="x", data_dir=data_dir))
+    run(tasks_mod.add_edge(a["id"], b["id"], "blocks", "x", data_dir=data_dir))
+    result = run(tasks_mod.list_edges(data_dir=data_dir))
+    assert len(result) == 1
+    assert result[0]["from_id"] == a["id"]
+    assert result[0]["to_id"] == b["id"]
+    assert result[0]["type"] == "blocks"
+
+
+def test_list_edges_type_filter(data_dir):
+    """list_edges with edge_type filter returns only matching edges."""
+    a = run(tasks_mod.create_task("A", created_by="x", data_dir=data_dir))
+    b = run(tasks_mod.create_task("B", created_by="x", data_dir=data_dir))
+    c = run(tasks_mod.create_task("C", created_by="x", data_dir=data_dir))
+    run(tasks_mod.add_edge(a["id"], b["id"], "blocks", "x", data_dir=data_dir))
+    run(tasks_mod.add_edge(a["id"], c["id"], "relates", "x", data_dir=data_dir))
+    result = run(tasks_mod.list_edges(edge_type="blocks", data_dir=data_dir))
+    assert len(result) == 1
+    assert result[0]["type"] == "blocks"
+
+
+def test_list_edges_invalid_type_raises(data_dir):
+    """list_edges rejects an invalid edge_type with ValueError."""
+    with pytest.raises(ValueError, match="edge_type"):
+        run(tasks_mod.list_edges(edge_type="bogus", data_dir=data_dir))
+
+
+def test_list_edges_excludes_removed(data_dir):
+    """list_edges does not return soft-removed edges."""
+    a = run(tasks_mod.create_task("A", created_by="x", data_dir=data_dir))
+    b = run(tasks_mod.create_task("B", created_by="x", data_dir=data_dir))
+    run(tasks_mod.add_edge(a["id"], b["id"], "blocks", "x", data_dir=data_dir))
+    run(tasks_mod.remove_edge(a["id"], b["id"], "blocks", data_dir=data_dir))
+    result = run(tasks_mod.list_edges(data_dir=data_dir))
+    assert result == []
+
+
+def test_list_edges_project_scoping(data_dir):
+    """list_edges with project returns only edges whose both endpoints are
+    in that project."""
+    a_a = run(tasks_mod.create_task("A-a", created_by="x", project="proj-a", data_dir=data_dir))
+    a_b = run(tasks_mod.create_task("A-b", created_by="x", project="proj-a", data_dir=data_dir))
+    b_a = run(tasks_mod.create_task("B-a", created_by="x", project="proj-b", data_dir=data_dir))
+    b_b = run(tasks_mod.create_task("B-b", created_by="x", project="proj-b", data_dir=data_dir))
+    run(tasks_mod.add_edge(a_a["id"], a_b["id"], "blocks", "x", data_dir=data_dir))
+    run(tasks_mod.add_edge(b_a["id"], b_b["id"], "blocks", "x", data_dir=data_dir))
+
+    proj_a_edges = run(tasks_mod.list_edges(project="proj-a", data_dir=data_dir))
+    returned = {e["from_id"] for e in proj_a_edges} | {e["to_id"] for e in proj_a_edges}
+    assert a_a["id"] in returned
+    assert a_b["id"] in returned
+    assert b_a["id"] not in returned
+    assert b_b["id"] not in returned
+
+
+# ---------------------------------------------------------------------------
 # depends_on in create_task
 # ---------------------------------------------------------------------------
 

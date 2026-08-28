@@ -672,3 +672,105 @@ def test_task_update_scoped_token_same_project_succeeds(project_server):
         {"status": "in_progress", "assignee": "agent-1"}, token=tok)
     assert status == 200, body
     assert body["status"] == "in_progress"
+
+
+# ---------------------------------------------------------------------------
+# Happy-path tests for GET /tasks/edges
+# ---------------------------------------------------------------------------
+
+
+def test_list_edges_tokenless_returns_empty_when_no_edges(project_server):
+    """Tokenless GET /tasks/edges returns an empty list when no edges exist."""
+    status, body = _get_json(project_server, "/tasks/edges")
+    assert status == 200, body
+    assert body["edges"] == []
+
+
+def test_list_edges_tokenless_returns_edges(project_server):
+    """Tokenless GET /tasks/edges returns active edges."""
+    t1 = _create_task(project_server, "Source", project="proj-a")
+    t2 = _create_task(project_server, "Target", project="proj-a")
+    _post_json(project_server, f"/tasks/{t1}/edges",
+               {"to_id": t2, "type": "blocks", "created_by": "setup"})
+    status, body = _get_json(project_server, "/tasks/edges")
+    assert status == 200, body
+    assert len(body["edges"]) == 1
+    assert body["edges"][0]["from_id"] == t1
+    assert body["edges"][0]["to_id"] == t2
+
+
+def test_list_edges_with_type_filter(project_server):
+    """GET /tasks/edges?type=blocks filters by edge type."""
+    t1 = _create_task(project_server, "A", project="proj-a")
+    t2 = _create_task(project_server, "B", project="proj-a")
+    t3 = _create_task(project_server, "C", project="proj-a")
+    _post_json(project_server, f"/tasks/{t1}/edges",
+               {"to_id": t2, "type": "blocks", "created_by": "setup"})
+    _post_json(project_server, f"/tasks/{t1}/edges",
+               {"to_id": t3, "type": "relates", "created_by": "setup"})
+    status, body = _get_json(project_server, "/tasks/edges?type=blocks")
+    assert status == 200, body
+    assert len(body["edges"]) == 1
+    assert body["edges"][0]["type"] == "blocks"
+
+
+# ---------------------------------------------------------------------------
+# RED-FIRST tests for GET /tasks/edges security and limit validation
+# ---------------------------------------------------------------------------
+
+
+def test_list_edges_positive_control_cross_project_post_is_403(project_server):
+    """A proj-a token cannot add an edge between two proj-b tasks.
+
+    This is the positive control: it must pass before and after the list-edges
+    scoping fix, proving the registry verifier and grants gate are active.
+    """
+    t1 = _create_task(project_server, "Foreign blocker", project="proj-b")
+    t2 = _create_task(project_server, "Foreign blocked", project="proj-b")
+    tok = _make_token("agent-1", project_id="proj-a",
+                      iss=registry_auth.REGISTRY_ISS)
+    status, _ = _post_json(
+        project_server, f"/tasks/{t1}/edges",
+        {"to_id": t2, "type": "blocks", "created_by": "agent-1"},
+        token=tok)
+    assert status == 403
+    assert t2 in _ready_ids(project_server)
+
+
+def test_list_edges_cross_project_leak(project_server):
+    """A proj-a token reading /tasks/edges must not see proj-b's edges."""
+    t_a1 = _create_task(project_server, "Proj-a source", project="proj-a")
+    t_a2 = _create_task(project_server, "Proj-a target", project="proj-a")
+    t_b1 = _create_task(project_server, "Proj-b source", project="proj-b")
+    t_b2 = _create_task(project_server, "Proj-b target", project="proj-b")
+    _post_json(project_server, f"/tasks/{t_a1}/edges",
+               {"to_id": t_a2, "type": "blocks", "created_by": "setup"})
+    _post_json(project_server, f"/tasks/{t_b1}/edges",
+               {"to_id": t_b2, "type": "blocks", "created_by": "setup"})
+    tok = _make_token("agent-1", project_id="proj-a",
+                      iss=registry_auth.REGISTRY_ISS)
+    status, body = _get_json(project_server, "/tasks/edges", token=tok)
+    assert status == 200, body
+    returned_ids = {e["from_id"] for e in body["edges"]} | {e["to_id"] for e in body["edges"]}
+    assert t_b1 not in returned_ids
+    assert t_b2 not in returned_ids
+    assert t_a1 in returned_ids
+    assert t_a2 in returned_ids
+
+
+def test_list_edges_negative_limit_is_rejected(project_server):
+    """GET /tasks/edges?limit=-1 must not return the full table."""
+    tasks = [_create_task(project_server, f"T{i}", project="proj-a") for i in range(3)]
+    for i in range(2):
+        _post_json(project_server, f"/tasks/{tasks[i]}/edges",
+                   {"to_id": tasks[i + 1], "type": "blocks", "created_by": "setup"})
+    status, body = _get_json(project_server, "/tasks/edges?limit=-1")
+    assert status == 400, body
+    assert body.get("edges", []) == []
+
+
+def test_list_edges_invalid_type_returns_400(project_server):
+    """GET /tasks/edges?type=bogus returns 400."""
+    status, body = _get_json(project_server, "/tasks/edges?type=bogus")
+    assert status == 400, body
+    assert "edge_type" in body.get("error", "").lower() or "type" in body.get("error", "").lower()

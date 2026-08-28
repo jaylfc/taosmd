@@ -436,6 +436,33 @@ class RemoteClient:
         resp = await self._run("GET", "/tasks", params=params)
         return resp.get("tasks", [])
 
+    async def task_list_edges(
+        self,
+        *,
+        from_id: str | None = None,
+        to_id: str | None = None,
+        edge_type: str | None = None,
+        limit: int = 500,
+        project: str | None = None,
+        **_opts,
+    ) -> list[dict]:
+        """GET /tasks/edges: return task edges from the remote server.
+
+        ``project`` is forwarded so project-scoped edges work over the remote
+        path, matching :meth:`task_list`.
+        """
+        params: dict = {"limit": limit}
+        if from_id is not None:
+            params["from_id"] = from_id
+        if to_id is not None:
+            params["to_id"] = to_id
+        if edge_type is not None:
+            params["type"] = edge_type
+        if project is not None:
+            params["project"] = project
+        resp = await self._run("GET", "/tasks/edges", params=params)
+        return resp.get("edges", [])
+
     async def task_ready(
         self,
         *,

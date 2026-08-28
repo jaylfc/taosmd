@@ -148,13 +148,14 @@ CAPABILITY_PROBES: tuple[CapabilityProbe, ...] = (
         symbols=(
             "task_create",
             "task_list",
+            "task_list_edges",
             "task_ready",
             "task_prime",
             "task_update",
             "task_add_edge",
             "task_remove_edge",
         ),
-        route_markers=('"/tasks"', '"/tasks/ready"', '"/tasks/prime"'),
+        route_markers=('"/tasks"', '"/tasks/edges"', '"/tasks/ready"', '"/tasks/prime"'),
     ),
     CapabilityProbe(
         # Time-travel over the temporal KG: ?as_of= on GET /graph, plus the
