@@ -342,3 +342,113 @@ def test_summarize_retrieval_delta_reports_identity(runner):
     assert summary["identical"] == 1
     assert summary["identical_pct"] == 50.0
     assert runner.summarize_retrieval_delta([{"correct": True}]) is None
+
+
+# ---------------------------------------------------------------------------
+# 8. Operator-error handling: a bad input must fail loudly and early, never
+#    at import time and never after a full run has already been spent.
+# ---------------------------------------------------------------------------
+
+def test_malformed_num_ctx_does_not_kill_the_import(monkeypatch, capsys):
+    """A junk TAOSMD_LME_NUM_CTX must degrade to the default, not raise.
+
+    The value is read at module scope, so a bare int() turned a typo into an
+    ImportError with no mention of the variable that caused it.
+    """
+    monkeypatch.setenv("TAOSMD_LME_NUM_CTX", "banana")
+
+    mod = _load_runner()
+
+    assert mod.NUM_CTX == 0
+    # The warning has to name the offending value, or the operator is left
+    # guessing which of the environment's settings was ignored.
+    assert "banana" in capsys.readouterr().err
+
+
+def test_empty_num_ctx_is_treated_as_unset_and_stays_quiet(monkeypatch, capsys):
+    """`export VAR=` means unset, not malformed, so it must not warn.
+
+    Both are worth separating: a warning on every empty value is noise an
+    operator learns to ignore, which is how the one that matters gets missed.
+    """
+    monkeypatch.setenv("TAOSMD_LME_NUM_CTX", "")
+
+    assert _load_runner().NUM_CTX == 0
+    assert "TAOSMD_LME_NUM_CTX" not in capsys.readouterr().err
+
+
+def test_well_formed_num_ctx_is_still_honoured(monkeypatch):
+    """Positive control: the fallback must not swallow a legitimate value."""
+    monkeypatch.setenv("TAOSMD_LME_NUM_CTX", "8192")
+
+    assert _load_runner().NUM_CTX == 8192
+
+
+def test_delta_on_the_legacy_path_is_refused(runner, monkeypatch):
+    """legacy + --report-retrieval-delta compares legacy against legacy.
+
+    That is identical by construction, so it would report a 100% anchor match
+    while measuring nothing at all. Refusing is the only honest answer.
+    """
+    opened = []
+    monkeypatch.setattr(
+        runner, "load_dataset",
+        lambda: opened.append("loaded") or [],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(runner.run_benchmark(args=_args(
+            graph_expansion=0,
+            retrieval_path="legacy",
+            report_retrieval_delta=True,
+        )))
+
+    assert exc.value.code != 0
+    assert opened == [], "the refusal must land before any work is done"
+
+
+def test_delta_on_the_wired_path_is_not_refused(runner, monkeypatch, tmp_path):
+    """Positive control: the refusal is specific to the legacy combination."""
+    monkeypatch.setattr(runner, "load_dataset", lambda: [])
+
+    asyncio.run(runner.run_benchmark(args=_args(
+        graph_expansion=0,
+        report_retrieval_delta=True,
+        out=str(tmp_path / "results.json"),
+    )))
+
+
+def test_missing_out_directory_is_created_before_the_run(runner, monkeypatch, tmp_path):
+    """--out into a directory that does not exist yet must be made to work."""
+    target = tmp_path / "deep" / "nested" / "results.json"
+    monkeypatch.setattr(runner, "load_dataset", lambda: [])
+
+    asyncio.run(runner.run_benchmark(args=_args(graph_expansion=0, out=str(target))))
+
+    # Created up front, so it is already there even though this run answered
+    # no questions and therefore never reached the write.
+    assert target.parent.is_dir()
+
+
+def test_unwritable_out_path_is_refused_before_the_run(runner, monkeypatch, tmp_path):
+    """An --out that can never be written must cost zero questions.
+
+    The parent component is a regular file, so the directory cannot be created
+    at all. That shape is deterministic and, unlike a chmod, it still fails
+    when the suite happens to run as root.
+    """
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("regular file")
+    target = blocker / "results.json"
+
+    opened = []
+    monkeypatch.setattr(
+        runner, "load_dataset",
+        lambda: opened.append("loaded") or [],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        asyncio.run(runner.run_benchmark(args=_args(graph_expansion=0, out=str(target))))
+
+    assert exc.value.code != 0
+    assert opened == [], "the run must not answer a single question first"

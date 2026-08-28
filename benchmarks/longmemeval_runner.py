@@ -75,7 +75,28 @@ SAMPLE_SEED = os.environ.get("TAOSMD_SAMPLE_SEED")
 # context is roughly 4500-5000 tokens, so Ollama's 4096 default already
 # truncates some prompts; raising this changes what is measured, which is why it
 # is opt-in rather than silently bumped here.
-NUM_CTX = int(os.environ.get("TAOSMD_LME_NUM_CTX", "0"))
+def _num_ctx_from_env(raw: str | None) -> int:
+    """Parse TAOSMD_LME_NUM_CTX, falling back to the default on a bad value.
+
+    A malformed or empty value used to raise ValueError at module import, which
+    killed the runner before it could say what was wrong. Falling back keeps the
+    historical default (num_ctx unset), and the warning names the offending
+    value so a mis-set window is never mistaken for a deliberate one.
+    """
+    if not raw:
+        return 0
+    try:
+        return int(raw)
+    except ValueError:
+        print(
+            f"  WARNING: TAOSMD_LME_NUM_CTX={raw!r} is not an integer; falling "
+            "back to the Ollama default (num_ctx unset).",
+            file=sys.stderr,
+        )
+        return 0
+
+
+NUM_CTX = _num_ctx_from_env(os.environ.get("TAOSMD_LME_NUM_CTX"))
 _reranker = None
 
 
@@ -496,6 +517,36 @@ def summarize_retrieval_delta(results: list[dict]) -> dict | None:
     }
 
 
+def _default_out_dir() -> str:
+    """Directory the runner writes results into when --out is not given."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+
+
+def _prepare_out_dir(out_path: str) -> str:
+    """Create the result directory and prove it is writable. Returns it.
+
+    Called before the question loop so an unusable --out costs nothing. The
+    probe is a real create-and-delete rather than an os.access() check, because
+    access() answers about permission bits and not about read-only mounts,
+    full filesystems or a parent component that is a regular file.
+    """
+    parent = os.path.dirname(os.path.abspath(out_path)) if out_path else _default_out_dir()
+    try:
+        os.makedirs(parent, exist_ok=True)
+        fd, probe = tempfile.mkstemp(dir=parent, prefix=".out-probe-")
+        os.close(fd)
+        os.unlink(probe)
+    except OSError as exc:
+        print(
+            f"  ERROR: results cannot be written to {parent}: {exc}. Fix --out "
+            "before starting the run, because a path that only fails at write "
+            "time discards every question the run has already answered.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return parent
+
+
 def load_dataset() -> list:
     """Load the LongMemEval oracle set from disk."""
     with open(DATA_PATH) as f:
@@ -540,6 +591,26 @@ async def run_benchmark(
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # The delta builds the legacy context and compares it against the context
+    # the run itself used. On the legacy path those are the same assembly, so
+    # the comparison is legacy-against-legacy: identical by construction, and
+    # a 100% figure that measures nothing. Refuse rather than report it.
+    if report_retrieval_delta and retrieval_path == "legacy":
+        print(
+            "  ERROR: --report-retrieval-delta compares the run's context "
+            "against the legacy context, so with --retrieval-path legacy it "
+            "compares legacy to legacy and is identical by construction. Drop "
+            "--retrieval-path legacy (the wired path is the default) to measure "
+            "the two paths against each other.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Prove the result path is writable now, not after the run. A --out into a
+    # directory that cannot be created used to fail at the final write, by which
+    # point every question had been answered and the results were unrecoverable.
+    _prepare_out_dir(out_path)
 
     # Load dataset
     dataset = load_dataset()
@@ -741,7 +812,7 @@ async def run_benchmark(
 
     if total_questions:
         if not out_path:
-            out_dir = os.path.join(os.path.dirname(__file__), "results")
+            out_dir = _default_out_dir()
             os.makedirs(out_dir, exist_ok=True)
             out_path = os.path.join(out_dir, f"longmemeval_{int(time.time())}.json")
         result_doc = {
