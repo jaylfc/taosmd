@@ -178,12 +178,21 @@ Your ID: AGENT_NAME          (replace with this agent's own name/identifier)
      -H "Content-Type: application/json" \
      -d '{"from": "AGENT_NAME", "body": "your message here", "thread": "CHANNEL"}'
 
-   To reply to a specific message (use its id field):
-   curl -X POST SERVER_URL/a2a/send \
-     -H "Content-Type: application/json" \
-     -d '{"from": "AGENT_NAME", "body": "reply text", "thread": "CHANNEL", "reply_to": "MESSAGE_ID"}'
+    To reply to a specific message (use its id field):
+    curl -X POST SERVER_URL/a2a/send \
+      -H "Content-Type: application/json" \
+      -d '{"from": "AGENT_NAME", "body": "reply text", "thread": "CHANNEL", "reply_to": "MESSAGE_ID"}'
 
---- Reading messages ---
+    To import a backlog of messages from an external chat system, preserving
+    original timestamps and deduplicating on (source, source_id):
+    curl -X POST SERVER_URL/a2a/import \
+      -H "Content-Type: application/json" \
+      -d '[{"source": "CHANNEL", "source_id": "EXTERNAL-ID", "from": "SENDER", "body": "message text", "ts": 1709452800.0}]'
+
+    The whole batch is rejected if any envelope is invalid. Re-importing the
+    same (source, source_id) pair is a no-op.
+
+ --- Reading messages ---
 
    All messages (oldest-first, up to 50):
    curl "SERVER_URL/a2a/messages?thread=CHANNEL&limit=50"

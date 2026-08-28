@@ -91,7 +91,16 @@ CREATE TABLE IF NOT EXISTS a2a_alarm_state (
 CREATE INDEX IF NOT EXISTS idx_a2a_alarm_state_key_fp ON a2a_alarm_state(alarm_key, fingerprint);
 """
 
-INDEX_SCHEMA = INDEX_SCHEMA + A2A_ALARM_STATE_SCHEMA
+A2A_IMPORT_DEDUP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS a2a_import_dedup (
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    PRIMARY KEY (source, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_import_dedup_source_id ON a2a_import_dedup(source, source_id);
+"""
+
+INDEX_SCHEMA = INDEX_SCHEMA + A2A_ALARM_STATE_SCHEMA + A2A_IMPORT_DEDUP_SCHEMA
 
 
 class ArchiveStore:
@@ -201,6 +210,22 @@ class ArchiveStore:
         )
         self._conn.commit()
 
+    async def record_import_dedup(self, source: str, source_id: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO a2a_import_dedup (source, source_id) VALUES (?, ?)",
+            (source, source_id),
+        )
+        self._conn.commit()
+
+    async def get_import_dedup(self, source: str, source_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT source, source_id FROM a2a_import_dedup WHERE source = ? AND source_id = ?",
+            (source, source_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"source": row[0], "source_id": row[1]}
+
     # ------------------------------------------------------------------
     # Recording
     # ------------------------------------------------------------------
@@ -237,6 +262,7 @@ class ArchiveStore:
         app_id: str | None = None,
         summary: str = "",
         project: str | None = None,
+        timestamp: float | None = None,
     ) -> int:
         """Record an event to the archive. Returns the index row ID."""
         # Skip user activity events if tracking is disabled
@@ -250,7 +276,7 @@ class ArchiveStore:
             if key in data and isinstance(data[key], str):
                 data[key], _ = redact_secrets(data[key])
 
-        ts = time.time()
+        ts = timestamp if timestamp is not None else time.time()
         event = {
             "timestamp": ts,
             "event_type": event_type,

@@ -235,6 +235,13 @@ class RemoteClient:
             payload["alarm_fingerprint"] = alarm_fingerprint
         return await self._run("POST", "/a2a/send", payload)
 
+    async def a2a_import(self, batch: list[dict], **_opts) -> dict:
+        """POST /a2a/import: bulk-import external chat envelopes onto the A2A bus.
+
+        Returns the import receipt ``{"imported", "skipped", "messages"}``.
+        """
+        return await self._run("POST", "/a2a/import", batch)
+
     async def a2a_alarms_clear(
         self,
         alarm_key: str,

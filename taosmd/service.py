@@ -543,6 +543,192 @@ async def a2a_send(
     return receipt
 
 
+_A2A_REF_KINDS = frozenset({"doc", "report", "spec", "log"})
+_A2A_MAX_REFS = 8
+
+
+async def a2a_import(batch, *, data_dir=None) -> dict:
+    """Import a batch of external chat envelopes onto the A2A bus.
+
+    Each envelope must be a dict with:
+
+    * ``source`` (str, non-empty): the channel/source name; used as the
+      dedupe key first element and as the thread when ``thread`` is absent.
+    * ``source_id`` (str, non-empty): unique ID from the external system;
+      used as the dedupe key second element.
+    * ``from`` (str, non-empty): sender handle.
+    * ``ts`` (float): original epoch timestamp; preserved verbatim in the
+      archive so backlog imports do not collapse onto import time.
+    * ``body`` (str, non-empty): message text. Required when ``blocks`` is
+      absent; required alongside ``blocks`` when ``blocks`` is present
+      (body is the flattened plain-text rendering).
+
+    Optional envelope fields: ``thread`` (defaults to ``source``), ``kind``
+    (one of the A2A kinds, default ``"chat"``), ``reply_to``, ``refs``
+    (list of dicts, max 8, each with ``kind`` in the ref-kinds enum),
+    ``blocks`` (list of dicts), ``recipient``.
+
+    **Whole-batch semantics**: if *any* envelope in the batch is invalid the
+    entire batch is rejected with ``ValueError``. This composes with
+    exporter clients that pre-validate and refuse to send a batch if any
+    author is unmapped.
+
+    **Idempotence**: deduped on the pair ``(source, source_id)``. A
+    re-import of the same envelope is a no-op (skipped), so retrying a
+    failed export is safe.
+
+    Returns ``{"imported": int, "skipped": int, "messages": [...]}`` where
+    ``messages`` contains the row ids and source keys of newly imported
+    messages.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    if not isinstance(batch, list):
+        raise ValueError("'batch' must be a list of envelope dicts")
+    if not batch:
+        return {"imported": 0, "skipped": 0, "messages": []}
+
+    # Pre-validate every envelope before touching the store so the whole
+    # batch is rejected on the first error.
+    for i, env in enumerate(batch):
+        if not isinstance(env, dict):
+            raise ValueError(f"batch[{i}] must be an object")
+        source = env.get("source")
+        source_id = env.get("source_id")
+        from_ = env.get("from")
+        ts = env.get("ts")
+        body = env.get("body")
+        blocks = env.get("blocks")
+        kind = env.get("kind", "chat")
+        if kind is None:
+            kind = "chat"
+        refs = env.get("refs")
+        if not isinstance(source, str) or not source:
+            raise ValueError(f"batch[{i}].source must be a non-empty string")
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError(f"batch[{i}].source_id must be a non-empty string")
+        if not isinstance(from_, str) or not from_:
+            raise ValueError(f"batch[{i}].from must be a non-empty string")
+        if not isinstance(ts, (int, float)):
+            raise ValueError(f"batch[{i}].ts must be a number")
+        if not isinstance(body, str) or not body:
+            raise ValueError(
+                f"batch[{i}].body must be a non-empty string"
+                + (" when blocks is absent" if not blocks else "")
+            )
+        if kind not in _A2A_KINDS:
+            raise ValueError(
+                f"batch[{i}].kind must be one of {sorted(_A2A_KINDS)}; got {kind!r}"
+            )
+        if refs is not None:
+            if not isinstance(refs, list):
+                raise ValueError(f"batch[{i}].refs must be a list")
+            if len(refs) > _A2A_MAX_REFS:
+                raise ValueError(
+                    f"batch[{i}].refs must have at most {_A2A_MAX_REFS} items"
+                )
+            for j, ref in enumerate(refs):
+                if not isinstance(ref, dict):
+                    raise ValueError(f"batch[{i}].refs[{j}] must be an object")
+                ref_kind = ref.get("kind")
+                if ref_kind not in _A2A_REF_KINDS:
+                    raise ValueError(
+                        f"batch[{i}].refs[{j}].kind must be one of {sorted(_A2A_REF_KINDS)}"
+                    )
+        if blocks is not None:
+            if not isinstance(blocks, list):
+                raise ValueError(f"batch[{i}].blocks must be a list")
+            for j, block in enumerate(blocks):
+                if not isinstance(block, dict):
+                    raise ValueError(f"batch[{i}].blocks[{j}] must be an object")
+        # Total serialized message (body+refs+blocks) <= 64KB.
+        serialized = json.dumps({"body": body, "refs": refs, "blocks": blocks})
+        if len(serialized.encode("utf-8")) > 64 * 1024:
+            raise ValueError(
+                f"batch[{i}] message (body+refs+blocks) exceeds 64KB limit"
+            )
+
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_import(batch)
+
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    if data_dir is not None:
+        from .admin import A2AAdminState  # noqa: PLC0415
+        _admin = A2AAdminState(data_dir)
+
+    imported = 0
+    skipped = 0
+    messages = []
+    for env in batch:
+        source = env["source"]
+        source_id = env["source_id"]
+        from_ = env["from"]
+        ts = float(env["ts"])
+        body = env["body"]
+        thread = env.get("thread") or source
+        kind = env.get("kind", "chat") or "chat"
+        reply_to = env.get("reply_to")
+        refs = env.get("refs")
+        blocks = env.get("blocks")
+        recipient = env.get("recipient")
+
+        if data_dir is not None:
+            thread = _admin.resolve_channel(thread)
+
+        existing = await archive.get_import_dedup(source, source_id)
+        if existing is not None:
+            skipped += 1
+            continue
+
+        data = {
+            "from": from_,
+            "body": body,
+            "thread": thread,
+            "reply_to": reply_to,
+            "kind": kind,
+            "source": source,
+            "source_id": source_id,
+        }
+        if recipient is not None:
+            data["recipient"] = recipient
+        if refs is not None:
+            data["refs"] = refs
+        if blocks is not None:
+            data["blocks"] = blocks
+        row_id = await archive.record(
+            event_type=EVENT_A2A,
+            data=data,
+            agent_name=from_,
+            app_id=thread,
+            summary=body[:200],
+            timestamp=ts,
+        )
+        await archive.record_import_dedup(source, source_id)
+        receipt = {
+            "id": row_id,
+            "ts": ts,
+            "source": source,
+            "source_id": source_id,
+            "from": from_,
+            "thread": thread,
+            "reply_to": reply_to,
+            "kind": kind,
+        }
+        if recipient is not None:
+            receipt["recipient"] = recipient
+        if refs is not None:
+            receipt["refs"] = refs
+        if blocks is not None:
+            receipt["blocks"] = blocks
+        messages.append(receipt)
+        imported += 1
+
+    return {"imported": imported, "skipped": skipped, "messages": messages}
+
+
 async def a2a_feed(
     *,
     thread: str | None = None,
@@ -1844,7 +2030,7 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
 
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
-           "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
+           "supersede", "fetch_by_ref", "a2a_send", "a2a_import", "a2a_feed", "a2a_channels", "a2a_sender_census",
            "a2a_members", "a2a_threads", "a2a_thread_messages",
            "a2a_mentions_feed", "a2a_migrate_kinds", "a2a_alarms_clear", "can_read",
            "a2a_inbox", "a2a_inbox_advance",

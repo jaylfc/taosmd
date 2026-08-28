@@ -103,8 +103,11 @@ Endpoints
 ``GET  /pending?agent=``                                   -> ``{"pending": [...]}``
 ``POST /pending/resolve``  ``{"id", "decision", "note"?}`` -> resolve result
 ``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?, "refs"?, "blocks"?}`` -> send receipt
-                            ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
-                            ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
+                             ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
+                             ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
+``POST /a2a/import``       ``[{"source", "source_id", "from", "body", "ts", "thread"?, "kind"?, "reply_to"?, "refs"?, "blocks"?}]`` -> import receipt
+                             ``source`` + ``source_id`` form the idempotency key; the whole batch is rejected if any envelope is invalid
+                             ``ts`` is the original epoch timestamp, preserved verbatim
 ``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400)
 ``GET  /a2a/mentions``    ``?since=&limit=&reader=``                  -> ``{"messages": [...]}`` (requires registry auth; ``reader`` is derived from the verified token ``sub``, or supplied as a query parameter when no verifier is configured)
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream); ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400
@@ -790,6 +793,16 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("JSON body must be an object")
             return parsed
 
+        def _read_json_body_any(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0:
+                return None
+            raw = self.rfile.read(length)
+            try:
+                return json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise _BadRequest(f"invalid JSON body: {exc}") from exc
+
         # ----- auth helpers ------------------------------------------------
         def _check_token(self, path: str) -> bool:
             """Return True when the request is authorised to proceed.
@@ -1071,6 +1084,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_pending_resolve()
                 elif method == "POST" and path == "/a2a/send":
                     self._handle_a2a_send()
+                elif method == "POST" and path == "/a2a/import":
+                    self._handle_a2a_import()
                 elif method == "GET" and path == "/a2a/channels":
                     self._handle_a2a_channels(query)
                 elif method == "GET" and path == "/a2a/census":
@@ -1640,76 +1655,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             # failure: identity is proven and nothing is being impersonated, so
             # it follows the same warn-or-enforce path as a missing token.
             if _registry_verifier is not None:
-                from . import registry_auth  # noqa: PLC0415 - optional path
-                auth = self.headers.get("Authorization", "")
-                token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
-
-                # Compute warn_reason (None = auth passed) and the status/message
-                # to use in enforce mode. Presented-credential failures return
-                # immediately; grant failures fall through to the single
-                # enforce-or-warn decision below.
-                warn_reason: str | None = None
-                _reject_status: int = 403
-                _reject_msg: str = ""
-
-                if not token:
-                    warn_reason = "missing Bearer token"
-                    _reject_status = 401
-                    _reject_msg = "registry auth: Bearer token required"
-                else:
-                    try:
-                        _registry_verifier.authorize(token, from_)
-                    except registry_auth.HumanAuthError as exc:
-                        logger.warning("human principal %r rejected: %s", from_, exc)
-                        self._send_json(403, {"error": f"registry auth: {exc}"})
-                        return
-                    except registry_auth.AuthError as exc:
-                        # Class 2: presented-credential failure. Always reject,
-                        # even in warn mode -- see the comment block above.
-                        _registry_url_cfg = _config.get_registry_url(data_dir)
-                        _registry_token_cfg = _config.get_registry_token(data_dir)
-                        if _registry_url_cfg is not None and _registry_token_cfg is None:
-                            msg = (
-                                "registry auth: registry_token is unset "
-                                "(registry_url is set without registry_token; "
-                                "set it with `taosmd config set-registry-token ...` "
-                                "or clear registry_url)"
-                            )
-                        else:
-                            msg = f"registry auth: {exc}"
-                        logger.warning(
-                            "a2a auth: rejecting presented-credential failure "
-                            "from %r (regardless of enforce mode): %s", from_, msg,
-                        )
-                        self._send_json(403, {"error": msg})
-                        return
-
-                # Grant check: token proves identity; grant proves permission.
-                # Human principals (controller sessions) have no registry grant,
-                # so the grants check is skipped for them.
-                if warn_reason is None and _grants_verifier is not None:
-                    if not _registry_verifier.is_human(from_):
-                        try:
-                            if not _grants_verifier.has_grant(from_):
-                                warn_reason = "no a2a_send grant"
-                                _reject_status = 403
-                                _reject_msg = f"registry auth: no active grant for {from_!r}"
-                        except registry_auth.AuthError as exc:
-                            warn_reason = str(exc)
-                            _reject_status = 403
-                            _reject_msg = f"registry auth: {exc}"
-                    else:
-                        logger.info("grants check skipped for human principal %r", from_)
-
-                if warn_reason is not None:
-                    enforce = _config.get_a2a_auth_enforce(data_dir)
-                    if enforce:
-                        self._send_json(_reject_status, {"error": _reject_msg})
-                        return
-                    logger.warning(
-                        "a2a verify-and-warn: accepting unverified post from %r: %s",
-                        from_, warn_reason,
-                    )
+                if not self._check_a2a_registry_auth(from_):
+                    return
             result = runner.run(
                 service.a2a_send(
                     sender=from_, body=body_text,
@@ -1718,6 +1665,94 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     alarm_key=alarm_key, alarm_fingerprint=alarm_fingerprint,
                     data_dir=data_dir,
                 )
+            )
+            self._send_json(200, result)
+
+        def _check_a2a_registry_auth(self, claimed_from: str | None = None) -> bool:
+            if _registry_verifier is None:
+                return True
+            from . import registry_auth  # noqa: PLC0415 - optional path
+            auth = self.headers.get("Authorization", "")
+            token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+
+            warn_reason: str | None = None
+            _reject_status: int = 403
+            _reject_msg: str = ""
+
+            if not token:
+                warn_reason = "missing Bearer token"
+                _reject_status = 401
+                _reject_msg = "registry auth: Bearer token required"
+            else:
+                try:
+                    if claimed_from is not None:
+                        _registry_verifier.authorize(token, claimed_from)
+                    else:
+                        pubkey = _registry_verifier._get_pubkey()
+                        claims = registry_auth.decode_and_verify(token, pubkey)
+                        sub = claims.get("sub")
+                        if not sub:
+                            raise registry_auth.AuthError("token has no 'sub' claim")
+                        is_human = sub in _registry_verifier._human_principal_ids
+                        revoked = set() if is_human else _registry_verifier._get_revoked()
+                        if not is_human and sub in revoked:
+                            raise registry_auth.AuthError(f"canonical_id {sub!r} is revoked")
+                except registry_auth.HumanAuthError as exc:
+                    logger.warning("human principal rejected: %s", exc)
+                    self._send_json(403, {"error": f"registry auth: {exc}"})
+                    return False
+                except registry_auth.AuthError as exc:
+                    _registry_url_cfg = _config.get_registry_url(data_dir)
+                    _registry_token_cfg = _config.get_registry_token(data_dir)
+                    if _registry_url_cfg is not None and _registry_token_cfg is None:
+                        _reject_msg = (
+                            "registry auth: registry_token is unset "
+                            "(registry_url is set without registry_token; "
+                            "set it with `taosmd config set-registry-token ...` "
+                            "or clear registry_url)"
+                        )
+                    else:
+                        _reject_msg = f"registry auth: {exc}"
+                    logger.warning(
+                        "a2a auth: rejecting presented-credential failure: %s",
+                        _reject_msg,
+                    )
+                    self._send_json(403, {"error": _reject_msg})
+                    return False
+
+            if warn_reason is None and claimed_from is not None and _grants_verifier is not None:
+                if not _registry_verifier.is_human(claimed_from):
+                    try:
+                        if not _grants_verifier.has_grant(claimed_from):
+                            warn_reason = "no a2a_send grant"
+                            _reject_status = 403
+                            _reject_msg = f"registry auth: no active grant for {claimed_from!r}"
+                    except registry_auth.AuthError as exc:
+                        warn_reason = str(exc)
+                        _reject_status = 403
+                        _reject_msg = f"registry auth: {exc}"
+                else:
+                    logger.info("grants check skipped for human principal %r", claimed_from)
+
+            if warn_reason is not None:
+                enforce = _config.get_a2a_auth_enforce(data_dir)
+                if enforce:
+                    self._send_json(_reject_status, {"error": _reject_msg})
+                    return False
+                logger.warning(
+                    "a2a verify-and-warn: accepting unverified post from %r: %s",
+                    claimed_from, warn_reason,
+                )
+            return True
+
+        def _handle_a2a_import(self) -> None:
+            if not self._check_a2a_registry_auth():
+                return
+            body = self._read_json_body_any()
+            if not isinstance(body, list):
+                raise _BadRequest("'batch' must be a JSON array of envelope dicts")
+            result = runner.run(
+                service.a2a_import(body, data_dir=data_dir)
             )
             self._send_json(200, result)
 
