@@ -470,6 +470,14 @@ a2a_members(channel="CHANNEL")
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
+| `GET`  | `/tasks/edges` | `?from_id=&to_id=&type=&limit=` | `{"edges": [...]}`; scoped to the token-bound project when registry auth is configured, tokenless requests return all edges |
+| `POST` | `/tasks` | body JSON `{"title", "body"?, "project"?, "assignee"?, "priority"?, "depends_on"?: [...], "created_by"}` | task object |
+| `GET`  | `/tasks` | `?status=&project=&assignee=&limit=` | `{"tasks": [...]}` |
+| `GET`  | `/tasks/ready` | `?project=&assignee=&limit=` | `{"tasks": [...]}` |
+| `GET`  | `/tasks/prime` | `?project=&assignee=` | `{"text": ..., "tasks": [...]}` |
+| `POST` | `/tasks/{id}` | body JSON `{"status"?, "assignee"?, "priority"?, "body"?}` | updated task object |
+| `POST` | `/tasks/{id}/edges` | body JSON `{"to_id", "type", "created_by"}` | edge record |
+| `POST` | `/tasks/{id}/edges/remove` | body JSON `{"to_id", "type"}` | edge record with `removed_ts` |
 
 ### Admin token (separate from the data plane)
 
