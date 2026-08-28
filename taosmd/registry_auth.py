@@ -42,6 +42,9 @@ class HumanAuthError(AuthError):
 def _require_jwt():
     try:
         import jwt  # noqa: PLC0415
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (  # noqa: PLC0415
+            Ed25519PublicKey,  # noqa: F401
+        )
     except ImportError as exc:  # pragma: no cover - exercised via degrade test
         raise AuthError(
             "registry auth requires the crypto extra: pip install taosmd[registry]"

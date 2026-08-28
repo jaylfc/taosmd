@@ -44,9 +44,9 @@ else
     cd "$INSTALL_DIR"
 fi
 
-# Install Python dependencies
+# Install Python dependencies (core + registry auth extra for fleet installs)
 echo "→ Installing dependencies..."
-pip install -e . --quiet 2>/dev/null || pip3 install -e . --quiet
+pip install -e ".[registry]" --quiet 2>/dev/null || pip3 install -e ".[registry]" --quiet
 
 # Install ONNX Runtime (for fast embeddings)
 pip install onnxruntime numpy --quiet 2>/dev/null || pip3 install onnxruntime numpy --quiet

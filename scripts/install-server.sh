@@ -32,7 +32,7 @@ echo "  Host: $HOST   Port: $PORT"
 # --- Step 1: install taosmd --------------------------------------------------
 echo ""
 echo "Step 1: Installing taosmd..."
-pip install --quiet --upgrade taosmd
+pip install --quiet --upgrade "taosmd[registry]"
 echo "  taosmd $(taosmd --version 2>/dev/null || python -c "import taosmd; print(taosmd.__version__)") installed."
 
 # --- Step 2: install and start the background service -----------------------
