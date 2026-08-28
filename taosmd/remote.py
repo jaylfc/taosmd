@@ -245,6 +245,71 @@ class RemoteClient:
             "POST", f"/a2a/alarms/{urllib.parse.quote(alarm_key, safe='')}/clear", {},
         )
 
+    async def a2a_inbox(
+        self,
+        consumer: str,
+        *,
+        limit: int = 50,
+        include_kinds: list | None = None,
+        **_opts,
+    ) -> list[dict]:
+        """GET /a2a/inbox: return messages past ``consumer``'s cursor.
+
+        Returns the ``messages`` list from the server response.
+        """
+        params: dict = {"consumer": consumer, "limit": limit}
+        if include_kinds is not None:
+            params["include_kinds"] = ",".join(include_kinds)
+        resp = await self._run("GET", "/a2a/inbox", params=params)
+        return resp.get("messages", [])
+
+    async def a2a_inbox_advance(
+        self,
+        consumer: str,
+        to_id: int,
+        **_opts,
+    ) -> dict:
+        """POST /a2a/inbox/advance: advance ``consumer``'s cursor to ``to_id``.
+
+        The ``consumer`` argument is accepted for API symmetry but is ignored
+        on the remote path; the server derives the principal from the
+        verified registry token ``sub``.
+
+        Returns ``{"ok": True}``.
+        """
+        return await self._run("POST", "/a2a/inbox/advance", {"to_id": to_id})
+
+    async def a2a_ack(
+        self,
+        message_id: int,
+        by: str,
+        **_opts,
+    ) -> dict:
+        """POST /a2a/ack: record that ``by`` has acknowledged ``message_id``.
+
+        The ``by`` argument is accepted for API symmetry but is ignored on
+        the remote path; the server derives the principal from the verified
+        registry token ``sub``.
+
+        Returns ``{"id", "acked_by", "ok"}``.
+        """
+        return await self._run("POST", "/a2a/ack", {"message_id": message_id})
+
+    async def a2a_inbox_unhandled(
+        self,
+        consumer: str,
+        *,
+        limit: int = 50,
+        **_opts,
+    ) -> list[dict]:
+        """GET /a2a/inbox/unhandled: return unhandled messages for ``consumer``.
+
+        Returns the ``messages`` list from the server response.
+        """
+        params: dict = {"consumer": consumer, "limit": limit}
+        resp = await self._run("GET", "/a2a/inbox/unhandled", params=params)
+        return resp.get("messages", [])
+
     async def a2a_feed(
         self,
         *,
