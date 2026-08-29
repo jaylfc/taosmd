@@ -499,3 +499,31 @@ def test_install_skill_force_overwrites(tmp_path, monkeypatch):
     new_content = skill_dest.read_text()
     assert new_content != "old content"
     assert "taosmd-a2a" in new_content
+
+
+def test_remote_task_list_edges_cross_project_scoping(client):
+    """RemoteClient task_list_edges with project= returns only edges in that project."""
+    # Seed tasks in two projects
+    ta1 = asyncio.run(client.task_create(title="A1", created_by="a", project="proj-a"))
+    ta2 = asyncio.run(client.task_create(title="A2", created_by="a", project="proj-a"))
+    tb1 = asyncio.run(client.task_create(title="B1", created_by="a", project="proj-b"))
+    tb2 = asyncio.run(client.task_create(title="B2", created_by="a", project="proj-b"))
+
+    # Seed edges in each project
+    asyncio.run(client.task_add_edge(ta1["id"], ta2["id"], "blocks", created_by="a"))
+    asyncio.run(client.task_add_edge(tb1["id"], tb2["id"], "blocks", created_by="a"))
+
+    # Without project scope, both edges are returned
+    all_edges = asyncio.run(client.task_list_edges())
+    assert len(all_edges) == 2
+
+    # With project=proj-a, only the proj-a edge is returned
+    proj_a_edges = asyncio.run(client.task_list_edges(project="proj-a"))
+    assert len(proj_a_edges) == 1
+    assert proj_a_edges[0]["from_id"] == ta1["id"]
+    assert proj_a_edges[0]["to_id"] == ta2["id"]
+
+    # Positive control: service.task_list is correctly scoped on the same hop
+    proj_a_tasks = asyncio.run(client.task_list(project="proj-a"))
+    assert len(proj_a_tasks) == 2
+    assert {t["id"] for t in proj_a_tasks} == {ta1["id"], ta2["id"]}

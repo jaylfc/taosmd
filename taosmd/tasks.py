@@ -631,6 +631,60 @@ async def add_edge(
     return edge
 
 
+async def list_edges(
+    *,
+    from_id: str | None = None,
+    to_id: str | None = None,
+    type: str | None = None,
+    project: str | None = None,
+    limit: int = 50,
+    data_dir: str | None = None,
+) -> list[dict]:
+    """Return task edges matching the given filters.
+
+    ``task_edges`` has no project column, so when a ``project`` is supplied
+    both edge endpoints must belong to that project (two ANDed EXISTS
+    clauses). Unbound requests (``project is None``) return every edge
+    that matches the other filters.
+    """
+    if type is not None and type not in VALID_EDGE_TYPES:
+        raise ValueError(f"type must be one of {sorted(VALID_EDGE_TYPES)}")
+
+    conn = _get_db(data_dir)
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if from_id is not None:
+        conditions.append("e.from_id = ?")
+        params.append(from_id)
+    if to_id is not None:
+        conditions.append("e.to_id = ?")
+        params.append(to_id)
+    if type is not None:
+        conditions.append("e.type = ?")
+        params.append(type)
+    conditions.append("e.removed_ts IS NULL")
+
+    if project is not None:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM tasks f WHERE f.id = e.from_id AND f.project = ?)"
+        )
+        params.append(project)
+        conditions.append(
+            "EXISTS (SELECT 1 FROM tasks t WHERE t.id = e.to_id AND t.project = ?)"
+        )
+        params.append(project)
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    params.append(limit)
+    rows = conn.execute(
+        f"SELECT e.from_id, e.to_id, e.type, e.created_ts, e.created_by, e.removed_ts "
+        f"FROM task_edges e {where} ORDER BY e.created_ts ASC LIMIT ?",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 async def remove_edge(
     from_id: str,
     to_id: str,

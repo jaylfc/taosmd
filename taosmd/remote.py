@@ -468,6 +468,29 @@ class RemoteClient:
             params["assignee"] = assignee
         return await self._run("GET", "/tasks/prime", params=params or None)
 
+    async def task_list_edges(
+        self,
+        *,
+        from_id: str | None = None,
+        to_id: str | None = None,
+        type: str | None = None,
+        project: str | None = None,
+        limit: int = 50,
+        **_opts,
+    ) -> list[dict]:
+        """GET /tasks/edges: list task edges from the remote server."""
+        params: dict = {"limit": limit}
+        if from_id is not None:
+            params["from_id"] = from_id
+        if to_id is not None:
+            params["to_id"] = to_id
+        if type is not None:
+            params["type"] = type
+        if project is not None:
+            params["project"] = project
+        resp = await self._run("GET", "/tasks/edges", params=params)
+        return resp.get("edges", [])
+
     async def task_update(
         self,
         task_id: str,
