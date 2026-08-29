@@ -107,6 +107,10 @@ Endpoints
                             ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
 ``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400)
 ``GET  /a2a/mentions``    ``?since=&limit=&reader=``                  -> ``{"messages": [...]}`` (requires registry auth; ``reader`` is derived from the verified token ``sub``, or supplied as a query parameter when no verifier is configured)
+``GET  /a2a/inbox``       ``?consumer=&limit=&include_kinds=``         -> ``{"messages": [...]}`` (``consumer`` is derived from the verified token ``sub`` when registry auth is configured; otherwise required as a query parameter)
+``POST /a2a/inbox/advance`` ``{"to_id": int}``                           -> ``{"ok": true}`` (principal derived from the verified token ``sub``)
+``POST /a2a/ack``          ``{"message_id": int}``                      -> ``{"id", "acked_by", "ok"}`` (``by`` derived from the verified token ``sub``)
+``GET  /a2a/inbox/unhandled`` ``?consumer=&limit=``                     -> ``{"messages": [...]}`` (composed query: mentions past cursor minus acks)
 ``GET  /a2a/stream``       ``?thread=&since=``             -> SSE stream (text/event-stream); ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400
 ``GET  /a2a/threads``      ``?principal=``                  -> ``{"threads": [...]}`` thread list for the principal, ordered by latest activity desc; each entry has ``thread``, ``kind``, ``participants``, ``last_message: {id, ts, from, body_preview}`` (see notes below)
 ``GET  /a2a/threads/{thread}/messages`` ``?before=&after=&limit=`` -> ``{"thread", "messages": [...]}`` cursor-paginated message envelope, oldest-first
@@ -1082,6 +1086,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_a2a_messages(query)
                 elif method == "GET" and path == "/a2a/mentions":
                     self._handle_a2a_mentions(query)
+                elif method == "GET" and path == "/a2a/inbox":
+                    self._handle_a2a_inbox(query)
+                elif method == "POST" and path == "/a2a/inbox/advance":
+                    self._handle_a2a_inbox_advance()
+                elif method == "POST" and path == "/a2a/ack":
+                    self._handle_a2a_ack()
+                elif method == "GET" and path == "/a2a/inbox/unhandled":
+                    self._handle_a2a_inbox_unhandled(query)
                 elif method == "GET" and path == "/a2a/stream":
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
@@ -1817,6 +1829,129 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     )
             messages = runner.run(
                 service.a2a_mentions_feed(reader, since=since, limit=limit_i, data_dir=data_dir)
+            )
+            self._send_json(200, {"messages": messages})
+
+        def _handle_a2a_inbox(self, qs: dict) -> None:
+            """GET /a2a/inbox -- messages past the consumer's cursor.
+
+            ``consumer`` is derived from the verified registry token ``sub``
+            when a verifier is configured; otherwise it is required as a
+            query parameter.
+            """
+            _validate_a2a_params(qs, frozenset({"consumer", "limit", "include_kinds", "exclude_acked_by"}))
+            consumer_qp = (qs.get("consumer") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            include_kinds_raw = (qs.get("include_kinds") or [None])[0]
+            exclude_acked_by_raw = (qs.get("exclude_acked_by") or [None])[0]
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            if _registry_verifier is not None:
+                token_consumer = self._get_authenticated_agent_id()
+                if token_consumer is None:
+                    self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                    return
+                if consumer_qp is not None:
+                    from .mentions import _normalise_handle  # noqa: PLC0415
+                    if _normalise_handle(consumer_qp) != _normalise_handle(token_consumer):
+                        self._send_json(403, {"error": "registry auth: consumer mismatch"})
+                        return
+                consumer = token_consumer
+            else:
+                consumer = consumer_qp
+                if not consumer:
+                    raise _BadRequest(
+                        "'consumer' query parameter is required when no registry verifier is configured"
+                    )
+            include_kinds = None
+            if include_kinds_raw:
+                include_kinds = [s.strip() for s in include_kinds_raw.split(",") if s.strip()]
+            exclude_acked_by = exclude_acked_by_raw if exclude_acked_by_raw else None
+            messages = runner.run(
+                service.a2a_inbox(consumer, limit=limit_i, include_kinds=include_kinds, exclude_acked_by=exclude_acked_by, data_dir=data_dir)
+            )
+            self._send_json(200, {"messages": messages})
+
+        def _handle_a2a_inbox_advance(self) -> None:
+            """POST /a2a/inbox/advance -- advance the caller's inbox cursor.
+
+            The consumer identity is derived from the verified registry token
+            ``sub``; ``to_id`` comes from the JSON body.
+            """
+            body = self._read_json_body()
+            to_id_raw = body.get("to_id")
+            if to_id_raw is None:
+                raise _BadRequest("'to_id' is required")
+            try:
+                to_id = int(to_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'to_id' must be an integer") from exc
+            consumer = self._get_authenticated_agent_id()
+            if consumer is None:
+                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                return
+            runner.run(
+                service.a2a_inbox_advance(consumer, to_id, data_dir=data_dir)
+            )
+            self._send_json(200, {"ok": True})
+
+        def _handle_a2a_ack(self) -> None:
+            """POST /a2a/ack -- record an acknowledgement for a message.
+
+            The ``by`` principal is derived from the verified registry token
+            ``sub``; ``message_id`` comes from the JSON body.
+            """
+            body = self._read_json_body()
+            message_id_raw = body.get("message_id")
+            if message_id_raw is None:
+                raise _BadRequest("'message_id' is required")
+            try:
+                message_id = int(message_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'message_id' must be an integer") from exc
+            by = self._get_authenticated_agent_id()
+            if by is None:
+                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                return
+            result = runner.run(
+                service.a2a_ack(message_id, by, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_inbox_unhandled(self, qs: dict) -> None:
+            """GET /a2a/inbox/unhandled -- composed unhandled query.
+
+            Returns messages past the consumer's cursor that are addressed
+            to the consumer and have NOT been acknowledged by the consumer.
+            """
+            _validate_a2a_params(qs, frozenset({"consumer", "limit"}))
+            consumer_qp = (qs.get("consumer") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            if _registry_verifier is not None:
+                token_consumer = self._get_authenticated_agent_id()
+                if token_consumer is None:
+                    self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                    return
+                if consumer_qp is not None:
+                    from .mentions import _normalise_handle  # noqa: PLC0415
+                    if _normalise_handle(consumer_qp) != _normalise_handle(token_consumer):
+                        self._send_json(403, {"error": "registry auth: consumer mismatch"})
+                        return
+                consumer = token_consumer
+            else:
+                consumer = consumer_qp
+                if not consumer:
+                    raise _BadRequest(
+                        "'consumer' query parameter is required when no registry verifier is configured"
+                    )
+            messages = runner.run(
+                service.a2a_inbox_unhandled(consumer, limit=limit_i, data_dir=data_dir)
             )
             self._send_json(200, {"messages": messages})
 
