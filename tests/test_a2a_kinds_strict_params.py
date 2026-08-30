@@ -314,6 +314,43 @@ def test_http_a2a_members_unknown_param_returns_400(live_server):
     assert "bogus" in body["error"]
 
 
+def test_http_a2a_message_receipts_unknown_param_returns_400(live_server):
+    """Unknown query params on /a2a/messages/{id}/receipts must 400.
+
+    Dispatch passes no query dict and the handler previously took no qs, so
+    ``after=``/``since_id=`` were silently dropped here too.
+    """
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": "msg", "thread": "rcpt-test"},
+    )
+    assert status == 200, body
+    msg_id = body["id"]
+    status, body = _get(f"{live_server}/a2a/messages/{msg_id}/receipts?bogus=1")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_receipts_unknown_param_returns_400(live_server):
+    """Unknown query params on /a2a/receipts must 400, not fall through to 404.
+
+    The handler took ``qs`` but never validated it, so a typo like ``sinc=``
+    was indistinguishable from a genuine miss.
+    """
+    status, body = _get(
+        f"{live_server}/a2a/receipts?message_id=1&agent=agentB&bogus=1"
+    )
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_receipts_missing_required_param_returns_400(live_server):
+    """Missing message_id/agent still 400s (rejects unknown param first)."""
+    status, body = _get(f"{live_server}/a2a/receipts?bogus=1")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
 # ---------------------------------------------------------------------------
 # Cursor-shaped params that were silently dropped before strict validation:
 # after= and since_id= are NOT accepted on the feed/stream/messages endpoints
@@ -452,6 +489,25 @@ def test_http_a2a_channels_no_params_returns_200(live_server):
     status, body = _get(f"{live_server}/a2a/channels")
     assert status == 200, body
     assert "channels" in body
+
+
+def test_http_a2a_message_receipts_no_params_returns_200(live_server):
+    """GET /a2a/messages/{id}/receipts with no params must still work (200)."""
+    status, body = _post(
+        f"{live_server}/a2a/send",
+        {"from": "agentA", "body": "msg", "thread": "rcpt-ok"},
+    )
+    assert status == 200, body
+    msg_id = body["id"]
+    status, body = _get(f"{live_server}/a2a/messages/{msg_id}/receipts")
+    assert status == 200, body
+    assert "delivered" in body and "read" in body
+
+
+def test_http_a2a_receipts_valid_params_returns_404(live_server):
+    """GET /a2a/receipts with only accepted params must not 400 (404 if not found)."""
+    status, body = _get(f"{live_server}/a2a/receipts?message_id=1&agent=agentB")
+    assert status == 404, body
 
 
 # ---------------------------------------------------------------------------

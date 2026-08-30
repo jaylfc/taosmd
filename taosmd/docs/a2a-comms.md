@@ -543,6 +543,9 @@ parameter is a 400, never a silent no-op. The accepted set is:
 | `GET /a2a/threads/{thread}/messages` | `before`, `after`, `limit` |
 | `GET /a2a/channels` | (none) |
 | `GET /a2a/members` | `channel` |
+| `GET /a2a/census` | (none) |
+| `GET /a2a/messages/{id}/receipts` | (none) |
+| `GET /a2a/receipts` | `message_id`, `agent` |
 
 ### MCP tools
 
