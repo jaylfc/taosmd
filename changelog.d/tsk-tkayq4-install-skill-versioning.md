@@ -1,0 +1,2 @@
+### Fixed
+- `taosmd install-skill` now compares the packaged skill `version` (from the SKILL.md frontmatter) against the installed copy and records a content hash in a `.taosmd-skill-manifest.json` at install time. A stale install with a newer package upgrades in place by default (no longer silently exits 0 with "already installed"); a copy carrying local edits is refused without `--force` so user edits are never silently clobbered.

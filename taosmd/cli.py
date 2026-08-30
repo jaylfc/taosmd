@@ -8,9 +8,12 @@ shell (e.g. compaction, re-indexing, exporting an agent's shelf).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .agents import (
     AgentExistsError,
@@ -610,10 +613,78 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
-def _install_skill_cmd(args: argparse.Namespace) -> int:
-    """Handle ``taosmd install-skill``: copy the packaged skill into ~/.claude/skills/."""
+# ----- taosmd-a2a skill install helpers --------------------------------
+
+
+def _parse_skill_version(skill_md: Path) -> str | None:
+    """Read the ``version`` field from a SKILL.md YAML frontmatter block."""
+    text = skill_md.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return None
+    end = text.find("---", 3)
+    if end == -1:
+        return None
+    m = re.search(r"^version:\s*(\S.*)$", text[3:end], re.MULTILINE)
+    return m.group(1).strip().strip("\"'") if m else None
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def _skill_manifest_path(dest_dir: Path) -> Path:
+    return dest_dir / ".taosmd-skill-manifest.json"
+
+
+def _write_skill_manifest(dest_dir: Path, version: str | None) -> None:
+    manifest = {
+        "skill": "taosmd-a2a",
+        "version": version,
+        "skill_md_sha256": _sha256(dest_dir / "SKILL.md"),
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _skill_manifest_path(dest_dir).write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _has_local_edits(installed_md: Path, packaged_md: Path, manifest: Path) -> bool:
+    """True when the installed SKILL.md diverges from the copy we last placed.
+
+    A manifest hash recorded at install time is the primary signal: if the
+    installed content no longer matches it, user edits are assumed. With no
+    manifest (pre-versioning installs) we fall back to a content diff that
+    ignores the ``version`` line, since that line is the whole point of a bump.
+    """
+    if manifest.exists():
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        expected = data.get("skill_md_sha256")
+        if expected is None:
+            return False
+        return _sha256(installed_md) != expected
+
+    def _body(text: str) -> list[str]:
+        return [
+            ln for ln in text.splitlines() if not ln.strip().startswith("version:")
+        ]
+
+    return (
+        _body(installed_md.read_text(encoding="utf-8"))
+        != _body(packaged_md.read_text(encoding="utf-8"))
+    )
+
+
+def _copy_skill_tree(src_dir: Path, dest_dir: Path) -> None:
     import shutil  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(str(src_dir), str(dest_dir), dirs_exist_ok=True)
+
+
+def _install_skill_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd install-skill``: copy the taosmd-a2a skill into ~/.claude/skills/."""
     from importlib.resources import files as _pkg_files  # noqa: PLC0415
 
     dest_dir = Path("~/.claude/skills/taosmd-a2a").expanduser()
@@ -622,8 +693,7 @@ def _install_skill_cmd(args: argparse.Namespace) -> int:
     if not skill_src_dir.is_dir():
         # Fallback: try importlib.resources (wheel installs)
         try:
-            _ref = _pkg_files("taosmd").joinpath("skills/taosmd-a2a")
-            # Convert Traversable to a concrete path via __file__ approach.
+            _pkg_files("taosmd").joinpath("skills/taosmd-a2a")
             skill_src_dir = Path(__file__).parent / "skills" / "taosmd-a2a"
         except Exception:
             pass
@@ -633,16 +703,68 @@ def _install_skill_cmd(args: argparse.Namespace) -> int:
         print("  Re-install the package to include skill assets.", file=sys.stderr)
         return 2
 
-    force = getattr(args, "force", False)
-    skill_md = dest_dir / "SKILL.md"
-    if skill_md.exists() and not force:
-        print(f"Skill already installed at {dest_dir}")
-        print("  Re-run with --force to overwrite.")
+    return _run_install_skill(
+        skill_src_dir, dest_dir, getattr(args, "force", False)
+    )
+
+
+def _run_install_skill(src_dir: Path, dest_dir: Path, force: bool) -> int:
+    """Core install/upgrade logic for the taosmd-a2a skill.
+
+    Compares the packaged version (from the SKILL.md frontmatter) against the
+    installed copy, using a content hash recorded at install time to detect
+    local edits. A newer package without local edits upgrades by default; a
+    copy carrying local edits is never clobbered without ``--force``.
+    """
+    packaged_md = src_dir / "SKILL.md"
+    installed_md = dest_dir / "SKILL.md"
+    manifest = _skill_manifest_path(dest_dir)
+    packaged_version = _parse_skill_version(packaged_md) or "0.0.0"
+
+    if not installed_md.exists():
+        _copy_skill_tree(src_dir, dest_dir)
+        _write_skill_manifest(dest_dir, packaged_version)
+        print(f"taosmd-a2a skill installed at {dest_dir} (v{packaged_version})")
         return 0
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(str(skill_src_dir), str(dest_dir), dirs_exist_ok=True)
-    print(f"taosmd-a2a skill installed at {dest_dir}")
+    installed_version = _parse_skill_version(installed_md)
+    has_local_edits = _has_local_edits(installed_md, packaged_md, manifest)
+    inst_repr = installed_version or "unknown (pre-versioning)"
+
+    if force:
+        _copy_skill_tree(src_dir, dest_dir)
+        _write_skill_manifest(dest_dir, packaged_version)
+        label = "overwriting local edits" if has_local_edits else "upgrading"
+        print(
+            f"taosmd-a2a skill {label}: "
+            f"v{inst_repr} -> v{packaged_version}"
+        )
+        return 0
+
+    if installed_version == packaged_version and not has_local_edits:
+        print(
+            f"taosmd-a2a skill already installed, up to date "
+            f"(v{packaged_version})."
+        )
+        return 0
+
+    if has_local_edits:
+        print(
+            f"error: taosmd-a2a skill has local edits "
+            f"(installed v{inst_repr}, packaged v{packaged_version}).",
+            file=sys.stderr,
+        )
+        print(
+            "  Refusing to overwrite local edits; re-run with --force to clobber.",
+            file=sys.stderr,
+        )
+        print("  taosmd install-skill --force", file=sys.stderr)
+        return 1
+
+    # Packaged version is newer and the installed copy is clean: upgrade.
+    _copy_skill_tree(src_dir, dest_dir)
+    _write_skill_manifest(dest_dir, packaged_version)
+    print(f"taosmd-a2a skill upgraded: v{inst_repr} -> v{packaged_version}")
     return 0
 
 

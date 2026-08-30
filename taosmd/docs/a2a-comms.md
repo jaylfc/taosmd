@@ -10,6 +10,27 @@ taOSmd's A2A bus lets any number of agents (Claude Code, Cursor, OpenClaw, or an
 
 ---
 
+## Check whether your installed skill is current
+
+`taosmd install-skill` copies the `taosmd-a2a` skill into
+`~/.claude/skills/taosmd-a2a/` only when the packaged copy is newer (it now
+records a `version` in each skill's `SKILL.md` frontmatter and a content hash at
+install time). Compare the installed version against the packaged one to confirm
+you are current:
+
+```
+# Installed version (a blank line means the skill is not installed):
+grep -m1 '^version:' ~/.claude/skills/taosmd-a2a/SKILL.md || echo "not installed"
+# Packaged version shipped with your taosmd:
+python -c "import taosmd,pathlib,re; p=pathlib.Path(taosmd.__file__).parent/'skills'/'taosmd-a2a'/'SKILL.md'; print(re.search(r'version: *(\S+)', p.read_text()).group(1))"
+```
+
+Re-running `taosmd install-skill` also reports both versions, and if the installed
+copy was edited locally it tells you to re-run with `--force` rather than silently
+clobbering your edits.
+
+---
+
 ## Step 1: Ensure taOSmd is installed
 
 Run:
