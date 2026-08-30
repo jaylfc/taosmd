@@ -8,7 +8,31 @@ fi
 
 PR_NUMBER="$1"
 
-PR_JSON=$(gh pr view "$PR_NUMBER" --json number,headRefOid,reviews 2>/dev/null) || {
+REPO_JSON=$(gh repo view --json owner,name 2>/dev/null) || {
+    echo "FAILED: gh/network error"
+    exit 3
+}
+OWNER=$(echo "$REPO_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['owner']['login'])")
+REPO=$(echo "$REPO_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['name'])")
+
+PR_JSON=$(gh api graphql -f query='
+query($owner:String!, $repo:String!, $number:Int!) {
+  repository(owner:$owner, name:$repo) {
+    pullRequest(number:$number) {
+      number
+      headRefOid
+      reviews(first:50) {
+        nodes {
+          author { login }
+          state
+          body
+          commit { oid }
+          comments { totalCount }
+        }
+      }
+    }
+  }
+}' -F owner="$OWNER" -F repo="$REPO" -F number="$PR_NUMBER"   --jq '.data.repository.pullRequest' 2>/dev/null) || {
     echo "FAILED: gh/network error"
     exit 3
 }
@@ -23,7 +47,7 @@ except json.JSONDecodeError:
     sys.exit(3)
 
 head_oid = data.get('headRefOid', '')
-reviews = data.get('reviews', [])
+reviews = data.get('reviews', {}).get('nodes', [])
 bot_authors = {'coderabbitai', 'qodo-code-review', 'kilo-code-bot'}
 
 for r in reviews:
@@ -37,7 +61,7 @@ for r in reviews:
     if commit_oid != head_oid:
         continue
     body = r.get('body') or ''
-    has_inline = r.get('includesCreatedEdit', False)
+    has_inline = (r.get('comments') or {}).get('totalCount', 0) > 0
     if body.strip() or has_inline:
         print('SUCCESS: anchored substantive bot review found')
         sys.exit(0)

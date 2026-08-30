@@ -1,22 +1,26 @@
 {
   "number": 218,
   "headRefOid": "abc123def456",
-  "reviews": [
-    {
-      "author": {"login": "coderabbitai"},
-      "state": "COMMENTED",
-      "body": "<details><summary>Nitpick comments (1)</summary><blockquote>\n\n**Add coverage for the new import-tracking table.**\n</blockquote></details>",
-      "commit": {"oid": "abc123def456"},
-      "includesCreatedEdit": false,
-      "submittedAt": "2026-07-28T12:21:45Z"
-    },
-    {
-      "author": {"login": "qodo-code-review"},
-      "state": "COMMENTED",
-      "body": "",
-      "commit": {"oid": "abc123def456"},
-      "includesCreatedEdit": false,
-      "submittedAt": "2026-07-28T12:22:07Z"
-    }
-  ]
+  "reviews": {
+    "nodes": [
+      {
+        "author": {"login": "coderabbitai"},
+        "state": "COMMENTED",
+        "body": "<details><summary>Nitpick comments (1)</summary><blockquote>\n\n**Add coverage for the new import-tracking table.**\n</blockquote></details>",
+        "commit": {"oid": "abc123def456"},
+        "comments": {"totalCount": 0},
+        "includesCreatedEdit": false,
+        "submittedAt": "2026-07-28T12:21:45Z"
+      },
+      {
+        "author": {"login": "qodo-code-review"},
+        "state": "COMMENTED",
+        "body": "",
+        "commit": {"oid": "abc123def456"},
+        "comments": {"totalCount": 0},
+        "includesCreatedEdit": false,
+        "submittedAt": "2026-07-28T12:22:07Z"
+      }
+    ]
+  }
 }

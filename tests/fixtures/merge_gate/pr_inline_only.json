@@ -1,0 +1,21 @@
+{
+    "headRefOid": "4fc4bd016efe0a035b28a31586d76e919c9f19ca",
+    "number": 267,
+    "reviews": {
+        "nodes": [
+            {
+                "author": {
+                    "login": "kilo-code-bot"
+                },
+                "body": "",
+                "comments": {
+                    "totalCount": 7
+                },
+                "commit": {
+                    "oid": "4fc4bd016efe0a035b28a31586d76e919c9f19ca"
+                },
+                "state": "COMMENTED"
+            }
+        ]
+    }
+}
