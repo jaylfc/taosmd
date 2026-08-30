@@ -116,6 +116,7 @@ Endpoints
 ``GET  /tasks``            ``?status=&project=&assignee=&limit=``  -> ``{"tasks": [...]}``
 ``GET  /tasks/ready``      ``?project=&assignee=&limit=``  -> ``{"tasks": [...]}``
 ``GET  /tasks/prime``      ``?project=&assignee=``         -> ``{"text": ..., "tasks": [...]}``
+``GET  /tasks/edges``      ``?from_id=&to_id=&type=&project=&limit=`` -> ``{"edges": [...]}``
 ``POST /tasks/{id}``       ``{"status"?, "assignee"?, "priority"?, "body"?}`` -> updated task object
 ``POST /tasks/{id}/edges`` ``{"to_id", "type", "created_by"}``     -> edge record
 ``POST /tasks/{id}/edges/remove`` ``{"to_id", "type"}``   -> edge record with removed_ts
@@ -1120,6 +1121,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_task_ready(query)
                 elif method == "GET" and path == "/tasks/prime":
                     self._handle_task_prime(query)
+                elif method == "GET" and path == "/tasks/edges":
+                    self._handle_task_list_edges(query)
                 elif method == "POST" and path.startswith("/tasks/"):
                     # /tasks/{id}/edges/remove  or  /tasks/{id}/edges  or  /tasks/{id}
                     rest = path[len("/tasks/"):]
@@ -2134,6 +2137,32 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             )
             self._send_json(200, result)
 
+        def _handle_task_list_edges(self, qs: dict) -> None:
+            from_id = (qs.get("from_id") or [None])[0]
+            to_id = (qs.get("to_id") or [None])[0]
+            edge_type = (qs.get("type") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = min(limit_i, 500)
+            project = (qs.get("project") or [None])[0]
+            project, ok = self._apply_token_binding(None, project)
+            if not ok:
+                return
+            edges = runner.run(
+                service.task_list_edges(
+                    from_id=from_id,
+                    to_id=to_id,
+                    type=edge_type,
+                    project=project,
+                    limit=limit_i,
+                    data_dir=data_dir,
+                )
+            )
+            self._send_json(200, {"edges": edges})
+
         def _handle_task_update(self, task_id: str) -> None:
             body = self._read_json_body()
             status = body.get("status")
@@ -2558,6 +2587,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
           "POST /a2a/send, GET /a2a/messages, GET /a2a/mentions, GET /a2a/stream, "
           "GET /a2a/channels, GET /a2a/members, "
           "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
+          "GET /tasks/edges, "
           "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove, "
           "GET /collections, GET /collections/{id}, POST /collections/{id}/link, "
           "POST /collections/{id}/unlink, POST /collections/{id}/grants, "
