@@ -249,6 +249,16 @@ _A2A_MSG_MAX_LIMIT = 200
 
 
 def _validate_a2a_params(qs: dict, allowed: frozenset[str]) -> None:
+    """Reject query parameters not in *allowed* with HTTP 400.
+
+    General rule established here and on the authenticated controller proxy
+    (taOS #2390): an unknown query parameter is a 400, never a silent no-op.
+    A caller who misspells a parameter (e.g. ``after=`` or ``since_id=`` on
+    the feed endpoints, which only accept ``since``) must learn it immediately,
+    not infer it from results that look plausible.  The error message names
+    both the offending parameters and the accepted set so the caller can
+    self-correct in one round-trip.
+    """
     unknown = set(qs.keys()) - allowed
     if unknown:
         raise _BadRequest(

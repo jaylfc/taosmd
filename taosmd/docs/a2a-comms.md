@@ -525,6 +525,25 @@ stored in `a2a_alarm_state` and survives restarts. Use
 Each channel in `/a2a/channels` has shape:
 `{"channel", "members", "message_count", "created_ts", "last_ts"}`
 
+### Strict query parameters
+
+Every `GET /a2a/*` endpoint rejects unknown query parameters with HTTP 400. The
+error response names both the offending parameter(s) and the accepted set, so a
+misspelt cursor (e.g. `after=` or `since_id=` on `/a2a/messages`, which only
+accepts `since` as a timestamp) is reported immediately rather than silently
+ignored. This mirrors the controller proxy (taOS #2390): an unknown query
+parameter is a 400, never a silent no-op. The accepted set is:
+
+| Endpoint | Accepted query parameters |
+|----------|--------------------------|
+| `GET /a2a/messages` | `thread`, `since`, `limit`, `fields`, `format` |
+| `GET /a2a/mentions` | `since`, `limit`, `reader` |
+| `GET /a2a/stream` | `thread`, `since` |
+| `GET /a2a/threads` | `principal` |
+| `GET /a2a/threads/{thread}/messages` | `before`, `after`, `limit` |
+| `GET /a2a/channels` | (none) |
+| `GET /a2a/members` | `channel` |
+
 ### MCP tools
 
 | Tool | Arguments | Returns |
