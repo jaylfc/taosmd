@@ -1,0 +1,2 @@
+### Fixed
+- Re-landed the floorless-limit clamp from PR #439 against a clean master checkout, preserving the nine-of-ten site boundary enforcement (negative limit returns 400, zero returns empty, large limit caps at 500) without deleting `_handle_a2a_messages` or its `_validate_a2a_params` guard. Added mutation-killing tests for the three clamp branches and HTTP-level coverage for `/a2a/messages` parameter validation.

@@ -1532,6 +1532,32 @@ async def task_prime(
     return await _tasks.prime(project=project, assignee=assignee, data_dir=data_dir)
 
 
+async def task_list_edges(
+    *,
+    from_id: str | None = None,
+    to_id: str | None = None,
+    type: str | None = None,
+    project: str | None = None,
+    limit: int = 50,
+    data_dir=None,
+) -> list[dict]:
+    """Return task edges matching the given filters.
+
+    Thin wrapper over :func:`taosmd.tasks.list_edges`.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.task_list_edges(
+            from_id=from_id, to_id=to_id, type=type,
+            project=project, limit=limit,
+        )
+    from . import tasks as _tasks  # noqa: PLC0415
+    return await _tasks.list_edges(
+        from_id=from_id, to_id=to_id, type=type,
+        project=project, limit=limit, data_dir=data_dir,
+    )
+
+
 async def task_update(
     task_id: str,
     *,

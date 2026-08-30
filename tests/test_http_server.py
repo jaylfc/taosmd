@@ -1171,3 +1171,229 @@ def test_post_refs_fetch_missing_agent_returns_400(live_server):
     )
     assert status == 400
     assert "agent" in body["error"]
+
+
+# --- /tasks/edges ----------------------------------------------------------
+
+
+def test_task_list_edges_empty(live_server):
+    """GET /tasks/edges returns an empty list when there are no edges."""
+    status, body = _get(f"{live_server}/tasks/edges")
+    assert status == 200, body
+    assert body["edges"] == []
+
+
+def test_task_list_edges_returns_edges(live_server):
+    """GET /tasks/edges returns seeded edges."""
+    _, t1 = _post(f"{live_server}/tasks", {"title": "T1", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "T2", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t1['id']}/edges",
+          {"to_id": t2["id"], "type": "blocks", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/edges")
+    assert status == 200, body
+    assert len(body["edges"]) == 1
+    assert body["edges"][0]["from_id"] == t1["id"]
+    assert body["edges"][0]["to_id"] == t2["id"]
+    assert body["edges"][0]["type"] == "blocks"
+
+
+def test_task_list_edges_from_id_filter(live_server):
+    """?from_id= filters edges by source task."""
+    _, t1 = _post(f"{live_server}/tasks", {"title": "T1", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "T2", "created_by": "a"})
+    _, t3 = _post(f"{live_server}/tasks", {"title": "T3", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t1['id']}/edges",
+          {"to_id": t2["id"], "type": "blocks", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t1['id']}/edges",
+          {"to_id": t3["id"], "type": "blocks", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t2['id']}/edges",
+          {"to_id": t3["id"], "type": "blocks", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/edges?from_id={t1['id']}")
+    assert status == 200, body
+    assert len(body["edges"]) == 2
+    assert all(e["from_id"] == t1["id"] for e in body["edges"])
+
+
+def test_task_list_edges_to_id_filter(live_server):
+    """?to_id= filters edges by target task."""
+    _, t1 = _post(f"{live_server}/tasks", {"title": "T1", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "T2", "created_by": "a"})
+    _, t3 = _post(f"{live_server}/tasks", {"title": "T3", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t1['id']}/edges",
+          {"to_id": t3["id"], "type": "blocks", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t2['id']}/edges",
+          {"to_id": t3["id"], "type": "blocks", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/edges?to_id={t3['id']}")
+    assert status == 200, body
+    assert len(body["edges"]) == 2
+    assert all(e["to_id"] == t3["id"] for e in body["edges"])
+
+
+def test_task_list_edges_type_filter(live_server):
+    """?type= filters edges by type."""
+    _, t1 = _post(f"{live_server}/tasks", {"title": "T1", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "T2", "created_by": "a"})
+    _, t3 = _post(f"{live_server}/tasks", {"title": "T3", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t1['id']}/edges",
+          {"to_id": t2["id"], "type": "blocks", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t1['id']}/edges",
+          {"to_id": t3["id"], "type": "parent", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/edges?type=blocks")
+    assert status == 200, body
+    assert len(body["edges"]) == 1
+    assert body["edges"][0]["type"] == "blocks"
+
+
+def test_task_list_edges_project_scope(live_server):
+    """?project= scopes edges to tasks in that project."""
+    _, ta1 = _post(f"{live_server}/tasks", {"title": "A1", "created_by": "a", "project": "proj-a"})
+    _, ta2 = _post(f"{live_server}/tasks", {"title": "A2", "created_by": "a", "project": "proj-a"})
+    _, tb1 = _post(f"{live_server}/tasks", {"title": "B1", "created_by": "a", "project": "proj-b"})
+    _, tb2 = _post(f"{live_server}/tasks", {"title": "B2", "created_by": "a", "project": "proj-b"})
+    _post(f"{live_server}/tasks/{ta1['id']}/edges",
+          {"to_id": ta2["id"], "type": "blocks", "created_by": "a"})
+    _post(f"{live_server}/tasks/{tb1['id']}/edges",
+          {"to_id": tb2["id"], "type": "blocks", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/edges?project=proj-a")
+    assert status == 200, body
+    assert len(body["edges"]) == 1
+    assert body["edges"][0]["from_id"] == ta1["id"]
+    assert body["edges"][0]["to_id"] == ta2["id"]
+
+
+def test_task_list_edges_cross_project_endpoints_excluded(live_server):
+    """An edge whose endpoints are in different projects is not returned."""
+    _, ta = _post(f"{live_server}/tasks", {"title": "A", "created_by": "a", "project": "proj-a"})
+    _, tb = _post(f"{live_server}/tasks", {"title": "B", "created_by": "a", "project": "proj-b"})
+    _post(f"{live_server}/tasks/{ta['id']}/edges",
+          {"to_id": tb["id"], "type": "blocks", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/edges")
+    assert status == 200, body
+    assert len(body["edges"]) == 1
+    assert body["edges"][0]["from_id"] == ta["id"]
+    assert body["edges"][0]["to_id"] == tb["id"]
+
+    status_a, body_a = _get(f"{live_server}/tasks/edges?project=proj-a")
+    assert status_a == 200, body_a
+    assert body_a["edges"] == []
+
+    status_b, body_b = _get(f"{live_server}/tasks/edges?project=proj-b")
+    assert status_b == 200, body_b
+    assert body_b["edges"] == []
+
+
+def test_task_list_edges_limit_capped_at_500(live_server):
+    """GET /tasks/edges caps limit at 500."""
+    tasks = []
+    for i in range(10):
+        _, t = _post(f"{live_server}/tasks", {"title": f"T{i}", "created_by": "a"})
+        tasks.append(t["id"])
+    for i in range(9):
+        _post(f"{live_server}/tasks/{tasks[i]}/edges",
+              {"to_id": tasks[i + 1], "type": "blocks", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/edges?limit=500")
+    assert status == 200, body
+    assert len(body["edges"]) == 9
+
+
+def test_task_list_edges_limit_over_500_is_clamped(live_server):
+    """A limit > 500 is clamped to 500 at the HTTP boundary."""
+    tasks = []
+    for i in range(10):
+        _, t = _post(f"{live_server}/tasks", {"title": f"T{i}", "created_by": "a"})
+        tasks.append(t["id"])
+    for i in range(9):
+        _post(f"{live_server}/tasks/{tasks[i]}/edges",
+              {"to_id": tasks[i + 1], "type": "blocks", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/edges?limit=9999")
+    assert status == 200, body
+    assert len(body["edges"]) == 9
+
+
+# ---------------------------------------------------------------------------
+# Limit-clamp mutation-killing tests (M1 floor, M2 zero, M3 ceiling)
+# ---------------------------------------------------------------------------
+
+def _seed_tasks(live_server, n=520, project="proj"):
+    for i in range(n):
+        _post(f"{live_server}/tasks", {"title": f"T{i}", "created_by": "a", "project": project})
+
+
+def test_limit_negative_returns_400(live_server):
+    """M1: a negative limit is rejected before reaching SQL."""
+    _seed_tasks(live_server)
+    status, body = _get(f"{live_server}/tasks?limit=-1")
+    assert status == 400
+    assert "limit" in body["error"]
+
+
+def test_limit_zero_returns_empty(live_server):
+    """M2: limit=0 returns 0 rows."""
+    _seed_tasks(live_server)
+    status, body = _get(f"{live_server}/tasks?limit=0")
+    assert status == 200
+    assert body["tasks"] == []
+
+
+def test_limit_over_cap_clamped(live_server):
+    """M3: a limit above the cap is clamped, not passed through."""
+    _seed_tasks(live_server)
+    status, body = _get(f"{live_server}/tasks?limit=99999")
+    assert status == 200, body
+    assert len(body["tasks"]) == 500
+
+
+# ---------------------------------------------------------------------------
+# _handle_a2a_messages restored + limit-clamp coverage
+# ---------------------------------------------------------------------------
+
+def _seed_a2a_messages(live_server, n=520, thread="lim"):
+    for i in range(n):
+        _post(f"{live_server}/a2a/send", {"from": "alice", "body": f"msg{i}", "thread": thread})
+
+
+def test_a2a_messages_returns_200_with_rows(live_server):
+    """_handle_a2a_messages is present and returns data."""
+    _post(f"{live_server}/a2a/send", {"from": "alice", "body": "hello", "thread": "thr"})
+    status, body = _get(f"{live_server}/a2a/messages?thread=thr")
+    assert status == 200
+    assert len(body["messages"]) == 1
+
+
+def test_a2a_messages_bogus_param_returns_400(live_server):
+    """_validate_a2a_params guard rejects unknown query parameters."""
+    status, body = _get(f"{live_server}/a2a/messages?bogus=1")
+    assert status == 400
+    assert "unknown query parameters" in body["error"]
+
+
+def test_a2a_messages_limit_negative_returns_400(live_server):
+    """M1 on /a2a/messages: negative limit is rejected."""
+    _seed_a2a_messages(live_server)
+    status, body = _get(f"{live_server}/a2a/messages?thread=lim&limit=-1")
+    assert status == 400
+    assert "limit" in body["error"]
+
+
+def test_a2a_messages_limit_zero_returns_empty(live_server):
+    """M2 on /a2a/messages: limit=0 returns 0 rows."""
+    _seed_a2a_messages(live_server)
+    status, body = _get(f"{live_server}/a2a/messages?thread=lim&limit=0")
+    assert status == 200
+    assert body["messages"] == []
+
+
+def test_a2a_messages_limit_over_cap_clamped(live_server):
+    """M3 on /a2a/messages: limit above 500 is clamped."""
+    _seed_a2a_messages(live_server)
+    status, body = _get(f"{live_server}/a2a/messages?thread=lim&limit=99999")
+    assert status == 200, body
+    assert len(body["messages"]) == 500

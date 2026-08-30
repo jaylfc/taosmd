@@ -116,6 +116,7 @@ Endpoints
 ``GET  /tasks``            ``?status=&project=&assignee=&limit=``  -> ``{"tasks": [...]}``
 ``GET  /tasks/ready``      ``?project=&assignee=&limit=``  -> ``{"tasks": [...]}``
 ``GET  /tasks/prime``      ``?project=&assignee=``         -> ``{"text": ..., "tasks": [...]}``
+``GET  /tasks/edges``      ``?from_id=&to_id=&type=&project=&limit=`` -> ``{"edges": [...]}``
 ``POST /tasks/{id}``       ``{"status"?, "assignee"?, "priority"?, "body"?}`` -> updated task object
 ``POST /tasks/{id}/edges`` ``{"to_id", "type", "created_by"}``     -> edge record
 ``POST /tasks/{id}/edges/remove`` ``{"to_id", "type"}``   -> edge record with removed_ts
@@ -308,6 +309,14 @@ def _parse_cursor(raw: str | None) -> int | float | None:
     if val == int(val) and abs(val) < 1e15:
         return int(val)
     return val
+
+
+def _clamp_limit(limit: int, max_limit: int = 500) -> int:
+    if limit < 0:
+        raise _BadRequest("'limit' must be non-negative")
+    if limit == 0:
+        return 0
+    return min(limit, max_limit)
 
 
 # A single self-contained page: one inline <style> and one inline vanilla
@@ -1120,6 +1129,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_task_ready(query)
                 elif method == "GET" and path == "/tasks/prime":
                     self._handle_task_prime(query)
+                elif method == "GET" and path == "/tasks/edges":
+                    self._handle_task_list_edges(query)
                 elif method == "POST" and path.startswith("/tasks/"):
                     # /tasks/{id}/edges/remove  or  /tasks/{id}/edges  or  /tasks/{id}
                     rest = path[len("/tasks/"):]
@@ -1327,6 +1338,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i)
             if mode is not None and not isinstance(mode, str):
                 raise _BadRequest("'mode' must be a string when provided")
             if collection is not None and not isinstance(collection, str):
@@ -1465,6 +1477,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i)
             memories = runner.run(
                 service.list_memories(scope=scope, limit=limit_i, data_dir=data_dir)
             )
@@ -1476,6 +1489,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i)
             # Optional time-travel: ?as_of=<finite float epoch> reconstructs the
             # graph as it stood then. Any value that is not a finite number is
             # ignored (current graph), so a malformed scrubber value degrades
@@ -1505,6 +1519,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("since/window must be numbers and limit an integer") from exc
+            limit_i = _clamp_limit(limit_i)
             result = runner.run(
                 service.graph_activations(since=since_f, window=window_f, limit=limit_i, data_dir=data_dir)
             )
@@ -1524,6 +1539,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i)
             pending = runner.run(
                 service.pending_list(agent=agent, data_dir=data_dir, limit=limit_i)
             )
@@ -1733,6 +1749,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i)
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
             messages = runner.run(
@@ -1772,6 +1789,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i)
             # Auth: when a registry verifier is configured, the caller's
             # verified identity is the reader. Unauthenticated requests
             # return 401. When no verifier is configured (standalone), a
@@ -1901,6 +1919,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, 200)
             result = runner.run(
                 service.a2a_thread_messages(
                     thread=thread, before=before, after=after,
@@ -2084,6 +2103,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i)
             project, ok = self._apply_token_binding(assignee, project)
             if not ok:
                 return
@@ -2106,6 +2126,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i)
             project, ok = self._apply_token_binding(assignee, project)
             if not ok:
                 return
@@ -2133,6 +2154,32 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 )
             )
             self._send_json(200, result)
+
+        def _handle_task_list_edges(self, qs: dict) -> None:
+            from_id = (qs.get("from_id") or [None])[0]
+            to_id = (qs.get("to_id") or [None])[0]
+            edge_type = (qs.get("type") or [None])[0]
+            limit_raw = (qs.get("limit") or [50])[0]
+            try:
+                limit_i = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i)
+            project = (qs.get("project") or [None])[0]
+            project, ok = self._apply_token_binding(None, project)
+            if not ok:
+                return
+            edges = runner.run(
+                service.task_list_edges(
+                    from_id=from_id,
+                    to_id=to_id,
+                    type=edge_type,
+                    project=project,
+                    limit=limit_i,
+                    data_dir=data_dir,
+                )
+            )
+            self._send_json(200, {"edges": edges})
 
         def _handle_task_update(self, task_id: str) -> None:
             body = self._read_json_body()
@@ -2558,6 +2605,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
           "POST /a2a/send, GET /a2a/messages, GET /a2a/mentions, GET /a2a/stream, "
           "GET /a2a/channels, GET /a2a/members, "
           "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
+          "GET /tasks/edges, "
           "POST /tasks/{id}, POST /tasks/{id}/edges, POST /tasks/{id}/edges/remove, "
           "GET /collections, GET /collections/{id}, POST /collections/{id}/link, "
           "POST /collections/{id}/unlink, POST /collections/{id}/grants, "
