@@ -470,6 +470,33 @@ a2a_members(channel="CHANNEL")
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
+| `POST` | `/a2a/admin/set-channel-acl` | body JSON `{"channel", "read"? (list of ids), "post"? (list of ids), "clear"? (bool)}` | `{"ok": true, "channel": str}`; admin, same token rule |
+| `GET`  | `/a2a/admin/channel-acl` | `?channel=<name>` | `{"channel": str, "acl": {"read": [...], "post": [...]}}`; admin, same token rule |
+
+### Per-channel ACL
+
+Channels default to open (`read` and `post` allow `"*"`). Use
+`POST /a2a/admin/set-channel-acl` to restrict a channel to a list of
+verified identity strings. `GET /a2a/admin/channel-acl?channel=<name>`
+returns the current allowlist.
+
+Read endpoints enforce ACL as follows:
+
+- `GET /a2a/messages?thread=<name>` returns 403 when the caller is not
+  in the channel's `read` allowlist.
+- `GET /a2a/messages` (no `thread`) returns only the messages from
+  channels the caller may read; rows from restricted channels are
+  dropped, not 403, so fleet sweepers keep working.
+- `GET /a2a/threads` drops channels the caller cannot read.
+- `GET /a2a/stream?thread=<name>` returns 403 before SSE headers when
+  the channel is denied.
+- `GET /a2a/stream` (no `thread`) filters restricted messages in the
+  poll loop.
+
+Post endpoints enforce ACL on the `post` allowlist. ACL is checked
+after registry auth, using the verified `sub` claim from
+`_get_authenticated_agent_id`; the body `from` field is never used for
+the ACL decision.
 
 ### Admin token (separate from the data plane)
 
