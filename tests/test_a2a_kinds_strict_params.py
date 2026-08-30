@@ -315,6 +315,146 @@ def test_http_a2a_members_unknown_param_returns_400(live_server):
 
 
 # ---------------------------------------------------------------------------
+# Cursor-shaped params that were silently dropped before strict validation:
+# after= and since_id= are NOT accepted on the feed/stream/messages endpoints
+# (they live on /a2a/threads/{thread}/messages, which is a different surface).
+# ---------------------------------------------------------------------------
+
+def test_http_a2a_messages_after_rejected_returns_400(live_server):
+    """after= is not a recognised param on /a2a/messages; must 400, not page."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "hi", "thread": "after-t"})
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=after-t&after=1"
+    )
+    assert status == 400, body
+    assert "after" in body["error"]
+
+
+def test_http_a2a_messages_since_id_rejected_returns_400(live_server):
+    """since_id= is not a recognised param on /a2a/messages; must 400, not page."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "hi", "thread": "since-id-t"})
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=since-id-t&since_id=1"
+    )
+    assert status == 400, body
+    assert "since_id" in body["error"]
+
+
+def test_http_a2a_stream_after_rejected_returns_400(live_server):
+    """after= is not accepted on /a2a/stream; must 400."""
+    status = _stream_status_code(
+        live_server, "/a2a/stream?thread=any&after=1"
+    )
+    assert status == 400
+
+
+def test_http_a2a_stream_since_id_rejected_returns_400(live_server):
+    """since_id= is not accepted on /a2a/stream; must 400."""
+    status = _stream_status_code(
+        live_server, "/a2a/stream?thread=any&since_id=1"
+    )
+    assert status == 400
+
+
+def test_http_a2a_mentions_after_rejected_returns_400(live_server):
+    """after= is not accepted on /a2a/mentions (the feed path); must 400."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "hi", "thread": "mention-after"})
+    status, body = _get(
+        f"{live_server}/a2a/mentions?reader=agentA&after=1"
+    )
+    assert status == 400, body
+    assert "after" in body["error"]
+
+
+def test_http_a2a_mentions_since_id_rejected_returns_400(live_server):
+    """since_id= is not accepted on /a2a/mentions; must 400."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "hi", "thread": "mention-since-id"})
+    status, body = _get(
+        f"{live_server}/a2a/mentions?reader=agentA&since_id=1"
+    )
+    assert status == 400, body
+    assert "since_id" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# Error shape: names both the offending param and the accepted set
+# ---------------------------------------------------------------------------
+
+def test_http_a2a_messages_error_names_accepted_set(live_server):
+    """The 400 error must name the offending parameter AND the accepted set."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg", "thread": "nameset"})
+    status, body = _get(
+        f"{live_server}/a2a/messages?thread=nameset&after=1"
+    )
+    assert status == 400, body
+    err = body["error"]
+    assert "after" in err
+    assert "thread" in err and "since" in err and "limit" in err
+    assert "fields" in err and "format" in err
+
+
+def test_http_a2a_mentions_error_names_accepted_set(live_server):
+    """The 400 error on /a2a/mentions names both the offending param and accepted set."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg", "thread": "nameset-m"})
+    status, body = _get(
+        f"{live_server}/a2a/mentions?reader=agentA&bogus=1"
+    )
+    assert status == 400, body
+    err = body["error"]
+    assert "bogus" in err
+    assert "reader" in err and "since" in err and "limit" in err
+
+
+# ---------------------------------------------------------------------------
+# Positive cases: every accepted param still works; no params still works
+# ---------------------------------------------------------------------------
+
+def test_http_a2a_messages_no_params_returns_200(live_server):
+    """A plain GET /a2a/messages with no query params must still work (200)."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "no-param msg", "thread": "noparams"})
+    status, body = _get(f"{live_server}/a2a/messages")
+    assert status == 200, body
+    assert "messages" in body
+
+
+def test_http_a2a_messages_all_accepted_params_return_200(live_server):
+    """All accepted params together on /a2a/messages must return 200, not 400."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "allparams", "thread": "allparams"})
+    ts = time.time() - 1
+    status, body = _get(
+        f"{live_server}/a2a/messages"
+        f"?thread=allparams&since={ts}&limit=10&fields=id,from,body&format=json"
+    )
+    assert status == 200, body
+    msgs = body["messages"]
+    assert len(msgs) == 1
+    assert msgs[0]["body"] == "allparams"
+    assert set(msgs[0].keys()) == {"id", "from", "body"}
+
+
+def test_http_a2a_threads_no_params_returns_200(live_server):
+    """A plain GET /a2a/threads with no query params must still work (200)."""
+    status, body = _get(f"{live_server}/a2a/threads")
+    assert status == 200, body
+    assert "threads" in body
+
+
+def test_http_a2a_channels_no_params_returns_200(live_server):
+    """A plain GET /a2a/channels with no query params must still work (200)."""
+    status, body = _get(f"{live_server}/a2a/channels")
+    assert status == 200, body
+    assert "channels" in body
+
+
+# ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------
 
