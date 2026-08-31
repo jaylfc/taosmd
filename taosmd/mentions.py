@@ -21,14 +21,23 @@ _MENTION_RE = re.compile(r'(?<![\w/])@([a-zA-Z0-9_-]+)')
 
 
 class MentionStore:
-    """Append-only mention index keyed by (mentioned_handle, message_id, ts, thread)."""
+    """Append-only mention index keyed by (mentioned_handle, message_id, ts, thread).
+
+    All methods are async so callers can ``await`` them uniformly; the body
+    runs synchronously against a single SQLite connection. The connection is
+    opened through ``taosmd._db.connect`` (WAL journal mode, 5000 ms busy
+    timeout) with ``check_same_thread=False`` so the connection stays usable
+    from whichever thread drives the event loop -- this differs from the
+    thread-affine stores and is required because the async methods are not
+    guaranteed to run on the creating thread.
+    """
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._conn: sqlite3.Connection | None = None
 
     async def init(self) -> None:
-        self._conn = _db.connect(self._db_path)
+        self._conn = _db.connect(self._db_path, check_same_thread=False)
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS mentions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

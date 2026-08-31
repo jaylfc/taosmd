@@ -16,11 +16,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
 from taosmd import api as taosmd_api
 from taosmd import http_server, service
+from taosmd import mentions as mentions_module
 from taosmd.registry_auth import REGISTRY_ISS
 
 pytest.importorskip("jwt")
@@ -236,6 +238,73 @@ def test_mention_store_multiple_handles_in_body(isolated_data_dir):
     bob_ids = asyncio.run(mentions.get_mentioned_message_ids("bob"))
     assert [r["message_id"] for r in alice_ids] == [1]
     assert [r["message_id"] for r in bob_ids] == [1]
+
+
+# ---------------------------------------------------------------------------
+# Connection configuration: WAL + busy_timeout via _db.connect
+# ---------------------------------------------------------------------------
+
+def test_mention_store_uses_wal_and_busy_timeout():
+    """MentionStore must open via _db.connect so WAL + busy_timeout are set.
+
+    A direct sqlite3.connect bypass would leave the database in
+    rollback-journal mode with a zero busy timeout, surfacing
+    ``sqlite3.OperationalError: database is locked`` under contention instead
+    of waiting up to 5000 ms. This pins that regression.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = str(Path(tmp) / "a2a-mentions.db")
+        store = mentions_module.MentionStore(db_path=db_path)
+        asyncio.run(store.init())
+        try:
+            mode = store._conn.execute("PRAGMA journal_mode").fetchone()[0]
+            timeout = store._conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            assert mode == "wal", mode
+            assert int(timeout) == 5000, timeout
+        finally:
+            asyncio.run(store.close())
+
+
+# ---------------------------------------------------------------------------
+# Thread-affinity: connection must stay usable across threads
+# ---------------------------------------------------------------------------
+
+def test_mention_store_usable_from_non_creating_thread():
+    """check_same_thread=False keeps the connection usable cross-thread.
+
+    MentionStore's async methods may be driven by any event loop or thread
+    (the A2A mention feed is served by ThreadingHTTPServer, which hands each
+    request to its own thread), so the connection must not demand thread
+    affinity (the default for ``sqlite3.connect``). This pins that behaviour
+    so a naive swap back to the default does not turn the concurrency fix into
+    a thread-affinity crash.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = str(Path(tmp) / "a2a-mentions.db")
+        store = mentions_module.MentionStore(db_path=db_path)
+        asyncio.run(store.init())  # connection created on the main thread
+        outcome: dict = {}
+
+        def worker() -> None:
+            try:
+                asyncio.run(store.record_mentions(
+                    message_id=1, body="hello @bob", thread="t1", ts=100.0,
+                ))
+                ids = asyncio.run(store.get_mentioned_message_ids("bob"))
+                outcome["ok"] = [r["message_id"] for r in ids]
+            except Exception as exc:  # noqa: BLE001
+                outcome["err"] = repr(exc)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        try:
+            assert "err" not in outcome, outcome.get("err")
+            assert outcome["ok"] == [1]
+        finally:
+            asyncio.run(store.close())
 
 
 # ---------------------------------------------------------------------------
