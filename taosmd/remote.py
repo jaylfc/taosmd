@@ -316,7 +316,10 @@ class RemoteClient:
             params["before"] = before
         if after is not None:
             params["after"] = after
-        resp = await self._run("GET", f"/a2a/threads/{thread}/messages", params=params)
+        resp = await self._run(
+            "GET", f"/a2a/threads/{urllib.parse.quote(thread, safe='')}/messages",
+            params=params,
+        )
         return resp
 
     async def a2a_record_delivered(

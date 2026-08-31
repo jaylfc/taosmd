@@ -1109,6 +1109,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         if not thread:
                             self._send_json(404, {"error": "thread name required"})
                         else:
+                            thread = unquote(thread)
                             self._handle_a2a_thread_messages(thread, query)
                 elif method == "POST" and path.startswith("/a2a/threads/") and path.endswith("/members"):
                     rest = path[len("/a2a/threads/"):]

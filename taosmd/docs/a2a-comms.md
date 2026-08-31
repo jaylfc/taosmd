@@ -496,6 +496,8 @@ gating read endpoints on membership are tracked separately.
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
 | `POST` | `/a2a/threads` | body JSON `{"thread", "participants", "agent"}` | `{"thread", "created", "active_members"}`; create a thread (caller becomes owner, participants become members; ownership is self-asserted from the `agent` body field, see notes) |
+| `GET`  | `/a2a/threads` | `?principal=` | `{"threads": [...]}` |
+| `GET`  | `/a2a/threads/{thread}/messages` | `?before=&after=&limit=` | `{"thread", "messages": [...]}`; oldest-first cursor-paginated |
 | `GET`  | `/a2a/threads/{thread}/members` | n/a | `{"members": [...]}`; active members (owners + members), empty for open/legacy threads with no membership rows |
 | `POST` | `/a2a/threads/{thread}/members` | body JSON `{"principal_id", "agent"}` | `{"thread", "principal_id", "added"}`; add a member (caller must be owner; returns `{"added": false, "already_member": true}` if already present; 403 if caller is not an owner) |
 | `DELETE` | `/a2a/threads/{thread}/members/{principal}` | body JSON `{"agent"}` | `{"thread", "principal_id", "removed", "archived": true}`; remove a member (caller must be owner; last owner cannot be removed; 403 if caller is not an owner) |
@@ -503,6 +505,15 @@ gating read endpoints on membership are tracked separately.
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
+
+#### Thread path-segment encoding
+
+`{thread}` and `{principal}` in URL path segments are percent-encoded by the
+client (`urllib.parse.quote(thread, safe='')`) and percent-decoded by the
+server (`urllib.parse.unquote`) in every handler that accepts them, so thread
+names containing spaces, hashes (`%23`), slashes (`%2F`), or non-ASCII
+characters are matched correctly instead of silently returning an empty
+result or raising `InvalidURL` / `UnicodeEncodeError`.
 
 ### Admin token (separate from the data plane)
 
