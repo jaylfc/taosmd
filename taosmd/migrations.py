@@ -632,7 +632,7 @@ def migrate_all(data_dir: Union[str, Path]) -> list[MigrationResult]:
         path = _db_path(data_dir, db)
         if not path.exists():
             continue
-        conn = _db.connect(path)
+        conn = _db.connect(path, check_same_thread=False)
         try:
             results.append(migrate(conn, db))
         finally:

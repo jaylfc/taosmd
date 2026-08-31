@@ -181,7 +181,7 @@ class CollectionStore:
         self._data_dir = os.fspath(data_dir)
         path = Path(self._data_dir)
         path.mkdir(parents=True, exist_ok=True)
-        self._conn = _db.connect(str(path / "collections.db"))
+        self._conn = _db.connect(str(path / "collections.db"), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
 

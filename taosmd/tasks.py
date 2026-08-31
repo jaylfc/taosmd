@@ -118,7 +118,7 @@ def _get_db(data_dir: str | None) -> sqlite3.Connection:
     path = Path(resolved)
     path.mkdir(parents=True, exist_ok=True)
     db_path = str(path / "tasks.db")
-    conn = _db.connect(db_path)
+    conn = _db.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
     conn.commit()
@@ -773,7 +773,7 @@ async def rebuild_from_archive(data_dir: str | None = None) -> dict:
     # Rebuild schema on a fresh connection
     path = Path(resolved)
     db_path = str(path / "tasks.db")
-    conn = _db.connect(db_path)
+    conn = _db.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     # Drop projection tables (view drops automatically)
     conn.executescript("""
