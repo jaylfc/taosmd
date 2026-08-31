@@ -8,9 +8,12 @@ shell (e.g. compaction, re-indexing, exporting an agent's shelf).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .agents import (
     AgentExistsError,
@@ -610,39 +613,232 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
-def _install_skill_cmd(args: argparse.Namespace) -> int:
-    """Handle ``taosmd install-skill``: copy the packaged skill into ~/.claude/skills/."""
-    import shutil  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
-    from importlib.resources import files as _pkg_files  # noqa: PLC0415
+# ----- taosmd-a2a skill install helpers --------------------------------
 
+
+def _parse_skill_version(skill_md: Path) -> str | None:
+    """Read the ``version`` field from a SKILL.md YAML frontmatter block."""
+    text = skill_md.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return None
+    end = text.find("---", 3)
+    if end == -1:
+        return None
+    m = re.search(r"^version:\s*(\S.*)$", text[3:end], re.MULTILINE)
+    return m.group(1).strip().strip("\"'") if m else None
+
+
+def _version_tuple(version: str | None) -> tuple[int, ...] | None:
+    """Parse a plain numeric dotted version such as ``1.10.0`` into an int tuple.
+
+    Returns ``None`` for anything else, including ``None``, the empty string
+    and pre-release forms like ``1.0.0-rc1``. Comparing the tuples orders
+    ``0.9.0`` before ``0.10.0``, which a string compare does not. Callers treat
+    an unparsable version as "no ordering available" rather than guessing one.
+    """
+    if not version:
+        return None
+    parts = version.split(".")
+    if not all(part.isascii() and part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+_SKILL_CHANGE_PAST = {
+    "upgrade": "upgraded",
+    "downgrade": "downgraded",
+    "reinstall": "reinstalled",
+    "replace": "replaced",
+}
+
+
+def _skill_change_kind(installed_version: str | None, packaged_version: str) -> str:
+    """Classify an installed -> packaged move for the user-facing message.
+
+    One of ``upgrade``, ``downgrade``, ``reinstall`` or ``replace``. Ordering
+    is only claimed when both sides parse as plain numeric dotted versions;
+    otherwise the move is a ``replace``, because the packaged copy is the one
+    we ship but we cannot honestly call it newer.
+    """
+    installed = _version_tuple(installed_version)
+    packaged = _version_tuple(packaged_version)
+    if installed is None or packaged is None:
+        return "replace"
+    if packaged > installed:
+        return "upgrade"
+    if packaged < installed:
+        return "downgrade"
+    return "reinstall"
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def _skill_manifest_path(dest_dir: Path) -> Path:
+    return dest_dir / ".taosmd-skill-manifest.json"
+
+
+def _write_skill_manifest(dest_dir: Path, version: str | None) -> None:
+    manifest = {
+        "skill": "taosmd-a2a",
+        "version": version,
+        "skill_md_sha256": _sha256(dest_dir / "SKILL.md"),
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _skill_manifest_path(dest_dir).write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _read_skill_manifest(manifest: Path) -> dict | None:
+    """Load the install manifest, or ``None`` when it is missing or unreadable.
+
+    A truncated, hand-edited or non-object manifest must not brick
+    ``install-skill``: it is treated as unknown provenance so the caller falls
+    back to the no-manifest content comparison, on the default path and the
+    ``--force`` path alike.
+    """
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _has_local_edits(installed_md: Path, packaged_md: Path, manifest: Path) -> bool:
+    """True when the installed SKILL.md diverges from the copy we last placed.
+
+    A manifest hash recorded at install time is the primary signal: if the
+    installed content no longer matches it, user edits are assumed. With no
+    manifest (pre-versioning installs), or one we cannot read, we fall back to
+    a content diff that ignores the ``version`` line, since that line is the
+    whole point of a bump.
+    """
+    data = _read_skill_manifest(manifest)
+    if data is not None:
+        expected = data.get("skill_md_sha256")
+        if expected is None:
+            return False
+        return _sha256(installed_md) != expected
+
+    def _body(text: str) -> list[str]:
+        return [
+            ln for ln in text.splitlines() if not ln.strip().startswith("version:")
+        ]
+
+    return (
+        _body(installed_md.read_text(encoding="utf-8"))
+        != _body(packaged_md.read_text(encoding="utf-8"))
+    )
+
+
+def _copy_skill_tree(src_dir: Path, dest_dir: Path) -> None:
+    import shutil  # noqa: PLC0415
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(str(src_dir), str(dest_dir), dirs_exist_ok=True)
+
+
+def _install_skill_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd install-skill``: copy the taosmd-a2a skill into ~/.claude/skills/."""
+    # Skill assets ship inside the package directory, so the path next to this
+    # module is the install location for source checkouts and wheels alike.
     dest_dir = Path("~/.claude/skills/taosmd-a2a").expanduser()
     skill_src_dir = Path(__file__).parent / "skills" / "taosmd-a2a"
-
-    if not skill_src_dir.is_dir():
-        # Fallback: try importlib.resources (wheel installs)
-        try:
-            _ref = _pkg_files("taosmd").joinpath("skills/taosmd-a2a")
-            # Convert Traversable to a concrete path via __file__ approach.
-            skill_src_dir = Path(__file__).parent / "skills" / "taosmd-a2a"
-        except Exception:
-            pass
 
     if not skill_src_dir.is_dir():
         print("error: packaged skill not found in taosmd/skills/taosmd-a2a/", file=sys.stderr)
         print("  Re-install the package to include skill assets.", file=sys.stderr)
         return 2
 
-    force = getattr(args, "force", False)
-    skill_md = dest_dir / "SKILL.md"
-    if skill_md.exists() and not force:
-        print(f"Skill already installed at {dest_dir}")
-        print("  Re-run with --force to overwrite.")
+    return _run_install_skill(
+        skill_src_dir, dest_dir, getattr(args, "force", False)
+    )
+
+
+def _run_install_skill(src_dir: Path, dest_dir: Path, force: bool) -> int:
+    """Core install/upgrade logic for the taosmd-a2a skill.
+
+    Compares the packaged version (from the SKILL.md frontmatter) against the
+    installed copy, using a content hash recorded at install time to detect
+    local edits. Versions are ordered as tuples of dotted integers: a newer
+    package without local edits upgrades by default, an older package is
+    refused unless ``force`` is set, and when either side is not a plain
+    numeric version the packaged copy simply replaces a clean installed one.
+    A copy carrying local edits is never clobbered without ``force``.
+    """
+    packaged_md = src_dir / "SKILL.md"
+    installed_md = dest_dir / "SKILL.md"
+    manifest = _skill_manifest_path(dest_dir)
+    packaged_version = _parse_skill_version(packaged_md) or "0.0.0"
+
+    if not installed_md.exists():
+        _copy_skill_tree(src_dir, dest_dir)
+        _write_skill_manifest(dest_dir, packaged_version)
+        print(f"taosmd-a2a skill installed at {dest_dir} (v{packaged_version})")
         return 0
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(str(skill_src_dir), str(dest_dir), dirs_exist_ok=True)
-    print(f"taosmd-a2a skill installed at {dest_dir}")
+    installed_version = _parse_skill_version(installed_md)
+    has_local_edits = _has_local_edits(installed_md, packaged_md, manifest)
+    inst_repr = installed_version or "unknown (pre-versioning)"
+
+    if force:
+        _copy_skill_tree(src_dir, dest_dir)
+        _write_skill_manifest(dest_dir, packaged_version)
+        kind = _skill_change_kind(installed_version, packaged_version)
+        note = " (overwriting local edits)" if has_local_edits else ""
+        print(
+            f"taosmd-a2a skill {_SKILL_CHANGE_PAST[kind]}: "
+            f"v{inst_repr} -> v{packaged_version}{note}"
+        )
+        return 0
+
+    if installed_version == packaged_version and not has_local_edits:
+        print(
+            f"taosmd-a2a skill already installed, up to date "
+            f"(v{packaged_version})."
+        )
+        return 0
+
+    if has_local_edits:
+        print(
+            f"error: taosmd-a2a skill has local edits "
+            f"(installed v{inst_repr}, packaged v{packaged_version}).",
+            file=sys.stderr,
+        )
+        print(
+            "  Refusing to overwrite local edits; re-run with --force to clobber.",
+            file=sys.stderr,
+        )
+        print("  taosmd install-skill --force", file=sys.stderr)
+        return 1
+
+    kind = _skill_change_kind(installed_version, packaged_version)
+
+    if kind == "downgrade":
+        print(
+            f"error: packaged taosmd-a2a skill is older than the installed copy "
+            f"(installed v{inst_repr}, packaged v{packaged_version}).",
+            file=sys.stderr,
+        )
+        print(
+            "  Refusing to downgrade; re-run with --force to install the older copy.",
+            file=sys.stderr,
+        )
+        print("  taosmd install-skill --force", file=sys.stderr)
+        return 1
+
+    # Installed copy is clean and the packaged version differs: install it. Only
+    # a parsed ordering earns the word "upgraded"; everything else is a replace.
+    _copy_skill_tree(src_dir, dest_dir)
+    _write_skill_manifest(dest_dir, packaged_version)
+    print(
+        f"taosmd-a2a skill {_SKILL_CHANGE_PAST[kind]}: "
+        f"v{inst_repr} -> v{packaged_version}"
+    )
     return 0
 
 
