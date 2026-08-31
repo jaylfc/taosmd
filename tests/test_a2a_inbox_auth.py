@@ -8,7 +8,6 @@ Covers:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import threading
 import urllib.error
@@ -25,6 +24,7 @@ from cryptography.hazmat.primitives import serialization
 
 from taosmd import api as taosmd_api
 from taosmd import config as cfg, http_server, registry_auth
+from taosmd.registry_auth import REGISTRY_ISS
 
 
 # ---------------------------------------------------------------------------
@@ -49,10 +49,8 @@ REG_PRIV_PEM, REG_PUB_PEM = _keypair()
 OTHER_PRIV_PEM, _OTHER_PUB_PEM = _keypair()
 
 
-def _make_token(sub, priv_pem=REG_PRIV_PEM, iss=None):
-    claims = {"sub": sub}
-    if iss is not None:
-        claims["iss"] = iss
+def _make_token(sub, priv_pem=REG_PRIV_PEM, iss=REGISTRY_ISS):
+    claims = {"sub": sub, "iss": iss}
     return pyjwt.encode(claims, priv_pem, algorithm="EdDSA")
 
 
@@ -104,7 +102,7 @@ def authed_server(tmp_path, monkeypatch):
         return json.dumps([])
 
     verifier = registry_auth.verifier_from_url(
-        "http://reg.test", opener=fake_opener, expected_iss=None,
+        "http://reg.test", opener=fake_opener, expected_iss=registry_auth.REGISTRY_ISS,
     )
     httpd = http_server.make_server(
         "127.0.0.1", 0, data_dir=str(data_dir), verifier=verifier,
@@ -282,7 +280,6 @@ def test_inbox_unhandled_with_valid_matching_token_succeeds(authed_server, tmp_p
         token=token,
     )
     assert send_status == 200
-    msg_id = send_body["id"]
 
     status, body = _get(
         f"{authed_server}/a2a/inbox/unhandled",
@@ -293,7 +290,35 @@ def test_inbox_unhandled_with_valid_matching_token_succeeds(authed_server, tmp_p
 
 
 # ---------------------------------------------------------------------------
-# Gate (e): unknown query parameter -> 400 on unhandled
+# Gate (e): wrong issuer -> 401 on all endpoints
+# ---------------------------------------------------------------------------
+
+def test_inbox_with_wrong_issuer_is_rejected(authed_server):
+    bad_token = _make_token("agent-1", iss="wrong-issuer")
+    status, _ = _get(f"{authed_server}/a2a/inbox", token=bad_token)
+    assert status == 401
+
+
+def test_inbox_advance_with_wrong_issuer_is_rejected(authed_server):
+    bad_token = _make_token("agent-1", iss="wrong-issuer")
+    status, _ = _post(f"{authed_server}/a2a/inbox/advance", {"to_id": 5}, token=bad_token)
+    assert status == 401
+
+
+def test_ack_with_wrong_issuer_is_rejected(authed_server):
+    bad_token = _make_token("agent-1", iss="wrong-issuer")
+    status, _ = _post(f"{authed_server}/a2a/ack", {"message_id": 1}, token=bad_token)
+    assert status == 401
+
+
+def test_inbox_unhandled_with_wrong_issuer_is_rejected(authed_server):
+    bad_token = _make_token("agent-1", iss="wrong-issuer")
+    status, _ = _get(f"{authed_server}/a2a/inbox/unhandled", token=bad_token)
+    assert status == 401
+
+
+# ---------------------------------------------------------------------------
+# Gate (f): unknown query parameter -> 400 on unhandled
 # ---------------------------------------------------------------------------
 
 def test_inbox_unhandled_unknown_param_is_rejected(authed_server):

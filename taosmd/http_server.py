@@ -107,7 +107,7 @@ Endpoints
                             ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
 ``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400)
 ``GET  /a2a/mentions``    ``?since=&limit=&reader=``                  -> ``{"messages": [...]}`` (requires registry auth; ``reader`` is derived from the verified token ``sub``, or supplied as a query parameter when no verifier is configured)
-``GET  /a2a/inbox``       ``?consumer=&limit=&include_kinds=``         -> ``{"messages": [...]}`` (``consumer`` is derived from the verified token ``sub`` when registry auth is configured; otherwise required as a query parameter)
+``GET  /a2a/inbox``       ``?consumer=&limit=&include_kinds=&exclude_acked_by=``         -> ``{"messages": [...]}`` (``consumer`` is derived from the verified token ``sub`` when registry auth is configured; otherwise required as a query parameter; ``exclude_acked_by`` omits messages already acknowledged by the named principal)
 ``POST /a2a/inbox/advance`` ``{"to_id": int}``                           -> ``{"ok": true}`` (principal derived from the verified token ``sub``)
 ``POST /a2a/ack``          ``{"message_id": int}``                      -> ``{"id", "acked_by", "ok"}`` (``by`` derived from the verified token ``sub``)
 ``GET  /a2a/inbox/unhandled`` ``?consumer=&limit=``                     -> ``{"messages": [...]}`` (composed query: mentions past cursor minus acks)

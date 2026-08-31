@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives import serialization
 from taosmd import api as taosmd_api
 from taosmd import config as taosmd_config
 from taosmd import http_server, registry_auth, service as taosmd_service
+from taosmd.registry_auth import REGISTRY_ISS
 
 
 # ---------------------------------------------------------------------------
@@ -50,8 +51,8 @@ def _keypair():
 REG_PRIV_PEM, REG_PUB_PEM = _keypair()
 
 
-def _make_token(sub, priv_pem=REG_PRIV_PEM):
-    return pyjwt.encode({"sub": sub}, priv_pem, algorithm="EdDSA")
+def _make_token(sub, priv_pem=REG_PRIV_PEM, iss=REGISTRY_ISS):
+    return pyjwt.encode({"sub": sub, "iss": iss}, priv_pem, algorithm="EdDSA")
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +93,7 @@ def authed_live_server(tmp_path, monkeypatch):
         return json.dumps([])
 
     verifier = registry_auth.verifier_from_url(
-        "http://reg.test", opener=fake_opener, expected_iss=None,
+        "http://reg.test", opener=fake_opener, expected_iss=registry_auth.REGISTRY_ISS,
     )
 
     # Pre-seed via local service layer before the server starts, then clear
@@ -227,8 +228,54 @@ def test_remote_inbox_unhandled_reaches_remote_server(caller_data_dir, authed_li
 
 
 # ---------------------------------------------------------------------------
-# Tests: exclude_acked_by forwarded and applied on remote path
+# Tests: wrong issuer is rejected on the remote path
 # ---------------------------------------------------------------------------
+
+def test_remote_inbox_rejects_wrong_issuer(tmp_path, monkeypatch):
+    """A token with the wrong issuer is rejected by the remote registry verifier."""
+    server_dir = tmp_path / "taosmd-remote-wrong-iss-server"
+    server_dir.mkdir()
+    taosmd_config.set_a2a_auth_enforce(True, str(server_dir))
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+
+    def fake_opener(url, token=None):
+        if url.endswith(registry_auth.PUBKEY_PATH):
+            return json.dumps({"pubkey": REG_PUB_PEM})
+        return json.dumps([])
+
+    verifier = registry_auth.verifier_from_url(
+        "http://reg.test", opener=fake_opener, expected_iss=registry_auth.REGISTRY_ISS,
+    )
+
+    wrong_token = _make_token("agent-1", iss="wrong-issuer")
+    cfg_file = server_dir / "config.json"
+    cfg_file.write_text(json.dumps({"server_token": wrong_token}))
+
+    httpd = http_server.make_server(
+        "127.0.0.1", 0, data_dir=str(server_dir), verifier=verifier,
+    )
+    asyncio_run = __import__("asyncio").run
+    asyncio_run(taosmd_api._ensure_stores(str(server_dir)))
+    _patch_embedder(asyncio_run(taosmd_api._ensure_stores(str(server_dir))))
+    host, port = httpd.server_address[:2]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        caller_dir = tmp_path / "taosmd-remote-wrong-iss-caller"
+        caller_dir.mkdir()
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        caller_cfg = caller_dir / "config.json"
+        caller_cfg.write_text(json.dumps({"server_url": f"http://{host}:{port}", "server_token": wrong_token}))
+        taosmd_service._remote_cache.clear()
+        with pytest.raises(RuntimeError, match="HTTP 401"):
+            asyncio_run(taosmd_service.a2a_inbox("agent-1", data_dir=str(caller_dir)))
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+        httpd.service_loop.close()
+        taosmd_service._remote_cache.clear()
+
 
 def test_remote_inbox_exclude_acked_by_applied(caller_data_dir, authed_live_server):
     base_url, server_data_dir = authed_live_server
