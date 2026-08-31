@@ -1,0 +1,2 @@
+### Fixed
+- Collection grant revocation now reports whether a row was actually removed. ``CollectionStore.revoke`` captured the ``DELETE`` rowcount but discarded it, so ``DELETE /collections/{id}/grants/{agent}`` returned 200 even when no grant matched, telling an operator the revoke succeeded while the grant stayed live. The endpoint now returns a boolean ``revoked`` field alongside ``collection``; a no-op revoke stays 200 (idempotent), not an error. The grantee match is still case-sensitive and whitespace-normalised, unchanged.

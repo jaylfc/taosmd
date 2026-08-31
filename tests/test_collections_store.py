@@ -236,6 +236,32 @@ def test_grantee_key_preserves_the_pre_existing_non_string_behaviour(store, sour
         store.revoke(col["id"], ["agent-a"])
 
 
+def test_revoke_reports_revoked_true_when_a_grant_was_removed(store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.grant(col["id"], "agent-a")
+    result = store.revoke(col["id"], "agent-a")
+    assert result["revoked"] is True
+    assert result["grants"] == []
+    assert not store.has_grant("agent-a", col["id"])
+
+
+def test_revoke_reports_revoked_false_when_no_grant_matched(store, source_dir):
+    """A revoke that matched no row removed nothing, so report it.
+
+    Whitespace is normalised and case is deliberate (see
+    ``test_grantee_match_is_not_case_insensitive``): a mis-cased grantee
+    deletes no row, yet the pre-fix ``revoke`` returned the collection as if
+    it had succeeded. ``revoked`` is False so a caller reading only the store
+    result is not told the grant was taken.
+    """
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.grant(col["id"], "Agent-A")
+    result = store.revoke(col["id"], "agent-a")
+    assert result["revoked"] is False
+    assert result["grants"] == ["Agent-A"]
+    assert store.has_grant("Agent-A", col["id"])
+
+
 # ---------------------------------------------------------------------------
 # archive (delete alias) + status
 # ---------------------------------------------------------------------------
