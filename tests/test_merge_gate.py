@@ -95,6 +95,17 @@ def test_human_only_fails(tmp_path):
     assert result.stdout.startswith("FAILED:")
 
 
+def test_bot_dismissed_at_head_fails(tmp_path):
+    result = _run(
+        "check_bot_anchoring.sh",
+        ["218"],
+        str(tmp_path),
+        pr=_read("pr_bot_dismissed.json"),
+    )
+    assert result.returncode == 10, result.stdout + result.stderr
+    assert result.stdout.startswith("FAILED:")
+
+
 def test_rate_limited_fails(tmp_path):
     result = _run(
         "check_fake_green.sh",
