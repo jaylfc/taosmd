@@ -624,7 +624,7 @@ def _parse_skill_version(skill_md: Path) -> str | None:
     end = text.find("---", 3)
     if end == -1:
         return None
-    m = re.search(r"^version:\s*(\S.*)$", text[3:end], re.MULTILINE)
+    m = re.search(r"^version:[ \t]*(\S.*)$", text[3:end], re.MULTILINE)
     return m.group(1).strip().strip("\"'") if m else None
 
 
@@ -688,9 +688,16 @@ def _write_skill_manifest(dest_dir: Path, version: str | None) -> None:
         "skill_md_sha256": _sha256(dest_dir / "SKILL.md"),
         "installed_at": datetime.now(timezone.utc).isoformat(),
     }
-    _skill_manifest_path(dest_dir).write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
+    manifest_path = _skill_manifest_path(dest_dir)
+    content = json.dumps(manifest, indent=2) + "\n"
+    try:
+        manifest_path.write_text(content, encoding="utf-8")
+    except IsADirectoryError:
+        manifest_path.rmdir()
+        manifest_path.write_text(content, encoding="utf-8")
+    except PermissionError:
+        manifest_path.chmod(0o644)
+        manifest_path.write_text(content, encoding="utf-8")
 
 
 def _read_skill_manifest(manifest: Path) -> dict | None:

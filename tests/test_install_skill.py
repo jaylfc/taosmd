@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
+from pathlib import Path
 
 from taosmd.cli import _parse_skill_version, _run_install_skill, _version_tuple
 
@@ -487,3 +490,172 @@ def test_parse_skill_version_ignores_a_version_line_below_the_frontmatter(tmp_pa
         "---\nname: taosmd-a2a\n---\n\nversion: 9.9.9\n\nBody text.\n"
     )
     assert _parse_skill_version(skill_md) is None
+
+
+def test_parse_skill_version_empty_version_line_does_not_consume_next_line(tmp_path):
+    """An empty 'version:' line must not consume the next line as the version."""
+    skill_md = tmp_path / "SKILL.md"
+    skill_md.write_text(
+        "---\n"
+        "name: taosmd-a2a\n"
+        "version:\n"
+        "description: some description\n"
+        "---\n"
+        "Body text.\n"
+    )
+    assert _parse_skill_version(skill_md) is None
+
+
+# --- D2: manifest write path must not raise on both arms --------------------
+
+
+def test_directory_in_place_manifest_non_force_arm(tmp_path):
+    """Non-force arm with a stale clean copy and directory-in-place manifest."""
+    src_v1 = tmp_path / "pkg-v1"
+    _write_skill(src_v1, "1.0.0", "old body")
+    dest = tmp_path / "dest"
+    _run_install_skill(src_v1, dest, force=False)
+
+    manifest_dir = dest / MANIFEST_NAME
+    manifest_dir.unlink()
+    manifest_dir.mkdir()
+
+    src_v2 = tmp_path / "pkg-v2"
+    _write_skill(src_v2, "1.1.0", "old body")
+
+    rc = _run_install_skill(src_v2, dest, force=False)
+    assert rc == 0
+    assert "1.1.0" in (dest / "SKILL.md").read_text()
+    data = json.loads((dest / MANIFEST_NAME).read_text())
+    assert data["version"] == "1.1.0"
+
+
+def test_directory_in_place_manifest_force_arm(tmp_path):
+    """Force arm with a stale copy and directory-in-place manifest."""
+    src_v1 = tmp_path / "pkg-v1"
+    _write_skill(src_v1, "1.0.0", "old body")
+    dest = tmp_path / "dest"
+    _run_install_skill(src_v1, dest, force=False)
+
+    manifest_dir = dest / MANIFEST_NAME
+    manifest_dir.unlink()
+    manifest_dir.mkdir()
+
+    src_v2 = tmp_path / "pkg-v2"
+    _write_skill(src_v2, "1.1.0", "new body")
+
+    rc = _run_install_skill(src_v2, dest, force=True)
+    assert rc == 0
+    assert "1.1.0" in (dest / "SKILL.md").read_text()
+    data = json.loads((dest / MANIFEST_NAME).read_text())
+    assert data["version"] == "1.1.0"
+
+
+def test_read_only_manifest_non_force_arm(tmp_path):
+    """Non-force arm with a stale clean copy and read-only manifest."""
+    src_v1 = tmp_path / "pkg-v1"
+    _write_skill(src_v1, "1.0.0", "old body")
+    dest = tmp_path / "dest"
+    _run_install_skill(src_v1, dest, force=False)
+
+    manifest = dest / MANIFEST_NAME
+    manifest.chmod(0o444)
+
+    src_v2 = tmp_path / "pkg-v2"
+    _write_skill(src_v2, "1.1.0", "old body")
+
+    rc = _run_install_skill(src_v2, dest, force=False)
+    assert rc == 0
+    assert "1.1.0" in (dest / "SKILL.md").read_text()
+    data = json.loads((dest / MANIFEST_NAME).read_text())
+    assert data["version"] == "1.1.0"
+
+
+def test_read_only_manifest_force_arm(tmp_path):
+    """Force arm with a stale copy and read-only manifest."""
+    src_v1 = tmp_path / "pkg-v1"
+    _write_skill(src_v1, "1.0.0", "old body")
+    dest = tmp_path / "dest"
+    _run_install_skill(src_v1, dest, force=False)
+
+    manifest = dest / MANIFEST_NAME
+    manifest.chmod(0o444)
+
+    src_v2 = tmp_path / "pkg-v2"
+    _write_skill(src_v2, "1.1.0", "new body")
+
+    rc = _run_install_skill(src_v2, dest, force=True)
+    assert rc == 0
+    assert "1.1.0" in (dest / "SKILL.md").read_text()
+    data = json.loads((dest / MANIFEST_NAME).read_text())
+    assert data["version"] == "1.1.0"
+
+
+# --- D1: install-client.sh must not auto-force on refusal -------------------
+
+
+class TestInstallClientScript:
+    """End-to-end probe for scripts/install-client.sh refusal handling."""
+
+    def test_refusal_does_not_auto_force(self, tmp_path, monkeypatch):
+        """When taosmd install-skill refuses, install-client.sh must not force."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+
+        fake_taosmd = bin_dir / "taosmd"
+        fake_taosmd.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "install-skill" ]; then\n'
+            "    if [ \"$2\" = \"--force\" ]; then\n"
+            "        DEST=\"$HOME/.claude/skills/taosmd-a2a\"\n"
+            "        mkdir -p \"$DEST\"\n"
+            "        echo \"packaged skill\" > \"$DEST/SKILL.md\"\n"
+            "        echo '{\"skill\":\"taosmd-a2a\",\"version\":\"1.0.0\"}' > \"$DEST/.taosmd-skill-manifest.json\"\n"
+            "    else\n"
+            "        echo \"error: local edits\" >&2\n"
+            "        echo \"  taosmd install-skill --force\" >&2\n"
+            "        exit 1\n"
+            "    fi\n"
+            "elif [ \"$1\" = \"config\" ]; then\n"
+            "    exit 0\n"
+            "elif [ \"$1\" = \"--version\" ]; then\n"
+            "    echo \"1.0.0\"\n"
+            "else\n"
+            "    exit 0\n"
+            "fi\n"
+        )
+        fake_taosmd.chmod(0o755)
+
+        fake_pip = bin_dir / "pip"
+        fake_pip.write_text("#!/usr/bin/env bash\nexit 0\n")
+        fake_pip.chmod(0o755)
+
+        fake_curl = bin_dir / "curl"
+        fake_curl.write_text('#!/usr/bin/env bash\necho \'{"status": "ok"}\'')
+        fake_curl.chmod(0o755)
+
+        skill_dir = fake_home / ".claude" / "skills" / "taosmd-a2a"
+        skill_dir.mkdir(parents=True)
+        local_edit_marker = "# LOCAL EDIT BY USER\n"
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: taosmd-a2a\nversion: 1.0.0\n---\n{local_edit_marker}"
+        )
+
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv(
+            "PATH", str(bin_dir) + ":" + os.environ.get("PATH", "")
+        )
+
+        script_path = Path(__file__).parent.parent / "scripts" / "install-client.sh"
+        subprocess.run(
+            ["bash", str(script_path), "http://localhost:7900"],
+            capture_output=True,
+            text=True,
+        )
+
+        skill_md = (skill_dir / "SKILL.md").read_text()
+        assert local_edit_marker in skill_md, (
+            "Local edit was clobbered by auto-forced reinstall"
+        )

@@ -46,10 +46,9 @@ Write-Host "  Remote server URL set: $ServerUrl"
 # --- Step 3: install the Claude skill ----------------------------------------
 Write-Host ""
 Write-Host "Step 3: Installing taosmd-a2a skill..."
-try {
-    taosmd install-skill
-} catch {
-    taosmd install-skill --force
+taosmd install-skill
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
 }
 Write-Host "  Skill installed."
 
