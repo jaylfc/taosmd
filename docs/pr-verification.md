@@ -83,10 +83,15 @@ string; that is the marker verified against real taOSmd data on PR #212.
 ### Prove the negative
 
 Run the finished gate against PRs you already know are unreviewed, not only against ones you
-expect to pass. Measured 2026-07-28: **9 of taOSmd's 15 most recently merged PRs were
+expect to pass. Measured 2026-07-28: **8 of taOSmd's 15 most recently merged PRs were
 CodeRabbit rate-limit-only at their merged head** (#212, #207, #196, #195, #193, #192, #191,
-#190, #189). The gate must print `FAILED:` on every one of them. If it passes any, the gate is
+#189). The gate must print `FAILED:` on every one of them. If it passes any, the gate is
 wrong, not the PR.
+
+**Note**: PR #190 was removed from this list; it now legitimately passes after tsk-q7dnww,
+when kilo-code-bot reviewed its head with an inline-only review (empty body, findings in
+inline comments). This note records that #190 moved from must-fail to legitimately-passing
+so it is not silently re-added.
 
 Bot review coverage is a property to **measure per repo**, not to assume from a bot's presence
 in the checks list.

@@ -84,7 +84,7 @@ hint = "changes to the A2A handlers (taosmd/http_server.py, taosmd/service.py) r
 # documented in docs/pr-verification.md (this rule fires on that doc itself,
 # so gutting a required section here is caught, not just add/delete).
 name = "contributor-surface"
-when_changed = [".github/workflows/**", "pyproject.toml", "docs/pr-verification.md"]
+when_changed = [".github/workflows/**", "pyproject.toml", "docs/pr-verification.md", "scripts/merge-gate/**"]
 on_modify = true
 require_doc = ["docs/pr-verification.md"]
 hint = "changes to .github/workflows or pyproject require docs/pr-verification.md reviewed"
