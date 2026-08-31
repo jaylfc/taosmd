@@ -522,6 +522,8 @@ because SQLite treats `LIMIT -1` as unbounded, so a cap written as
 | `POST` | `/a2a/threads/{thread}/members` | body JSON `{"principal_id", "agent"}` | `{"thread", "principal_id", "added"}`; add a member (caller must be owner; returns `{"added": false, "already_member": true}` if already present; 403 if caller is not an owner) |
 | `DELETE` | `/a2a/threads/{thread}/members/{principal}` | body JSON `{"agent"}` | `{"thread", "principal_id", "removed", "archived": true}`; remove a member (caller must be owner; last owner cannot be removed; 403 if caller is not an owner) |
 | `POST` | `/a2a/alarms/{key}/clear` | path-encoded alarm key | `{"cleared": true, "key": str}` |
+| `POST` | `/a2a/admin/set-channel-acl` | body JSON `{"channel", "read"?, "post"?}` | `{"ok": true, "channel": str}`; admin, same token rule |
+| `GET`  | `/a2a/admin/channel-acl` | `?channel=<name>` | `{"channel": str, "acl": {"read": [...], "post": [...]}}`; admin, same token rule |
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
@@ -589,6 +591,43 @@ stored in `a2a_alarm_state` and survives restarts. Use
 Each channel in `/a2a/channels` has shape:
 `{"channel", "members", "message_count", "created_ts", "last_ts"}`
 
+### Per-channel ACL
+
+Channels default to open (read and post allow `*`). To restrict a channel, set
+an ACL via `POST /a2a/admin/set-channel-acl`:
+
+```
+POST /a2a/admin/set-channel-acl
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{"channel": "secret", "read": ["agent-allowed"], "post": ["agent-allowed"]}
+```
+
+Read the current ACL with `GET /a2a/admin/channel-acl?channel=<name>`.
+
+When a channel has an ACL:
+- `GET /a2a/messages?thread=<channel>` returns 403 for callers whose verified
+  identity is not in the `read` allowlist.
+- `GET /a2a/messages` without a thread drops rows from channels the caller
+  cannot read instead of returning every message on the bus. A bounded
+  pre-filter window (see below) keeps this scan finite.
+- `GET /a2a/threads` filters out restricted channels.
+- `GET /a2a/stream?thread=<channel>` returns 403 before SSE headers when the
+  channel is denied.
+- `GET /a2a/stream` without a thread filters restricted messages from the
+  delivery loop, advancing the poll cursor across denied rows so a channel
+  that fills the window does not freeze the feed.
+- `GET /a2a/channels`, `GET /a2a/members?channel=<name>`, and
+  `GET /a2a/census` all hide restricted channels from unauthenticated or
+  unauthorized callers.
+
+The ACL is resolved from `TAOSMD_ACL_CHANNELS` (JSON env var) or the `acls`
+section in `~/.taosmd/config.json`. A non-object entry (a JSON list, a bare
+string, or unparseable text) fails closed to empty allowlists rather than
+falling open. `set-channel-acl` preserves any dimension the request omits
+instead of resetting it to `*`, and `clear` must be a real boolean.
+
 ### Strict query parameters
 
 Every `GET /a2a/*` endpoint rejects unknown query parameters **that carry a
@@ -624,8 +663,6 @@ parameter is a 400, never a silent no-op. The accepted set is:
 | `GET /a2a/receipts` | `message_id`, `agent` |
 
 ### MCP tools
-
-| Tool | Arguments | Returns |
 |------|-----------|---------|
 | `a2a_channels` | — | `list[dict]` — channel summaries |
 | `a2a_members` | `channel` | `list[str]` — sorted sender names |
