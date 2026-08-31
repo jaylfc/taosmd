@@ -314,6 +314,22 @@ def test_http_a2a_members_unknown_param_returns_400(live_server):
     assert "bogus" in body["error"]
 
 
+def test_http_a2a_receipts_unknown_param_returns_400(live_server):
+    """Unknown query params on GET /a2a/receipts must 400, not silently page."""
+    status, body = _get(
+        f"{live_server}/a2a/receipts?message_id=1&agent=alice&bogus=1"
+    )
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_message_receipts_unknown_param_returns_400(live_server):
+    """Unknown query params on GET /a2a/messages/{id}/receipts must 400."""
+    status, body = _get(f"{live_server}/a2a/messages/1/receipts?bogus=1")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
 # ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------

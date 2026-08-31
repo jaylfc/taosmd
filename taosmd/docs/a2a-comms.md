@@ -471,6 +471,8 @@ a2a_members(channel="CHANNEL")
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
 
+All `GET /a2a/*` endpoints reject unknown query parameters with `400`, listing the parameters each one accepts, so a misspelled or renamed parameter fails loud instead of silently returning a page. This contract applies to the receipt read endpoints `GET /a2a/receipts` and `GET /a2a/messages/{id}/receipts` as well as every other read route on the bus.
+
 ### Admin token (separate from the data plane)
 
 The admin routes above (and `POST /shelves`, `POST /shelves/{id}/archive`,

@@ -1104,7 +1104,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_a2a_receipts_seen()
                 elif method == "GET" and path.startswith("/a2a/messages/") and path.endswith("/receipts"):
                     msg_id = path[len("/a2a/messages/"):-len("/receipts")]
-                    self._handle_a2a_message_receipts(msg_id)
+                    self._handle_a2a_message_receipts(msg_id, query)
                 elif method == "GET" and path == "/a2a/receipts":
                     self._handle_a2a_receipts(query)
                 elif method == "POST" and path == "/a2a/admin/prune-receipts":
@@ -1960,8 +1960,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             )
             self._send_json(200, {"ok": True})
 
-        def _handle_a2a_message_receipts(self, msg_id_str: str) -> None:
+        def _handle_a2a_message_receipts(self, msg_id_str: str, qs: dict) -> None:
             """GET /a2a/messages/{id}/receipts -- all receipts for one message."""
+            _validate_a2a_params(qs, frozenset())
             try:
                 message_id = int(msg_id_str)
             except (TypeError, ValueError) as exc:
@@ -1973,6 +1974,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_a2a_receipts(self, qs: dict) -> None:
             """GET /a2a/receipts?message_id=X&agent=Y -- a single receipt."""
+            _validate_a2a_params(qs, frozenset({"message_id", "agent"}))
             message_id_raw = (qs.get("message_id") or [None])[0]
             agent_id = (qs.get("agent") or [None])[0]
             if message_id_raw is None or agent_id is None:
