@@ -247,6 +247,11 @@ _A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "
 _A2A_MSG_DEFAULT_LIMIT = 50
 _A2A_MSG_MAX_LIMIT = 200
 
+# Upper cap for GET /memories?limit=. Negative values are rejected (400), and
+# limit=0 yields zero rows (SQLite LIMIT 0). See tsk-au6qkw.
+_MEMORY_DEFAULT_LIMIT = 50
+_MEMORY_MAX_LIMIT = 500
+
 
 def _validate_a2a_params(qs: dict, allowed: frozenset[str]) -> None:
     unknown = set(qs.keys()) - allowed
@@ -1463,11 +1468,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_memories(self, qs: dict) -> None:
             scope = (qs.get("scope") or [None])[0]
-            limit = (qs.get("limit") or [50])[0]
+            limit = (qs.get("limit") or [_MEMORY_DEFAULT_LIMIT])[0]
             try:
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must be a non-negative integer")
+            limit_i = min(limit_i, _MEMORY_MAX_LIMIT)
             memories = runner.run(
                 service.list_memories(scope=scope, limit=limit_i, data_dir=data_dir)
             )
