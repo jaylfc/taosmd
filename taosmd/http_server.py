@@ -247,6 +247,39 @@ _A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "
 _A2A_MSG_DEFAULT_LIMIT = 50
 _A2A_MSG_MAX_LIMIT = 200
 
+# Upper caps for limit-taking endpoints that need floors and ceilings.
+# Negative values are rejected (400), and limit=0 yields zero rows
+# (SQLite LIMIT 0). See tsk-rsltm6.
+_TASKS_DEFAULT_LIMIT = 50
+_TASKS_MAX_LIMIT = 500
+_TASKS_READY_DEFAULT_LIMIT = 20
+_TASKS_READY_MAX_LIMIT = 500
+_PENDING_DEFAULT_LIMIT = 20
+_PENDING_MAX_LIMIT = 500
+_GRAPH_DEFAULT_LIMIT = 300
+_GRAPH_MAX_LIMIT = 500
+_GRAPH_ACTIVATIONS_DEFAULT_LIMIT = 100
+_GRAPH_ACTIVATIONS_MAX_LIMIT = 500
+_SEARCH_DEFAULT_LIMIT = 5
+_SEARCH_MAX_LIMIT = 500
+_MEMORY_DEFAULT_LIMIT = 50
+_MEMORY_MAX_LIMIT = 500
+_A2A_MSG_DEFAULT_LIMIT = 50
+_A2A_MSG_MAX_LIMIT = 200
+
+
+def _clamp_limit(limit: int, default: int, max_limit: int) -> int:
+    """Clamp a limit value to ensure it's within valid bounds.
+    
+    Negative values are rejected (400), and limit=0 yields zero rows
+    (SQLite LIMIT 0). Returns the clamped limit for use in SQL queries.
+    """
+    if limit < 0:
+        raise _BadRequest("'limit' must be a non-negative integer")
+    if limit == 0:
+        return 0
+    return min(limit, max_limit)
+
 
 def _validate_a2a_params(qs: dict, allowed: frozenset[str]) -> None:
     unknown = set(qs.keys()) - allowed
@@ -1295,7 +1328,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_search_get(self, qs: dict) -> None:
             query = (qs.get("q") or qs.get("query") or [None])[0]
             agent = (qs.get("agent") or [None])[0]
-            limit = (qs.get("limit") or [5])[0]
+            limit = (qs.get("limit") or [_SEARCH_DEFAULT_LIMIT])[0]
             project = (qs.get("project") or [None])[0]
             # Comma-separated list in the query string, e.g. also_include=a,b
             ai_raw = (qs.get("also_include") or [None])[0]
@@ -1330,6 +1363,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, _SEARCH_DEFAULT_LIMIT, _SEARCH_MAX_LIMIT)
             if mode is not None and not isinstance(mode, str):
                 raise _BadRequest("'mode' must be a string when provided")
             if collection is not None and not isinstance(collection, str):
@@ -1463,22 +1497,24 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_memories(self, qs: dict) -> None:
             scope = (qs.get("scope") or [None])[0]
-            limit = (qs.get("limit") or [50])[0]
+            limit = (qs.get("limit") or [_MEMORY_DEFAULT_LIMIT])[0]
             try:
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, _MEMORY_DEFAULT_LIMIT, _MEMORY_MAX_LIMIT)
             memories = runner.run(
                 service.list_memories(scope=scope, limit=limit_i, data_dir=data_dir)
             )
             self._send_json(200, {"memories": memories})
 
         def _handle_graph(self, qs: dict) -> None:
-            limit = (qs.get("limit") or [300])[0]
+            limit = (qs.get("limit") or [_GRAPH_DEFAULT_LIMIT])[0]
             try:
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, _GRAPH_DEFAULT_LIMIT, _GRAPH_MAX_LIMIT)
             # Optional time-travel: ?as_of=<finite float epoch> reconstructs the
             # graph as it stood then. Any value that is not a finite number is
             # ignored (current graph), so a malformed scrubber value degrades
@@ -1501,13 +1537,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_graph_activations(self, qs: dict) -> None:
             since = (qs.get("since") or [None])[0]
             window = (qs.get("window") or [60])[0]
-            limit = (qs.get("limit") or [100])[0]
+            limit = (qs.get("limit") or [_GRAPH_ACTIVATIONS_DEFAULT_LIMIT])[0]
             try:
                 since_f = float(since) if since is not None else None
                 window_f = float(window)
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("since/window must be numbers and limit an integer") from exc
+            limit_i = _clamp_limit(limit_i, _GRAPH_ACTIVATIONS_DEFAULT_LIMIT, _GRAPH_ACTIVATIONS_MAX_LIMIT)
             result = runner.run(
                 service.graph_activations(since=since_f, window=window_f, limit=limit_i, data_dir=data_dir)
             )
@@ -1522,11 +1559,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_pending(self, qs: dict) -> None:
             agent = (qs.get("agent") or [None])[0]
-            limit = (qs.get("limit") or [20])[0]
+            limit = (qs.get("limit") or [_PENDING_DEFAULT_LIMIT])[0]
             try:
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, _PENDING_DEFAULT_LIMIT, _PENDING_MAX_LIMIT)
             pending = runner.run(
                 service.pending_list(agent=agent, data_dir=data_dir, limit=limit_i)
             )
@@ -1724,8 +1762,6 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             )
             self._send_json(200, result)
 
-        def _handle_a2a_messages(self, qs: dict) -> None:
-            _validate_a2a_params(qs, frozenset({"thread", "since", "limit", "fields", "format"}))
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
@@ -1736,6 +1772,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, _A2A_MSG_DEFAULT_LIMIT, _A2A_MSG_MAX_LIMIT)
+            if fmt not in ("json", "ndjson"):
+                raise _BadRequest("'format' must be 'json' or 'ndjson'")
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
             messages = runner.run(
@@ -1775,6 +1814,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, _A2A_MSG_DEFAULT_LIMIT, _A2A_MSG_MAX_LIMIT)
             # Auth: when a registry verifier is configured, the caller's
             # verified identity is the reader. Unauthenticated requests
             # return 401. When no verifier is configured (standalone), a
@@ -1904,6 +1944,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, _A2A_MSG_DEFAULT_LIMIT, _A2A_MSG_MAX_LIMIT)
             result = runner.run(
                 service.a2a_thread_messages(
                     thread=thread, before=before, after=after,
@@ -2082,11 +2123,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             status = (qs.get("status") or [None])[0]
             project = (qs.get("project") or [None])[0]
             assignee = (qs.get("assignee") or [None])[0]
-            limit_raw = (qs.get("limit") or [50])[0]
+            limit_raw = (qs.get("limit") or [_TASKS_DEFAULT_LIMIT])[0]
             try:
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, _TASKS_DEFAULT_LIMIT, _TASKS_MAX_LIMIT)
             project, ok = self._apply_token_binding(assignee, project)
             if not ok:
                 return
@@ -2104,11 +2146,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_task_ready(self, qs: dict) -> None:
             project = (qs.get("project") or [None])[0]
             assignee = (qs.get("assignee") or [None])[0]
-            limit_raw = (qs.get("limit") or [20])[0]
+            limit_raw = (qs.get("limit") or [_TASKS_READY_DEFAULT_LIMIT])[0]
             try:
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _clamp_limit(limit_i, _TASKS_READY_DEFAULT_LIMIT, _TASKS_READY_MAX_LIMIT)
             project, ok = self._apply_token_binding(assignee, project)
             if not ok:
                 return
@@ -2141,12 +2184,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             from_id = (qs.get("from_id") or [None])[0]
             to_id = (qs.get("to_id") or [None])[0]
             edge_type = (qs.get("type") or [None])[0]
-            limit_raw = (qs.get("limit") or [50])[0]
+            limit_raw = (qs.get("limit") or [_TASKS_DEFAULT_LIMIT])[0]
             try:
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
-            limit_i = min(limit_i, 500)
+            limit_i = _clamp_limit(limit_i, _TASKS_DEFAULT_LIMIT, _TASKS_MAX_LIMIT)
             project = (qs.get("project") or [None])[0]
             project, ok = self._apply_token_binding(None, project)
             if not ok:
