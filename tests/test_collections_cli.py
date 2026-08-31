@@ -77,6 +77,19 @@ def test_link_unlink_grant_revoke(data_dir, source_dir, capsys):
     capsys.readouterr()
 
 
+def test_revoke_noop_returns_nonzero(data_dir, source_dir, capsys):
+    store = CollectionStore(data_dir)
+    col = store.create(name="a", kind="docs", source_path=str(source_dir))
+    cid = col["id"]
+
+    assert main(["collections", "grant", cid, "dev"]) == 0
+    rc = main(["collections", "revoke", cid, "not-dev"])
+    assert rc == 1
+    out = capsys.readouterr().err
+    assert "no grant matched" in out
+    assert store.get(cid)["grants"] == ["dev"]
+
+
 def test_index_runs_synchronously(data_dir, source_dir, capsys, monkeypatch):
     from taosmd import api as taosmd_api
     import asyncio

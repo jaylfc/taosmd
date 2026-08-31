@@ -1089,6 +1089,10 @@ def _collections_cmd(args: argparse.Namespace) -> int:
             col = asyncio.run(
                 service.collections_revoke(args.collection_id, args.agent, data_dir=data_dir)
             )
+            revoked = col.pop("revoked", False)
+            if not revoked:
+                print(f"noop: no grant matched for {args.agent}", file=sys.stderr)
+                return 1
             print(f"{col['id']} grants: {', '.join(col['grants']) or '(none)'}")
             return 0
     except CollectionNotFoundError as exc:

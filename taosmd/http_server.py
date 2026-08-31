@@ -2454,7 +2454,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             except CollectionNotFoundError as exc:
                 self._send_json(404, {"error": str(exc)})
                 return
-            self._send_json(200, {"collection": col})
+            revoked = col.pop("revoked")
+            self._send_json(200, {"collection": col, "revoked": revoked})
 
         def _handle_collections_delete(self, collection_id: str) -> None:
             if not self._check_admin_token():
