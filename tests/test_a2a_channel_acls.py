@@ -386,11 +386,12 @@ def test_thread_secret_returns_403_positive_control(acl_server, tmp_path):
 def test_messages_no_thread_filters_restricted(acl_server, tmp_path):
     """GET /a2a/messages without thread must drop messages from ACL-restricted channels."""
     data_dir = tmp_path / "data"
-    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
-
     token_allowed = _mint("agent-allowed")
+
     _post_send(acl_server, "agent-allowed", "canary-body-secret", token=token_allowed, thread="secret")
     _post_send(acl_server, "agent-allowed", "public-body", token=token_allowed, thread="public")
+
+    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
 
     status, body = _get_messages(acl_server)
     assert status == 200, body
@@ -419,11 +420,12 @@ def test_admin_channel_acl_requires_admin_token(acl_server, tmp_path):
 def test_threads_filters_restricted(acl_server, tmp_path):
     """GET /a2a/threads must not expose channels the caller cannot read."""
     data_dir = tmp_path / "data"
-    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
-
     token_allowed = _mint("agent-allowed")
+
     _post_send(acl_server, "agent-allowed", "thread-canary", token=token_allowed, thread="secret")
     _post_send(acl_server, "agent-allowed", "public-msg", token=token_allowed, thread="public")
+
+    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
 
     status, body = _get_threads(acl_server)
     assert status == 200, body
@@ -453,10 +455,6 @@ def test_stream_no_thread_filters_restricted(acl_server, tmp_path):
     """GET /a2a/stream without thread must not deliver restricted messages."""
     data_dir = tmp_path / "data"
     _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
-
-    # parsed = urllib.parse.urlsplit(acl_server)
-    # host = parsed.hostname
-    # port = parsed.port
 
     frames_received = []
     error_holder = []
@@ -500,11 +498,12 @@ def test_stream_no_thread_filters_restricted(acl_server, tmp_path):
 def test_channels_filters_restricted(acl_server, tmp_path):
     """GET /a2a/channels must not expose restricted channels."""
     data_dir = tmp_path / "data"
-    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
-
     token_allowed = _mint("agent-allowed")
+
     _post_send(acl_server, "agent-allowed", "secret-msg", token=token_allowed, thread="secret")
     _post_send(acl_server, "agent-allowed", "public-msg", token=token_allowed, thread="public")
+
+    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
 
     status, body = _get_channels(acl_server)
     assert status == 200, body
@@ -516,10 +515,11 @@ def test_channels_filters_restricted(acl_server, tmp_path):
 def test_members_restricted_channel_returns_empty(acl_server, tmp_path):
     """GET /a2a/members?channel=secret must return empty for unauthorized caller."""
     data_dir = tmp_path / "data"
-    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
-
     token_allowed = _mint("agent-allowed")
+
     _post_send(acl_server, "agent-allowed", "secret-member-msg", token=token_allowed, thread="secret")
+
+    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
 
     status, body = _get_members(acl_server, "secret")
     assert status == 200, body
@@ -529,11 +529,12 @@ def test_members_restricted_channel_returns_empty(acl_server, tmp_path):
 def test_census_filters_restricted_channels(acl_server, tmp_path):
     """GET /a2a/census must not expose restricted channel counts."""
     data_dir = tmp_path / "data"
-    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
-
     token_allowed = _mint("agent-allowed")
+
     _post_send(acl_server, "agent-allowed", "secret-msg", token=token_allowed, thread="secret")
     _post_send(acl_server, "agent-allowed", "public-msg", token=token_allowed, thread="public")
+
+    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
 
     status, body = _get_census(acl_server)
     assert status == 200, body
@@ -639,6 +640,43 @@ def test_messages_no_thread_not_starved_when_restricted_exceed_window(acl_server
     bodies = [m.get("body", "") for m in body.get("messages", [])]
     assert "public-body" in bodies, "public message starved by restricted rows exceeding fetch window"
     assert all(not b.startswith("secret-") for b in bodies), "restricted messages should not leak"
+
+
+# ---------------------------------------------------------------------------
+# Open-default pin: restricting read must not deny post and vice-versa
+# ---------------------------------------------------------------------------
+
+def test_post_succeeds_when_read_restricted(acl_server, tmp_path):
+    """Posting to a channel whose read list is restricted must still succeed.
+
+    The post default is independent of the read default: setting read_ids
+    must not implicitly deny posting.
+    """
+    data_dir = tmp_path / "data"
+    _set_acl(data_dir, "secret", read_ids=["agent-allowed"])
+
+    token_allowed = _mint("agent-allowed")
+    status, body = _post_send(acl_server, "agent-allowed", "hello", token=token_allowed, thread="secret")
+    assert status == 200, body
+
+
+def test_read_not_affected_by_post_restriction(acl_server, tmp_path):
+    """Restricting post must not affect read access for an allowed identity.
+
+    A message posted while the channel is open must remain readable after
+    the post allowlist is narrowed to a different identity.
+    """
+    data_dir = tmp_path / "data"
+
+    token_allowed = _mint("agent-allowed")
+    _post_send(acl_server, "agent-allowed", "hello", token=token_allowed, thread="secret")
+
+    _set_acl(data_dir, "secret", post_ids=["agent-other"])
+
+    status, body = _get_messages(acl_server, thread="secret", token=token_allowed)
+    assert status == 200, body
+    bodies = [m.get("body", "") for m in body.get("messages", [])]
+    assert "hello" in bodies, "post restriction must not hide previously readable messages"
 
 
 # ---------------------------------------------------------------------------
