@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 
+from taosmd import _db
+
 __all__ = ["SCHEMA", "ReceiptStore"]
 
 logger = logging.getLogger(__name__)
@@ -41,11 +43,17 @@ CREATE INDEX IF NOT EXISTS idx_receipts_delivered ON a2a_receipts(delivered_at);
 
 
 class ReceiptStore:
-    """Thread-affine store for A2A read receipts.
+    """Store for A2A read receipts.
 
     All methods are async so callers can ``await`` them uniformly; the body
-    runs synchronously against a single SQLite connection, exactly like the
-    other taOSmd stores.
+    runs synchronously against a single SQLite connection. The connection is
+    opened through ``taosmd._db.connect`` (WAL journal mode, 5000 ms busy
+    timeout) with ``check_same_thread=False`` so the connection stays usable
+    from whichever thread drives the event loop. This differs from the
+    thread-affine stores: ReceiptStore's async methods are not guaranteed to
+    run on the creating thread, so ``check_same_thread=False`` is required to
+    avoid a thread-affinity crash, and routing through ``_db.connect`` is
+    required to get WAL and the busy timeout.
     """
 
     def __init__(self, db_path: str) -> None:
@@ -53,7 +61,7 @@ class ReceiptStore:
         self._conn: sqlite3.Connection | None = None
 
     async def init(self) -> None:
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn = _db.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()
