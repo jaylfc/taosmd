@@ -186,7 +186,7 @@ class CollectionStore:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        self._conn.executescript(SCHEMA)
+        _db.run_schema(self._conn, SCHEMA)
         self._conn.commit()
         # Schema versioning. collections.db shipped in Phase 1 with no
         # migration path at all, so the first column added to any of its
