@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
+import threading
+
 import pytest
 
 from taosmd import api as taosmd_api
 import taosmd.tasks as tasks_mod
+from taosmd import http_server
 
 
 # ---------------------------------------------------------------------------
@@ -434,3 +438,57 @@ def test_rebuild_from_archive_with_edge_removal(data_dir):
     # Both should be ready after edge removal
     assert t1["id"] in ready_after
     assert t2["id"] in ready_after
+
+
+# ---------------------------------------------------------------------------
+# End-to-end regression: main-thread cache + HTTP serve
+# ---------------------------------------------------------------------------
+
+
+def test_e2e_main_thread_cache_then_serve(data_dir, monkeypatch):
+    """Populate tasks._db_cache from the main thread, then serve via HTTP.
+
+    This exercises the Python-API-then-serve deployment shape: creating a task
+    on the main thread populates _db_cache; subsequent requests from the service
+    loop thread must not raise sqlite3.ProgrammingError: foreign thread.
+
+    Regression for tasks.py:121 (_get_db): if check_same_thread=False is removed
+    from _db.connect at that line, the GET /tasks request will fail with
+    ProgrammingError because the cache was primed on the main thread.
+    """
+    # Ensure a clean cache per-test
+    monkeypatch.setattr(tasks_mod, "_db_cache", {})
+
+    # ── Prime the _db_cache on the main thread ────────────────────────
+    # Create a task on the main thread – this populates _db_cache via
+    # _get_db (tasks.py:121), which calls _db.connect(db_path).
+    run(tasks_mod.create_task(
+        "regression task",
+        created_by="agent-x",
+        data_dir=data_dir,
+    ))
+
+    # ── Start the HTTP server on an ephemeral port ─────────────────────
+    httpd = http_server.make_server("127.0.0.1", 0, data_dir=data_dir)
+    httpd.service_loop.run(taosmd_api._ensure_stores(data_dir))
+    host, port = httpd.server_address[:2]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        # ── Real HTTP GET /tasks ───────────────────────────────────────
+        url = f"http://{host}:{port}/tasks"
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(url)
+
+        # The fix (check_same_thread=False at tasks.py:121) makes this 200.
+        # Without the fix, the main-thread-primed cache causes a
+        # sqlite3.ProgrammingError on the service-loop thread → 500.
+        assert resp.status_code == 200, (
+            f"Expected 200 from GET /tasks but got {resp.status_code}; "
+            f"body: {resp.text}"
+        )
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        httpd.service_loop.close()

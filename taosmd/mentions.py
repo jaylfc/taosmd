@@ -28,7 +28,7 @@ class MentionStore:
         self._conn: sqlite3.Connection | None = None
 
     async def init(self) -> None:
-        self._conn = _db.connect(self._db_path)
+        self._conn = _db.connect(self._db_path, check_same_thread=False)
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS mentions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
