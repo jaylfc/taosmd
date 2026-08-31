@@ -1,5 +1,6 @@
 ---
 name: taosmd-a2a
+version: 1.0.0
 description: Set up agent-to-agent comms and named channels via the taOSmd A2A bus.
 user-invocable: true
 ---
