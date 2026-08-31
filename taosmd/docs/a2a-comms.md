@@ -10,6 +10,34 @@ taOSmd's A2A bus lets any number of agents (Claude Code, Cursor, OpenClaw, or an
 
 ---
 
+## Check whether your installed skill is current
+
+`taosmd install-skill` copies the `taosmd-a2a` skill into
+`~/.claude/skills/taosmd-a2a/` when the packaged copy is newer than the
+installed one (it records a `version` in each skill's `SKILL.md` frontmatter and
+a content hash at install time). Versions are compared as dotted integers, so
+`0.9.0` is older than `0.10.0`. If either side is not a plain numeric version,
+for example a pre-versioning install with no `version:` line at all, the
+packaged copy replaces the installed one whenever the two differ and the tool
+says "replaced" rather than claiming an upgrade it cannot order. An older
+packaged copy is refused unless you pass `--force`, so rolling taosmd back does
+not quietly take your skill backwards. Compare the installed version against the
+packaged one to confirm you are current:
+
+```
+# Installed version (a blank line means the skill is not installed):
+grep -m1 '^version:' ~/.claude/skills/taosmd-a2a/SKILL.md || echo "not installed"
+# Packaged version shipped with your taosmd:
+python -c "import taosmd,pathlib,re; p=pathlib.Path(taosmd.__file__).parent/'skills'/'taosmd-a2a'/'SKILL.md'; print(re.search(r'version: *(\S+)', p.read_text()).group(1))"
+```
+
+Re-running `taosmd install-skill` also reports both versions, and if the installed
+copy was edited locally, or the packaged copy is older than the installed one, it
+tells you to re-run with `--force` rather than silently clobbering your edits or
+walking the skill backwards.
+
+---
+
 ## Step 1: Ensure taOSmd is installed
 
 Run:
