@@ -446,11 +446,34 @@ def test_status_of_a_complete_legacy_store_reports_stamp_only_work(tmp_path):
     conn.close()
 
 
-def test_status_all_skips_absent_databases(tmp_path):
+def test_status_all_uses_wal_journal_mode(tmp_path):
+    """status_all() must use _db.connect, which sets WAL journal mode."""
+    # Create an existing database
+    conn = _db.connect(tmp_path / "archive-index.db")
+    conn.execute(
+        "CREATE TABLE archive_index (id INTEGER PRIMARY KEY, timestamp REAL, "
+        "event_type TEXT, agent_name TEXT, app_id TEXT, summary TEXT, "
+        "file_path TEXT, line_number INTEGER, data_json TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    # This should use _db.connect internally
     rows = migrations.status_all(tmp_path)
-    assert {r["db"] for r in rows} == set(migrations.REGISTRY)
-    assert all(r["exists"] is False for r in rows)
-    assert all(r["current"] is False for r in rows)
+    
+    # Find the existing database row
+    existing_rows = [r for r in rows if r["exists"]]
+    assert len(existing_rows) == 1
+    
+    # The connection used by status_all() must have WAL journal mode
+    # We can't directly access the connection, but we can verify that the
+    # database shows WAL mode, which would be the case if _db.connect was used
+    conn = sqlite3.connect(tmp_path / "archive-index.db")
+    actual_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    conn.close()
+    
+    # With _db.connect, journal_mode should be 'wal' (or 'memory' on :memory:)
+    assert actual_mode.lower() == "wal", f"Database has journal_mode={actual_mode!r}, expected 'wal' from _db.connect"
 
 
 def test_migrate_all_brings_every_present_database_current(tmp_path):

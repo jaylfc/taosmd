@@ -607,7 +607,8 @@ def status_all(data_dir: Union[str, Path]) -> list[dict]:
                 "pending": [m.name for m in REGISTRY[db]],
             })
             continue
-        conn = sqlite3.connect(str(path))
+        from taosmd import _db
+        conn = _db.connect(path)
         try:
             row = status(conn, db)
         finally:
