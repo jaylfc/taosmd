@@ -198,6 +198,20 @@ def test_receipt_store_get_receipt_missing():
             asyncio.run(store.close())
 
 
+def test_busy_timeout_is_set():
+    """Verify that _db.connect sets busy_timeout to 5000 ms."""
+    import tempfile
+    from taosmd import _db
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "test.db"
+        conn = _db.connect(str(db_path))
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert int(timeout) == 5000, f"Expected 5000, got {timeout}"
+        conn.close()
+
+
 def test_receipt_store_seen_idempotent():
     """Seen timestamp is monotonic -- a second call does not move it back."""
     import tempfile

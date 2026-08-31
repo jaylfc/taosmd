@@ -32,6 +32,8 @@ def connect(db_path: Union[str, Path]) -> sqlite3.Connection:
     Drop-in replacement for ``sqlite3.connect(db_path)``. Callers that need a
     ``row_factory`` or other connection attributes should set them on the
     returned connection as before.
+
+    There are 17 existing call sites across taosmd/ and tests/.
     """
     conn = sqlite3.connect(db_path)
     # ``PRAGMA journal_mode`` echoes the journal mode actually in effect. WAL
