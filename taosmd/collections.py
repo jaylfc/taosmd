@@ -380,6 +380,8 @@ class CollectionStore:
         return self.get(collection_id)
 
     def unlink(self, collection_id: str, link_type: str, ext_id: str) -> dict:
+        if not isinstance(ext_id, str) or not ext_id.strip():
+            raise ValueError("link id must be a non-empty string")
         self._row(collection_id)
         self._conn.execute(
             "DELETE FROM collection_links "
