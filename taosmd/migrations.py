@@ -378,8 +378,42 @@ _COLLECTIONS: tuple[Migration, ...] = (
 )
 
 
+# --- a2a_membership ----------------------------------------------------
+
+def _membership_baseline(conn: sqlite3.Connection) -> None:
+    """Create the membership table and indexes."""
+    exec_script(conn, """
+    CREATE TABLE IF NOT EXISTS a2a_membership (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        removed_at REAL,
+        UNIQUE(thread, principal_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_a2a_membership_thread ON a2a_membership(thread);
+    CREATE INDEX IF NOT EXISTS idx_a2a_membership_principal ON a2a_membership(principal_id);
+    CREATE INDEX IF NOT EXISTS idx_a2a_membership_active ON a2a_membership(thread, removed_at)
+        WHERE removed_at IS NULL;
+    """)
+
+
+_MEMBERSHIP: tuple[Migration, ...] = (
+    Migration(
+        1, "membership_baseline", _membership_baseline,
+        lambda c: (
+            table_exists(c, "a2a_membership")
+            and index_exists(c, "idx_a2a_membership_thread")
+            and index_exists(c, "idx_a2a_membership_active")
+        ),
+    ),
+)
+
+
 #: Logical database name -> ordered migration steps.
 REGISTRY: dict[str, tuple[Migration, ...]] = {
+    "a2a_membership": _MEMBERSHIP,
     "a2a_receipts": _A2A_RECEIPTS,
     "archive_index": _ARCHIVE_INDEX,
     "claims": _CLAIMS,
@@ -418,6 +452,7 @@ for _db_name, _db_migs in REGISTRY.items():
 
 #: Logical database name -> filename inside the data directory.
 DB_FILES: dict[str, str] = {
+    "a2a_membership": "a2a-membership.db",
     "a2a_receipts": "a2a-receipts.db",
     "archive_index": "archive-index.db",
     "claims": "claims.db",
