@@ -901,7 +901,7 @@ async def a2a_threads(*, principal: str | None = None, data_dir=None) -> list[di
     """
     remote = _get_remote(data_dir)
     if remote is not None:
-        return await remote.a2a_threads(principal=principal)
+        return await remote.a2a_threads(principal=principal, data_dir=data_dir)
     stores = await _api._ensure_stores(data_dir)
     archive = stores["archive"]
     rows = await archive.query(event_type=EVENT_A2A, limit=100_000)
@@ -1869,6 +1869,223 @@ async def collections_archive(collection_id: str, *, data_dir=None) -> dict:
         store.close()
 
 
+# ---------------------------------------------------------------------------
+# A2A thread membership (unified-chat slice 2)
+# ---------------------------------------------------------------------------
+#
+# Thread membership tracks which principals (agents) belong to which threads
+# and their roles (owner/member). The store is zero-loss: removal marks a
+# membership inactive rather than deleting the row. Threads with no
+# membership rows are treated as open/legacy and visible to all.
+
+
+async def a2a_create_thread(
+    thread: str,
+    participants: list[str],
+    agent: str,
+    data_dir=None,
+) -> dict:
+    """Create an A2A thread with initial participants.
+
+    The caller (``agent``) is added as an owner by default. ``participants``
+    (excluding the caller) are added as members.
+
+    Returns the thread and the list of its active members after creation.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_create_thread(
+            thread=thread, participants=participants, agent=agent, data_dir=data_dir,
+        )
+
+    from .a2a_membership import MembershipStore
+
+    resolved_dir = _api._resolve_data_dir(data_dir)
+    store = MembershipStore(resolved_dir)
+    try:
+        if not participants:
+            raise ValueError("participants list cannot be empty")
+
+        if await store.has_any_membership(thread):
+            raise ValueError(f"thread '{thread}' already exists")
+
+        await store.add_membership(thread, agent, role="owner")
+        for participant in participants:
+            if participant != agent:
+                await store.add_membership(thread, participant, role="member")
+
+        ts = time.time()
+        await store.archive_membership_created(thread, agent, "owner", ts, resolved_dir)
+        for participant in participants:
+            if participant != agent:
+                await store.archive_membership_created(
+                    thread, participant, "member", ts, resolved_dir,
+                )
+
+        members = await store.list_active_members(thread)
+        return {
+            "thread": thread,
+            "created": True,
+            "active_members": [
+                {"principal_id": m.principal_id, "role": m.role, "created_at": m.created_at}
+                for m in members
+            ],
+        }
+    finally:
+        await store.close()
+
+
+async def a2a_list_members(
+    thread: str,
+    data_dir=None,
+) -> list[dict]:
+    """List all active members (owners and members) of a thread.
+
+    Threads with no membership rows at all are open/legacy and return an
+    empty list (backward compatibility).
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_list_members(thread=thread, data_dir=data_dir)
+
+    from .a2a_membership import MembershipStore
+
+    resolved_dir = _api._resolve_data_dir(data_dir)
+    store = MembershipStore(resolved_dir)
+    try:
+        if not await store.has_any_membership(thread):
+            return []
+
+        members = await store.list_active_members(thread)
+        return [
+            {
+                "principal_id": m.principal_id,
+                "role": m.role,
+                "created_at": m.created_at,
+            }
+            for m in members
+        ]
+    finally:
+        await store.close()
+
+
+async def a2a_add_member(
+    thread: str,
+    principal_id: str,
+    agent: str,
+    data_dir=None,
+) -> dict:
+    """Add a member to a thread. Caller must be an owner.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_add_member(
+            thread=thread, principal_id=principal_id, agent=agent, data_dir=data_dir,
+        )
+
+    from .a2a_membership import MembershipStore
+
+    resolved_dir = _api._resolve_data_dir(data_dir)
+    store = MembershipStore(resolved_dir)
+    try:
+        if not await store.is_principal_owner(thread, agent):
+            raise PermissionError(
+                f"caller '{agent}' is not an owner of thread '{thread}'"
+            )
+
+        existing = await store.get_membership(thread, principal_id)
+        if existing is not None:
+            return {
+                "thread": thread,
+                "principal_id": principal_id,
+                "added": False,
+                "already_member": True,
+            }
+
+        await store.add_membership(thread, principal_id, role="member")
+
+        ts = time.time()
+        await store.archive_membership_created(
+            thread, principal_id, "member", ts, resolved_dir,
+        )
+
+        return {
+            "thread": thread,
+            "principal_id": principal_id,
+            "added": True,
+        }
+    finally:
+        await store.close()
+
+
+async def a2a_remove_member(
+    thread: str,
+    principal_id: str,
+    agent: str,
+    data_dir=None,
+) -> dict:
+    """Remove a member from a thread.
+
+    Caller must be an owner. Cannot remove the last owner of a thread.
+
+    When a remote server URL is configured the call is forwarded to
+    :class:`~taosmd.remote.RemoteClient` transparently.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.a2a_remove_member(
+            thread=thread, principal_id=principal_id, agent=agent, data_dir=data_dir,
+        )
+
+    from .a2a_membership import MembershipStore
+
+    resolved_dir = _api._resolve_data_dir(data_dir)
+    store = MembershipStore(resolved_dir)
+    try:
+        if not await store.is_principal_owner(thread, agent):
+            raise PermissionError(
+                f"caller '{agent}' is not an owner of thread '{thread}'"
+            )
+
+        if await store.is_principal_owner(thread, principal_id):
+            owners = await store.get_thread_owners(thread)
+            if len(owners) <= 1:
+                raise ValueError(
+                    f"cannot remove the last owner of thread '{thread}'; "
+                    "transfer ownership or add another owner first"
+                )
+
+        removed = await store.remove_membership(thread, principal_id)
+        if not removed:
+            return {
+                "thread": thread,
+                "principal_id": principal_id,
+                "removed": False,
+                "not_found": True,
+            }
+
+        ts = time.time()
+        await store.archive_membership_removed(thread, principal_id, ts, resolved_dir)
+
+        return {
+            "thread": thread,
+            "principal_id": principal_id,
+            "removed": True,
+            "archived": True,
+        }
+    finally:
+        await store.close()
+
+
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
            "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
            "a2a_members", "a2a_threads", "a2a_thread_messages",
@@ -1885,4 +2102,6 @@ __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "
            "collections_index_start", "collections_index_run",
            "collections_index_background", "collections_link",
            "collections_unlink", "collections_grant", "collections_revoke",
-           "collections_archive"]
+           "collections_archive",
+           "a2a_create_thread", "a2a_list_members", "a2a_add_member",
+           "a2a_remove_member"]
