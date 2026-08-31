@@ -13,6 +13,7 @@ import json
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -20,6 +21,7 @@ import pytest
 from taosmd import api as taosmd_api
 from taosmd import config as taosmd_config
 from taosmd import http_server
+from taosmd.collections import CollectionStore
 
 _TOKEN = "test-admin-token-abc123"
 
@@ -271,6 +273,90 @@ def test_grants_add_and_revoke(live_server):
     )
     assert status == 200
     assert body["collection"]["grants"] == []
+
+
+# ---------------------------------------------------------------------------
+# Percent-decoding of the caller-supplied {agent} segment (tsk-vepm4j)
+# ---------------------------------------------------------------------------
+#
+# DELETE /collections/{cid}/grants/{agent} takes {agent} as a raw URL path
+# segment. A client must percent-encode it; the handler must decode it. The fix
+# lives in _handle_collections_revoke (taosmd/http_server.py), mirroring
+# _handle_a2a_alarms_clear. These tests assert the outcome by re-reading the
+# store directly, never just the 200 response -- a 200 with ok:true has been
+# observed on a payload the server discarded.
+
+_AGENT_SPECIAL = "a +b/c d\xe9"  # space, plus, slash, non-ASCII (U+00E9)
+
+
+def _grant_via_http(base, col_id, agent, token=_TOKEN):
+    status, body = _req(
+        "POST",
+        f"{base}/collections/{col_id}/grants",
+        {"agent": agent},
+        token=token,
+    )
+    assert status == 200, body
+    return body["collection"]
+
+
+def _revoke_via_http(base, col_id, agent, token=_TOKEN):
+    encoded = urllib.parse.quote(agent, safe="")
+    status, body = _req(
+        "DELETE",
+        f"{base}/collections/{col_id}/grants/{encoded}",
+        token=token,
+    )
+    return status, body
+
+
+def _store_has_grant(data_dir, col_id, agent) -> bool:
+    store = CollectionStore(data_dir)
+    try:
+        return store.has_grant(agent, col_id)
+    finally:
+        store.close()
+
+
+def test_revoke_decodes_caller_supplied_agent(live_server):
+    """Grant and revoke an agent id carrying space, +, slash, non-ASCII.
+
+    The grant is written through POST (agent taken from the JSON body, so it
+    is already decoded). The revoke goes through DELETE /collections/{cid}/
+    grants/{agent} as a percent-encoded segment. Before the fix the handler
+    never unquoted {agent}, so the DELETE matched the encoded spelling and
+    matched nothing: the grant stayed live and a 200 was returned anyway.
+    """
+    base, data_dir, source_dir = live_server
+    col = _create(base, source_dir)
+    _grant_via_http(base, col["id"], _AGENT_SPECIAL)
+    # Prove the grant landed before revoking -- a re-read, not the 200 above.
+    assert _store_has_grant(data_dir, col["id"], _AGENT_SPECIAL) is True
+    status, body = _revoke_via_http(base, col["id"], _AGENT_SPECIAL)
+    assert status == 200, body
+    # The verdict: re-read the store. Only this proves the write landed.
+    assert _store_has_grant(data_dir, col["id"], _AGENT_SPECIAL) is False
+    status, body = _req("GET", f"{base}/collections/{col['id']}", token=_TOKEN)
+    assert _AGENT_SPECIAL not in body["collection"]["grants"]
+
+
+def test_revoke_ascii_agent_is_a_control(live_server):
+    """Control: a plain-ASCII agent id (no percent-encoding-sensitive chars)
+    must revoke correctly regardless of whether the handler decodes.
+
+    Which question this validates: it rules out a blind probe. A green here
+    proves nothing about the decode -- ASCII passes through both encoded and
+    decoded unchanged -- so only the special-character test above can prove the
+    fix. It must stay green before and after the mutation so the mutation
+    verdict is a clean kill (special-char FAILs, ASCII survives).
+    """
+    base, data_dir, source_dir = live_server
+    col = _create(base, source_dir)
+    _grant_via_http(base, col["id"], "dev")
+    assert _store_has_grant(data_dir, col["id"], "dev") is True
+    status, body = _revoke_via_http(base, col["id"], "dev")
+    assert status == 200, body
+    assert _store_has_grant(data_dir, col["id"], "dev") is False
 
 
 # ---------------------------------------------------------------------------

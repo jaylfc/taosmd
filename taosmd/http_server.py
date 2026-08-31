@@ -2446,7 +2446,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"collection": col})
 
         def _handle_collections_revoke(self, collection_id: str, agent: str) -> None:
+            import urllib.parse as _up  # noqa: PLC0415
             from .collections import CollectionNotFoundError  # noqa: PLC0415
+            agent = _up.unquote(agent)
             try:
                 col = runner.run(
                     service.collections_revoke(collection_id, agent, data_dir=data_dir)
