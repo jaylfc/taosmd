@@ -1909,6 +1909,16 @@ async def a2a_create_thread(
         if not participants:
             raise ValueError("participants list cannot be empty")
 
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for participant in participants:
+            if not isinstance(participant, str) or not participant:
+                raise ValueError("each participant must be a non-empty string")
+            if participant not in seen:
+                seen.add(participant)
+                deduped.append(participant)
+        participants = deduped
+
         if await store.has_any_membership(thread):
             raise ValueError(f"thread '{thread}' already exists")
 
