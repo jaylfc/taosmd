@@ -273,6 +273,28 @@ def test_grants_add_and_revoke(live_server):
     assert body["collection"]["grants"] == []
 
 
+def test_grant_rejects_invalid_agent(live_server):
+    base, _, source_dir = live_server
+    col = _create(base, source_dir)
+    for bad in ("", "   ", None, 5):
+        payload = {"agent": bad} if bad is not None else {}
+        status, _ = _req(
+            "POST", f"{base}/collections/{col['id']}/grants",
+            payload, token=_TOKEN,
+        )
+        assert status == 400, f"grant with {bad!r} should 400, got {status}"
+
+
+def test_revoke_rejects_invalid_agent(live_server):
+    base, _, source_dir = live_server
+    col = _create(base, source_dir)
+    # Whitespace agent in URL path -> 400
+    status, _ = _req(
+        "DELETE", f"{base}/collections/{col['id']}/grants/%20%20", token=_TOKEN,
+    )
+    assert status == 400
+
+
 # ---------------------------------------------------------------------------
 # Index (async, 202 + poll) and search integration
 # ---------------------------------------------------------------------------

@@ -210,29 +210,41 @@ def test_grantee_match_is_not_case_insensitive(store, source_dir):
     assert store.has_grant("Agent-A", col["id"])
 
 
+def test_grant_rejects_invalid_grantee(store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    for bad in ("", "   ", None, 5):
+        with pytest.raises(ValueError, match="agent .* must be a non-empty string"):
+            store.grant(col["id"], bad)
+
+
+def test_revoke_rejects_invalid_grantee(store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    for bad in ("", "   ", None, 5):
+        with pytest.raises(ValueError, match="agent .* must be a non-empty string"):
+            store.revoke(col["id"], bad)
+
+
 def test_grantee_key_preserves_the_pre_existing_non_string_behaviour(store, source_dir):
-    """The ``isinstance`` guard in ``_grantee_key`` is load-bearing, not decoration.
+    """``has_grant`` still accepts non-string ids and returns False, but
+    ``revoke`` now validates its grantee to match ``grant``.
 
-    ``revoke``/``has_grant`` bound the raw argument before the symmetry fix, so a
-    value sqlite binds natively reached the query and matched nothing. Routing
-    both ends through ``.strip()`` would newly raise ``AttributeError`` on those
-    callers, which is a behaviour change the fix does not intend to make. The
-    guard is what keeps it out, and nothing else pins it.
-
-    Measured on ``master`` before this change and on this branch after it: both
-    trees pass ``None`` and an int through to a non-match, and both raise
-    ``sqlite3.ProgrammingError`` on a list. The guard does not widen what sqlite
-    accepts, so that half is asserted too.
+    ``has_grant`` is a read-only membership check, so passing through ``None``
+    and an int to a non-match is harmless and pre-existing. ``revoke`` is a
+    mutator: a caller sending garbage has a bug and should be told, while a
+    caller sending a real-but-ungranted agent still correctly gets
+    ``revoked=False``. Those are different conditions and currently collapse
+    into one response, so the contract was tightened on the write side only.
     """
     col = store.create(name="a", kind="docs", source_path=source_dir)
     store.grant(col["id"], "agent-a")
 
     assert store.has_grant(None, col["id"]) is False
     assert store.has_grant(7, col["id"]) is False
-    assert store.revoke(col["id"], None)["id"] == col["id"]
+    with pytest.raises(ValueError, match="agent .* must be a non-empty string"):
+        store.revoke(col["id"], None)
     assert store.has_grant("agent-a", col["id"]) is True  # control: still granted
 
-    with pytest.raises(sqlite3.ProgrammingError):
+    with pytest.raises(ValueError, match="agent .* must be a non-empty string"):
         store.revoke(col["id"], ["agent-a"])
 
 

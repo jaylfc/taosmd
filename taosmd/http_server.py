@@ -1190,8 +1190,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     rest = path[len("/collections/"):]
                     if "/grants/" in rest:
                         cid, _, agent = rest.partition("/grants/")
-                        if not cid or not agent:
-                            self._send_json(404, {"error": "collection id and agent required"})
+                        if not cid:
+                            self._send_json(404, {"error": "collection id required"})
                         else:
                             self._handle_collections_revoke(cid, agent)
                     elif rest and "/" not in rest:
@@ -2446,7 +2446,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"collection": col})
 
         def _handle_collections_revoke(self, collection_id: str, agent: str) -> None:
+            import urllib.parse as _up  # noqa: PLC0415
             from .collections import CollectionNotFoundError  # noqa: PLC0415
+            agent = _up.unquote(agent)
+            if not isinstance(agent, str) or not agent.strip():
+                raise _BadRequest("'agent' (non-empty string) is required")
             try:
                 col = runner.run(
                     service.collections_revoke(collection_id, agent, data_dir=data_dir)

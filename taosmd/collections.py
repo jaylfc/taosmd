@@ -404,6 +404,8 @@ class CollectionStore:
         return self.get(collection_id)
 
     def revoke(self, collection_id: str, canonical_id: str) -> dict:
+        if not isinstance(canonical_id, str) or not canonical_id.strip():
+            raise ValueError("agent (canonical_id) must be a non-empty string")
         self._row(collection_id)
         self._conn.execute(
             "DELETE FROM collection_grants "
