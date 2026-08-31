@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 
+from taosmd import _db
+
 __all__ = ["SCHEMA", "ReceiptStore"]
 
 logger = logging.getLogger(__name__)
@@ -53,9 +55,9 @@ class ReceiptStore:
         self._conn: sqlite3.Connection | None = None
 
     async def init(self) -> None:
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn = _db.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(SCHEMA)
+        _db.run_schema(self._conn, SCHEMA)
         self._conn.commit()
 
     async def close(self) -> None:

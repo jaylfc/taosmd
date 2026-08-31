@@ -12,11 +12,16 @@ lets readers proceed concurrently with a writer, and sets a busy timeout so a
 contended writer waits and retries rather than failing immediately. Both are
 plain PRAGMAs with no extra dependencies; standalone behaviour is unchanged
 apart from the journal mode.
+
+``run_schema`` wraps ``executescript`` with a retry loop so that concurrent
+first-time init does not lose rows when two writers race the CREATE TABLE /
+CREATE INDEX DDL.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import time
 import warnings
 from pathlib import Path
 from typing import Union
@@ -57,3 +62,24 @@ def connect(db_path: Union[str, Path]) -> sqlite3.Connection:
     # parameters in PRAGMA statements, and the value is an internal constant.
     conn.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_MS)}")
     return conn
+
+
+def run_schema(conn: sqlite3.Connection, schema: str) -> None:
+    """Run a schema script, retrying on transient lock errors.
+
+    When multiple processes init the same fresh database concurrently, the
+    CREATE TABLE / CREATE INDEX statements inside ``executescript`` can
+    raise ``OperationalError: database is locked``.  We retry with
+    back-off so that all writers eventually succeed and no rows are lost.
+    """
+    for attempt in range(5):
+        try:
+            conn.executescript(schema)
+            return
+        except sqlite3.OperationalError as exc:
+            lowered = str(exc).lower()
+            if "locked" not in lowered and "busy" not in lowered:
+                raise
+            if attempt == 4:
+                raise
+            time.sleep(0.05 * (attempt + 1))
