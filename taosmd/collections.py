@@ -405,13 +405,16 @@ class CollectionStore:
 
     def revoke(self, collection_id: str, canonical_id: str) -> dict:
         self._row(collection_id)
-        self._conn.execute(
+        cur = self._conn.execute(
             "DELETE FROM collection_grants "
             "WHERE canonical_id = ? AND scope = ? AND collection_id = ?",
             (_grantee_key(canonical_id), GRANT_SCOPE, collection_id),
         )
+        removed = cur.rowcount
         self._conn.commit()
-        return self.get(collection_id)
+        col = self.get(collection_id)
+        col["revoked"] = removed > 0
+        return col
 
     def has_grant(self, canonical_id: str, collection_id: str) -> bool:
         row = self._conn.execute(
