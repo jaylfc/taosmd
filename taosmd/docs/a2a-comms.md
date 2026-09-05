@@ -577,6 +577,40 @@ stored in `a2a_alarm_state` and survives restarts. Use
 Each channel in `/a2a/channels` has shape:
 `{"channel", "members", "message_count", "created_ts", "last_ts"}`
 
+### Strict query parameters
+
+Every `GET /a2a/*` endpoint rejects unknown query parameters **that carry a
+value** with HTTP 400. The error response names both the offending parameter(s)
+and the accepted set, so a misspelt cursor (e.g. `after=9` or `since_id=3` on
+`/a2a/messages`, which only accepts `since` as a timestamp) is reported
+immediately rather than silently ignored.
+
+The qualifier is load-bearing and is not a hedge. Dispatch parses the query with
+`parse_qs` at its default `keep_blank_values=False`, so a parameter with an empty
+value never reaches the validator at all: `?bogus=1` is a 400, while `?bogus=`
+and a bare `?bogus` are both accepted and ignored. That applies uniformly to all
+ten endpoints and is long-standing behaviour rather than anything these handlers
+choose. It matters in practice because a client interpolating an unset cursor
+emits exactly `since_id=`. Making the unqualified sentence true would mean
+switching to `keep_blank_values=True` repo-wide, which changes how every
+endpoint reads its parameters and is deliberately not done here.
+
+This mirrors the controller proxy (taOS #2390): an unknown query
+parameter is a 400, never a silent no-op. The accepted set is:
+
+| Endpoint | Accepted query parameters |
+|----------|--------------------------|
+| `GET /a2a/messages` | `thread`, `since`, `limit`, `fields`, `format` |
+| `GET /a2a/mentions` | `since`, `limit`, `reader` |
+| `GET /a2a/stream` | `thread`, `since` |
+| `GET /a2a/threads` | `principal` |
+| `GET /a2a/threads/{thread}/messages` | `before`, `after`, `limit` |
+| `GET /a2a/channels` | (none) |
+| `GET /a2a/members` | `channel` |
+| `GET /a2a/census` | (none) |
+| `GET /a2a/messages/{id}/receipts` | (none) |
+| `GET /a2a/receipts` | `message_id`, `agent` |
+
 ### MCP tools
 
 | Tool | Arguments | Returns |
