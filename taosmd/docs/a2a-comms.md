@@ -492,6 +492,14 @@ gating read endpoints on membership are tracked separately.
 |--------|------|------------|----------|
 | `POST` | `/a2a/send` | body JSON `{"from", "body", "thread"?, "reply_to"?}` | `{"id", "from", "thread", "reply_to"}` |
 | `GET`  | `/a2a/messages` | `?thread=&since=&limit=&fields=&format=` | `{"messages": [...]}`; `fields=id,sender,body` projects each message down to those keys; `format=ndjson` emits one message per line (`application/x-ndjson`) |
+
+`limit` on `GET /a2a/messages` is bounded below as well as parsed. A negative
+value is rejected with `400 'limit' must not be negative`, and a non-integer
+with `400 'limit' must be an integer`. `limit=0` is valid and returns zero
+messages. Omitting the parameter, including passing it empty, falls through to
+the default page size rather than to an unbounded read. The floor matters
+because SQLite treats `LIMIT -1` as unbounded, so a cap written as
+`min(limit, N)` clamps only above and `?limit=-1` would return the whole feed.
 | `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |

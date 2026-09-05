@@ -124,6 +124,45 @@ def test_http_a2a_messages_unknown_param_returns_400(live_server):
 
 
 # ---------------------------------------------------------------------------
+# New: limit parameter validation
+# ---------------------------------------------------------------------------
+
+def test_http_a2a_messages_limit_negative_returns_400(live_server):
+    """?limit=-1 on /a2a/messages must 400; SQLite treats -1 as unbounded."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg", "thread": "limit-neg-test"})
+    for i in range(20):
+        _post(f"{live_server}/a2a/send",
+              {"from": "agentA", "body": f"msg{i}", "thread": "limit-neg-test"})
+    status, body = _get(f"{live_server}/a2a/messages?thread=limit-neg-test&limit=-1")
+    assert status == 400, body
+
+
+def test_http_a2a_messages_limit_zero_returns_zero(live_server):
+    """?limit=0 on /a2a/messages must return 0 rows."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg", "thread": "limit-zero-test"})
+    for i in range(20):
+        _post(f"{live_server}/a2a/send",
+              {"from": "agentA", "body": f"msg{i}", "thread": "limit-zero-test"})
+    status, body = _get(f"{live_server}/a2a/messages?thread=limit-zero-test&limit=0")
+    assert status == 200
+    assert len(body["messages"]) == 0
+
+
+def test_http_a2a_messages_limit_one_returns_one(live_server):
+    """?limit=1 on /a2a/messages must return exactly 1 row."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg", "thread": "limit-one-test"})
+    for i in range(20):
+        _post(f"{live_server}/a2a/send",
+              {"from": "agentA", "body": f"msg{i}", "thread": "limit-one-test"})
+    status, body = _get(f"{live_server}/a2a/messages?thread=limit-one-test&limit=1")
+    assert status == 200
+    assert len(body["messages"]) == 1
+
+
+# ---------------------------------------------------------------------------
 # Gate (b): kind round-trips send -> messages -> stream
 # ---------------------------------------------------------------------------
 
