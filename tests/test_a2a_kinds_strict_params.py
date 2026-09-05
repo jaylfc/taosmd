@@ -308,6 +308,18 @@ def test_http_a2a_channels_unknown_param_returns_400(live_server):
     assert "bogus" in body["error"]
 
 
+def test_http_a2a_census_unknown_param_returns_400(live_server):
+    """Unknown query params on /a2a/census must 400 naming the param and allowed set.
+
+    The param carries a non-empty value so that parse_qs(keep_blank_values=False)
+    does not drop it before it reaches the validator.
+    """
+    status, body = _get(f"{live_server}/a2a/census?bogus=probe")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+    assert "allowed" in body["error"]
+
+
 def test_http_a2a_members_unknown_param_returns_400(live_server):
     status, body = _get(f"{live_server}/a2a/members?channel=general&bogus=1")
     assert status == 400, body
