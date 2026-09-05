@@ -455,6 +455,35 @@ a2a_members(channel="CHANNEL")
 
 ---
 
+## Thread membership
+
+Thread membership (`POST /a2a/threads`, `GET/POST/DELETE /a2a/threads/{thread}/members`)
+tracks which principals (agents) belong to which threads and their roles
+(owner/member). The membership store lives in `a2a-membership.db` and is
+zero-loss: removal marks a row inactive rather than deleting it. Threads with
+no membership rows are open to all (backward compatibility with channels whose
+membership has not yet been asserted).
+
+The caller (`agent` field in the request body) is added as owner on thread
+creation. Adding or removing a member requires the caller to be an owner, and
+the last owner cannot be removed. `PermissionError` denials return HTTP 403.
+
+**Ownership is self-asserted** -- the owner check compares the request body's
+`agent` field against the membership store, not the caller's verified token.
+The sibling A2A read path (`/a2a/mentions`) binds the `reader` query parameter
+to the token's `sub` claim and returns 403 on mismatch; the membership write
+path does not yet do this. Additionally, `a2a_create_thread` only checks for
+existing membership rows, not for an existing conversation archive, so a
+principal who has never posted can claim ownership of a live channel name.
+These are tracked as open design questions (see `docs/a2a-membership-auth-assessment.md`).
+
+**No read path is gated by membership yet** -- the four endpoints above (create,
+list, add, remove) are the only code paths that read or write the membership
+store. The A2A read API (`/a2a/messages`, `/a2a/threads`, `/a2a/stream`,
+`/a2a/mentions`) does not consult membership; any principal can read any thread
+that carries membership rows. Binding ownership to the caller's token and
+gating read endpoints on membership are tracked separately.
+
 ## Reference
 
 ### HTTP endpoints
@@ -466,10 +495,25 @@ a2a_members(channel="CHANNEL")
 | `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
+| `POST` | `/a2a/threads` | body JSON `{"thread", "participants", "agent"}` | `{"thread", "created", "active_members"}`; create a thread (caller becomes owner, participants become members; ownership is self-asserted from the `agent` body field, see notes) |
+| `GET`  | `/a2a/threads` | `?principal=` | `{"threads": [...]}` |
+| `GET`  | `/a2a/threads/{thread}/messages` | `?before=&after=&limit=` | `{"thread", "messages": [...]}`; oldest-first cursor-paginated |
+| `GET`  | `/a2a/threads/{thread}/members` | n/a | `{"members": [...]}`; active members (owners + members), empty for open/legacy threads with no membership rows |
+| `POST` | `/a2a/threads/{thread}/members` | body JSON `{"principal_id", "agent"}` | `{"thread", "principal_id", "added"}`; add a member (caller must be owner; returns `{"added": false, "already_member": true}` if already present; 403 if caller is not an owner) |
+| `DELETE` | `/a2a/threads/{thread}/members/{principal}` | body JSON `{"agent"}` | `{"thread", "principal_id", "removed", "archived": true}`; remove a member (caller must be owner; last owner cannot be removed; 403 if caller is not an owner) |
 | `POST` | `/a2a/alarms/{key}/clear` | path-encoded alarm key | `{"cleared": true, "key": str}` |
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
+
+#### Thread path-segment encoding
+
+`{thread}` and `{principal}` in URL path segments are percent-encoded by the
+client (`urllib.parse.quote(thread, safe='')`) and percent-decoded by the
+server (`urllib.parse.unquote`) in every handler that accepts them, so thread
+names containing spaces, hashes (`%23`), slashes (`%2F`), or non-ASCII
+characters are matched correctly instead of silently returning an empty
+result or raising `InvalidURL` / `UnicodeEncodeError`.
 
 ### Admin token (separate from the data plane)
 
