@@ -137,6 +137,64 @@ def test_link_rejects_bad_type(store, source_dir):
         store.link(col["id"], "jira", "PROJ-1")
 
 
+LINK_TYPE_HOSTILE = ["", "  ", 7, None]
+EXT_ID_HOSTILE = ["", "  ", 7, None]
+
+
+@pytest.mark.parametrize("bad_type", LINK_TYPE_HOSTILE)
+def test_link_rejects_hostile_link_type(bad_type, store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    with pytest.raises(ValueError):
+        store.link(col["id"], bad_type, "prj-123")
+
+
+@pytest.mark.parametrize("bad_ext_id", EXT_ID_HOSTILE)
+def test_link_rejects_hostile_ext_id(bad_ext_id, store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    with pytest.raises(ValueError):
+        store.link(col["id"], "taos", bad_ext_id)
+
+
+@pytest.mark.parametrize("bad_type", LINK_TYPE_HOSTILE)
+def test_unlink_rejects_hostile_link_type(bad_type, store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.link(col["id"], "taos", "prj-123")
+    with pytest.raises(ValueError):
+        store.unlink(col["id"], bad_type, "prj-123")
+
+
+@pytest.mark.parametrize("bad_ext_id", EXT_ID_HOSTILE)
+def test_unlink_rejects_hostile_ext_id(bad_ext_id, store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.link(col["id"], "taos", "prj-123")
+    with pytest.raises(ValueError):
+        store.unlink(col["id"], "taos", bad_ext_id)
+
+
+def test_unlink_strips_whitespace_ext_id(store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.link(col["id"], "taos", "  prj-123  ")
+    assert {"type": "taos", "id": "prj-123"} in store.get(col["id"])["links"]
+    store.unlink(col["id"], "taos", "  prj-123  ")
+    assert store.get(col["id"])["links"] == []
+
+
+def test_link_then_unlink_with_padded_id_round_trip(store, source_dir):
+    col = store.create(name="a", kind="docs", source_path=source_dir)
+    store.link(col["id"], "taos", "  prj-123  ")
+    assert store.get(col["id"])["links"] == [{"type": "taos", "id": "prj-123"}]
+    store.unlink(col["id"], "taos", "  prj-123  ")
+    assert store.get(col["id"])["links"] == []
+
+
+def test_list_project_filter_strips_whitespace(store, source_dir):
+    a = store.create(name="a", kind="docs", source_path=source_dir)
+    store.link(a["id"], "taos", "  prj-123  ")
+    assert store.list(project="prj-123") == [store.get(a["id"])]
+    assert store.list(project="  prj-123  ") == [store.get(a["id"])]
+    assert store.list(project="prj-456") == []
+
+
 def test_list_project_filter_matches_either_link_type(store, source_dir):
     a = store.create(name="a", kind="docs", source_path=source_dir)
     b = store.create(name="b", kind="docs", source_path=source_dir)

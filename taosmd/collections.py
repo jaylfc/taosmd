@@ -312,12 +312,13 @@ class CollectionStore:
             "SELECT id, status FROM collections ORDER BY created_at"
         ).fetchall()
         out = []
+        project_norm = project.strip() if project is not None else None
         for row in rows:
             if not include_archived and row["status"] == "archived":
                 continue
             col = self.get(row["id"])
-            if project is not None and not any(
-                link["id"] == project for link in col["links"]
+            if project_norm is not None and not any(
+                link["id"] == project_norm for link in col["links"]
             ):
                 continue
             out.append(col)
@@ -380,11 +381,17 @@ class CollectionStore:
         return self.get(collection_id)
 
     def unlink(self, collection_id: str, link_type: str, ext_id: str) -> dict:
+        if link_type not in LINK_TYPES:
+            raise ValueError(
+                f"link type must be one of {'|'.join(LINK_TYPES)}, got {link_type!r}"
+            )
+        if not isinstance(ext_id, str) or not ext_id.strip():
+            raise ValueError("link id must be a non-empty string")
         self._row(collection_id)
         self._conn.execute(
             "DELETE FROM collection_links "
             "WHERE collection_id = ? AND type = ? AND ext_id = ?",
-            (collection_id, link_type, ext_id),
+            (collection_id, link_type, ext_id.strip()),
         )
         self._conn.commit()
         return self.get(collection_id)

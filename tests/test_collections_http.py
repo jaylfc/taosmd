@@ -257,6 +257,37 @@ def test_link_bad_type_400(live_server):
     assert status == 400
 
 
+def test_unlink_bad_type_400(live_server):
+    base, _, source_dir = live_server
+    col = _create(base, source_dir)
+    _req(
+        "POST", f"{base}/collections/{col['id']}/link",
+        {"type": "taos", "id": "prj-123"}, token=_TOKEN,
+    )
+    status, _ = _req(
+        "POST", f"{base}/collections/{col['id']}/unlink",
+        {"type": "jira", "id": "prj-123"}, token=_TOKEN,
+    )
+    assert status == 400
+
+
+def test_link_unlink_with_padded_id(live_server):
+    base, _, source_dir = live_server
+    col = _create(base, source_dir)
+    status, body = _req(
+        "POST", f"{base}/collections/{col['id']}/link",
+        {"type": "taos", "id": "  prj-123  "}, token=_TOKEN,
+    )
+    assert status == 200
+    assert {"type": "taos", "id": "prj-123"} in body["collection"]["links"]
+    status, body = _req(
+        "POST", f"{base}/collections/{col['id']}/unlink",
+        {"type": "taos", "id": "  prj-123  "}, token=_TOKEN,
+    )
+    assert status == 200
+    assert body["collection"]["links"] == []
+
+
 def test_grants_add_and_revoke(live_server):
     base, _, source_dir = live_server
     col = _create(base, source_dir)
