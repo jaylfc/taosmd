@@ -516,7 +516,7 @@ because SQLite treats `LIMIT -1` as unbounded, so a cap written as
 | `POST` | `/a2a/ack` | body JSON `{"message_id": int}` | `{"id", "acked_by", "ok"}` |
 | `GET`  | `/a2a/inbox/unhandled` | `?consumer=&limit=` | `{"messages": [...]}` |
 | `POST` | `/a2a/threads` | body JSON `{"thread", "participants", "agent"}` | `{"thread", "created", "active_members"}`; create a thread (caller becomes owner, participants become members; ownership is self-asserted from the `agent` body field, see notes) |
-| `GET`  | `/a2a/threads` | `?principal=` | `{"threads": [...]}` |
+| `GET`  | `/a2a/threads` | `?principal=` | `{"threads": [...]}`; sender-derived filter: returns only threads this principal has sent to |
 | `GET`  | `/a2a/threads/{thread}/messages` | `?before=&after=&limit=` | `{"thread", "messages": [...]}`; oldest-first cursor-paginated |
 | `GET`  | `/a2a/threads/{thread}/members` | n/a | `{"members": [...]}`; active members (owners + members), empty for open/legacy threads with no membership rows |
 | `POST` | `/a2a/threads/{thread}/members` | body JSON `{"principal_id", "agent"}` | `{"thread", "principal_id", "added"}`; add a member (caller must be owner; returns `{"added": false, "already_member": true}` if already present; 403 if caller is not an owner) |

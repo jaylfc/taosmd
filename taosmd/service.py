@@ -896,6 +896,12 @@ async def a2a_threads(*, principal: str | None = None, data_dir=None) -> list[di
     timestamp of each thread's last message. This replaced an alphabetical
     ordering; callers that relied on alphabetical order must sort client-side.
 
+    When ``principal`` is supplied, only threads this principal has sent to
+    are returned. This is a sender-derived filter: a thread is included when
+    ``principal`` appears in the ``participants`` list, which is built from
+    the ``from`` field of each archived message. It is not membership,
+    subscription, or roster lookup.
+
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
     """
@@ -965,6 +971,8 @@ async def a2a_threads(*, principal: str | None = None, data_dir=None) -> list[di
             "_last_ts": t["_last_ts"],
         })
     result.sort(key=lambda x: x["_last_ts"], reverse=True)
+    if principal is not None:
+        result = [t for t in result if principal in t["participants"]]
     return [{"thread": t["thread"], "kind": t["kind"],
              "participants": t["participants"],
              "last_message": t["last_message"]} for t in result]
