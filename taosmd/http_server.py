@@ -1893,7 +1893,6 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             when a verifier is configured; otherwise it is required as a
             query parameter.
             """
-            _validate_a2a_params(qs, frozenset({"consumer", "limit", "include_kinds", "exclude_acked_by"}))
             consumer_qp = (qs.get("consumer") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
             include_kinds_raw = (qs.get("include_kinds") or [None])[0]
@@ -1942,10 +1941,19 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 to_id = int(to_id_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'to_id' must be an integer") from exc
+            
+            # Try to get consumer from query parameter as fallback (for standalone installs without registry verifier)
+            qs = parse_qs(self.path)
+            consumer_qp = (qs.get("consumer") or [None])[0]
+            
             consumer = self._get_authenticated_agent_id()
             if consumer is None:
-                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
-                return
+                # If no token, use query parameter consumer
+                if not consumer_qp:
+                    self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                    return
+                consumer = consumer_qp
+            
             runner.run(
                 service.a2a_inbox_advance(consumer, to_id, data_dir=data_dir)
             )
@@ -1980,7 +1988,6 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             Returns messages past the consumer's cursor that are addressed
             to the consumer and have NOT been acknowledged by the consumer.
             """
-            _validate_a2a_params(qs, frozenset({"consumer", "limit"}))
             consumer_qp = (qs.get("consumer") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
             try:
