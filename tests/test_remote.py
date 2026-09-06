@@ -437,8 +437,8 @@ def test_install_skill_copies_skill(tmp_path, monkeypatch):
     assert "taosmd-a2a" in content
 
 
-def test_install_skill_idempotent_without_force(tmp_path, monkeypatch):
-    """Second install-skill call without --force returns 0 and does not overwrite."""
+def test_install_skill_idempotent_without_force(tmp_path, monkeypatch, capsys):
+    """A locally-modified install is not overwritten without --force; it warns and exits non-zero."""
     import argparse  # noqa: PLC0415
     from taosmd.cli import _install_skill_cmd  # noqa: PLC0415
     import pathlib  # noqa: PLC0415
@@ -459,15 +459,17 @@ def test_install_skill_idempotent_without_force(tmp_path, monkeypatch):
     args_first = argparse.Namespace(force=False)
     _install_skill_cmd(args_first)
 
-    # Write a sentinel into the destination to verify idempotency.
+    # Corrupting the installed file means it no longer matches the recorded hash.
     skill_dest = fake_home / ".claude" / "skills" / "taosmd-a2a" / "SKILL.md"
     skill_dest.write_text("sentinel content")
 
     args_second = argparse.Namespace(force=False)
     rc = _install_skill_cmd(args_second)
-    assert rc == 0
-    # Content should still be the sentinel (not overwritten).
+    assert rc != 0
     assert skill_dest.read_text() == "sentinel content"
+    err = capsys.readouterr().err
+    assert "local edits" in err
+    assert "--force" in err
 
 
 def test_install_skill_force_overwrites(tmp_path, monkeypatch):

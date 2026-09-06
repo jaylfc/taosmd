@@ -45,7 +45,7 @@ echo "  Remote server URL set: $SERVER_URL"
 # --- Step 3: install the Claude skill ----------------------------------------
 echo ""
 echo "Step 3: Installing taosmd-a2a skill..."
-taosmd install-skill || taosmd install-skill --force
+taosmd install-skill
 echo "  Skill installed."
 
 # --- Step 4: health check -----------------------------------------------------
