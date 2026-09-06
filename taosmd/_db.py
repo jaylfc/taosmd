@@ -37,10 +37,14 @@ def connect(
     ``row_factory`` or other connection attributes should set them on the
     returned connection as before.
 
-    ``check_same_thread`` defaults to ``True`` to preserve sqlite3's default
-    thread-affinity contract for existing call sites. Stores driven by async
-    methods that may be awaited from any thread pass
-    ``check_same_thread=False`` explicitly (e.g. ``ReceiptStore``).
+    ``check_same_thread`` is keyword-only and defaults to ``True`` so every
+    existing caller keeps sqlite3's thread-affinity safety check. Set it to
+    ``False`` only when the connection will be shared across threads (e.g.
+    opened on a background loop thread and accessed from a request thread);
+    under the current :class:`~taosmd.http_server.ThreadingHTTPServer` +
+    :class:`~taosmd.http_server._ServiceLoop` design every store connection
+    is created and used on the single service-loop thread, so the default is
+    correct and the parameter is an explicit opt-in, not a blanket flip.
     """
     conn = sqlite3.connect(db_path, check_same_thread=check_same_thread)
     # ``PRAGMA journal_mode`` echoes the journal mode actually in effect. WAL

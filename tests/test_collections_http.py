@@ -273,6 +273,45 @@ def test_grants_add_and_revoke(live_server):
     assert body["collection"]["grants"] == []
 
 
+def test_revoke_reports_revoked_true_on_matching_grant(live_server):
+    base, _, source_dir = live_server
+    col = _create(base, source_dir)
+    _req(
+        "POST", f"{base}/collections/{col['id']}/grants",
+        {"agent": "dev"}, token=_TOKEN,
+    )
+    status, body = _req(
+        "DELETE", f"{base}/collections/{col['id']}/grants/dev", token=_TOKEN,
+    )
+    assert status == 200
+    assert body["revoked"] is True
+    assert body["collection"]["grants"] == []
+    assert "revoked" not in body["collection"]
+
+
+def test_revoke_reports_revoked_false_on_non_matching_grantee(live_server):
+    """Revoking a grantee that holds no grant is idempotent: 200 with
+    ``revoked`` False and the surviving grant still listed under ``grants``.
+
+    A mis-cased grantee (``not-dev`` vs the granted ``dev``) deletes no row,
+    so the endpoint must not report success to a caller that reads only the
+    status.
+    """
+    base, _, source_dir = live_server
+    col = _create(base, source_dir)
+    _req(
+        "POST", f"{base}/collections/{col['id']}/grants",
+        {"agent": "dev"}, token=_TOKEN,
+    )
+    status, body = _req(
+        "DELETE", f"{base}/collections/{col['id']}/grants/not-dev", token=_TOKEN,
+    )
+    assert status == 200
+    assert body["revoked"] is False
+    assert body["collection"]["grants"] == ["dev"]
+    assert "revoked" not in body["collection"]
+
+
 # ---------------------------------------------------------------------------
 # Index (async, 202 + poll) and search integration
 # ---------------------------------------------------------------------------

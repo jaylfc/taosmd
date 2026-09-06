@@ -63,7 +63,7 @@ POST   /collections                        -> {"collection": {...}, "created": t
 POST   /collections/{id}/index             -> 202, then poll GET /collections/{id}
 POST   /collections/{id}/link | /unlink    -> {"collection": {...}}
 POST   /collections/{id}/grants            -> {"collection": {...}}
-DELETE /collections/{id}/grants/{agent}    -> {"collection": {...}}
+DELETE /collections/{id}/grants/{agent}    -> {"collection": ..., "revoked": ...}
 DELETE /collections/{id}                   -> {"collection": {...}}  (archived)
 ```
 
