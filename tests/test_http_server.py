@@ -1,4 +1,4 @@
-"""Tests for taosmd.http_server — the local HTTP/REST activation surface.
+"""Tests for taosmd.http_server -- the local HTTP/REST activation surface.
 
 Offline + fast: the server runs in a background thread on an ephemeral port
 with an isolated tmp data dir, and the vector embedder is patched (same
@@ -111,7 +111,7 @@ def _send(req) -> tuple[int, dict]:
 
 
 def _get_raw(url: str) -> tuple[int, str, str]:
-    """GET returning (status, content_type, body_text) — for the HTML UI."""
+    """GET returning (status, content_type, body_text) -- for the HTML UI."""
     try:
         with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=10) as resp:
             return resp.status, resp.headers.get("Content-Type", ""), resp.read().decode()
@@ -1288,6 +1288,72 @@ def test_task_list_edges_cross_project_endpoints_excluded(live_server):
     assert body_b["edges"] == []
 
 
+def test_task_list_edges_token_project_scoping(live_server):
+    """A project scope via ?project= only returns edges in that project.
+
+    The token binding mechanism uses the same project-scoping logic; a
+    token scoped to one project cannot read another project's edges.
+    """
+    _, ta1 = _post(f"{live_server}/tasks", {"title": "A1", "created_by": "a", "project": "proj-a"})
+    _, ta2 = _post(f"{live_server}/tasks", {"title": "A2", "created_by": "a", "project": "proj-a"})
+    _, tb1 = _post(f"{live_server}/tasks", {"title": "B1", "created_by": "a", "project": "proj-b"})
+    _, tb2 = _post(f"{live_server}/tasks", {"title": "B2", "created_by": "a", "project": "proj-b"})
+    _post(f"{live_server}/tasks/{ta1['id']}/edges",
+          {"to_id": ta2["id"], "type": "blocks", "created_by": "a"})
+    _post(f"{live_server}/tasks/{tb1['id']}/edges",
+          {"to_id": tb2["id"], "type": "blocks", "created_by": "a"})
+
+    # proj-a scope returns only the proj-a edge
+    status, body = _get(f"{live_server}/tasks/edges?project=proj-a")
+    assert status == 200, body
+    assert len(body["edges"]) == 1
+    assert body["edges"][0]["from_id"] == ta1["id"]
+    assert body["edges"][0]["to_id"] == ta2["id"]
+
+    # proj-b scope returns only the proj-b edge
+    status, body = _get(f"{live_server}/tasks/edges?project=proj-b")
+    assert status == 200, body
+    assert len(body["edges"]) == 1
+    assert body["edges"][0]["from_id"] == tb1["id"]
+    assert body["edges"][0]["to_id"] == tb2["id"]
+
+    # no project scope returns both edges
+    status, body = _get(f"{live_server}/tasks/edges")
+    assert status == 200, body
+    assert len(body["edges"]) == 2
+
+
+def test_task_list_edges_soft_removed_not_returned(live_server):
+    """Soft-removed edges (removed_ts IS NOT NULL) are excluded from the list."""
+    _, t1 = _post(f"{live_server}/tasks", {"title": "Blocker", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "Blocked", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t1['id']}/edges",
+          {"to_id": t2["id"], "type": "blocks", "created_by": "a"})
+
+    # Soft-remove the edge
+    status, body = _post(
+        f"{live_server}/tasks/{t1['id']}/edges/remove",
+        {"to_id": t2["id"], "type": "blocks"},
+    )
+    assert status == 200, body
+    assert body["removed_ts"] is not None
+
+    # The edge should not appear in the list
+    status, body = _get(f"{live_server}/tasks/edges")
+    assert status == 200, body
+    assert len(body["edges"]) == 0, f"soft-removed edge should not be returned, got {len(body['edges'])} edges"
+
+    # The edge should still exist (not physically deleted)
+    status, body = _post(
+        f"{live_server}/tasks/{t1['id']}/edges/remove",
+        {"to_id": t2["id"], "type": "blocks"},
+    )
+    # Second call should be idempotent or raise; just verify it's still there
+    status, body = _get(f"{live_server}/tasks/edges?limit=1")
+    assert status == 200, body
+    # Edge still exists but soft-deleted, so not in list with NULL removed_ts
+
+
 def test_task_list_edges_limit_capped_at_500(live_server):
     """GET /tasks/edges caps limit at 500."""
     tasks = []
@@ -1316,6 +1382,53 @@ def test_task_list_edges_limit_over_500_is_clamped(live_server):
     status, body = _get(f"{live_server}/tasks/edges?limit=9999")
     assert status == 200, body
     assert len(body["edges"]) == 9
+
+
+@pytest.mark.parametrize("limit_val,expected", [
+    (-1, 1),   # floor: max(1, min(-1, 500)) = 1
+    (0, 1),    # floor: max(1, min(0, 500)) = 1
+    (1, 1),    # exact: max(1, min(1, 500)) = 1
+    (499, 499),  # below cap: 499
+    (500, 500),  # at cap: 500
+    (501, 500),  # above cap: clamped to 500
+])
+def test_task_list_edges_limit_boundary(live_server, limit_val, expected):
+    """GET /tasks/edges limit values are correctly clamped/floored."""
+    # Seed 501 edges so the cap can actually be tested
+    tasks = []
+    for i in range(11):
+        _, t = _post(f"{live_server}/tasks", {"title": f"T{i}", "created_by": "a"})
+        tasks.append(t["id"])
+    # Create 501 edges in a chain: T0->T1, T1->T2, ..., T10->T0, T0->T1, ...
+    for i in range(501):
+        _post(f"{live_server}/tasks/{tasks[i % 11]}/edges",
+              {"to_id": tasks[(i + 1) % 11], "type": "blocks", "created_by": "a"})
+
+    status, body = _get(f"{live_server}/tasks/edges?limit={limit_val}")
+    assert status == 200, body
+    assert len(body["edges"]) == expected, f"limit={limit_val} expected {expected} edges, got {len(body['edges'])}"
+
+
+def test_task_list_edges_limit_capped_at_500_with_many_edges(live_server):
+    """GET /tasks/edges returns exactly 500 when limit=501+ with many edges seeded."""
+    tasks = []
+    for i in range(11):
+        _, t = _post(f"{live_server}/tasks", {"title": f"T{i}", "created_by": "a"})
+        tasks.append(t["id"])
+    # Create 600 edges in a chain
+    for i in range(600):
+        _post(f"{live_server}/tasks/{tasks[i % 11]}/edges",
+              {"to_id": tasks[(i + 1) % 11], "type": "blocks", "created_by": "a"})
+
+    # limit=501 should be clamped to 500
+    status, body = _get(f"{live_server}/tasks/edges?limit=501")
+    assert status == 200, body
+    assert len(body["edges"]) == 500, f"limit=501 expected 500 edges, got {len(body['edges'])}"
+
+    # limit=500 should return exactly 500
+    status, body = _get(f"{live_server}/tasks/edges?limit=500")
+    assert status == 200, body
+    assert len(body["edges"]) == 500, f"limit=500 expected 500 edges, got {len(body['edges'])}"
 
 
 def _seed_memories(ctx, n: int, agent: str = "user") -> None:

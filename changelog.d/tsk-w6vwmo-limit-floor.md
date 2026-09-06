@@ -1,0 +1,2 @@
+### Fixed
+- `GET /tasks/edges` limit clamp now uses `max(1, min(limit, 500))` instead of bare `min(limit, 500)`, adding a floor of 1 so that `?limit=0` and `?limit=-1` return at least 1 row instead of unbounded or zero results. This matches the convention established by sibling clamps in `service.py`.
