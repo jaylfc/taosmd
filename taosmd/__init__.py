@@ -42,6 +42,8 @@ from .project import get_project_id, ProjectResolver, ProjectInfo
 from . import service
 from .http_server import serve
 
+from .a2a_membership import MembershipStore
+
 # MCP server (#84). The module imports the `mcp` SDK lazily, so this import
 # never fails when the optional dependency is absent; only building/running a
 # server raises MissingMCPDependencyError. Importing `taosmd` stays lean.
@@ -213,4 +215,6 @@ __all__ = [
     "config",
     "list_pending_decisions",
     "resolve_pending_decision",
+    # A2A thread membership store
+    "MembershipStore",
 ]

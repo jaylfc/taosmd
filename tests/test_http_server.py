@@ -1316,3 +1316,76 @@ def test_task_list_edges_limit_over_500_is_clamped(live_server):
     status, body = _get(f"{live_server}/tasks/edges?limit=9999")
     assert status == 200, body
     assert len(body["edges"]) == 9
+
+
+def _seed_memories(ctx, n: int, agent: str = "user") -> None:
+    """Seed *n* conversation rows directly into the archive index.
+
+    Used by bound tests that must seed more rows than the asserted cap.
+    """
+    arc = ctx.stores["archive"]
+
+    async def _seed() -> None:
+        for i in range(n):
+            await arc.record(
+                event_type="conversation",
+                data={"text": f"seed memory {i}"},
+                agent_name=agent,
+                summary=f"seed memory {i}",
+            )
+
+    ctx.run(_seed())
+
+
+_SEED_COUNT = 600
+
+
+@pytest.fixture
+def memories_server(live_server_ctx):
+    """Live server pre-seeded with 600 memories (more than the 500 cap)."""
+    _seed_memories(live_server_ctx, _SEED_COUNT)
+    return live_server_ctx.url
+
+
+def test_memories_negative_limit_rejected(memories_server):
+    """limit < 0 returns 400, not an unbounded dump (tsk-au6qkw).
+
+    The bug: -1 flowed straight to SQLite LIMIT ?, which treats -1 as
+    'no limit' and returned every row.
+    """
+    for bad in ("-1", "-999"):
+        status, body = _get(f"{memories_server}/memories?limit={bad}")
+        assert status == 400, body
+        assert "limit" in body["error"].lower()
+
+
+def test_memories_limit_zero_returns_empty(memories_server):
+    """limit=0 returns zero rows (settled contract, matches /a2a/messages)."""
+    status, body = _get(f"{memories_server}/memories?limit=0")
+    assert status == 200, body
+    assert len(body["memories"]) == 0
+
+
+def test_memories_default_limit(memories_server):
+    """No limit param -> default page size of 50."""
+    status, body = _get(f"{memories_server}/memories")
+    assert status == 200, body
+    assert len(body["memories"]) == 50
+
+
+def test_memories_limit_clamped_to_max(memories_server):
+    """limit > cap is clamped so callers cannot pull the whole archive.
+
+    Seeded _SEED_COUNT (600) rows, strictly more than _MEMORY_MAX_LIMIT
+    (500), so absent the cap this assertion would receive 600, not 500.
+    """
+    status, body = _get(f"{memories_server}/memories?limit=9999")
+    assert status == 200, body
+    assert len(body["memories"]) == 500
+
+
+def test_memories_limit_at_cap(memories_server):
+    """limit == cap returns exactly the cap."""
+    status, body = _get(f"{memories_server}/memories?limit=500")
+    assert status == 200, body
+    assert len(body["memories"]) == 500
