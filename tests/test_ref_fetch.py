@@ -380,8 +380,8 @@ class TestServiceFetchByRefRouting:
 
         ref = {"uri": "taos://proj/files/hello.txt", "sha256": "abc"}
         data_dir = str(tmp_path)
-        result = asyncio.run(svc.fetch_by_ref(ref, agent="test", data_dir=data_dir))
-        assert captured["data_dir"] == data_dir
+        result = asyncio.run(svc.fetch_by_ref(ref, agent="test", data_dir="/tmp"))
+        assert captured["data_dir"] == "/tmp"
         assert result["bytes"] == "aGVsbG8="
 
     def test_service_fetch_by_ref_does_not_raise_when_files_url_unset_but_registry_set(self, tmp_path, monkeypatch):
