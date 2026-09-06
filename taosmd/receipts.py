@@ -51,7 +51,8 @@ class ReceiptStore:
     timeout) with ``check_same_thread=False`` so it stays usable from whichever
     thread drives the event loop -- the async methods here are not guaranteed
     to run on the creating thread, so ``check_same_thread=False`` is required
-    to avoid a thread-affinity crash.
+    to avoid a thread-affinity crash, and routing through ``_db.connect`` is
+    required to get WAL and the busy timeout.
     """
 
     def __init__(self, db_path: str) -> None:

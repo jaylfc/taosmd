@@ -217,6 +217,79 @@ def test_receipt_store_seen_idempotent():
 
 
 # ---------------------------------------------------------------------------
+# Connection configuration: WAL + busy_timeout via _db.connect
+# ---------------------------------------------------------------------------
+
+def test_receipt_store_uses_wal_and_busy_timeout(monkeypatch):
+    """ReceiptStore must open via _db.connect so WAL + busy_timeout are set.
+
+    The direct sqlite3.connect bypass left the database in rollback-journal
+    mode with a zero busy timeout, surfacing ``database is locked`` under
+    contention instead of waiting and retrying. This pins that regression.
+
+    DEFECT 2 fix: rather than a hard-coded ``5000`` (which coincides with the
+    Python sqlite3 default and so survives deletion of the PRAGMA), the
+    busy_timeout assertion pins against ``_db.BUSY_TIMEOUT_MS`` after the
+    constant is monkeypatched to a value distinct from the default. Deleting
+    the ``PRAGMA busy_timeout`` line at ``taosmd/_db.py:67`` reverts the
+    connection to the default (5000), which no longer matches the mutated
+    constant (3000), so the test goes RED.
+    """
+    from taosmd import _db
+
+    import tempfile
+    monkeypatch.setattr(_db, "BUSY_TIMEOUT_MS", 3000)
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = str(Path(tmp) / "a2a-receipts.db")
+        store = receipts.ReceiptStore(db_path=db_path)
+        asyncio.run(store.init())
+        try:
+            mode = store._conn.execute("PRAGMA journal_mode").fetchone()[0]
+            timeout = store._conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            assert mode == "wal", mode
+            assert int(timeout) == _db.BUSY_TIMEOUT_MS, timeout
+        finally:
+            asyncio.run(store.close())
+
+
+# ---------------------------------------------------------------------------
+# Thread-affinity: connection must stay usable across threads
+# ---------------------------------------------------------------------------
+
+def test_receipt_store_usable_from_non_creating_thread():
+    """check_same_thread=False keeps the connection usable cross-thread.
+
+    ReceiptStore's async methods may be driven by any event loop or thread, so
+    the connection must not demand thread affinity (the default for
+    ``sqlite3.connect``). This pins that behaviour so a naive swap back to the
+    default does not turn the concurrency fix into a thread-affinity crash.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = str(Path(tmp) / "a2a-receipts.db")
+        store = receipts.ReceiptStore(db_path=db_path)
+        asyncio.run(store.init())  # connection created on the main thread
+        outcome: dict = {}
+
+        def worker() -> None:
+            try:
+                asyncio.run(store.record_delivered(1, "alice", 100.0))
+                got = asyncio.run(store.get_receipt(1, "alice"))
+                outcome["ok"] = got
+            except Exception as exc:  # noqa: BLE001
+                outcome["err"] = repr(exc)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        try:
+            assert "err" not in outcome, outcome.get("err")
+            assert outcome["ok"]["delivered_at"] == 100.0
+        finally:
+            asyncio.run(store.close())
+
+
+# ---------------------------------------------------------------------------
 # HTTP endpoint tests with valid registry tokens
 # ---------------------------------------------------------------------------
 
