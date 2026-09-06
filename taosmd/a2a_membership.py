@@ -1,0 +1,259 @@
+"""A2A thread membership store.
+
+Tracks which principals (agents) belong to which threads and their roles.
+Zero-loss: removal marks membership inactive; it does NOT delete the row.
+Backward compatible: threads with no membership rows are open to all.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+from taosmd import _db, migrations
+
+Role = Literal["owner", "member"]
+
+
+@dataclass(frozen=True)
+class Membership:
+    """Thread membership record."""
+    thread: str
+    principal_id: str
+    role: Role
+    created_at: float
+    removed_at: float | None = None
+
+
+class MembershipStore:
+    """Persistent store for A2A thread membership."""
+
+    def __init__(self, data_dir: str | Path | None = None) -> None:
+        from taosmd.api import _resolve_data_dir  # noqa: PLC0415
+
+        if data_dir is None:
+            data_dir = _resolve_data_dir(None)
+        self._data_dir = Path(data_dir)
+        self._path = self._data_dir / "a2a-membership.db"
+        self._conn: sqlite3.Connection | None = None
+        self._conn = _db.connect(self._path)
+        self._conn.row_factory = sqlite3.Row
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        """Create tables and indexes via migrations."""
+        migrations.migrate(self._conn, "a2a_membership")
+
+    async def close(self) -> None:
+        """Close the SQLite connection."""
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    # --- CRUD operations ---
+
+    async def add_membership(
+        self,
+        thread: str,
+        principal_id: str,
+        role: Role = "member",
+        created_at: float | None = None,
+    ) -> int:
+        """Add a membership record (owner by default for thread creation).
+
+        If a row already exists for this (thread, principal_id) -- e.g. a
+        previously removed member being re-added -- the row is reactivated
+        (removed_at cleared, role and created_at updated) rather than
+        violating the UNIQUE constraint.
+        """
+        ts = created_at if created_at is not None else time.time()
+        cursor = self._conn.execute(
+            """
+            INSERT INTO a2a_membership (thread, principal_id, role, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(thread, principal_id) DO UPDATE SET
+                role = excluded.role,
+                created_at = excluded.created_at,
+                removed_at = NULL
+            """,
+            (thread, principal_id, role, ts),
+        )
+        self._conn.commit()
+        return cursor.lastrowid
+
+    async def remove_membership(
+        self,
+        thread: str,
+        principal_id: str,
+        removed_at: float | None = None,
+    ) -> bool:
+        """Mark a membership inactive (zero-loss)."""
+        ts = removed_at if removed_at is not None else time.time()
+        cursor = self._conn.execute(
+            """
+            UPDATE a2a_membership
+            SET removed_at = ?
+            WHERE thread = ? AND principal_id = ? AND removed_at IS NULL
+            """,
+            (ts, thread, principal_id),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    async def get_membership(
+        self,
+        thread: str,
+        principal_id: str,
+    ) -> Membership | None:
+        """Get current (active) membership for a principal in a thread."""
+        row = self._conn.execute(
+            """
+            SELECT thread, principal_id, role, created_at, removed_at
+            FROM a2a_membership
+            WHERE thread = ? AND principal_id = ? AND removed_at IS NULL
+            """,
+            (thread, principal_id),
+        ).fetchone()
+        if not row:
+            return None
+        return Membership(
+            thread=row["thread"],
+            principal_id=row["principal_id"],
+            role=row["role"],
+            created_at=row["created_at"],
+            removed_at=row["removed_at"],
+        )
+
+    async def list_active_members(self, thread: str) -> list[Membership]:
+        """List all active members (owners and members) of a thread."""
+        rows = self._conn.execute(
+            """
+            SELECT thread, principal_id, role, created_at, removed_at
+            FROM a2a_membership
+            WHERE thread = ? AND removed_at IS NULL
+            ORDER BY role DESC, principal_id
+            """,
+            (thread,),
+        ).fetchall()
+        return [
+            Membership(
+                thread=row["thread"],
+                principal_id=row["principal_id"],
+                role=row["role"],
+                created_at=row["created_at"],
+                removed_at=row["removed_at"],
+            )
+            for row in rows
+        ]
+
+    async def get_thread_owners(self, thread: str) -> list[Membership]:
+        """Get all active owners of a thread."""
+        rows = self._conn.execute(
+            """
+            SELECT thread, principal_id, role, created_at, removed_at
+            FROM a2a_membership
+            WHERE thread = ? AND role = 'owner' AND removed_at IS NULL
+            """,
+            (thread,),
+        ).fetchall()
+        return [
+            Membership(
+                thread=row["thread"],
+                principal_id=row["principal_id"],
+                role=row["role"],
+                created_at=row["created_at"],
+                removed_at=row["removed_at"],
+            )
+            for row in rows
+        ]
+
+    async def is_principal_owner(self, thread: str, principal_id: str) -> bool:
+        """Check if a principal is an active owner of a thread."""
+        row = self._conn.execute(
+            """
+            SELECT 1
+            FROM a2a_membership
+            WHERE thread = ? AND principal_id = ? AND role = 'owner' AND removed_at IS NULL
+            LIMIT 1
+            """,
+            (thread, principal_id),
+        ).fetchone()
+        return row is not None
+
+    async def has_any_membership(self, thread: str) -> bool:
+        """Check if a thread has any membership rows at all (active or inactive)."""
+        row = self._conn.execute(
+            """
+            SELECT 1
+            FROM a2a_membership
+            WHERE thread = ?
+            LIMIT 1
+            """,
+            (thread,),
+        ).fetchone()
+        return row is not None
+
+    # --- Archive integration ---
+
+    async def archive_membership_created(
+        self,
+        thread: str,
+        principal_id: str,
+        role: Role,
+        ts: float,
+        data_dir: str | Path,
+    ) -> None:
+        """Record a membership creation as an archive event."""
+        from taosmd.archive import ArchiveStore, EVENT_A2A
+
+        archive = ArchiveStore(
+            archive_dir=str(Path(data_dir) / "archive"),
+            index_path=str(Path(data_dir) / "archive-index.db"),
+        )
+        await archive.init()
+        await archive.record(
+            event_type=EVENT_A2A,
+            data={
+                "admin_action": "membership_created",
+                "thread": thread,
+                "principal_id": principal_id,
+                "role": role,
+                "timestamp": ts,
+            },
+            agent_name=principal_id,
+            app_id=thread,
+            summary=f"Added {principal_id} as {role} to thread {thread}",
+        )
+        await archive.close()
+
+    async def archive_membership_removed(
+        self,
+        thread: str,
+        principal_id: str,
+        ts: float,
+        data_dir: str | Path,
+    ) -> None:
+        """Record a membership removal as an archive event."""
+        from taosmd.archive import ArchiveStore, EVENT_A2A
+
+        archive = ArchiveStore(
+            archive_dir=str(Path(data_dir) / "archive"),
+            index_path=str(Path(data_dir) / "archive-index.db"),
+        )
+        await archive.init()
+        await archive.record(
+            event_type=EVENT_A2A,
+            data={
+                "admin_action": "membership_removed",
+                "thread": thread,
+                "principal_id": principal_id,
+                "timestamp": ts,
+            },
+            agent_name=principal_id,
+            app_id=thread,
+            summary=f"Removed {principal_id} from thread {thread}",
+        )
+        await archive.close()

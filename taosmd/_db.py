@@ -26,14 +26,27 @@ from typing import Union
 BUSY_TIMEOUT_MS = 5000
 
 
-def connect(db_path: Union[str, Path]) -> sqlite3.Connection:
+def connect(
+    db_path: Union[str, Path],
+    *,
+    check_same_thread: bool = True,
+) -> sqlite3.Connection:
     """Open a SQLite connection in WAL mode with a busy timeout.
 
     Drop-in replacement for ``sqlite3.connect(db_path)``. Callers that need a
     ``row_factory`` or other connection attributes should set them on the
     returned connection as before.
+
+    ``check_same_thread`` is keyword-only and defaults to ``True`` so every
+    existing caller keeps sqlite3's thread-affinity safety check. Set it to
+    ``False`` only when the connection will be shared across threads (e.g.
+    opened on a background loop thread and accessed from a request thread);
+    under the current :class:`~taosmd.http_server.ThreadingHTTPServer` +
+    :class:`~taosmd.http_server._ServiceLoop` design every store connection
+    is created and used on the single service-loop thread, so the default is
+    correct and the parameter is an explicit opt-in, not a blanket flip.
     """
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=check_same_thread)
     # ``PRAGMA journal_mode`` echoes the journal mode actually in effect. WAL
     # can silently refuse to engage on filesystems without shared-memory/mmap
     # support (notably some network mounts), where it falls back to the prior

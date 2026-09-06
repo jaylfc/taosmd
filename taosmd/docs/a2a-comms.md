@@ -455,6 +455,35 @@ a2a_members(channel="CHANNEL")
 
 ---
 
+## Thread membership
+
+Thread membership (`POST /a2a/threads`, `GET/POST/DELETE /a2a/threads/{thread}/members`)
+tracks which principals (agents) belong to which threads and their roles
+(owner/member). The membership store lives in `a2a-membership.db` and is
+zero-loss: removal marks a row inactive rather than deleting it. Threads with
+no membership rows are open to all (backward compatibility with channels whose
+membership has not yet been asserted).
+
+The caller (`agent` field in the request body) is added as owner on thread
+creation. Adding or removing a member requires the caller to be an owner, and
+the last owner cannot be removed. `PermissionError` denials return HTTP 403.
+
+**Ownership is self-asserted** -- the owner check compares the request body's
+`agent` field against the membership store, not the caller's verified token.
+The sibling A2A read path (`/a2a/mentions`) binds the `reader` query parameter
+to the token's `sub` claim and returns 403 on mismatch; the membership write
+path does not yet do this. Additionally, `a2a_create_thread` only checks for
+existing membership rows, not for an existing conversation archive, so a
+principal who has never posted can claim ownership of a live channel name.
+These are tracked as open design questions (see `docs/a2a-membership-auth-assessment.md`).
+
+**No read path is gated by membership yet** -- the four endpoints above (create,
+list, add, remove) are the only code paths that read or write the membership
+store. The A2A read API (`/a2a/messages`, `/a2a/threads`, `/a2a/stream`,
+`/a2a/mentions`) does not consult membership; any principal can read any thread
+that carries membership rows. Binding ownership to the caller's token and
+gating read endpoints on membership are tracked separately.
+
 ## Reference
 
 ### HTTP endpoints
@@ -463,6 +492,14 @@ a2a_members(channel="CHANNEL")
 |--------|------|------------|----------|
 | `POST` | `/a2a/send` | body JSON `{"from", "body", "thread"?, "reply_to"?}` | `{"id", "from", "thread", "reply_to"}` |
 | `GET`  | `/a2a/messages` | `?thread=&since=&limit=&fields=&format=` | `{"messages": [...]}`; `fields=id,sender,body` projects each message down to those keys; `format=ndjson` emits one message per line (`application/x-ndjson`) |
+
+`limit` on `GET /a2a/messages` is bounded below as well as parsed. A negative
+value is rejected with `400 'limit' must not be negative`, and a non-integer
+with `400 'limit' must be an integer`. `limit=0` is valid and returns zero
+messages. Omitting the parameter, including passing it empty, falls through to
+the default page size rather than to an unbounded read. The floor matters
+because SQLite treats `LIMIT -1` as unbounded, so a cap written as
+`min(limit, N)` clamps only above and `?limit=-1` would return the whole feed.
 | `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
@@ -470,10 +507,25 @@ a2a_members(channel="CHANNEL")
 | `POST` | `/a2a/inbox/advance` | body JSON `{"to_id": int}` | `{"ok": true}` |
 | `POST` | `/a2a/ack` | body JSON `{"message_id": int}` | `{"id", "acked_by", "ok"}` |
 | `GET`  | `/a2a/inbox/unhandled` | `?consumer=&limit=` | `{"messages": [...]}` |
+| `POST` | `/a2a/threads` | body JSON `{"thread", "participants", "agent"}` | `{"thread", "created", "active_members"}`; create a thread (caller becomes owner, participants become members; ownership is self-asserted from the `agent` body field, see notes) |
+| `GET`  | `/a2a/threads` | `?principal=` | `{"threads": [...]}` |
+| `GET`  | `/a2a/threads/{thread}/messages` | `?before=&after=&limit=` | `{"thread", "messages": [...]}`; oldest-first cursor-paginated |
+| `GET`  | `/a2a/threads/{thread}/members` | n/a | `{"members": [...]}`; active members (owners + members), empty for open/legacy threads with no membership rows |
+| `POST` | `/a2a/threads/{thread}/members` | body JSON `{"principal_id", "agent"}` | `{"thread", "principal_id", "added"}`; add a member (caller must be owner; returns `{"added": false, "already_member": true}` if already present; 403 if caller is not an owner) |
+| `DELETE` | `/a2a/threads/{thread}/members/{principal}` | body JSON `{"agent"}` | `{"thread", "principal_id", "removed", "archived": true}`; remove a member (caller must be owner; last owner cannot be removed; 403 if caller is not an owner) |
 | `POST` | `/a2a/alarms/{key}/clear` | path-encoded alarm key | `{"cleared": true, "key": str}` |
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
+
+#### Thread path-segment encoding
+
+`{thread}` and `{principal}` in URL path segments are percent-encoded by the
+client (`urllib.parse.quote(thread, safe='')`) and percent-decoded by the
+server (`urllib.parse.unquote`) in every handler that accepts them, so thread
+names containing spaces, hashes (`%23`), slashes (`%2F`), or non-ASCII
+characters are matched correctly instead of silently returning an empty
+result or raising `InvalidURL` / `UnicodeEncodeError`.
 
 ### Admin token (separate from the data plane)
 
@@ -528,6 +580,40 @@ stored in `a2a_alarm_state` and survives restarts. Use
 
 Each channel in `/a2a/channels` has shape:
 `{"channel", "members", "message_count", "created_ts", "last_ts"}`
+
+### Strict query parameters
+
+Every `GET /a2a/*` endpoint rejects unknown query parameters **that carry a
+value** with HTTP 400. The error response names both the offending parameter(s)
+and the accepted set, so a misspelt cursor (e.g. `after=9` or `since_id=3` on
+`/a2a/messages`, which only accepts `since` as a timestamp) is reported
+immediately rather than silently ignored.
+
+The qualifier is load-bearing and is not a hedge. Dispatch parses the query with
+`parse_qs` at its default `keep_blank_values=False`, so a parameter with an empty
+value never reaches the validator at all: `?bogus=1` is a 400, while `?bogus=`
+and a bare `?bogus` are both accepted and ignored. That applies uniformly to all
+ten endpoints and is long-standing behaviour rather than anything these handlers
+choose. It matters in practice because a client interpolating an unset cursor
+emits exactly `since_id=`. Making the unqualified sentence true would mean
+switching to `keep_blank_values=True` repo-wide, which changes how every
+endpoint reads its parameters and is deliberately not done here.
+
+This mirrors the controller proxy (taOS #2390): an unknown query
+parameter is a 400, never a silent no-op. The accepted set is:
+
+| Endpoint | Accepted query parameters |
+|----------|--------------------------|
+| `GET /a2a/messages` | `thread`, `since`, `limit`, `fields`, `format` |
+| `GET /a2a/mentions` | `since`, `limit`, `reader` |
+| `GET /a2a/stream` | `thread`, `since` |
+| `GET /a2a/threads` | `principal` |
+| `GET /a2a/threads/{thread}/messages` | `before`, `after`, `limit` |
+| `GET /a2a/channels` | (none) |
+| `GET /a2a/members` | `channel` |
+| `GET /a2a/census` | (none) |
+| `GET /a2a/messages/{id}/receipts` | (none) |
+| `GET /a2a/receipts` | `message_id`, `agent` |
 
 ### MCP tools
 
