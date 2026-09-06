@@ -511,6 +511,10 @@ because SQLite treats `LIMIT -1` as unbounded, so a cap written as
 | `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
+| `GET`  | `/a2a/inbox` | `?consumer=&limit=&include_kinds=` | `{"messages": [...]}` |
+| `POST` | `/a2a/inbox/advance` | body JSON `{"to_id": int}` | `{"ok": true}` |
+| `POST` | `/a2a/ack` | body JSON `{"message_id": int}` | `{"id", "acked_by", "ok"}` |
+| `GET`  | `/a2a/inbox/unhandled` | `?consumer=&limit=` | `{"messages": [...]}` |
 | `POST` | `/a2a/threads` | body JSON `{"thread", "participants", "agent"}` | `{"thread", "created", "active_members"}`; create a thread (caller becomes owner, participants become members; ownership is self-asserted from the `agent` body field, see notes) |
 | `GET`  | `/a2a/threads` | `?principal=` | `{"threads": [...]}` |
 | `GET`  | `/a2a/threads/{thread}/messages` | `?before=&after=&limit=` | `{"thread", "messages": [...]}`; oldest-first cursor-paginated |
