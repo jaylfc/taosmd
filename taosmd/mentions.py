@@ -29,7 +29,7 @@ class MentionStore:
 
     async def init(self) -> None:
         self._conn = _db.connect(self._db_path)
-        self._conn.executescript("""
+        _db.run_schema(self._conn, """
             CREATE TABLE IF NOT EXISTS mentions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 mentioned_handle TEXT NOT NULL,

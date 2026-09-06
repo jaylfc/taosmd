@@ -145,7 +145,7 @@ class SessionCatalog:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = _db.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(SCHEMA)
+        _db.run_schema(self._conn, SCHEMA)
         self._conn.commit()
         # Schema versioning and upgrades. Subsumes the former try/except
         # ALTER guards for the taxonomy columns, the agent_name column, and

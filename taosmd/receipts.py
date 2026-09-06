@@ -48,11 +48,10 @@ class ReceiptStore:
     All methods are async so callers can ``await`` them uniformly; the body
     runs synchronously against a single SQLite connection. The connection is
     opened through ``taosmd._db.connect`` (WAL journal mode, 5000 ms busy
-    timeout) with ``check_same_thread=False`` so the connection stays usable
-    from whichever thread drives the event loop. This differs from the
-    thread-affine stores: ReceiptStore's async methods are not guaranteed to
-    run on the creating thread, so ``check_same_thread=False`` is required to
-    avoid a thread-affinity crash, and routing through ``_db.connect`` is
+    timeout) with ``check_same_thread=False`` so it stays usable from whichever
+    thread drives the event loop -- the async methods here are not guaranteed
+    to run on the creating thread, so ``check_same_thread=False`` is required
+    to avoid a thread-affinity crash, and routing through ``_db.connect`` is
     required to get WAL and the busy timeout.
     """
 
@@ -63,7 +62,7 @@ class ReceiptStore:
     async def init(self) -> None:
         self._conn = _db.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(SCHEMA)
+        _db.run_schema(self._conn, SCHEMA)
         self._conn.commit()
 
     async def close(self) -> None:
