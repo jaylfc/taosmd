@@ -468,6 +468,14 @@ The caller (`agent` field in the request body) is added as owner on thread
 creation. Adding or removing a member requires the caller to be an owner, and
 the last owner cannot be removed. `PermissionError` denials return HTTP 403.
 
+`participants` is validated per element, not just as a container: every element
+must be a non-empty string, and duplicates are collapsed before any membership
+row is written. A `None`, object, integer or empty-string element is rejected
+with HTTP 400 (`ValueError` mapped by the existing handler) before the database
+is touched, so no driver error or schema detail reaches the caller. Listing the
+same principal twice yields one membership row and one `membership_created`
+archive event, never a second write over the first row's `created_at`.
+
 **Ownership is self-asserted** -- the owner check compares the request body's
 `agent` field against the membership store, not the caller's verified token.
 The sibling A2A read path (`/a2a/mentions`) binds the `reader` query parameter
