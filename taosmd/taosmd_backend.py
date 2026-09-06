@@ -90,7 +90,7 @@ class TaOSmdBackend(MemoryBackend):
         Path(self._settings_db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = _db.connect(self._settings_db_path)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(SETTINGS_SCHEMA + AGENT_CONFIG_SCHEMA)
+        _db.run_schema(self._conn, SETTINGS_SCHEMA + AGENT_CONFIG_SCHEMA)
         self._conn.commit()
 
     async def close(self) -> None:
@@ -335,5 +335,5 @@ class TaOSmdBackend(MemoryBackend):
             Path(self._settings_db_path).parent.mkdir(parents=True, exist_ok=True)
             self._conn = _db.connect(self._settings_db_path)
             self._conn.row_factory = sqlite3.Row
-            self._conn.executescript(SETTINGS_SCHEMA + AGENT_CONFIG_SCHEMA)
+            _db.run_schema(self._conn, SETTINGS_SCHEMA + AGENT_CONFIG_SCHEMA)
             self._conn.commit()

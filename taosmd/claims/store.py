@@ -41,7 +41,7 @@ class ClaimStore:
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = _db.connect(self._db_path)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
+        _db.run_schema(self._conn, _SCHEMA)
         self._conn.commit()
         migrations.migrate(self._conn, "claims")
 

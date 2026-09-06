@@ -118,7 +118,7 @@ class ArchiveStore:
         Path(self._index_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = _db.connect(self._index_path)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(INDEX_SCHEMA)
+        _db.run_schema(self._conn, INDEX_SCHEMA)
         self._conn.commit()
         # Schema versioning and upgrades (subsumes the old hand-rolled
         # `project` back-fill). Must complete before the first SELECT below.
