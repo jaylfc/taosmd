@@ -469,6 +469,90 @@ def test_http_a2a_create_thread_missing_fields(live_server):
     assert status == 400
 
 
+def test_http_a2a_create_thread_invalid_none(live_server):
+    """POST /a2a/threads with participants=[None] returns 400, not 500.
+
+    A None element must be rejected before it reaches the DB driver,
+    which would otherwise raise IntegrityError leaking schema.
+    """
+    status, body = _http_post(
+        f"{live_server}/a2a/threads",
+        {"thread": "inv-none", "participants": [None], "agent": "carol"},
+    )
+    assert status == 400
+
+
+def test_http_a2a_create_thread_invalid_dict(live_server):
+    """POST /a2a/threads with participants=[{'a': 1}] returns 400, not 500.
+
+    A dict element must be rejected before it reaches the DB driver,
+    which would otherwise raise ProgrammingError leaking the parameter-binding
+    message.
+    """
+    status, body = _http_post(
+        f"{live_server}/a2a/threads",
+        {"thread": "inv-dict", "participants": [{"a": 1}], "agent": "carol"},
+    )
+    assert status == 400
+
+
+def test_http_a2a_create_thread_invalid_int(live_server):
+    """POST /a2a/threads with participants=[123] returns 400.
+
+    An int element must be rejected rather than silently coerced to '123'.
+    """
+    status, body = _http_post(
+        f"{live_server}/a2a/threads",
+        {"thread": "inv-int", "participants": [123], "agent": "carol"},
+    )
+    assert status == 400
+
+
+def test_http_a2a_create_thread_invalid_empty_string(live_server):
+    """POST /a2a/threads with participants=[''] returns 400.
+
+    An empty-string principal must be rejected rather than silently stored.
+    """
+    status, body = _http_post(
+        f"{live_server}/a2a/threads",
+        {"thread": "inv-empty", "participants": [""], "agent": "carol"},
+    )
+    assert status == 400
+
+
+def test_http_a2a_create_thread_control_valid(live_server):
+    """Control: participants=['alice'] returns 200.
+
+    This control validates that the per-element validation is
+    discriminating -- it must still accept valid non-empty string
+    participants, proving the 400s above are genuine rejections of bad
+    input and not a blanket failure of the endpoint.
+    """
+    status, body = _http_post(
+        f"{live_server}/a2a/threads",
+        {"thread": "ctrl-valid", "participants": ["alice"], "agent": "carol"},
+    )
+    assert status == 200
+    assert body["created"] is True
+
+
+def test_http_a2a_create_thread_duplicate_returns_200(live_server):
+    """POST /a2a/threads with duplicate participants returns 200.
+
+    Duplicates are silently de-duplicated (not rejected), so a valid
+    thread is still created with each principal appearing exactly once.
+    """
+    status, body = _http_post(
+        f"{live_server}/a2a/threads",
+        {"thread": "dup-200", "participants": ["alice", "alice"], "agent": "carol"},
+    )
+    assert status == 200
+    assert body["created"] is True
+    ids = [m["principal_id"] for m in body["active_members"]]
+    assert ids.count("alice") == 1
+    assert ids.count("carol") == 1
+
+
 def test_http_a2a_list_members(live_server):
     """GET /a2a/threads/{thread}/members returns members."""
     _http_post(f"{live_server}/a2a/threads",
@@ -577,6 +661,65 @@ def test_archive_event_lands_on_add_and_remove(isolated_data_dir):
         assert "dave" in created_principals
         assert "carol" in created_principals
         assert "dave" in removed_principals
+    finally:
+        asyncio.run(archive.close())
+
+
+def test_create_thread_duplicate_one_archive_event_unless_created_at(isolated_data_dir):
+    """Duplicate participants must produce exactly ONE membership_created
+    archive event and an unchanged created_at in the store.
+
+    Without de-duplication, the second ``add_membership`` call triggers the
+    ON CONFLICT path (``created_at = excluded.created_at``), overwriting the
+    first value, and ``archive_membership_created`` emits a second event.
+    A 200 from the service is not sufficient evidence -- the archive and
+    store are re-read to confirm exactly one write landed.
+    """
+    dd = str(isolated_data_dir)
+    result = asyncio.run(service.a2a_create_thread(
+        "dup-t", ["alice", "alice"], "carol", data_dir=dd,
+    ))
+    assert result["created"] is True
+
+    store = MembershipStore(dd)
+    try:
+        row = store._conn.execute(
+            "SELECT created_at FROM a2a_membership "
+            "WHERE thread='dup-t' AND principal_id='alice'"
+        ).fetchone()
+        assert row is not None
+        created_at = row["created_at"]
+        assert created_at is not None and created_at > 0
+
+        row_count = store._conn.execute(
+            "SELECT COUNT(*) as n FROM a2a_membership "
+            "WHERE thread='dup-t' AND principal_id='alice'"
+        ).fetchone()
+        assert row_count["n"] == 1
+
+        m = asyncio.run(store.get_membership("dup-t", "alice"))
+        assert m is not None
+        assert m.created_at == created_at
+    finally:
+        asyncio.run(store.close())
+
+    archive = ArchiveStore(
+        archive_dir=str(isolated_data_dir / "archive"),
+        index_path=str(isolated_data_dir / "archive-index.db"),
+    )
+    asyncio.run(archive.init())
+    try:
+        events = asyncio.run(archive.query(event_type=EVENT_A2A, limit=1000))
+        alice_events = [
+            json.loads(e.get("data_json", "{}"))
+            for e in events
+            if json.loads(e.get("data_json", "{}")).get("admin_action") == "membership_created"
+            and json.loads(e.get("data_json", "{}")).get("principal_id") == "alice"
+        ]
+        assert len(alice_events) == 1, (
+            f"expected exactly 1 membership_created event for alice, "
+            f"got {len(alice_events)}"
+        )
     finally:
         asyncio.run(archive.close())
 
