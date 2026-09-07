@@ -643,3 +643,27 @@ def test_a2a_mentions_feed_visible_across_50_row_boundary(isolated_data_dir):
     msgs = asyncio.run(service.a2a_mentions_feed("bob", data_dir=dd))
     bodies = [m["body"] for m in msgs]
     assert "old @bob" in bodies
+
+
+# ---------------------------------------------------------------------------
+# RED-FIRST: can_read must gate disclosure in the mentions feed
+# ---------------------------------------------------------------------------
+
+def test_a2a_mentions_feed_gates_through_can_read(isolated_data_dir, monkeypatch):
+    """RED-FIRST: can_read must gate disclosure in the mentions feed.
+
+    Patching can_read to deny all messages must empty the feed.  Removing
+    the can_read call from a2a_mentions_feed makes this RED, because the
+    mention bodies leak through unfiltered.
+    """
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+
+    asyncio.run(service.a2a_send("agentA", "hey @bob", thread="t1", data_dir=dd))
+
+    async def deny_all(reader, msg, data_dir=None):
+        return False
+
+    monkeypatch.setattr(service, "can_read", deny_all)
+    msgs = asyncio.run(service.a2a_mentions_feed("bob", data_dir=dd))
+    assert msgs == [], "can_read denial did not filter messages from mentions feed"

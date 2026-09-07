@@ -485,12 +485,15 @@ existing membership rows, not for an existing conversation archive, so a
 principal who has never posted can claim ownership of a live channel name.
 These are tracked as open design questions (see `docs/a2a-membership-auth-assessment.md`).
 
-**No read path is gated by membership yet** -- the four endpoints above (create,
-list, add, remove) are the only code paths that read or write the membership
-store. The A2A read API (`/a2a/messages`, `/a2a/threads`, `/a2a/stream`,
-`/a2a/mentions`) does not consult membership; any principal can read any thread
-that carries membership rows. Binding ownership to the caller's token and
-gating read endpoints on membership are tracked separately.
+`GET /a2a/mentions` is gated by `can_read` (see `taosmd/service.py`), which
+returns `True` when the reader was granted a mention in the message's thread-root
+(`canRead = channelACL OR mentionGrant`, per the `--211` design). This prevents
+cross-channel message bodies from leaking through the mentions feed to a reader
+who was not mentioned in the thread root. The other A2A read endpoints
+(`/a2a/messages`, `/a2a/threads`, `/a2a/stream`) do not yet consult membership
+or mention-grant; any principal can read any thread. Binding ownership to the
+caller's token and gating those read endpoints on membership are tracked
+separately.
 
 ## Reference
 
