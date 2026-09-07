@@ -616,3 +616,78 @@ def _stream_status_code(live_server: str, path: str, timeout: float = 3.0) -> in
             line += chunk
     status_line = line.decode("utf-8", "replace").splitlines()[0]
     return int(status_line.split()[1])
+
+
+# ---------------------------------------------------------------------------
+# Blank-value unknown params: parse_qs(keep_blank_values=False) used to drop
+# them before the validator.  After the fix they must 400.
+# ---------------------------------------------------------------------------
+
+def test_http_a2a_messages_blank_unknown_param_returns_400(live_server):
+    """?bogus= on /a2a/messages must 400, not silently page."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg", "thread": "blank-bogus"})
+    status, body = _get(f"{live_server}/a2a/messages?thread=blank-bogus&bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_messages_blank_since_id_returns_400(live_server):
+    """?since_id= on /a2a/messages must 400 (the cursor-shaped typo case)."""
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg", "thread": "blank-since-id"})
+    status, body = _get(f"{live_server}/a2a/messages?thread=blank-since-id&since_id=")
+    assert status == 400, body
+    assert "since_id" in body["error"]
+
+
+def test_http_a2a_mentions_blank_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/mentions?reader=agentA&bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_stream_blank_unknown_param_returns_400(live_server):
+    status = _stream_status_code(live_server, "/a2a/stream?thread=any&bogus=")
+    assert status == 400
+
+
+def test_http_a2a_threads_blank_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/threads?principal=agentA&bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_channels_blank_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/channels?bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_census_blank_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/census?bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_members_blank_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/members?channel=general&bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_message_receipts_blank_unknown_param_returns_400(live_server):
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg", "thread": "blank-rcpt"})
+    msg_id = _post(f"{live_server}/a2a/send",
+                   {"from": "agentA", "body": "msg2", "thread": "blank-rcpt"})[1]["id"]
+    status, body = _get(f"{live_server}/a2a/messages/{msg_id}/receipts?bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_receipts_blank_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/receipts?message_id=1&agent=agentB&bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
