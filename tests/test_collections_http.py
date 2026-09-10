@@ -391,6 +391,46 @@ def test_revoke_rejects_whitespace_only_agent(live_server):
     assert body == {"error": "'agent' (non-empty string) is required"}
 
 
+@pytest.mark.parametrize("agent_id,question", [
+    ("dev", "control: does a plain ASCII id survive the encode/decode round-trip unchanged?"),
+    (" a", "does a leading-whitespace agent id round-trip through grant and revoke?"),
+    ("a ", "does a trailing-whitespace agent id round-trip through grant and revoke?"),
+    ("\t", "does an ASCII control (tab) get rejected by the HTTP-layer guard with the correct error message?"),
+])
+def test_grant_agent_normalisation(live_server, agent_id, question):
+    base, data_dir, source_dir = live_server
+    col = _create(base, source_dir)
+
+    status, body = _req(
+        "POST", f"{base}/collections/{col['id']}/grants",
+        {"agent": agent_id}, token=_TOKEN,
+    )
+
+    if agent_id == "\t":
+        assert status == 400, f"grant with tab should return 400, got {status}"
+        assert body == {"error": "'agent' (non-empty string) is required"}, (
+            f"grant with tab should return the HTTP-layer error, got {body}"
+        )
+        return
+
+    assert status == 200, f"grant with {agent_id!r} should succeed, got {status}"
+
+    from urllib.parse import quote
+    encoded = quote(agent_id, safe="")
+    _req(
+        "DELETE", f"{base}/collections/{col['id']}/grants/{encoded}", token=_TOKEN,
+    )
+
+    from taosmd.collections import CollectionStore
+    store = CollectionStore(data_dir)
+    try:
+        assert not store.has_grant(agent_id, col["id"]), (
+            f"grant for {agent_id!r} should be gone after revoke; {question}"
+        )
+    finally:
+        store.close()
+
+
 # ---------------------------------------------------------------------------
 # Index (async, 202 + poll) and search integration
 # ---------------------------------------------------------------------------
