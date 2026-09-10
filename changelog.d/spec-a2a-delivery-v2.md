@@ -1,1 +1,0 @@
-Spec: A2A delivery contract v2 - server-side delivery state (cursors, inbox, acks, alarm keys), kind taxonomy, strict params, wake payloads carrying messages. Drafted from the 2026-08-16..23 token-burn audit.

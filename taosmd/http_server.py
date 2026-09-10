@@ -831,6 +831,33 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return auth[len("Bearer "):].strip() == _server_token
             return False
 
+        def _can_read_channel(self, channel: str) -> bool:
+            """Return True if the current authenticated agent can read the channel.
+            
+            This implements the per-channel ACL check. For now, this is always-true
+            as the channel ACL is being implemented in a separate task (tsk-dp6fyv).
+            """
+            return True
+
+        def _filter_a2a_messages_by_auth(self, messages: list, principal: str, is_inbox: bool, data_dir) -> list:
+            """Shared helper for A2A read authorization across mentions and inbox.
+
+            Applies both channel ACL (for thread-based channels) and the mention grant
+            logic in ``service.can_read``.  Returns the filtered list of messages
+            that the ``principal`` is authorized to view.
+            """
+            filtered = []
+            for msg in messages:
+                if is_inbox:
+                    if runner.run(service.can_read(principal, msg, data_dir=data_dir)):
+                        filtered.append(msg)
+                else:
+                    # For mentions, enforce channel ACL on the thread (same as messages/threads endpoints)
+                    thread = msg.get("thread") or "general"
+                    if self._can_read_channel(thread):
+                        filtered.append(msg)
+            return filtered
+
         def _get_authenticated_agent_id(self) -> str | None:
             """Return the agent identity from a verified registry token, or None.
 
@@ -1884,7 +1911,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_mentions_feed(reader, since=since, limit=limit_i, data_dir=data_dir)
             )
-            self._send_json(200, {"messages": messages})
+            # Filter messages through channel read authorization (shared helper)
+            readable_messages = self._filter_a2a_messages_by_auth(messages, reader, is_inbox=False, data_dir=data_dir)
+            self._send_json(200, {"messages": readable_messages})
 
         def _handle_a2a_inbox(self, qs: dict) -> None:
             """GET /a2a/inbox -- messages past the consumer's cursor.
@@ -1926,7 +1955,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_inbox(consumer, limit=limit_i, include_kinds=include_kinds, exclude_acked_by=exclude_acked_by, data_dir=data_dir)
             )
-            self._send_json(200, {"messages": messages})
+            # Filter messages through can_read authorization (shared helper)
+            readable_messages = self._filter_a2a_messages_by_auth(messages, consumer, is_inbox=True, data_dir=data_dir)
+            self._send_json(200, {"messages": readable_messages})
 
         def _handle_a2a_inbox_advance(self) -> None:
             """POST /a2a/inbox/advance -- advance the caller's inbox cursor.

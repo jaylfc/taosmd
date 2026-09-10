@@ -1203,7 +1203,19 @@ async def can_read(reader: str, msg: dict, data_dir=None) -> bool:
     enforcement (tsk-dp6fyv) plugs into the ``channelACL`` slot; until
     then it is effectively always-true for compatibility.
     """
-    return True
+    from . import config as _config
+    
+    if data_dir is None:
+        raise ValueError("data_dir is required")
+    
+    thread = msg.get("thread") or "general"
+    acl = _config.get_acl(data_dir, thread)
+    allowlist = acl.get("read", ["*"])
+    
+    if "*" in allowlist:
+        return True
+    
+    return False
 
 
 async def a2a_inbox(
