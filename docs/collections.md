@@ -64,6 +64,7 @@ POST   /collections/{id}/index             -> 202, then poll GET /collections/{i
 POST   /collections/{id}/link | /unlink    -> {"collection": {...}}
 POST   /collections/{id}/grants            -> {"collection": {...}}
 DELETE /collections/{id}/grants/{agent}    -> {"collection": ..., "revoked": ...}
+                                         ({agent} is percent-decoded)
 DELETE /collections/{id}                   -> {"collection": {...}}  (archived)
 ```
 
@@ -183,6 +184,7 @@ POST   /collections/{id}/link      {"type": "taos"|"git", "id": "..."}
 POST   /collections/{id}/unlink    same body
 POST   /collections/{id}/grants    {"agent": "..."}
 DELETE /collections/{id}/grants/{agent}
+                                         ({agent} is percent-decoded)
 POST   /search                     with collection/collections/collections_only
 ```
 

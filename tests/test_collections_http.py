@@ -312,6 +312,54 @@ def test_revoke_reports_revoked_false_on_non_matching_grantee(live_server):
     assert "revoked" not in body["collection"]
 
 
+@pytest.mark.parametrize("agent_id,question", [
+    ("dev", "control: does a plain ASCII id survive the encode/decode round-trip unchanged?"),
+    ("a b", "does a space survive percent-encoding and decoding?"),
+    ("a+b", "does a plus survive?"),
+    ("a/b", "does a slash survive?"),
+    ("a\xe9", "does a non-ASCII byte (U+00E9) survive?"),
+    ("a%b", "does a literal percent sign survive double-encoding?"),
+    (" a", "does leading whitespace survive?"),
+    ("a ", "does trailing whitespace survive?"),
+])
+def test_revoke_round_trip_hostile_agent_ids(live_server, agent_id, question):
+    base, data_dir, source_dir = live_server
+    col = _create(base, source_dir)
+
+    status, _ = _req(
+        "POST", f"{base}/collections/{col['id']}/grants",
+        {"agent": agent_id}, token=_TOKEN,
+    )
+    assert status == 200, f"grant with {agent_id!r} should succeed, got {status}"
+
+    from urllib.parse import quote
+    encoded = quote(agent_id, safe="")
+    status, _ = _req(
+        "DELETE", f"{base}/collections/{col['id']}/grants/{encoded}", token=_TOKEN,
+    )
+    assert status == 200, f"revoke with encoded {agent_id!r} should return 200, got {status}"
+
+    from taosmd.collections import CollectionStore
+    store = CollectionStore(data_dir)
+    try:
+        assert not store.has_grant(agent_id, col["id"]), (
+            f"grant for {agent_id!r} should be gone after revoke; "
+            f"control validates: {question}"
+        )
+    finally:
+        store.close()
+
+
+def test_revoke_rejects_whitespace_only_agent(live_server):
+    base, _, source_dir = live_server
+    col = _create(base, source_dir)
+    status, body = _req(
+        "DELETE", f"{base}/collections/{col['id']}/grants/%20%20", token=_TOKEN,
+    )
+    assert status == 400
+    assert body == {"error": "'agent' (non-empty string) is required"}
+
+
 # ---------------------------------------------------------------------------
 # Index (async, 202 + poll) and search integration
 # ---------------------------------------------------------------------------
