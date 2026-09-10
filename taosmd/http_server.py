@@ -334,6 +334,22 @@ def _parse_cursor(raw: str | None) -> int | float | None:
     return val
 
 
+def _parse_limit(raw: str, max_limit: int = 500) -> int:
+    """Parse, validate, and clamp a ``limit`` query parameter.
+
+    Returns the parsed integer bounded to ``[0, max_limit]``.  Raises
+    :class:`_BadRequest` (HTTP 400) when the value is not an integer or
+    is negative.
+    """
+    try:
+        limit_i = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise _BadRequest("'limit' must be an integer") from exc
+    if limit_i < 0:
+        raise _BadRequest("'limit' must be a non-negative integer")
+    return min(limit_i, max_limit)
+
+
 # A single self-contained page: one inline <style> and one inline vanilla
 # <script>, no external requests, so it works fully offline. Read-only: it
 # only calls the GET /health, POST /search and GET /pending endpoints and
@@ -1387,10 +1403,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 isinstance(also_include, list) and all(isinstance(s, str) for s in also_include)
             ):
                 raise _BadRequest("'also_include' must be a list of strings when provided")
-            try:
-                limit_i = int(limit)
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _parse_limit(limit, max_limit=500)
             if mode is not None and not isinstance(mode, str):
                 raise _BadRequest("'mode' must be a string when provided")
             if collection is not None and not isinstance(collection, str):
@@ -1539,10 +1552,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_graph(self, qs: dict) -> None:
             limit = (qs.get("limit") or [300])[0]
-            try:
-                limit_i = int(limit)
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _parse_limit(limit, max_limit=500)
             # Optional time-travel: ?as_of=<finite float epoch> reconstructs the
             # graph as it stood then. Any value that is not a finite number is
             # ignored (current graph), so a malformed scrubber value degrades
@@ -1569,9 +1579,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             try:
                 since_f = float(since) if since is not None else None
                 window_f = float(window)
-                limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("since/window must be numbers and limit an integer") from exc
+            limit_i = _parse_limit(limit, max_limit=500)
             result = runner.run(
                 service.graph_activations(since=since_f, window=window_f, limit=limit_i, data_dir=data_dir)
             )
@@ -1587,10 +1597,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_pending(self, qs: dict) -> None:
             agent = (qs.get("agent") or [None])[0]
             limit = (qs.get("limit") or [20])[0]
-            try:
-                limit_i = int(limit)
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _parse_limit(limit, max_limit=500)
             pending = runner.run(
                 service.pending_list(agent=agent, data_dir=data_dir, limit=limit_i)
             )
@@ -1832,15 +1839,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_a2a_mentions(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset({"since", "limit", "reader"}))
             since_raw = (qs.get("since") or [None])[0]
-            limit_raw = (qs.get("limit") or [50])[0]
+            limit_raw = (qs.get("limit") or [_A2A_MSG_DEFAULT_LIMIT])[0]
             try:
                 since = float(since_raw) if since_raw is not None else None
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'since' must be a float timestamp") from exc
-            try:
-                limit_i = int(limit_raw)
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _parse_limit(limit_raw, max_limit=_A2A_MSG_MAX_LIMIT)
             # Auth: when a registry verifier is configured, the caller's
             # verified identity is the reader. Unauthenticated requests
             # return 401. When no verifier is configured (standalone), a
@@ -2086,13 +2090,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             _validate_a2a_params(qs, frozenset({"before", "after", "limit"}))
             before_raw = (qs.get("before") or [None])[0]
             after_raw = (qs.get("after") or [None])[0]
-            limit_raw = (qs.get("limit") or [50])[0]
+            limit_raw = (qs.get("limit") or [_A2A_MSG_DEFAULT_LIMIT])[0]
             before = _parse_cursor(before_raw)
             after = _parse_cursor(after_raw)
-            try:
-                limit_i = int(limit_raw)
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _parse_limit(limit_raw, max_limit=_A2A_MSG_MAX_LIMIT)
             result = runner.run(
                 service.a2a_thread_messages(
                     thread=thread, before=before, after=after,
@@ -2342,10 +2343,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             project = (qs.get("project") or [None])[0]
             assignee = (qs.get("assignee") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
-            try:
-                limit_i = int(limit_raw)
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _parse_limit(limit_raw, max_limit=500)
             project, ok = self._apply_token_binding(assignee, project)
             if not ok:
                 return
@@ -2364,10 +2362,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             project = (qs.get("project") or [None])[0]
             assignee = (qs.get("assignee") or [None])[0]
             limit_raw = (qs.get("limit") or [20])[0]
-            try:
-                limit_i = int(limit_raw)
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = _parse_limit(limit_raw, max_limit=500)
             project, ok = self._apply_token_binding(assignee, project)
             if not ok:
                 return
@@ -2401,11 +2396,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             to_id = (qs.get("to_id") or [None])[0]
             edge_type = (qs.get("type") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
-            try:
-                limit_i = int(limit_raw)
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'limit' must be an integer") from exc
-            limit_i = min(limit_i, 500)
+            limit_i = _parse_limit(limit_raw, max_limit=500)
             project = (qs.get("project") or [None])[0]
             project, ok = self._apply_token_binding(None, project)
             if not ok:

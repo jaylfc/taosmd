@@ -1389,3 +1389,85 @@ def test_memories_limit_at_cap(memories_server):
     status, body = _get(f"{memories_server}/memories?limit=500")
     assert status == 200, body
     assert len(body["memories"]) == 500
+
+
+# ---- limit floor tests (tsk-p4whpu) ----
+
+def test_search_negative_limit_rejected(live_server):
+    _post(f"{live_server}/ingest", {"text": "search floor test", "agent": "limit-test"})
+    status, body = _get(f"{live_server}/search?q=search+floor+test&agent=limit-test&limit=-1")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
+
+
+def test_graph_negative_limit_rejected(graph_server):
+    status, body = _get(f"{graph_server}/graph?limit=-1")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
+
+
+def test_graph_activations_negative_limit_rejected(live_server_ctx):
+    kg = live_server_ctx.stores["kg"]
+    live_server_ctx.run(kg.add_triple("Jay", "works on", "taosmd", valid_from=1000.0))
+    live_server_ctx.run(kg.query_entity("Jay"))
+    url = live_server_ctx.url
+    status, body = _get(f"{url}/graph/activations?limit=-1")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
+
+
+def test_pending_negative_limit_rejected(live_server_ctx):
+    from taosmd.pending_decisions import PendingDecisionsStore
+
+    store = PendingDecisionsStore(db_path=live_server_ctx.stores["kg"]._db_path)
+    live_server_ctx.run(store.init())
+    live_server_ctx.run(
+        store.defer(
+            kind="contradiction",
+            subject="s",
+            predicate="p",
+            new_object="o",
+            old_triple_ids=[],
+            suggested_action="invalidate_old_add_new",
+        )
+    )
+    status, body = _get(f"{live_server_ctx.url}/pending?limit=-1")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
+
+
+def test_a2a_mentions_negative_limit_rejected(live_server):
+    _post(f"{live_server}/a2a/send", {"from": "alice", "body": "hello", "thread": "mention-thread"})
+    status, body = _get(f"{live_server}/a2a/mentions?limit=-1&reader=alice")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
+
+
+def test_a2a_thread_messages_negative_limit_rejected(live_server):
+    _post(f"{live_server}/a2a/send", {"from": "alice", "body": "hello", "thread": "thread-neg"})
+    status, body = _get(f"{live_server}/a2a/threads/thread-neg/messages?limit=-1")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
+
+
+def test_task_list_negative_limit_rejected(live_server):
+    _post(f"{live_server}/tasks", {"title": "T", "created_by": "a"})
+    status, body = _get(f"{live_server}/tasks?limit=-1")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
+
+
+def test_task_ready_negative_limit_rejected(live_server):
+    _post(f"{live_server}/tasks", {"title": "ReadyT", "created_by": "a"})
+    status, body = _get(f"{live_server}/tasks/ready?limit=-1")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
+
+
+def test_task_list_edges_negative_limit_rejected(live_server):
+    _, t1 = _post(f"{live_server}/tasks", {"title": "E1", "created_by": "a"})
+    _, t2 = _post(f"{live_server}/tasks", {"title": "E2", "created_by": "a"})
+    _post(f"{live_server}/tasks/{t1['id']}/edges", {"to_id": t2["id"], "type": "blocks", "created_by": "a"})
+    status, body = _get(f"{live_server}/tasks/edges?limit=-1")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
