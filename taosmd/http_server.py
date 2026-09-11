@@ -2221,19 +2221,38 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"ok": True})
 
         def _handle_a2a_message_receipts(self, msg_id_str: str, qs: dict) -> None:
-            """GET /a2a/messages/{id}/receipts -- all receipts for one message."""
+            """GET /a2a/messages/{id}/receipts -- all receipts for one message.
+
+            Guarded by verified registry identity when a registry verifier is configured.
+            Three-way behaviour:
+              - Registry verifier configured, valid token  -> 200 (reads receipt data)
+              - Registry verifier configured, no/bad token -> 401
+              - No registry verifier configured (standalone) -> 200 (unchanged)
+            """
             _validate_a2a_params(qs, frozenset())
             try:
                 message_id = int(msg_id_str)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("message id must be an integer") from exc
+            if _registry_verifier is not None:
+                agent_id = self._get_authenticated_agent_id()
+                if agent_id is None:
+                    self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                    return
             result = runner.run(
                 service.a2a_get_receipts(message_id, data_dir=data_dir)
             )
             self._send_json(200, result)
 
         def _handle_a2a_receipts(self, qs: dict) -> None:
-            """GET /a2a/receipts?message_id=X&agent=Y -- a single receipt."""
+            """GET /a2a/receipts?message_id=X&agent=Y -- a single receipt.
+
+            Guarded by verified registry identity when a registry verifier is configured.
+            Three-way behaviour:
+              - Registry verifier configured, valid token  -> 200 (reads receipt data)
+              - Registry verifier configured, no/bad token -> 401
+              - No registry verifier configured (standalone) -> 200 (unchanged)
+            """
             _validate_a2a_params(qs, frozenset({"message_id", "agent"}))
             message_id_raw = (qs.get("message_id") or [None])[0]
             agent_id = (qs.get("agent") or [None])[0]
@@ -2243,6 +2262,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 message_id = int(message_id_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'message_id' must be an integer") from exc
+            if _registry_verifier is not None:
+                authenticated_agent_id = self._get_authenticated_agent_id()
+                if authenticated_agent_id is None:
+                    self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                    return
+                agent_id = authenticated_agent_id
             receipt = runner.run(
                 service.a2a_get_receipt(message_id, agent_id, data_dir=data_dir)
             )
