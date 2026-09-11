@@ -2696,7 +2696,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             from .collections import CollectionNotFoundError  # noqa: PLC0415
             body = self._read_json_body()
             agent = body.get("agent")
-            if not isinstance(agent, str) or not agent:
+            if not isinstance(agent, str) or not agent.strip():
                 raise _BadRequest("'agent' (non-empty string) is required")
             try:
                 col = runner.run(
