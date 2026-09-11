@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import threading
 import urllib.error
 import urllib.request
@@ -253,20 +254,23 @@ def test_receipt_store_uses_wal_and_busy_timeout(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Thread-affinity: connection must stay usable across threads
+# Thread-affinity: connection must reject cross-thread use
 # ---------------------------------------------------------------------------
 
-def test_receipt_store_usable_from_non_creating_thread():
-    """check_same_thread=False keeps the connection usable cross-thread.
+def test_receipt_store_cross_thread_raises():
+    """check_same_thread=True (the default) means a worker-thread write raises.
 
-    ReceiptStore's async methods may be driven by any event loop or thread, so
-    the connection must not demand thread affinity (the default for
-    ``sqlite3.connect``). This pins that behaviour so a naive swap back to the
-    default does not turn the concurrency fix into a thread-affinity crash.
+    ReceiptStore uses the default check_same_thread=True because all
+    production callers touch it only from the _ServiceLoop thread. A
+    worker thread that tries to write through a connection created on the
+    main thread must raise sqlite3.ProgrammingError, not silently
+    corrupt data.
     """
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
-        db_path = str(Path(tmp) / "a2a-receipts.db")
+        data_dir = Path(tmp) / "receipt-test-data"
+        data_dir.mkdir()
+        db_path = str(data_dir / "a2a-receipts.db")
         store = receipts.ReceiptStore(db_path=db_path)
         asyncio.run(store.init())  # connection created on the main thread
         outcome: dict = {}
@@ -274,17 +278,18 @@ def test_receipt_store_usable_from_non_creating_thread():
         def worker() -> None:
             try:
                 asyncio.run(store.record_delivered(1, "alice", 100.0))
-                got = asyncio.run(store.get_receipt(1, "alice"))
-                outcome["ok"] = got
+                outcome["ok"] = True
+            except sqlite3.ProgrammingError as exc:
+                outcome["error"] = exc
             except Exception as exc:  # noqa: BLE001
-                outcome["err"] = repr(exc)
+                outcome["other"] = repr(exc)
 
         t = threading.Thread(target=worker)
         t.start()
         t.join()
         try:
-            assert "err" not in outcome, outcome.get("err")
-            assert outcome["ok"]["delivered_at"] == 100.0
+            assert "error" in outcome, f"expected ProgrammingError, got {outcome}"
+            assert outcome.get("ok") is not True
         finally:
             asyncio.run(store.close())
 

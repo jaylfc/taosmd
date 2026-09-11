@@ -1,27 +1,28 @@
 """Thread-affinity pin for ReceiptStore.
 
-ReceiptStore is opened through ``_db.connect(..., check_same_thread=False)``
-because its async methods may be driven from any thread (the event loop is not
-guaranteed to run on the creating thread). These tests fail with
-``sqlite3.ProgrammingError: SQLite objects created in a thread can only be
-used in that same thread`` if ``check_same_thread=False`` is dropped from the
-connect call -- i.e. they are RED without that flag.
+ReceiptStore is opened through ``_db.connect`` with the default
+``check_same_thread=True`` because all production callers touch it only from
+the ``_ServiceLoop`` service-loop thread. These tests verify that a genuine
+cross-thread use raises ``sqlite3.ProgrammingError`` rather than silently
+corrupting data, and that same-thread use continues to work.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 
 from taosmd import receipts
 
 
-def test_receipt_store_usable_from_non_creating_thread(tmp_path):
-    """A connection created on one thread must work on another.
+def test_receipt_store_cross_thread_raises(tmp_path):
+    """A connection created on one thread must raise when used on another.
 
-    RED without ``check_same_thread=False`` on the connect call: the worker
-    thread's write raises ``ProgrammingError``. With the flag the write
-    succeeds and the row is readable from the same worker thread.
+    ReceiptStore uses ``check_same_thread=True`` (the default) so SQLite
+    enforces single-thread access. A worker thread that tries to write
+    through a connection created on the main thread must raise
+    ``ProgrammingError``, not silently corrupt data.
     """
     db_path = str(tmp_path / "receipts.db")
     store = receipts.ReceiptStore(db_path=db_path)
@@ -31,14 +32,16 @@ def test_receipt_store_usable_from_non_creating_thread(tmp_path):
     def worker() -> None:
         try:
             asyncio.run(store.record_delivered(1, "alice", 100.0))
-            outcome["receipt"] = asyncio.run(store.get_receipt(1, "alice"))
+            outcome["ok"] = True
+        except sqlite3.ProgrammingError as exc:
+            outcome["error"] = exc
         except Exception as exc:  # noqa: BLE001
-            outcome["error"] = repr(exc)
+            outcome["other"] = repr(exc)
 
     t = threading.Thread(target=worker)
     t.start()
     t.join()
     asyncio.run(store.close())
 
-    assert "error" not in outcome, outcome.get("error")
-    assert outcome["receipt"]["delivered_at"] == 100.0
+    assert "error" in outcome, f"expected ProgrammingError, got {outcome}"
+    assert outcome.get("ok") is not True
