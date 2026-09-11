@@ -267,9 +267,9 @@ def _qs_param_names(query: str) -> set[str]:
         if not pair:
             continue
         if "=" in pair:
-            names.add(pair.split("=", 1)[0])
+            names.add(unquote(pair.split("=", 1)[0]))
         else:
-            names.add(pair)
+            names.add(unquote(pair))
     return names
 
 

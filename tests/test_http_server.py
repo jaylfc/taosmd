@@ -569,6 +569,18 @@ def test_a2a_since_negative_inf_rejected(live_server):
     assert "error" in body
 
 
+def test_a2a_percent_encoded_param_name_accepted(live_server):
+    """Percent-encoded legitimate param name should be decoded before allowlist check.
+
+    Regression for tsk-72kuyp: _qs_param_names did not URL-decode parameter names,
+    so %73ince (which decodes to since) was falsely rejected as unknown.
+    """
+    status, body = _get(
+        f"{live_server}/a2a/messages?%73ince=1234567890&thread=general"
+    )
+    assert status == 200, body
+
+
 # ---------------------------------------------------------------------------
 # POST /ingest/batch + ?mode=bm25 (#25 user-memory contract)
 # ---------------------------------------------------------------------------
