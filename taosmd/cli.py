@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .agents import (
     AgentExistsError,
@@ -610,20 +611,194 @@ def _a2a_poll_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+MANIFEST_NAME = ".taosmd-skill-manifest.json"
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in v.split("."))
+
+
+def _parse_skill_version(skill_md_path: Path) -> str | None:
+    text = skill_md_path.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return None
+    end = text.find("---", 3)
+    if end == -1:
+        return None
+    frontmatter = text[3:end]
+    for line in frontmatter.splitlines():
+        line = line.strip()
+        if line.startswith("version:"):
+            ver = line[len("version:"):].strip()
+            return ver or None
+    return None
+
+
+def _write_skill_manifest(dest_dir: Path, version: str, skill_md_path: Path) -> None:
+    import hashlib
+
+    sha = hashlib.sha256(skill_md_path.read_bytes()).hexdigest()
+    data = {"version": version, "skill_md_sha256": sha}
+    manifest_path = dest_dir / MANIFEST_NAME
+    tmp = manifest_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(manifest_path)
+
+
+def _run_install_skill(src: Path, dest: Path, force: bool = False) -> int:
+    import hashlib
+    import shutil
+
+    src_path = Path(src)
+    dest_path = Path(dest)
+
+    src_skill = src_path / "SKILL.md"
+    if not src_skill.exists():
+        return 1
+
+    version = _parse_skill_version(src_skill)
+    src_hash = hashlib.sha256(src_skill.read_bytes()).hexdigest()
+
+    dest_skill = dest_path / "SKILL.md"
+    manifest_path = dest_path / MANIFEST_NAME
+
+    if manifest_path.is_dir():
+        shutil.rmtree(str(manifest_path))
+
+    had_manifest_file = manifest_path.is_file()
+    manifest = None
+    if had_manifest_file:
+        try:
+            raw = manifest_path.read_text(encoding="utf-8")
+            manifest = json.loads(raw)
+            if not isinstance(manifest, dict):
+                manifest = None
+        except (json.JSONDecodeError, OSError):
+            manifest = None
+
+    if not dest_skill.exists():
+        dest_path.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(str(src_path), str(dest_path), dirs_exist_ok=True)
+        if version is not None:
+            _write_skill_manifest(dest_path, version, dest_path / "SKILL.md")
+        return 0
+
+    installed_hash = hashlib.sha256(dest_skill.read_bytes()).hexdigest()
+    installed_version = _parse_skill_version(dest_skill) or "0.0.0"
+
+    def _upgrade(new_version: str) -> int:
+        if new_version is not None:
+            try:
+                _write_skill_manifest(dest_path, new_version, src_skill)
+            except OSError:
+                return 1
+        shutil.copytree(str(src_path), str(dest_path), dirs_exist_ok=True)
+        return 0
+
+    if had_manifest_file and manifest is not None:
+        recorded_version = manifest.get("version", "0.0.0")
+        recorded_hash = manifest.get("skill_md_sha256")
+
+        if recorded_hash == installed_hash:
+            if _version_tuple(version) < _version_tuple(recorded_version):
+                if not force:
+                    print(
+                        f"error: package version {version} is older than installed {recorded_version}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                rc = _upgrade(version)
+                if rc != 0:
+                    return rc
+                print(f"Downgraded from {recorded_version} to {version}")
+                return 0
+            if _version_tuple(version) == _version_tuple(recorded_version):
+                if src_hash == installed_hash:
+                    print("up to date")
+                    return 0
+                rc = _upgrade(version)
+                if rc != 0:
+                    return rc
+                print(f"Upgraded {version}")
+                return 0
+            rc = _upgrade(version)
+            if rc != 0:
+                return rc
+            print(f"Upgraded from {recorded_version} to {version}")
+            return 0
+
+        if not force:
+            print(f"error: local edits detected in {dest_skill}", file=sys.stderr)
+            print("  Use --force to overwrite.", file=sys.stderr)
+            return 1
+        rc = _upgrade(version)
+        if rc != 0:
+            return rc
+        print("overwriting local edits")
+        return 0
+
+    if had_manifest_file:
+        if installed_hash != src_hash:
+            if not force:
+                print(f"error: local edits detected in {dest_skill}", file=sys.stderr)
+                print("  Use --force to overwrite.", file=sys.stderr)
+                return 1
+            rc = _upgrade(version)
+            if rc != 0:
+                return rc
+            print("overwriting local edits")
+            return 0
+
+    if version is None:
+        if src_hash == installed_hash:
+            print("up to date")
+            return 0
+        if not force:
+            print(f"error: local edits detected in {dest_skill}", file=sys.stderr)
+            print("  Use --force to overwrite.", file=sys.stderr)
+            return 1
+        shutil.copytree(str(src_path), str(dest_path), dirs_exist_ok=True)
+        print("overwriting local edits")
+        return 0
+
+    if _version_tuple(version) < _version_tuple(installed_version):
+        if not force:
+            print(
+                f"error: package version {version} is older than installed {installed_version}",
+                file=sys.stderr,
+            )
+            return 1
+        rc = _upgrade(version)
+        if rc != 0:
+            return rc
+        print(f"Downgraded from {installed_version} to {version}")
+        return 0
+    if _version_tuple(version) == _version_tuple(installed_version):
+        if src_hash == installed_hash:
+            print("up to date")
+            return 0
+        rc = _upgrade(version)
+        if rc != 0:
+            return rc
+        print(f"Upgraded {version}")
+        return 0
+    rc = _upgrade(version)
+    if rc != 0:
+        return rc
+    print(f"Upgraded from {installed_version} to {version}")
+    return 0
+
+
 def _install_skill_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd install-skill``: copy the packaged skill into ~/.claude/skills/."""
-    import shutil  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
     from importlib.resources import files as _pkg_files  # noqa: PLC0415
 
     dest_dir = Path("~/.claude/skills/taosmd-a2a").expanduser()
     skill_src_dir = Path(__file__).parent / "skills" / "taosmd-a2a"
 
     if not skill_src_dir.is_dir():
-        # Fallback: try importlib.resources (wheel installs)
         try:
             _ref = _pkg_files("taosmd").joinpath("skills/taosmd-a2a")
-            # Convert Traversable to a concrete path via __file__ approach.
             skill_src_dir = Path(__file__).parent / "skills" / "taosmd-a2a"
         except Exception:
             pass
@@ -634,16 +809,7 @@ def _install_skill_cmd(args: argparse.Namespace) -> int:
         return 2
 
     force = getattr(args, "force", False)
-    skill_md = dest_dir / "SKILL.md"
-    if skill_md.exists() and not force:
-        print(f"Skill already installed at {dest_dir}")
-        print("  Re-run with --force to overwrite.")
-        return 0
-
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(str(skill_src_dir), str(dest_dir), dirs_exist_ok=True)
-    print(f"taosmd-a2a skill installed at {dest_dir}")
-    return 0
+    return _run_install_skill(skill_src_dir, dest_dir, force=force)
 
 
 def _setup_prompt_cmd(args: argparse.Namespace) -> int:
