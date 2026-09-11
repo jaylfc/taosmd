@@ -1170,7 +1170,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "POST" and path.startswith("/a2a/alarms/") and path.endswith("/clear"):
                     key = path[len("/a2a/alarms/"):-len("/clear")]
                     self._handle_a2a_alarms_clear(key)
-                # Task graph endpoints — prefix matching for /tasks/{id} paths
+                # Task graph endpoints -- prefix matching for /tasks/{id} paths
                 elif method == "POST" and path == "/tasks":
                     self._handle_task_create()
                 elif method == "GET" and path == "/tasks":
@@ -2408,7 +2408,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
-            limit_i = min(limit_i, 500)
+            limit_i = max(1, min(limit_i, 500))
             project = (qs.get("project") or [None])[0]
             project, ok = self._apply_token_binding(None, project)
             if not ok:
@@ -2807,7 +2807,7 @@ def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=Non
         # loudly so a deployment cannot end up with partial auth silently.
         logger.warning(
             "registry auth: a registry verifier is configured but no grants "
-            "verifier — A2A sends will be identity-checked but NOT grant-checked"
+            "verifier -- A2A sends will be identity-checked but NOT grant-checked"
         )
     runner = _ServiceLoop()
     httpd = ThreadingHTTPServer(

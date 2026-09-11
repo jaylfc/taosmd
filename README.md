@@ -736,6 +736,7 @@ ollama pull qwen3:4b  # Same model as the smaller node, same quality
 | `GET` | `/tasks` | `?status=&project=&assignee=&limit=` | `{"tasks": [...]}` |
 | `GET` | `/tasks/ready` | `?project=&assignee=&limit=` | unblocked tasks, priority order |
 | `GET` | `/tasks/prime` | `?project=&assignee=` | `{"text": <briefing>, "tasks": [...]}` |
+| `GET` | `/tasks/edges` | `?from_id=&to_id=&type=&project=&limit=` | `{"edges": [...]}` |
 | `POST` | `/tasks/{id}` | `{"status"?, "assignee"?, "priority"?, "body"?}` | updated task |
 | `POST` | `/tasks/{id}/edges` (+ `/edges/remove`) | `{"to_id": str, "type": "blocks"\|"parent"\|"relates"\|"duplicates"}` | edge receipt |
 
