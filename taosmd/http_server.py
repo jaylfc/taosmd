@@ -261,7 +261,19 @@ _MEMORY_DEFAULT_LIMIT = 50
 _MEMORY_MAX_LIMIT = 500
 
 
-def _validate_a2a_params(qs: dict, allowed: frozenset[str]) -> None:
+def _qs_param_names(query: str) -> set[str]:
+    names: set[str] = set()
+    for pair in query.split("&"):
+        if not pair:
+            continue
+        if "=" in pair:
+            names.add(pair.split("=", 1)[0])
+        else:
+            names.add(pair)
+    return names
+
+
+def _validate_a2a_params(qs: dict, allowed: frozenset[str], raw_query: str = "") -> None:
     """Reject query parameters not in *allowed* with HTTP 400.
 
     General rule established here and on the authenticated controller proxy
@@ -271,8 +283,15 @@ def _validate_a2a_params(qs: dict, allowed: frozenset[str]) -> None:
     not infer it from results that look plausible.  The error message names
     both the offending parameters and the accepted set so the caller can
     self-correct in one round-trip.
+
+    ``parse_qs`` drops parameters with blank values before they reach this
+    function.  To catch that case, the raw query string is passed via
+    *raw_query* and its parameter names are validated against the same
+    allowlist.
     """
     unknown = set(qs.keys()) - allowed
+    if raw_query:
+        unknown |= _qs_param_names(raw_query) - allowed
     if unknown:
         raise _BadRequest(
             f"unknown query parameters: {sorted(unknown)}; allowed: {sorted(allowed)}"
@@ -1033,6 +1052,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             parts = urlsplit(self.path)
             path = parts.path.rstrip("/") or "/"
             query = parse_qs(parts.query)
+            self._raw_qs = parts.query
             # Token gate: check before routing so even unknown paths are
             # protected (prevents enumeration without a token). Admin write
             # routes are exempt here (#154): they enforce their own, stricter
@@ -1616,17 +1636,17 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, result)
 
         def _handle_a2a_channels(self, qs: dict) -> None:
-            _validate_a2a_params(qs, frozenset())
+            _validate_a2a_params(qs, frozenset(), self._raw_qs)
             channels = runner.run(service.a2a_channels(data_dir=data_dir))
             self._send_json(200, {"channels": channels})
 
         def _handle_a2a_census(self, qs: dict) -> None:
-            _validate_a2a_params(qs, frozenset())
+            _validate_a2a_params(qs, frozenset(), self._raw_qs)
             census = runner.run(service.a2a_sender_census(data_dir=data_dir))
             self._send_json(200, {"census": census})
 
         def _handle_a2a_members(self, qs: dict) -> None:
-            _validate_a2a_params(qs, frozenset({"channel"}))
+            _validate_a2a_params(qs, frozenset({"channel"}), self._raw_qs)
             channel = (qs.get("channel") or [None])[0]
             if not channel:
                 raise _BadRequest("'channel' query parameter is required")
@@ -1792,7 +1812,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, result)
 
         def _handle_a2a_messages(self, qs: dict) -> None:
-            _validate_a2a_params(qs, frozenset({"thread", "since", "limit", "fields", "format"}))
+            _validate_a2a_params(qs, frozenset({"thread", "since", "limit", "fields", "format"}), self._raw_qs)
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
@@ -1833,7 +1853,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_mentions(self, qs: dict) -> None:
-            _validate_a2a_params(qs, frozenset({"since", "limit", "reader"}))
+            _validate_a2a_params(qs, frozenset({"since", "limit", "reader"}), self._raw_qs)
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
             try:
@@ -1896,7 +1916,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             when a verifier is configured; otherwise it is required as a
             query parameter.
             """
-            _validate_a2a_params(qs, frozenset({"consumer", "limit", "include_kinds", "exclude_acked_by"}))
+            _validate_a2a_params(qs, frozenset({"consumer", "limit", "include_kinds", "exclude_acked_by"}), self._raw_qs)
             consumer_qp = (qs.get("consumer") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
             include_kinds_raw = (qs.get("include_kinds") or [None])[0]
@@ -1983,7 +2003,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             Returns messages past the consumer's cursor that are addressed
             to the consumer and have NOT been acknowledged by the consumer.
             """
-            _validate_a2a_params(qs, frozenset({"consumer", "limit"}))
+            _validate_a2a_params(qs, frozenset({"consumer", "limit"}), self._raw_qs)
             consumer_qp = (qs.get("consumer") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
             try:
@@ -2028,7 +2048,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             subscribers that carry no identifying token produce no delivered
             mark.
             """
-            _validate_a2a_params(qs, frozenset({"thread", "since"}))
+            _validate_a2a_params(qs, frozenset({"thread", "since"}), self._raw_qs)
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             last_ts = _parse_since(since_raw)
@@ -2078,7 +2098,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return
 
         def _handle_a2a_threads(self, qs: dict) -> None:
-            _validate_a2a_params(qs, frozenset({"principal"}))
+            _validate_a2a_params(qs, frozenset({"principal"}), self._raw_qs)
             principal = (qs.get("principal") or [None])[0]
             threads = runner.run(
                 service.a2a_threads(principal=principal, data_dir=data_dir)
@@ -2086,7 +2106,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"threads": threads})
 
         def _handle_a2a_thread_messages(self, thread: str, qs: dict) -> None:
-            _validate_a2a_params(qs, frozenset({"before", "after", "limit"}))
+            _validate_a2a_params(qs, frozenset({"before", "after", "limit"}), self._raw_qs)
             before_raw = (qs.get("before") or [None])[0]
             after_raw = (qs.get("after") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
@@ -2129,7 +2149,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_a2a_list_members(self, thread: str, qs: dict) -> None:
             """GET /a2a/threads/{thread}/members: list active members."""
             thread = unquote(thread)
-            _validate_a2a_params(qs, frozenset())
+            _validate_a2a_params(qs, frozenset(), self._raw_qs)
             members = runner.run(
                 service.a2a_list_members(thread=thread, data_dir=data_dir)
             )
@@ -2222,7 +2242,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_a2a_message_receipts(self, msg_id_str: str, qs: dict) -> None:
             """GET /a2a/messages/{id}/receipts -- all receipts for one message."""
-            _validate_a2a_params(qs, frozenset())
+            _validate_a2a_params(qs, frozenset(), self._raw_qs)
             try:
                 message_id = int(msg_id_str)
             except (TypeError, ValueError) as exc:
@@ -2234,7 +2254,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_a2a_receipts(self, qs: dict) -> None:
             """GET /a2a/receipts?message_id=X&agent=Y -- a single receipt."""
-            _validate_a2a_params(qs, frozenset({"message_id", "agent"}))
+            _validate_a2a_params(qs, frozenset({"message_id", "agent"}), self._raw_qs)
             message_id_raw = (qs.get("message_id") or [None])[0]
             agent_id = (qs.get("agent") or [None])[0]
             if message_id_raw is None or agent_id is None:
