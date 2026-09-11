@@ -511,7 +511,7 @@ because SQLite treats `LIMIT -1` as unbounded, so a cap written as
 | `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
-| `GET`  | `/a2a/inbox` | `?consumer=&limit=&include_kinds=` | `{"messages": [...]}` |
+| `GET`  | `/a2a/inbox` | `?consumer=&limit=&include_kinds=&exclude_acked_by=` | `{"messages": [...]}`; `exclude_acked_by` omits messages already acked by the named principal so the caller's result set is limited to messages that still need attention |
 | `POST` | `/a2a/inbox/advance` | body JSON `{"to_id": int}` | `{"ok": true}` (principal derived from the verified registry token `sub`; no standalone `?consumer=` fallback) |
 | `POST` | `/a2a/ack` | body JSON `{"message_id": int}` | `{"id", "acked_by", "ok"}` (principal derived from the verified registry token `sub`; no standalone `?consumer=` fallback) |
 | `GET`  | `/a2a/inbox/unhandled` | `?consumer=&limit=` | `{"messages": [...]}` |

@@ -60,8 +60,8 @@ def _keypair():
 REG_PRIV_PEM, REG_PUB_PEM = _keypair()
 
 
-def _make_token(sub, priv_pem=REG_PRIV_PEM):
-    return pyjwt.encode({"sub": sub}, priv_pem, algorithm="EdDSA")
+def _make_token(sub, priv_pem=REG_PRIV_PEM, iss=registry_auth.REGISTRY_ISS):
+    return pyjwt.encode({"sub": sub, "iss": iss}, priv_pem, algorithm="EdDSA")
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ def authed_live_server(tmp_path, monkeypatch):
         return json.dumps([])
 
     verifier = registry_auth.verifier_from_url(
-        "http://reg.test", opener=fake_opener, expected_iss=None,
+        "http://reg.test", opener=fake_opener, expected_iss=registry_auth.REGISTRY_ISS,
     )
 
     # Pre-seed via local service layer before the server starts, then clear

@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import threading
 import urllib.error
@@ -49,7 +50,7 @@ REG_PRIV_PEM, REG_PUB_PEM = _keypair()
 OTHER_PRIV_PEM, _OTHER_PUB_PEM = _keypair()
 
 
-def _make_token(sub, priv_pem=REG_PRIV_PEM, iss=None):
+def _make_token(sub, priv_pem=REG_PRIV_PEM, iss=registry_auth.REGISTRY_ISS):
     claims = {"sub": sub}
     if iss is not None:
         claims["iss"] = iss
@@ -104,10 +105,55 @@ def authed_server(tmp_path, monkeypatch):
         return json.dumps([])
 
     verifier = registry_auth.verifier_from_url(
-        "http://reg.test", opener=fake_opener, expected_iss=None,
+        "http://reg.test", opener=fake_opener, expected_iss=registry_auth.REGISTRY_ISS,
     )
     httpd = http_server.make_server(
         "127.0.0.1", 0, data_dir=str(data_dir), verifier=verifier,
+    )
+    httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
+    host, port = httpd.server_address[:2]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+        httpd.service_loop.close()
+
+
+@pytest.fixture
+def production_pinned_server(tmp_path, monkeypatch):
+    """Server that builds its registry verifier via the production code path.
+
+    No verifier is injected; ``registry_url`` is set in config so
+    ``_make_handler`` constructs the verifier itself, pinning the issuer to
+    ``registry_auth.REGISTRY_ISS`` exactly as production does.
+    """
+    data_dir = tmp_path / "taosmd-prod-pin"
+    data_dir.mkdir()
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+    cfg.set_a2a_auth_enforce(True, str(data_dir))
+    cfg.set_registry_url("http://reg.test", data_dir=str(data_dir))
+
+    real_urlopen = urllib.request.urlopen
+
+    def _fake_urlopen(req, timeout=None):
+        if hasattr(req, "full_url"):
+            url = req.full_url
+        else:
+            url = req
+        if url.endswith(registry_auth.PUBKEY_PATH):
+            return io.BytesIO(json.dumps({"pubkey": REG_PUB_PEM}).encode())
+        if url.endswith(registry_auth.REVOKED_PATH):
+            return io.BytesIO(b"[]")
+        return real_urlopen(req, timeout=timeout)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    httpd = http_server.make_server(
+        "127.0.0.1", 0, data_dir=str(data_dir),
     )
     httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
     host, port = httpd.server_address[:2]
@@ -309,3 +355,33 @@ def test_inbox_unhandled_unknown_param_is_rejected(authed_server):
     token = _make_token("agent-1")
     status, _ = _get(f"{authed_server}/a2a/inbox/unhandled?foo=bar", token=token)
     assert status == 400
+
+
+def test_inbox_with_wrong_issuer_is_rejected(authed_server):
+    token = _make_token("agent-1", iss="wrong-issuer")
+    status, _ = _get(f"{authed_server}/a2a/inbox", token=token)
+    assert status == 401
+
+
+def test_inbox_advance_with_wrong_issuer_is_rejected(authed_server):
+    token = _make_token("agent-1", iss="wrong-issuer")
+    status, _ = _post(f"{authed_server}/a2a/inbox/advance", {"to_id": 5}, token=token)
+    assert status == 401
+
+
+def test_ack_with_wrong_issuer_is_rejected(authed_server):
+    token = _make_token("agent-1", iss="wrong-issuer")
+    status, _ = _post(f"{authed_server}/a2a/ack", {"message_id": 1}, token=token)
+    assert status == 401
+
+
+def test_inbox_unhandled_with_wrong_issuer_is_rejected(authed_server):
+    token = _make_token("agent-1", iss="wrong-issuer")
+    status, _ = _get(f"{authed_server}/a2a/inbox/unhandled", token=token)
+    assert status == 401
+
+
+def test_inbox_with_wrong_issuer_via_production_verifier_is_rejected(production_pinned_server):
+    token = _make_token("agent-1", iss="wrong-issuer")
+    status, _ = _get(f"{production_pinned_server}/a2a/inbox", token=token)
+    assert status == 401
