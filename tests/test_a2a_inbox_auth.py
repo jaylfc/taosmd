@@ -299,6 +299,12 @@ def test_inbox_unhandled_with_valid_matching_token_succeeds(authed_server, tmp_p
 # Gate (e): unknown query parameter -> 400 on unhandled
 # ---------------------------------------------------------------------------
 
+def test_inbox_unknown_param_is_rejected(authed_server):
+    token = _make_token("agent-1")
+    status, _ = _get(f"{authed_server}/a2a/inbox?foo=bar", token=token)
+    assert status == 400
+
+
 def test_inbox_unhandled_unknown_param_is_rejected(authed_server):
     token = _make_token("agent-1")
     status, _ = _get(f"{authed_server}/a2a/inbox/unhandled?foo=bar", token=token)
