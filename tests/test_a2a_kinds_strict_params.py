@@ -341,6 +341,38 @@ def test_http_a2a_thread_messages_unknown_param_returns_400(live_server):
     assert "bogus" in body["error"]
 
 
+def test_http_a2a_inbox_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/inbox?consumer=agentA&bogus=1")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_inbox_blank_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/inbox?consumer=agentA&bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_inbox_unhandled_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/inbox/unhandled?consumer=agentA&bogus=1")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_inbox_unhandled_blank_unknown_param_returns_400(live_server):
+    status, body = _get(f"{live_server}/a2a/inbox/unhandled?consumer=agentA&bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_list_members_unknown_param_returns_400(live_server):
+    _post(f"{live_server}/a2a/threads",
+          {"thread": "list-members-test", "participants": ["agentA"], "agent": "agentA"})
+    status, body = _get(f"{live_server}/a2a/threads/list-members-test/members?bogus=1")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
 def test_http_a2a_channels_unknown_param_returns_400(live_server):
     status, body = _get(f"{live_server}/a2a/channels?bogus=1")
     assert status == 400, body
@@ -672,6 +704,22 @@ def test_http_a2a_census_blank_unknown_param_returns_400(live_server):
 
 def test_http_a2a_members_blank_unknown_param_returns_400(live_server):
     status, body = _get(f"{live_server}/a2a/members?channel=general&bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_thread_messages_blank_unknown_param_returns_400(live_server):
+    _post(f"{live_server}/a2a/send",
+          {"from": "agentA", "body": "msg", "thread": "blank-tm-test"})
+    status, body = _get(f"{live_server}/a2a/threads/blank-tm-test/messages?bogus=")
+    assert status == 400, body
+    assert "bogus" in body["error"]
+
+
+def test_http_a2a_list_members_blank_unknown_param_returns_400(live_server):
+    _post(f"{live_server}/a2a/threads",
+          {"thread": "blank-list-members-test", "participants": ["agentA"], "agent": "agentA"})
+    status, body = _get(f"{live_server}/a2a/threads/blank-list-members-test/members?bogus=")
     assert status == 400, body
     assert "bogus" in body["error"]
 
