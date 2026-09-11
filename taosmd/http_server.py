@@ -249,6 +249,7 @@ DEFAULT_PORT = 7900
 _A2A_REF_KINDS = frozenset({"doc", "report", "spec", "log"})
 _A2A_MAX_REFS = 8
 _A2A_MAX_MESSAGE_BYTES = 64 * 1024  # 64 KB total (body+refs+blocks)
+_A2A_MAX_IMPORT_BATCH = 100
 _A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "system"})
 
 # Cursor pagination limits for /a2a/threads/{thread}/messages.
@@ -1095,6 +1096,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_pending_resolve()
                 elif method == "POST" and path == "/a2a/send":
                     self._handle_a2a_send()
+                elif method == "POST" and path == "/a2a/import":
+                    self._handle_a2a_import()
                 elif method == "GET" and path == "/a2a/channels":
                     self._handle_a2a_channels(query)
                 elif method == "GET" and path == "/a2a/census":
@@ -1788,6 +1791,38 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     alarm_key=alarm_key, alarm_fingerprint=alarm_fingerprint,
                     data_dir=data_dir,
                 )
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_import(self) -> None:
+            body = self._read_json_body()
+            envelopes = body.get("envelopes")
+            if not isinstance(envelopes, list):
+                raise _BadRequest("'envelopes' (list) is required")
+            if len(envelopes) > _A2A_MAX_IMPORT_BATCH:
+                raise _BadRequest(
+                    f"'envelopes' must have at most {_A2A_MAX_IMPORT_BATCH} items"
+                )
+            if _registry_verifier is not None:
+                auth = self.headers.get("Authorization", "")
+                token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+                if not token:
+                    self._send_json(401, {"error": "registry auth: Bearer token required"})
+                    return
+                try:
+                    from . import registry_auth as _ra  # noqa: PLC0415
+                    import jwt as _jwt  # noqa: PLC0415
+                    unverified = _jwt.decode(token, options={"verify_signature": False})
+                    raw_sub = unverified.get("sub", "") or ""
+                except Exception:  # noqa: BLE001
+                    raw_sub = ""
+                try:
+                    _registry_verifier.authorize(token, raw_sub)
+                except _ra.AuthError as exc:
+                    self._send_json(403, {"error": f"registry auth: {exc}"})
+                    return
+            result = runner.run(
+                service.a2a_import(envelopes, data_dir=data_dir)
             )
             self._send_json(200, result)
 
@@ -2851,7 +2886,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, "
           "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
-          "POST /a2a/send, GET /a2a/messages, GET /a2a/mentions, GET /a2a/stream, "
+          "POST /a2a/send, POST /a2a/import, GET /a2a/messages, GET /a2a/mentions, GET /a2a/stream, "
           "GET /a2a/channels, GET /a2a/members, "
           "POST /tasks, GET /tasks, GET /tasks/ready, GET /tasks/prime, "
           "GET /tasks/edges, "
