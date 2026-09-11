@@ -1,0 +1,2 @@
+### Fixed
+- `ReceiptStore` now opens its SQLite connection with the default `check_same_thread=True` instead of `check_same_thread=False`. All production callers create and use the connection on the single `_ServiceLoop` service-loop thread, so the default is correct and SQLite now enforces the single-thread invariant for us. A genuine cross-thread use raises `sqlite3.ProgrammingError` instead of silently corrupting data.
