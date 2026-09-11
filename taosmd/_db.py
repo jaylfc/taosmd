@@ -28,7 +28,7 @@ from typing import Union
 
 # Allow a contended connection to block-and-retry for this many milliseconds
 # before raising ``sqlite3.OperationalError: database is locked``.
-BUSY_TIMEOUT_MS = 5000
+BUSY_TIMEOUT_MS = 30000
 
 # Number of attempts (the first plus retries) ``run_schema`` makes when the
 # schema DDL hits a transient ``SQLITE_BUSY`` / ``database is locked`` error.

@@ -41,7 +41,7 @@ def _keypair():
 PRIV_PEM, PUB_PEM = _keypair()
 
 
-def _post_send(base_url, from_, body, token=None):
+def _post_send(base_url, from_, body, token=None, timeout=30):
     payload = json.dumps({"from": from_, "body": body}).encode()
     headers = {"Content-Type": "application/json"}
     if token:
@@ -49,7 +49,7 @@ def _post_send(base_url, from_, body, token=None):
     req = urllib.request.Request(base_url + "/a2a/send", data=payload,
                                  headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode() or "{}")
@@ -253,7 +253,7 @@ def _make_token(sub, project_id=None, iss=None):
     return pyjwt.encode(claims, PRIV_PEM, algorithm="EdDSA")
 
 
-def _post_json(base_url, path, payload, token=None):
+def _post_json(base_url, path, payload, token=None, timeout=30):
     data = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
     if token:
@@ -261,19 +261,19 @@ def _post_json(base_url, path, payload, token=None):
     req = urllib.request.Request(base_url + path, data=data,
                                  headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode() or "{}")
 
 
-def _get_json(base_url, path, token=None):
+def _get_json(base_url, path, token=None, timeout=30):
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(base_url + path, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode() or "{}")
