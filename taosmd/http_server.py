@@ -1864,6 +1864,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = max(1, min(limit_i, 10000))
             # Auth: when a registry verifier is configured, the caller's
             # verified identity is the reader. Unauthenticated requests
             # return 401. When no verifier is configured (standalone), a

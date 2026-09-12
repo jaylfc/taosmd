@@ -1164,7 +1164,15 @@ async def a2a_mentions_feed(
         result.append(msg)
 
     result.sort(key=lambda m: m["ts"])
-    return result[:limit]
+    # Thread-scoped read guard (#211 anti-bypass): gate each message body
+    # through can_read so a mention grant -- never a blanket channel ACL --
+    # is what entitles disclosure.  A blanket ACL filter would wrongly cut
+    # cross-channel mentions that #211 intentionally grants.
+    readable = []
+    for msg in result:
+        if await can_read(reader, msg, data_dir=data_dir):
+            readable.append(msg)
+    return readable[:limit]
 
 
 async def _find_thread_root(message_id: int, archive) -> int | None:
@@ -1203,6 +1211,23 @@ async def can_read(reader: str, msg: dict, data_dir=None) -> bool:
     enforcement (tsk-dp6fyv) plugs into the ``channelACL`` slot; until
     then it is effectively always-true for compatibility.
     """
+    norm_reader = _normalise_handle(reader)
+    stores = await _api._ensure_stores(data_dir)
+    mentions_store = stores["mentions"]
+    archive = stores["archive"]
+
+    # Mention grant: reader was mentioned in the thread-root message.
+    thread_root_id = msg.get("thread_root")
+    if thread_root_id is None:
+        msg_id = msg.get("id")
+        if msg_id is not None:
+            thread_root_id = await _find_thread_root(msg_id, archive)
+    if thread_root_id is not None:
+        recipients = await mentions_store.get_mention_recipients(int(thread_root_id))
+        if norm_reader in recipients:
+            return True
+
+    # Channel ACL (always-true until tsk-dp6fyv plugs in).
     return True
 
 
