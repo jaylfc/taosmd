@@ -407,6 +407,9 @@ async def fetch_by_ref(ref: dict, *, agent: str, data_dir=None) -> dict:
 
 _A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "system"})
 _A2A_ALARM_MIN_INTERVAL = 5.0
+_A2A_MAX_REFS = 8
+_A2A_MAX_MESSAGE_BYTES = 64 * 1024
+_A2A_MAX_IMPORT_BATCH = 100
 
 
 async def a2a_send(
@@ -541,6 +544,89 @@ async def a2a_send(
             recipient=recipient,
         )
     return receipt
+
+
+async def a2a_import(
+    envelopes: list[dict],
+    *,
+    data_dir=None,
+) -> dict:
+    """Idempotent batch import of external chat envelopes onto the A2A bus.
+
+    Each envelope is validated against the same field rules as
+    :func:`a2a_send` (``from``, ``body``, ``thread``, ``kind``, ``refs``,
+    ``blocks``, ``reply_to``, ``recipient``).  Duplicates are suppressed
+    via the import dedup table: a crash between the archive write and the
+    dedup record yields a duplicate, never a loss.
+
+    Returns ``{"imported": N, "deduped": M, "total": T}`` where ``T`` is
+    the number of envelopes in the batch.
+    """
+    if not isinstance(envelopes, list):
+        raise ValueError("'envelopes' (list) is required")
+    if len(envelopes) > _A2A_MAX_IMPORT_BATCH:
+        raise ValueError(f"'envelopes' must have at most {_A2A_MAX_IMPORT_BATCH} items")
+    imported = 0
+    deduped = 0
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    for envelope in envelopes:
+        if not isinstance(envelope, dict):
+            raise ValueError("each envelope must be an object")
+        from_ = envelope.get("from")
+        body = envelope.get("body")
+        thread = envelope.get("thread", "general") or "general"
+        reply_to = envelope.get("reply_to")
+        refs = envelope.get("refs")
+        blocks = envelope.get("blocks")
+        kind = envelope.get("kind", "chat")
+        if kind is None:
+            kind = "chat"
+        recipient = envelope.get("recipient")
+        if not isinstance(from_, str) or not from_:
+            raise ValueError("'from' (non-empty string) is required in each envelope")
+        if not isinstance(body, str) or not body:
+            raise ValueError("'body' (non-empty string) is required in each envelope")
+        if not isinstance(thread, str) or not thread:
+            raise ValueError("'thread' (non-empty string) is required in each envelope")
+        if kind not in _A2A_KINDS:
+            raise ValueError(
+                f"'kind' must be one of {sorted(_A2A_KINDS)}; got {kind!r}"
+            )
+        if refs is not None:
+            if not isinstance(refs, list):
+                raise ValueError("'refs' must be a list")
+            if len(refs) > _A2A_MAX_REFS:
+                raise ValueError(f"'refs' must have at most {_A2A_MAX_REFS} items")
+        if blocks is not None and not isinstance(blocks, list):
+            raise ValueError("'blocks' must be a list")
+        serialized = json.dumps(
+            {"from": from_, "body": body, "thread": thread, "reply_to": reply_to, "refs": refs, "blocks": blocks, "kind": kind, "recipient": recipient}
+        )
+        if len(serialized.encode("utf-8")) > _A2A_MAX_MESSAGE_BYTES:
+            raise ValueError("envelope exceeds 64KB limit")
+        key = hashlib.sha256(serialized.encode()).hexdigest()
+        existing = await archive.get_import_dedup(key)
+        if existing is not None:
+            deduped += 1
+            continue
+        data = {"from": from_, "body": body, "thread": thread, "reply_to": reply_to, "kind": kind}
+        if recipient is not None:
+            data["recipient"] = recipient
+        if refs is not None:
+            data["refs"] = refs
+        if blocks is not None:
+            data["blocks"] = blocks
+        row_id = await archive.record(
+            event_type=EVENT_A2A,
+            data=data,
+            agent_name=from_,
+            app_id=thread,
+            summary=body[:200],
+        )
+        await archive.record_import_dedup(key, row_id)
+        imported += 1
+    return {"imported": imported, "deduped": deduped, "total": len(envelopes)}
 
 
 async def a2a_feed(
@@ -2166,7 +2252,7 @@ async def a2a_remove_member(
 
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
-           "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
+           "supersede", "fetch_by_ref", "a2a_send", "a2a_import", "a2a_feed", "a2a_channels", "a2a_sender_census",
            "a2a_members", "a2a_threads", "a2a_thread_messages",
            "a2a_mentions_feed", "a2a_migrate_kinds", "a2a_alarms_clear", "can_read",
            "a2a_inbox", "a2a_inbox_advance", "a2a_inbox_unhandled",
