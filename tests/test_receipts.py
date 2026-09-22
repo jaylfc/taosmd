@@ -345,7 +345,7 @@ def test_get_message_receipts(authed_server):
     token = _make_token("alice", iss=REGISTRY_ISS)
     _post(f"{authed_server}/a2a/receipts", {"message_id": 42}, token=token)
     _patch(f"{authed_server}/a2a/receipts", {"message_id": 42}, token=token)
-    status, body = _get(f"{authed_server}/a2a/messages/42/receipts")
+    status, body = _get(f"{authed_server}/a2a/messages/42/receipts", token=token)
     assert status == 200, body
     assert "delivered" in body
     assert "read" in body
@@ -360,7 +360,8 @@ def test_get_single_receipt(authed_server):
     token = _make_token("alice", iss=REGISTRY_ISS)
     _post(f"{authed_server}/a2a/receipts", {"message_id": 42}, token=token)
     status, body = _get(
-        f"{authed_server}/a2a/receipts?message_id=42&agent=alice"
+        f"{authed_server}/a2a/receipts?message_id=42&agent=alice",
+        token=token,
     )
     assert status == 200, body
     assert "delivered_at" in body
@@ -369,8 +370,10 @@ def test_get_single_receipt(authed_server):
 
 def test_get_single_receipt_not_found(authed_server):
     """GET /a2a/receipts for a nonexistent receipt returns 404."""
+    token = _make_token("alice", iss=REGISTRY_ISS)
     status, body = _get(
-        f"{authed_server}/a2a/receipts?message_id=999&agent=nobody"
+        f"{authed_server}/a2a/receipts?message_id=999&agent=nobody",
+        token=token,
     )
     assert status == 404, body
 
@@ -396,7 +399,8 @@ def test_forged_token_post_writes_no_receipt(authed_server):
     assert status == 401, body
 
     # Confirm the DB stays empty for message 77.
-    status2, body2 = _get(f"{authed_server}/a2a/messages/77/receipts")
+    token = _make_token("alice", iss=REGISTRY_ISS)
+    status2, body2 = _get(f"{authed_server}/a2a/messages/77/receipts", token=token)
     assert status2 == 200, body2
     assert body2["delivered"] == []
     assert body2["read"] == []
@@ -412,7 +416,8 @@ def test_forged_token_patch_writes_no_receipt(authed_server):
     )
     assert status == 401, body
 
-    status2, body2 = _get(f"{authed_server}/a2a/messages/77/receipts")
+    token = _make_token("alice", iss=REGISTRY_ISS)
+    status2, body2 = _get(f"{authed_server}/a2a/messages/77/receipts", token=token)
     assert status2 == 200, body2
     assert body2["delivered"] == []
     assert body2["read"] == []
@@ -429,7 +434,8 @@ def test_forged_token_does_not_impersonate(authed_server):
     assert status == 401, body
 
     # Bob should have no receipts.
-    status2, body2 = _get(f"{authed_server}/a2a/messages/88/receipts")
+    token = _make_token("alice", iss=REGISTRY_ISS)
+    status2, body2 = _get(f"{authed_server}/a2a/messages/88/receipts", token=token)
     assert status2 == 200, body2
     assert len(body2["delivered"]) == 0
 
@@ -462,7 +468,7 @@ def test_admin_prune_with_token(authed_server):
     assert body["pruned"] >= 1
 
     # Receipt should be gone.
-    status2, body2 = _get(f"{authed_server}/a2a/receipts?message_id=42&agent=alice")
+    status2, body2 = _get(f"{authed_server}/a2a/receipts?message_id=42&agent=alice", token=token)
     assert status2 == 404, body2
 
 
@@ -496,7 +502,7 @@ def test_delivered_seen_round_trip(authed_server):
     assert b["ok"] is True
 
     # Read back: delivered yes, read empty
-    s, b = _get(f"{authed_server}/a2a/messages/{msg_id}/receipts")
+    s, b = _get(f"{authed_server}/a2a/messages/{msg_id}/receipts", token=token)
     assert s == 200, b
     assert len(b["delivered"]) == 1
     assert len(b["read"]) == 0
@@ -507,7 +513,7 @@ def test_delivered_seen_round_trip(authed_server):
     assert b["ok"] is True
 
     # Read back: both delivered and read populated
-    s, b = _get(f"{authed_server}/a2a/messages/{msg_id}/receipts")
+    s, b = _get(f"{authed_server}/a2a/messages/{msg_id}/receipts", token=token)
     assert s == 200, b
     assert len(b["delivered"]) == 1
     assert len(b["read"]) == 1
@@ -515,7 +521,7 @@ def test_delivered_seen_round_trip(authed_server):
     assert b["read"][0]["agent_id"] == "carol"
 
     # Single receipt
-    s, b = _get(f"{authed_server}/a2a/receipts?message_id={msg_id}&agent=carol")
+    s, b = _get(f"{authed_server}/a2a/receipts?message_id={msg_id}&agent=carol", token=token)
     assert s == 200, b
     assert "delivered_at" in b
     assert b["seen_at"] is not None
