@@ -134,8 +134,24 @@ A2A chat read API (unified-chat slice 4) ``--`` /a2a/threads, /a2a/threads/{thre
                             participates in, plus all open/legacy threads. Membership is not yet managed
                             (separate card), so every thread is open and therefore visible to every
                             principal; the ``principal`` param is accepted for forward compatibility.
-                            ``title`` and ``unread_count`` are omitted: title storage and read receipts are
-                            not yet implemented (tsk-fhltad), so the field is left out entirely, never faked.
+                             ``title`` is omitted (no title store exists); ``unread_count`` is
+                             omitted because the receipts subsystem tracks per-agent delivery
+                             and seen marks but does not compute a per-message unread count.
+                             Receipts are keyed by ``(message_id, agent_id)`` in the
+                             ``a2a_receipts`` table: ``delivered_at`` is set once on first
+                             delivery (INSERT OR IGNORE), ``seen_at`` is nullable and only
+                             moves from null to a value (guarded by ``WHERE seen_at IS NULL``).
+                             A missing row, or a row with ``seen_at IS NULL``, means the
+                             client has no record of delivery or seen status for that agent,
+                             which is distinct from the agent definitively not having seen
+                             the message. Endpoints: ``POST /a2a/receipts`` records delivery,
+                             ``PATCH /a2a/receipts`` records seen,
+                             ``GET /a2a/messages/{id}/receipts`` lists all receipts for a
+                             message, ``GET /a2a/receipts?message_id=X&agent=Y`` reads a
+                             single receipt, and ``POST /a2a/admin/prune-receipts`` prunes
+                             old rows.
+                             Delivered marks are also written automatically for identified
+                             SSE subscribers.
 ``GET  /a2a/threads/{thread}/messages`` ``?before=&after=&limit=`` -- cursor pagination in BOTH directions.
                             ``before`` walks backwards (older), ``after`` walks forwards (newer); messages
                             are always returned oldest-first. ``limit`` defaults to 50, max 200 (clamped).
