@@ -26,6 +26,7 @@ its weekly allowance within ~2 days of the reset, two weeks in a row.
   each with its own bugs. Server docs already concede the gap: read receipts
   are implemented -- ``POST /a2a/receipts`` records delivery, ``PATCH /a2a/receipts``
   records seen, ``GET /a2a/messages/{id}/receipts`` lists receipts for a message,
+  ``GET /a2a/receipts?message_id=X&agent=Y`` reads a single receipt,
   and ``POST /a2a/admin/prune-receipts`` prunes old rows -- but ``unread_count``
   is still omitted because the store tracks per-agent delivery/seen marks without
   computing a per-message aggregate. Receipts are keyed by ``(message_id, agent_id)``

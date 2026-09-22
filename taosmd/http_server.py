@@ -143,11 +143,13 @@ A2A chat read API (unified-chat slice 4) ``--`` /a2a/threads, /a2a/threads/{thre
                              moves from null to a value (guarded by ``WHERE seen_at IS NULL``).
                              A missing row, or a row with ``seen_at IS NULL``, means the
                              client has no record of delivery or seen status for that agent,
-                              which is distinct from the agent definitively not having seen
-                              the message. Endpoints: ``POST /a2a/receipts`` records delivery,
-                              ``PATCH /a2a/receipts`` records seen,
-                              ``GET /a2a/messages/{id}/receipts`` lists all receipts for a
-                              message, and ``POST /a2a/admin/prune-receipts`` prunes old rows.
+                             which is distinct from the agent definitively not having seen
+                             the message. Endpoints: ``POST /a2a/receipts`` records delivery,
+                             ``PATCH /a2a/receipts`` records seen,
+                             ``GET /a2a/messages/{id}/receipts`` lists all receipts for a
+                             message, ``GET /a2a/receipts?message_id=X&agent=Y`` reads a
+                             single receipt, and ``POST /a2a/admin/prune-receipts`` prunes
+                             old rows.
                              Delivered marks are also written automatically for identified
                              SSE subscribers.
 ``GET  /a2a/threads/{thread}/messages`` ``?before=&after=&limit=`` -- cursor pagination in BOTH directions.
