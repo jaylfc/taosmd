@@ -2241,7 +2241,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"ok": True})
 
         def _handle_a2a_message_receipts(self, msg_id_str: str, qs: dict) -> None:
-            """GET /a2a/messages/{id}/receipts -- all receipts for one message."""
+            """GET /a2a/messages/{id}/receipts -- all receipts for one message.
+
+            When a registry verifier is configured, the caller must present a
+            valid Bearer token whose ``sub`` claim is verified by the registry.
+            Returns 401 with no receipt data when the token is missing or
+            invalid.  When no registry verifier is configured (standalone)
+            the read is allowed without a token, preserving prior behaviour.
+            """
+            agent_id = self._get_authenticated_agent_id()
+            if agent_id is None and _registry_verifier is not None:
+                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                return
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
             try:
                 message_id = int(msg_id_str)
@@ -2253,7 +2264,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, result)
 
         def _handle_a2a_receipts(self, qs: dict) -> None:
-            """GET /a2a/receipts?message_id=X&agent=Y -- a single receipt."""
+            """GET /a2a/receipts?message_id=X&agent=Y -- a single receipt.
+
+            When a registry verifier is configured, the caller must present a
+            valid Bearer token whose ``sub`` claim is verified by the registry.
+            Returns 401 with no receipt data when the token is missing or
+            invalid.  When no registry verifier is configured (standalone)
+            the read is allowed without a token, preserving prior behaviour.
+            """
+            agent_id = self._get_authenticated_agent_id()
+            if agent_id is None and _registry_verifier is not None:
+                self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
+                return
             _validate_a2a_params(qs, frozenset({"message_id", "agent"}), self._raw_qs)
             message_id_raw = (qs.get("message_id") or [None])[0]
             agent_id = (qs.get("agent") or [None])[0]
