@@ -4,14 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taosmd"
-version = "0.4.0"
+version = "0.4.1"
 description = "Framework-agnostic, local-first AI memory system. 97.0% Recall@5 on LongMemEval-S, measured on a low-end reference stack."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [{name = "the taOS project"}]
 requires-python = ">=3.10"
 dependencies = [
-    "onnxruntime",
     "numpy",
     "transformers",
 ]
@@ -19,6 +18,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
 local = ["sentence-transformers"]
+# ONNX embedding + cross-encoder backends.  Optional because onnxruntime
+# publishes no musllinux wheel and no sdist, so requiring it outright makes
+# taosmd -- and everything that depends on it -- impossible to install on any
+# musl host (Alpine, postmarketOS).  Every `import onnxruntime` in this package
+# is already lazy and guarded, so the core install works without it and only
+# the "onnx" embed mode is unavailable.
+# Install with: pip install taosmd[onnx]
+onnx = ["onnxruntime"]
 benchmarks = ["mem0ai>=0.1.0", "mempalace"]
 # MCP server surface (#84) — optional so the core install stays lean.
 # Install with: pip install taosmd[mcp]

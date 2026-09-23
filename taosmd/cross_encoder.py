@@ -46,7 +46,19 @@ class CrossEncoderReranker:
         """Lazy-load the ONNX model and tokenizer."""
         if self._session is not None:
             return
-        import onnxruntime as ort
+        try:
+            import onnxruntime as ort
+        except ImportError as e:  # pragma: no cover - depends on the install
+            # onnxruntime is an optional extra: it publishes no musllinux wheel
+            # and no sdist, so it cannot be a hard dependency without making
+            # taosmd uninstallable on Alpine/postmarketOS.  Name the fix rather
+            # than surfacing a bare ImportError from deep in a reranker call.
+            raise ImportError(
+                "the ONNX cross-encoder needs onnxruntime, which is not installed. "
+                "Install it with `pip install taosmd[onnx]` (note: onnxruntime "
+                "publishes no musl build, so this extra is unavailable on Alpine "
+                "and postmarketOS -- use the qmd embed backend there instead)."
+            ) from e
         from transformers import AutoTokenizer
 
         if not self._model_file:

@@ -13,8 +13,8 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Install Python
         run: uv python install 3.12
-      - name: Install deps (dev dependency-group)
-        run: uv sync --python 3.12
+      - name: Install deps (dev dependency-group + onnx extra)
+        run: uv sync --python 3.12 --extra onnx
       - name: Compile check (two merged branches previously shipped files that do not parse)
         run: uv run python -m compileall -q taosmd/
       - name: Lint (pyflakes via ruff; its own step so a lint failure is not read as a test failure)

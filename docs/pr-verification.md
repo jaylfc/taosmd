@@ -98,6 +98,14 @@ in the checks list.
 is wrong and any test result from it is meaningless. Say so rather than forcing the deps in
 by hand, because a hand-forced environment hides the same breakage from the next person.
 
+`onnxruntime` is the `onnx` optional extra (not a core dependency, since it publishes no
+musllinux wheel or sdist), so CI runs `uv sync --extra onnx` to reproduce the full suite,
+including `tests/test_live_embed_backend.py` and `tests/test_cross_encoder.py`. A bare
+`uv sync` omits it: `unittest.mock.patch("onnxruntime.InferenceSession", ...)` imports the
+target module even when the mocked call is never reached, so those tests fail with
+`ModuleNotFoundError` rather than skip. Match CI locally with `uv sync --extra onnx` before
+running that subset.
+
 ## Documentation drift gate
 
 A pull request that changes feature code, an A2A handler, or contributor-surface files
