@@ -1385,7 +1385,6 @@ def test_task_list_edges_limit_over_500_is_clamped(live_server):
 
 
 @pytest.mark.parametrize("limit_val,expected", [
-    (-1, 1),   # floor: max(1, min(-1, 500)) = 1
     (0, 1),    # floor: max(1, min(0, 500)) = 1
     (1, 1),    # exact: max(1, min(1, 500)) = 1
     (499, 499),  # below cap: 499
@@ -1407,6 +1406,13 @@ def test_task_list_edges_limit_boundary(live_server, limit_val, expected):
     status, body = _get(f"{live_server}/tasks/edges?limit={limit_val}")
     assert status == 200, body
     assert len(body["edges"]) == expected, f"limit={limit_val} expected {expected} edges, got {len(body['edges'])}"
+
+
+def test_task_list_edges_negative_limit_rejected(live_server):
+    """limit < 0 returns 400 on /tasks/edges (master convention: negative limits are rejected)."""
+    status, body = _get(f"{live_server}/tasks/edges?limit=-1")
+    assert status == 400, body
+    assert "limit" in body["error"].lower()
 
 
 def test_task_list_edges_limit_capped_at_500_with_many_edges(live_server):
