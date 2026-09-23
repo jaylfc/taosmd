@@ -220,7 +220,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import __version__, capabilities, config as _config, service
+from . import __version__, api as _api, capabilities, config as _config, service
 
 # ---------------------------------------------------------------------------
 # Static webui helpers
@@ -2208,6 +2208,21 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             )
             self._send_json(200, result)
 
+        # ----- A2A receipt helpers -------------------------------------------
+
+        def _get_message_sender(self, message_id: int) -> asyncio.coroutine:
+            """Return the ``from`` field of an A2A message, or ``None``."""
+
+            async def _coro():
+                stores = await _api._ensure_stores(data_dir)
+                archive = stores["archive"]
+                event = await archive.get_event(message_id)
+                if event is None:
+                    return None
+                return event.get("data", {}).get("from")
+
+            return _coro()
+
         # ----- A2A receipt handlers -----------------------------------------
 
         def _handle_a2a_receipts_delivered(self) -> None:
@@ -2257,16 +2272,19 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"ok": True})
 
         def _handle_a2a_message_receipts(self, msg_id_str: str, qs: dict) -> None:
-            """GET /a2a/messages/{id}/receipts -- all receipts for one message.
+            """GET /a2a/messages/{id}/receipts -- receipts for one message.
 
             When a registry verifier is configured, the caller must present a
             valid Bearer token whose ``sub`` claim is verified by the registry.
             Returns 401 with no receipt data when the token is missing or
             invalid.  When no registry verifier is configured (standalone)
             the read is allowed without a token, preserving prior behaviour.
+
+            A receipt is private to the agent it is about, except that the
+            message's SENDER may see all receipts for their own message.
             """
-            agent_id = self._get_authenticated_agent_id()
-            if agent_id is None and _registry_verifier is not None:
+            caller_id = self._get_authenticated_agent_id()
+            if caller_id is None and _registry_verifier is not None:
                 self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
                 return
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
@@ -2277,6 +2295,13 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             result = runner.run(
                 service.a2a_get_receipts(message_id, data_dir=data_dir)
             )
+            if _registry_verifier is not None and caller_id is not None:
+                message_sender = runner.run(self._get_message_sender(message_id))
+                if message_sender != caller_id:
+                    result = {
+                        "delivered": [r for r in result.get("delivered", []) if r.get("agent_id") == caller_id],
+                        "read": [r for r in result.get("read", []) if r.get("agent_id") == caller_id],
+                    }
             self._send_json(200, result)
 
         def _handle_a2a_receipts(self, qs: dict) -> None:
@@ -2287,22 +2312,30 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             Returns 401 with no receipt data when the token is missing or
             invalid.  When no registry verifier is configured (standalone)
             the read is allowed without a token, preserving prior behaviour.
+
+            A receipt is private to the agent it is about, except that the
+            message's SENDER may read any agent's receipt for their own message.
             """
-            agent_id = self._get_authenticated_agent_id()
-            if agent_id is None and _registry_verifier is not None:
+            caller_id = self._get_authenticated_agent_id()
+            if caller_id is None and _registry_verifier is not None:
                 self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
                 return
             _validate_a2a_params(qs, frozenset({"message_id", "agent"}), self._raw_qs)
             message_id_raw = (qs.get("message_id") or [None])[0]
-            agent_id = (qs.get("agent") or [None])[0]
-            if message_id_raw is None or agent_id is None:
+            requested_agent = (qs.get("agent") or [None])[0]
+            if message_id_raw is None or requested_agent is None:
                 raise _BadRequest("'message_id' and 'agent' query parameters are required")
             try:
                 message_id = int(message_id_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'message_id' must be an integer") from exc
+            if _registry_verifier is not None and caller_id is not None and caller_id != requested_agent:
+                message_sender = runner.run(self._get_message_sender(message_id))
+                if message_sender is not None and message_sender != caller_id:
+                    self._send_json(403, {"error": "forbidden"})
+                    return
             receipt = runner.run(
-                service.a2a_get_receipt(message_id, agent_id, data_dir=data_dir)
+                service.a2a_get_receipt(message_id, requested_agent, data_dir=data_dir)
             )
             if receipt is None:
                 self._send_json(404, {"error": "receipt not found"})
