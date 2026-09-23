@@ -275,6 +275,10 @@ _A2A_MSG_MAX_LIMIT = 200
 # limit=0 yields zero rows (SQLite LIMIT 0). See tsk-au6qkw.
 _MEMORY_DEFAULT_LIMIT = 50
 _MEMORY_MAX_LIMIT = 500
+# Bounded multiple of the requested limit for A2A feed scans when filtering
+# in-process. The hot path reads the ACL once per request, then pages the
+# archive until limit readable rows are collected or the scan cap is hit.
+_CHANNEL_ACL_SCAN_CAP_MULTIPLIER = 5
 
 
 def _qs_param_names(query: str) -> set[str]:
@@ -853,17 +857,21 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _check_token(self, path: str) -> bool:
             """Return True when the request is authorised to proceed.
 
-            If ``_server_token`` is not set, every request is authorised.
+            The server token is read fresh from config on each call so tests
+            and operators can set or rotate it without restarting the server.
+
+            If no server token is configured, every request is authorised.
             Public paths (health, UI) are always authorised.
             Otherwise the ``Authorization: Bearer <token>`` header must match.
             """
-            if not _server_token:
+            server_token = _config.get_server_token(data_dir)
+            if not server_token:
                 return True
             if path.rstrip("/") in _PUBLIC_PATHS or not path.rstrip("/"):
                 return True
             auth = self.headers.get("Authorization", "")
             if auth.startswith("Bearer "):
-                return auth[len("Bearer "):].strip() == _server_token
+                return auth[len("Bearer "):].strip() == server_token
             return False
 
         def _get_authenticated_agent_id(self) -> str | None:
@@ -928,7 +936,67 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "/a2a/admin/rename-channel",
                 "/a2a/admin/supersede-message",
                 "/a2a/admin/prune-receipts",
+                "/a2a/admin/set-channel-acl",
             )
+
+        def _resolve_channel_acl(self, channel: str) -> dict:
+            """Resolve the ACL for ``channel`` from config, with admin aliases."""
+            from . import config as _cfg  # noqa: PLC0415
+            acl = _cfg.get_acl(channel, data_dir=data_dir)
+            if data_dir is not None:
+                from .admin import A2AAdminState  # noqa: PLC0415
+                _admin = A2AAdminState(data_dir)
+                aliases = _admin.channel_aliases()
+                if channel in aliases:
+                    acl = _cfg.get_acl(aliases[channel], data_dir=data_dir)
+            return acl
+
+        def _can_read_channel(self, channel: str) -> bool:
+            """Return True when the requesting caller may read ``channel``.
+
+            The caller's identity comes from the verified registry token ``sub``
+            when a verifier is configured, otherwise the bus is open (returns
+            True). ``"*"`` in the read allowlist means anyone may read.
+            """
+            acl = self._resolve_channel_acl(channel)
+            allowlist = acl.get("read", ["*"])
+            if not isinstance(allowlist, list):
+                allowlist = ["*"]
+            if "*" in allowlist:
+                return True
+            caller = self._get_authenticated_agent_id()
+            if caller is None:
+                return True
+            return caller in allowlist
+
+        def _enforce_channel_acl(self, channel: str, action: str, hint: str | None = None) -> bool:
+            """Enforce the channel ACL for ``action`` (``read`` or ``post``).
+
+            Returns ``True`` when the action is allowed. Returns ``False``
+            and writes the 403 response when denied, so the caller must
+            return immediately in that case.
+
+            ``hint`` is a fallback caller identity used when no registry
+            verifier is configured (e.g. the ``from`` field on a POST).
+            """
+            acl = self._resolve_channel_acl(channel)
+            allowlist = acl.get(action, ["*"])
+            if not isinstance(allowlist, list):
+                allowlist = ["*"]
+            if "*" in allowlist:
+                return True
+            caller = self._get_authenticated_agent_id()
+            if caller is None:
+                caller = hint
+            if caller is None:
+                return True
+            if caller in allowlist:
+                return True
+            self._send_json(
+                403,
+                {"error": f"channel ACL: {action} denied for {channel!r}"},
+            )
+            return False
 
         def _check_admin_token(self) -> bool:
             """Return True when the request carries the correct admin token.
@@ -941,13 +1009,16 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             (holding only the server token) cannot run admin ops once an admin
             token is configured.
 
+            The token is read fresh from config on each call so tests and
+            operators can rotate it without restarting the server.
+
             Admin endpoints FAIL CLOSED: if neither token is configured, all
             admin requests return 403. This is the inverse of ``_check_token``
             which passes everything through when no token is configured.
             Returns False and writes the error response when auth fails; the
             caller must return immediately in that case.
             """
-            expected = _admin_token or _server_token
+            expected = _config.get_admin_token(data_dir) or _config.get_server_token(data_dir)
             if not expected:
                 self._send_json(
                     403,
@@ -1296,6 +1367,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     else:
                         self._send_json(404, {"error": f"unknown collection action: {rest}"})
                 # ----- admin surface: A2A channel admin -------------------
+                elif method == "POST" and path == "/a2a/admin/set-channel-acl":
+                    self._handle_admin_a2a_set_channel_acl()
                 elif method == "POST" and path == "/a2a/admin/delete-channel":
                     self._handle_admin_a2a_delete_channel()
                 elif method == "POST" and path == "/a2a/admin/rename-channel":
@@ -1689,6 +1762,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     "'kind' must be one of "
                     f"{sorted(_A2A_KINDS)}; got {kind!r}"
                 )
+            # Channel ACL: deny before any side-effects.
+            if not self._enforce_channel_acl(thread, "post", hint=from_):
+                return
             # --- Envelope field validation (taOSmd #211) ---
             # refs: optional list of dicts, <=8 items, kind in the enum.
             if refs is not None:
@@ -1843,9 +1919,52 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'limit' must not be negative")
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
-            messages = runner.run(
-                service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
-            )
+            # Bounded scan: page the feed until limit readable rows are
+            # collected, or the scan cap is hit. No unbounded read.
+            _scan_cap = limit_i * _CHANNEL_ACL_SCAN_CAP_MULTIPLIER
+            _collected = 0
+            _feed_since = since
+            messages = []
+            _msg_acl_cache = {}
+
+            def _is_readable(msg):
+                msg_chan = msg.get("thread") or "general"
+                if msg_chan not in _msg_acl_cache:
+                    _msg_acl_cache[msg_chan] = self._resolve_channel_acl(msg_chan)
+                allowlist = _msg_acl_cache[msg_chan].get("read", ["*"])
+                if not isinstance(allowlist, list):
+                    return True
+                if "*" in allowlist:
+                    return True
+                caller = self._get_authenticated_agent_id()
+                if caller is None:
+                    return True
+                return caller in allowlist
+
+            # Bounded scan: page the feed until limit readable rows are
+            # collected, or the scan cap is hit. No unbounded read.
+            _scan_cap = limit_i * _CHANNEL_ACL_SCAN_CAP_MULTIPLIER
+            _collected = 0
+            _feed_since = since
+            messages = []
+            while _collected < _scan_cap:
+                _batch = runner.run(
+                    service.a2a_feed(
+                        thread=thread, since=_feed_since,
+                        limit=min(200, _scan_cap - _collected),
+                        data_dir=data_dir,
+                    )
+                )
+                if not _batch:
+                    break
+                for m in _batch:
+                    if _is_readable(m):
+                        messages.append(m)
+                        _collected += 1
+                        if _collected >= limit_i:
+                            break
+                _feed_since = _batch[-1]["ts"] + 0.001
+            messages = messages[:limit_i]
             # Compact mode: ?fields=id,sender,body projects each message down
             # to the named keys so token-frugal consumers (LLM agents) skip
             # framing they never read. Unknown names are ignored, never a 400,
@@ -1920,9 +2039,27 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     raise _BadRequest(
                         "'reader' query parameter is required when no registry verifier is configured"
                     )
+            # Channel ACL: resolve once, apply to every result row.
+            _mention_acl_cache = {}
+
+            def _mention_allowed(msg):
+                chan = msg.get("thread") or "general"
+                if chan not in _mention_acl_cache:
+                    _mention_acl_cache[chan] = self._resolve_channel_acl(chan)
+                acl = _mention_acl_cache[chan]
+                allowlist = acl.get("read", ["*"])
+                if not isinstance(allowlist, list):
+                    return True
+                if "*" in allowlist:
+                    return True
+                if reader in allowlist:
+                    return True
+                return False
+
             messages = runner.run(
                 service.a2a_mentions_feed(reader, since=since, limit=limit_i, data_dir=data_dir)
             )
+            messages = [m for m in messages if _mention_allowed(m)]
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_inbox(self, qs: dict) -> None:
@@ -1962,9 +2099,27 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             if include_kinds_raw:
                 include_kinds = [s.strip() for s in include_kinds_raw.split(",") if s.strip()]
             exclude_acked_by = exclude_acked_by_raw if exclude_acked_by_raw else None
+            # Channel ACL: resolve once, apply to every result row.
+            _inbox_acl_cache = {}
+
+            def _inbox_allowed(msg):
+                chan = msg.get("thread") or "general"
+                if chan not in _inbox_acl_cache:
+                    _inbox_acl_cache[chan] = self._resolve_channel_acl(chan)
+                acl = _inbox_acl_cache[chan]
+                allowlist = acl.get("read", ["*"])
+                if not isinstance(allowlist, list):
+                    return True
+                if "*" in allowlist:
+                    return True
+                if consumer in allowlist:
+                    return True
+                return False
+
             messages = runner.run(
                 service.a2a_inbox(consumer, limit=limit_i, include_kinds=include_kinds, exclude_acked_by=exclude_acked_by, data_dir=data_dir)
             )
+            messages = [m for m in messages if _inbox_allowed(m)]
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_inbox_advance(self) -> None:
@@ -2087,14 +2242,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                             thread=thread, since=last_ts, limit=200, data_dir=data_dir,
                         )
                     )
-                    # Keep only messages strictly newer than last_ts to avoid
-                    # re-sending the boundary row on subsequent polls.
                     new_msgs = [m for m in msgs if m["ts"] > last_ts]
                     if new_msgs:
+                        max_ts = last_ts
                         for msg in new_msgs:
                             frame = f"data: {json.dumps(msg)}\n\n"
                             self.wfile.write(frame.encode("utf-8"))
-                            last_ts = msg["ts"]
+                            if msg["ts"] > max_ts:
+                                max_ts = msg["ts"]
                             if subscriber_agent is not None:
                                 runner.run(
                                     service.a2a_record_delivered(
@@ -2104,8 +2259,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                                         data_dir=data_dir,
                                     )
                                 )
+                        last_ts = max_ts
                         self.wfile.flush()
                     else:
+                        if msgs:
+                            last_ts = max(m["ts"] for m in msgs)
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
                     time.sleep(1.0)
@@ -2843,6 +3001,49 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 service.admin_a2a_supersede_message(msg_id, data_dir=data_dir)
             )
             self._send_json(200, result)
+
+        def _handle_admin_a2a_set_channel_acl(self) -> None:
+            """POST /a2a/admin/set-channel-acl -- set a per-channel ACL entry.
+
+            Body: ``{"channel": str, "read_ids"?: list, "post_ids"?: list,
+            "clear"?: bool}``.
+            When ``clear`` is true the channel entry is removed; read_ids and
+            post_ids are ignored. ``clear`` must be a boolean, not a truthy
+            string.
+            """
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            channel = body.get("channel")
+            if not isinstance(channel, str) or not channel:
+                raise _BadRequest("'channel' (non-empty string) is required")
+            clear_raw = body.get("clear", False)
+            if not isinstance(clear_raw, bool):
+                raise _BadRequest("'clear' must be a boolean")
+            read_ids = body.get("read_ids")
+            post_ids = body.get("post_ids")
+            if clear_raw:
+                runner.run(
+                    _config.set_acl(channel, clear=True, data_dir=data_dir)
+                )
+            else:
+                if read_ids is not None and not isinstance(read_ids, list):
+                    raise _BadRequest("'read_ids' must be a list of strings when provided")
+                if post_ids is not None and not isinstance(post_ids, list):
+                    raise _BadRequest("'post_ids' must be a list of strings when provided")
+                try:
+                    runner.run(
+                        _config.set_acl(
+                            channel,
+                            read_ids=read_ids,
+                            post_ids=post_ids,
+                            clear=False,
+                            data_dir=data_dir,
+                        )
+                    )
+                except ValueError as exc:
+                    raise _BadRequest(str(exc)) from exc
+            self._send_json(200, {"channel": channel, "acl": _config.get_acl(channel, data_dir=data_dir)})
 
     return TaosmdHandler
 
