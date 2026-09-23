@@ -91,7 +91,15 @@ CREATE TABLE IF NOT EXISTS a2a_alarm_state (
 CREATE INDEX IF NOT EXISTS idx_a2a_alarm_state_key_fp ON a2a_alarm_state(alarm_key, fingerprint);
 """
 
-INDEX_SCHEMA = INDEX_SCHEMA + A2A_ALARM_STATE_SCHEMA
+A2A_IMPORT_DEDUP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS a2a_import_dedup (
+    key TEXT PRIMARY KEY,
+    row_id INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_import_dedup_key ON a2a_import_dedup(key);
+"""
+
+INDEX_SCHEMA = INDEX_SCHEMA + A2A_ALARM_STATE_SCHEMA + A2A_IMPORT_DEDUP_SCHEMA
 
 
 class ArchiveStore:
@@ -200,6 +208,22 @@ class ArchiveStore:
             (now, alarm_key),
         )
         self._conn.commit()
+
+    async def record_import_dedup(self, key: str, row_id: int) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO a2a_import_dedup (key, row_id) VALUES (?, ?)",
+            (key, row_id),
+        )
+        self._conn.commit()
+
+    async def get_import_dedup(self, key: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT key, row_id FROM a2a_import_dedup WHERE key = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"key": row[0], "row_id": row[1]}
 
     # ------------------------------------------------------------------
     # Recording
