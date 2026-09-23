@@ -69,6 +69,10 @@ _HUMAN_PRINCIPAL_IDS_KEY = "human_principal_ids"
 # one of these directories. Empty (the default) means collections are off.
 _COLLECTIONS_SECTION_KEY = "collections"
 _COLLECTIONS_ALLOWED_ROOTS_KEY = "allowed_roots"
+# Section under which per-channel A2A ACLs live. Each value is a dict with
+# optional ``read`` and ``post`` keys, each a list of allowed principal id
+# strings. A missing key defaults to [\"*"] (open to all).
+_CHANNEL_ACL_SECTION_KEY = "channel_acl"
 
 MANAGED_BY_STANDALONE = "standalone"
 MANAGED_BY_TAOS = "taos"
@@ -841,6 +845,82 @@ def set_collections_allowed_roots(roots, *, clear: bool = False, data_dir=None) 
     _write(data, data_dir)
 
 
+def _normalize_acl(entry):
+    """Normalize a per-channel ACL entry.
+
+    Missing ``read`` or ``post`` keys default to [\"*"] (allow all).
+    A non-dict value is treated as an empty (fully open) entry.
+    """
+    if not isinstance(entry, dict):
+        entry = {}
+    result = {}
+    for dim in ("read", "post"):
+        val = entry.get(dim, ["*"])
+        if isinstance(val, list):
+            result[dim] = [str(x) for x in val if str(x).strip()]
+        else:
+            result[dim] = ["*"]
+    return result
+
+
+def get_acl(channel: str, data_dir=None) -> dict:
+    """Return the ACL for ``channel``, or {} if unset.
+
+    The returned dict always has ``read`` and ``post`` keys, each a list
+    of allowed principal ids. A missing channel or missing dimension
+    defaults to [\"*"] (open to all).
+    """
+    data = _read(data_dir)
+    section = data.get(_CHANNEL_ACL_SECTION_KEY)
+    if not isinstance(section, dict):
+        return _normalize_acl({})
+    raw = section.get(channel)
+    if raw is None:
+        return _normalize_acl({})
+    return _normalize_acl(raw)
+
+
+def set_acl(channel: str, read_ids=None, post_ids=None, *, clear: bool = False, data_dir=None) -> None:
+    """Persist a per-channel ACL entry.
+
+    Reads the existing entry and merges supplied dimensions so omitted
+    keys are not clobbered. Use ``clear=True`` to remove the channel
+    entry entirely.
+
+    Args:
+        channel: channel name.
+        read_ids: list of principal ids allowed to read. When ``clear`` is
+            True this is ignored. When not provided the existing read
+            dimension is preserved.
+        post_ids: list of principal ids allowed to post. Same rules as
+            ``read_ids``.
+        clear: when True, remove the channel's ACL entry.
+
+    Raises:
+        ValueError: when ``clear`` is False and both ``read_ids`` and
+            ``post_ids`` are None, or when ``clear`` is not a bool.
+    """
+    if not isinstance(clear, bool):
+        raise ValueError("clear must be a boolean")
+    data = _read(data_dir)
+    section = data.get(_CHANNEL_ACL_SECTION_KEY)
+    if not isinstance(section, dict):
+        section = {}
+    if clear:
+        section.pop(channel, None)
+    else:
+        if read_ids is None and post_ids is None:
+            raise ValueError("read_ids or post_ids is required when clear is False")
+        existing = _normalize_acl(section.get(channel))
+        if read_ids is not None:
+            existing["read"] = [str(x) for x in read_ids if str(x).strip()]
+        if post_ids is not None:
+            existing["post"] = [str(x) for x in post_ids if str(x).strip()]
+        section[channel] = existing
+    data[_CHANNEL_ACL_SECTION_KEY] = section
+    _write(data, data_dir)
+
+
 __all__ = [
     "get_memory_model",
     "set_memory_model",
@@ -875,4 +955,6 @@ __all__ = [
     "set_generator_profile",
     "get_collections_allowed_roots",
     "set_collections_allowed_roots",
+    "get_acl",
+    "set_acl",
 ]
