@@ -499,6 +499,7 @@ gating read endpoints on membership are tracked separately.
 | Method | Path | Parameters | Response |
 |--------|------|------------|----------|
 | `POST` | `/a2a/send` | body JSON `{"from", "body", "thread"?, "reply_to"?}` | `{"id", "from", "thread", "reply_to"}` |
+| `POST` | `/a2a/import` | body JSON `{"envelopes": [{"from", "body", "thread"?, "kind"?, "reply_to"?}]}` | `{"imported", "deduped", "total"}`; idempotent batch import with dedup; each envelope's `from` must match the verified registry token `sub`; grant check mirrors `/a2a/send` |
 | `GET`  | `/a2a/messages` | `?thread=&since=&limit=&fields=&format=` | `{"messages": [...]}`; `fields=id,sender,body` projects each message down to those keys; `format=ndjson` emits one message per line (`application/x-ndjson`) |
 
 `limit` on `GET /a2a/messages` is bounded below as well as parsed. A negative
