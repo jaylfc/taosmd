@@ -453,11 +453,12 @@ def test_can_read_no_grant_on_sibling(isolated_data_dir):
     msgs = asyncio.run(service.a2a_feed(thread="t1", data_dir=dd))
     msg = next(m for m in msgs if m["id"] == r2["id"])
 
-    # channelACL is always-true for now, so canRead returns True.
-    # The anti-bypass property is enforced at the feed layer: the sibling
-    # must NOT appear in /a2a/mentions for @bob even though channelACL
-    # would allow it.
-    assert asyncio.run(service.can_read("bob", msg, data_dir=dd)) is True
+    # mentionGrant checks the reply-chain root of the message.
+    # The sibling (r2) is not a reply, so its thread_root is itself,
+    # which does not mention @bob. Hence mentionGrant is False.
+    # The anti-bypass property is enforced at the feed layer:
+    # the sibling must NOT appear in /a2a/mentions for @bob.
+    assert asyncio.run(service.can_read("bob", msg, data_dir=dd)) is False
 
 
 def test_mentions_feed_sibling_excluded_despite_channel_access(isolated_data_dir):

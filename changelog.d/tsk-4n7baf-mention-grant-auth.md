@@ -1,0 +1,2 @@
+### Fixed
+- Enforce mention grant authorization on `/a2a/mentions` and `/a2a/inbox` endpoints: a reader without a mention grant on the thread root is now denied access. Implements `mentionGrant` in `service.can_read` and wires it into `a2a_mentions_feed` and `a2a_inbox`. Channel ACL remains an extension point for future work (tsk-dp6fyv).

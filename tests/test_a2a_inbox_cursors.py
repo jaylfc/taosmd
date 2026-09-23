@@ -53,28 +53,24 @@ def _setup_stores(data_dir):
 
 
 def _seed_inbox_fixture(data_dir):
-    """Create 20 messages: 8 addressed to alice, of which 4 survive the default
-    kind filter.
+    """Create 20 messages: 7 addressed to alice by mention/recipient, of which 3 survive the default
+    kind filter (messages 1, 4, 17). Message 3 (thread ownership) has no mention grant.
 
-    Messages 5 to 8 mention ``@alice`` on purpose.  They are addressed by every
-    other rule the query applies, so the ONLY thing that can keep them out of
-    the result is the default kind exclusion.  If that filter is removed the
-    fixture yields 8 instead of 4, which is what makes gate (a) discriminate
-    the kind half rather than assert it vacuously.
+    Messages 5-8 mention @alice but are excluded by default kind filter.
     """
     dd = str(data_dir)
     consumer = "alice"
 
     messages = [
         # (sender, body, thread, recipient, kind)
-        ("bob", "hey @alice", "general", None, "chat"),           # 1: mention -> ADDRESSED
+        ("bob", "hey @alice", "general", None, "chat"),           # 1: mention -> ADDRESSED, GRANT
         ("alice", "self post", "general", None, "chat"),          # 2: self-post -> EXCLUDED
-        ("bob", "in your thread", "alice", None, "chat"),         # 3: owned thread -> ADDRESSED
-        ("bob", "for alice", "general", "alice", "chat"),         # 4: direct recipient -> ADDRESSED
-        ("bob", "@alice alarm!", "general", None, "alarm"),       # 5: addressed, alarm-kind -> EXCLUDED
-        ("bob", "@alice ack this", "general", None, "ack"),       # 6: addressed, ack-kind -> EXCLUDED
-        ("bob", "@alice receipt", "general", None, "receipt"),    # 7: addressed, receipt-kind -> EXCLUDED
-        ("bob", "@alice digest", "general", None, "digest"),      # 8: addressed, digest-kind -> EXCLUDED
+        ("bob", "in your thread", "alice", None, "chat"),         # 3: owned thread -> ADDRESSED, NO GRANT (no mention on thread root)
+        ("bob", "for alice", "general", "alice", "chat"),         # 4: direct recipient -> ADDRESSED, GRANT (recipient field)
+        ("bob", "@alice alarm!", "general", None, "alarm"),       # 5: mention -> ADDRESSED, GRANT, but alarm-kind excluded
+        ("bob", "@alice ack this", "general", None, "ack"),       # 6: mention -> ADDRESSED, GRANT, but ack-kind excluded
+        ("bob", "@alice receipt", "general", None, "receipt"),    # 7: mention -> ADDRESSED, GRANT, but receipt-kind excluded
+        ("bob", "@alice digest", "general", None, "digest"),      # 8: mention -> ADDRESSED, GRANT, but digest-kind excluded
         ("bob", "random chat", "general", None, "chat"),          # 9: not addressed
         ("bob", "another chat", "general", None, "chat"),         # 10: not addressed
         ("charlie", "hey @bob", "general", None, "chat"),         # 11: mentions bob, not alice
@@ -83,7 +79,7 @@ def _seed_inbox_fixture(data_dir):
         ("alice", "my thread", "alice", None, "chat"),            # 14: self-post on owned thread
         ("bob", "system msg", "general", None, "system"),         # 15: not addressed
         ("bob", "review", "general", None, "review"),             # 16: not addressed
-        ("charlie", "@alice hi", "general", None, "chat"),        # 17: mention -> ADDRESSED
+        ("charlie", "@alice hi", "general", None, "chat"),        # 17: mention -> ADDRESSED, GRANT
         ("bob", "plain", "general", None, "chat"),                # 18: not addressed
         ("bob", "plain2", "general", None, "chat"),               # 19: not addressed
         ("bob", "plain3", "general", None, "chat"),               # 20: not addressed
@@ -103,21 +99,21 @@ def _seed_inbox_fixture(data_dir):
 # ---------------------------------------------------------------------------
 
 def test_a2a_inbox_excludes_self_and_alarm_kind(inbox_data_dir):
-    """8 of 20 messages are addressed to alice and exactly 4 are returned;
-    self-posts are excluded, and so are the alarm, ack, receipt and digest
-    kinds, which is the only reason messages 5 to 8 are absent."""
+    """7 of 20 messages are addressed to alice by mention/recipient, and exactly 3
+    survive the default kind filter (messages 1, 4, 17). Message 3 (thread ownership)
+    has no mention grant on its thread root. Messages 5-8 are excluded by kind filter."""
     _setup_stores(inbox_data_dir)
     dd = str(inbox_data_dir)
     _seed_inbox_fixture(inbox_data_dir)
 
     msgs = asyncio.run(service.a2a_inbox("alice", limit=50, data_dir=dd))
 
-    assert len(msgs) == 4
+    assert len(msgs) == 3
     bodies = {m["body"] for m in msgs}
     assert "hey @alice" in bodies
-    assert "in your thread" in bodies
     assert "for alice" in bodies
     assert "@alice hi" in bodies
+    assert "in your thread" not in bodies  # no mention grant on thread root
 
     senders = {m["from"] for m in msgs}
     assert "alice" not in senders
@@ -138,7 +134,7 @@ def test_a2a_inbox_excludes_self_and_alarm_kind(inbox_data_dir):
 
 def test_a2a_inbox_include_kinds_widens_the_default_exclusion(inbox_data_dir):
     """``include_kinds`` re-admits a kind the default excludes, and only that
-    kind."""
+    kind. With alarm included, we get messages 1, 4, 5, 17 (4 messages)."""
     _setup_stores(inbox_data_dir)
     dd = str(inbox_data_dir)
     _seed_inbox_fixture(inbox_data_dir)
@@ -147,9 +143,13 @@ def test_a2a_inbox_include_kinds_widens_the_default_exclusion(inbox_data_dir):
         service.a2a_inbox("alice", limit=50, include_kinds=["alarm"], data_dir=dd)
     )
 
-    assert len(widened) == 5
+    assert len(widened) == 4
     bodies = {m["body"] for m in widened}
+    assert "hey @alice" in bodies
+    assert "for alice" in bodies
     assert "@alice alarm!" in bodies
+    assert "@alice hi" in bodies
+    assert "in your thread" not in bodies  # no mention grant
     assert "@alice ack this" not in bodies
     assert "@alice receipt" not in bodies
     assert "@alice digest" not in bodies
@@ -166,11 +166,11 @@ def test_a2a_inbox_fetch_does_not_advance_cursor(inbox_data_dir):
     _seed_inbox_fixture(inbox_data_dir)
 
     first_read = asyncio.run(service.a2a_inbox("alice", limit=50, data_dir=dd))
-    assert len(first_read) == 4
+    assert len(first_read) == 3
 
     # Second read without advance must return the same messages
     second_read = asyncio.run(service.a2a_inbox("alice", limit=50, data_dir=dd))
-    assert len(second_read) == 4
+    assert len(second_read) == 3
     assert [m["id"] for m in second_read] == [m["id"] for m in first_read]
 
     # Advance cursor to the last seen id
@@ -193,7 +193,7 @@ def test_a2a_inbox_cursor_survives_stores_cache_reset(inbox_data_dir):
     _seed_inbox_fixture(inbox_data_dir)
 
     first_read = asyncio.run(service.a2a_inbox("alice", limit=50, data_dir=dd))
-    assert len(first_read) == 4
+    assert len(first_read) == 3
 
     last_id = first_read[-1]["id"]
     asyncio.run(service.a2a_inbox_advance("alice", last_id, data_dir=dd))

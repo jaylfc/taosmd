@@ -1161,6 +1161,9 @@ async def a2a_mentions_feed(
             "thread_root": thread_roots.get(row["id"]),
             "kind": data.get("kind") or "chat",
         }
+        # Thread-scoped read guard: mention grant on thread root
+        if not await can_read(reader, msg, data_dir=data_dir):
+            continue
         result.append(msg)
 
     result.sort(key=lambda m: m["ts"])
@@ -1192,18 +1195,60 @@ async def _find_thread_root(message_id: int, archive) -> int | None:
     return None
 
 
+async def _message_mentions_handle(message_id: int, handle: str, archive) -> bool:
+    """Check if a message mentions the given handle (in body or recipient)."""
+    row = await archive.get_event(message_id)
+    if not row:
+        return False
+    try:
+        data = json.loads(row.get("data_json", "{}"))
+    except (json.JSONDecodeError, TypeError):
+        return False
+    body = data.get("body") or ""
+    recipient = data.get("recipient")
+    norm_handle = _normalise_handle(handle)
+    # Check recipient field
+    if recipient and _normalise_handle(recipient) == norm_handle:
+        return True
+    # Check body for @handle mention
+    for m in re.finditer(r'(?<![\w/])@([a-zA-Z0-9_-]+)', body):
+        if _normalise_handle(m.group(1)) == norm_handle:
+            return True
+    return False
+
+
 async def can_read(reader: str, msg: dict, data_dir=None) -> bool:
     """Thread-scoped read guard (#211 anti-bypass).
 
-    ``canRead(reader, msg) = channelACL(reader, msg.thread) OR
-    mentionGrant(reader, threadRoot(msg))``
+    ``canRead(reader, msg) = mentionGrant(reader, threadRoot(msg))``
 
     A mention grants visibility of the mentioned message and its full
-    reply_to chain, but never widens channel access. Channel ACL
-    enforcement (tsk-dp6fyv) plugs into the ``channelACL`` slot; until
-    then it is effectively always-true for compatibility.
+    reply_to chain, but never widens channel access.
+
+    The ``channelACL`` slot is reserved for future channel-level ACL
+    enforcement (tsk-dp6fyv).  It is intentionally NOT evaluated here;
+    callers that require channel ACL must compose it separately.
     """
-    return True
+    if not isinstance(reader, str) or not reader:
+        return False
+
+    # Get thread root from msg (precomputed by caller) or compute it
+    thread_root_id = msg.get("thread_root")
+    if thread_root_id is None:
+        # Fallback: compute thread root if not provided
+        if data_dir is None:
+            return False
+        stores = await _api._ensure_stores(data_dir)
+        archive = stores["archive"]
+        thread_root_id = await _find_thread_root(msg["id"], archive)
+
+    if thread_root_id is None:
+        return False
+
+    # Check mention grant on thread root
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    return await _message_mentions_handle(thread_root_id, reader, archive)
 
 
 async def a2a_inbox(
@@ -1256,6 +1301,16 @@ async def a2a_inbox(
     mention_re = re.compile(r'(?<![\w/])@([a-zA-Z0-9_-]+)')
 
     result = []
+    # Cache for thread roots to avoid repeated archive lookups
+    thread_root_cache: dict[int, int | None] = {}
+
+    async def get_thread_root(message_id: int) -> int | None:
+        if message_id in thread_root_cache:
+            return thread_root_cache[message_id]
+        root = await _find_thread_root(message_id, archive)
+        thread_root_cache[message_id] = root
+        return root
+
     for row in rows:
         if row["id"] <= cursor:
             continue
@@ -1303,6 +1358,14 @@ async def a2a_inbox(
             msg["blocks"] = data["blocks"]
         if "acked_by" in data:
             msg["acked_by"] = data["acked_by"]
+
+        # Thread-scoped read guard: mention grant on thread root
+        thread_root_id = await get_thread_root(row["id"])
+        if thread_root_id is not None:
+            msg["thread_root"] = thread_root_id
+        if not await can_read(consumer, msg, data_dir=data_dir):
+            continue
+
         result.append(msg)
 
     result.sort(key=lambda m: (m["ts"], m["id"]))
