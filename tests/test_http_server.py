@@ -569,6 +569,12 @@ def test_a2a_since_negative_inf_rejected(live_server):
     assert "error" in body
 
 
+def test_a2a_percent_encoded_param_name_accepted(live_server):
+    """A percent-encoded but legitimate parameter name must not be rejected."""
+    status, body = _get(f"{live_server}/a2a/messages?%73ince=1700000000")
+    assert status == 200, body
+
+
 # ---------------------------------------------------------------------------
 # POST /ingest/batch + ?mode=bm25 (#25 user-memory contract)
 # ---------------------------------------------------------------------------
