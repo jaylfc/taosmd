@@ -215,6 +215,37 @@ class TestSingleReceiptAuthorization:
         assert status == 200, body
         assert "delivered_at" in body
 
+    def test_unknown_message_cross_agent_read_403(self, authed_server):
+        """Cross-agent read on unknown-sender message returns 403 with no receipt fields."""
+        token_a = _make_token("agent-a")
+        token_b = _make_token("agent-b")
+        token_c = _make_token("agent-c")
+
+        msg_id = 999999999
+        _seed_receipt(authed_server, token_b, msg_id)
+
+        status, body = _get(
+            f"{authed_server}/a2a/receipts?message_id={msg_id}&agent=agent-b",
+            token=token_c,
+        )
+        assert status == 403, body
+        assert "delivered_at" not in body
+        assert "seen_at" not in body
+
+    def test_unknown_message_own_receipt_read_200(self, authed_server):
+        """B can read B's own receipt even on an unknown-sender message."""
+        token_b = _make_token("agent-b")
+
+        msg_id = 999999999
+        _seed_receipt(authed_server, token_b, msg_id)
+
+        status, body = _get(
+            f"{authed_server}/a2a/receipts?message_id={msg_id}&agent=agent-b",
+            token=token_b,
+        )
+        assert status == 200, body
+        assert "delivered_at" in body
+
 
 # ---------------------------------------------------------------------------
 # /a2a/messages/{id}/receipts: listing authorization

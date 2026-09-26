@@ -2331,7 +2331,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'message_id' must be an integer") from exc
             if _registry_verifier is not None and caller_id is not None and caller_id != requested_agent:
                 message_sender = runner.run(self._get_message_sender(message_id))
-                if message_sender is not None and message_sender != caller_id:
+                if message_sender is None or message_sender != caller_id:
                     self._send_json(403, {"error": "forbidden"})
                     return
             receipt = runner.run(
