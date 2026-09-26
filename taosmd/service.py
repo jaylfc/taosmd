@@ -2252,7 +2252,7 @@ async def a2a_remove_member(
 
 
 __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "stats",
-           "supersede", "fetch_by_ref", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
+           "supersede", "fetch_by_ref", "a2a_import", "a2a_send", "a2a_feed", "a2a_channels", "a2a_sender_census",
            "a2a_members", "a2a_threads", "a2a_thread_messages",
            "a2a_mentions_feed", "a2a_migrate_kinds", "a2a_alarms_clear", "can_read",
            "a2a_inbox", "a2a_inbox_advance", "a2a_inbox_unhandled",
