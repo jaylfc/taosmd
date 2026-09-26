@@ -2264,6 +2264,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             Returns 401 with no receipt data when the token is missing or
             invalid.  When no registry verifier is configured (standalone)
             the read is allowed without a token, preserving prior behaviour.
+
+            The auth gate runs before parameter validation: an unauthenticated
+            request carrying an unknown query parameter receives 401 (not 400)
+            when a verifier is configured. Standalone mode is unchanged.
             """
             agent_id = self._get_authenticated_agent_id()
             if agent_id is None and _registry_verifier is not None:
@@ -2287,6 +2291,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             Returns 401 with no receipt data when the token is missing or
             invalid.  When no registry verifier is configured (standalone)
             the read is allowed without a token, preserving prior behaviour.
+
+            The auth gate runs before parameter validation: an unauthenticated
+            request carrying an unknown query parameter receives 401 (not 400)
+            when a verifier is configured. Standalone mode is unchanged.
             """
             agent_id = self._get_authenticated_agent_id()
             if agent_id is None and _registry_verifier is not None:
