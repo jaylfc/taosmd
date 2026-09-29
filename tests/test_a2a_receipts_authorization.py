@@ -217,7 +217,6 @@ class TestSingleReceiptAuthorization:
 
     def test_unknown_message_cross_agent_read_403(self, authed_server):
         """Cross-agent read on unknown-sender message returns 403 with no receipt fields."""
-        token_a = _make_token("agent-a")
         token_b = _make_token("agent-b")
         token_c = _make_token("agent-c")
 
