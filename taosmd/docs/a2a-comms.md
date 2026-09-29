@@ -608,8 +608,7 @@ configured:
   filters the result to that caller's own rows only. In standalone mode all
   rows are returned.
 
-A missing message falls through to the existing 404 behaviour for the single
-receipt endpoint; for the listing endpoint an empty result is returned.
+For the single-receipt endpoint, a caller reading their own receipt on a missing message gets 404; any other verified caller gets 403, because an unknown sender cannot authorise a cross-agent read. For the listing endpoint an empty result is returned.
 
 ### Strict query parameters
 
