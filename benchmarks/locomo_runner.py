@@ -917,16 +917,25 @@ def _load_reranker(reranker_choice: str) -> object | None:
         # multilingual and stronger. Drop-in.
         from taosmd.cross_encoder import CrossEncoderReranker
         bge_path = os.path.join(_REPO_ROOT, "models", "bge-reranker-v2-m3-onnx")
-        if not Path(bge_path).exists():
-            raise FileNotFoundError(
-                f"BGE reranker model not found at {bge_path}.\n"
-                "Pull it with:\n"
-                "  hf download BAAI/bge-reranker-v2-m3 "
-                f"--local-dir {bge_path}"
-            )
+        _validate_bge_reranker_path(bge_path)
         return CrossEncoderReranker(onnx_path=bge_path)
 
     raise ValueError(f"Unknown reranker choice: {reranker_choice!r}")
+
+
+def _validate_bge_reranker_path(bge_path: str) -> None:
+    """Validate that the BGE reranker model directory contains model.onnx.
+
+    Raises FileNotFoundError with an export hint if model.onnx is missing.
+    Extracted for testability.
+    """
+    from taosmd.recipes import _reranker_present
+    if not _reranker_present(bge_path):
+        raise FileNotFoundError(
+            f"BGE reranker model not found at {bge_path} (model.onnx missing).\n"
+            "Export it with:\n"
+            f"  bash scripts/export_reranker_onnx.sh {bge_path}"
+        )
 
 
 def _apply_temporal_recency_boost(
@@ -1911,7 +1920,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Cross-encoder reranker applied after vector retrieval. "
                         "ms-marco: ms-marco-MiniLM-L-6-v2 ONNX (default). "
                         "bge-v2-m3: BAAI/bge-reranker-v2-m3 ONNX (model must be "
-                        "present under models/bge-reranker-v2-m3-onnx/). "
+                        "exported via scripts/export_reranker_onnx.sh to "
+                        "models/bge-reranker-v2-m3-onnx/). "
                         "off: skip reranking (pure vector).")
     p.add_argument("--multihop-decompose", action="store_true",
                    help="Before retrieval, ask an LLM (gemma4:e2b) to split the "
