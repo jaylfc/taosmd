@@ -16,6 +16,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -233,6 +235,152 @@ def test_a2a_body_secret_redacted(isolated_data_dir):
     assert len(msgs) == 1
     assert secret not in msgs[0]["body"]
     assert "[REDACTED" in msgs[0]["body"]
+
+
+# ---------------------------------------------------------------------------
+# Secret redaction in nested envelope fields (Part A)
+# ---------------------------------------------------------------------------
+
+def test_a2a_blocks_secret_redacted(isolated_data_dir):
+    """A secret inside blocks[*].result is redacted before storage and on read."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+    secret = _GH_PREFIX + _GH_BODY
+
+    asyncio.run(service.a2a_send(
+        "agentA", "msg with block secret",
+        thread="blocks-sec", data_dir=dd,
+        blocks=[{"kind": "tool_result", "result": f"token is {secret}"}],
+    ))
+    msgs = asyncio.run(service.a2a_feed(thread="blocks-sec", data_dir=dd))
+    assert len(msgs) == 1
+    assert secret not in msgs[0]["blocks"][0]["result"]
+    assert "[REDACTED" in msgs[0]["blocks"][0]["result"]
+
+
+def test_a2a_refs_secret_redacted(isolated_data_dir):
+    """A secret inside refs[*].uri is redacted before storage and on read."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+    secret = _GH_PREFIX + _GH_BODY
+
+    asyncio.run(service.a2a_send(
+        "agentA", "msg with ref secret",
+        thread="refs-sec", data_dir=dd,
+        refs=[{"kind": "doc", "title": "x", "uri": f"https://example.com/{secret}"}],
+    ))
+    msgs = asyncio.run(service.a2a_feed(thread="refs-sec", data_dir=dd))
+    assert len(msgs) == 1
+    assert secret not in msgs[0]["refs"][0]["uri"]
+    assert "[REDACTED" in msgs[0]["refs"][0]["uri"]
+
+
+def test_a2a_nested_secret_not_in_archive_jsonl(isolated_data_dir):
+    """Raw secret in blocks/refs must not appear in the on-disk JSONL."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+    secret = _GH_PREFIX + _GH_BODY
+
+    asyncio.run(service.a2a_send(
+        "agentA", "msg",
+        thread="jsonl-sec", data_dir=dd,
+        blocks=[{"kind": "tool_result", "result": secret}],
+        refs=[{"kind": "doc", "title": "x", "uri": f"https://example.com/{secret}"}],
+    ))
+
+    today = datetime.now(timezone.utc)
+    jsonl_path = Path(dd) / "archive" / str(today.year) / f"{today.month:02d}" / f"{today.day:02d}.jsonl"
+    assert jsonl_path.exists(), f"expected {jsonl_path} to exist"
+    content = jsonl_path.read_text(encoding="utf-8")
+    assert secret not in content, "raw secret leaked into archive JSONL"
+
+
+def test_a2a_redaction_preserves_structure_and_keys(isolated_data_dir):
+    """Recursive redaction must not rename or drop keys."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+    secret = _GH_PREFIX + _GH_BODY
+
+    payload = {
+        "top": f"has {secret} here",
+        "nested": {
+            "list": [1, {"inner": f"also {secret}"}, None],
+            "bool": True,
+            "num": 3.14,
+        },
+    }
+    asyncio.run(service.a2a_send(
+        "agentA", "structure test",
+        thread="struct", data_dir=dd,
+        blocks=[payload],
+    ))
+    msgs = asyncio.run(service.a2a_feed(thread="struct", data_dir=dd))
+    assert len(msgs) == 1
+    blocks = msgs[0]["blocks"]
+    assert len(blocks) == 1
+    stored = blocks[0]
+    assert list(stored.keys()) == list(payload.keys())
+    assert stored["nested"]["list"] == [1, {"inner": f"also [REDACTED:github_pat]"}, None]
+    assert stored["nested"]["bool"] is True
+    assert stored["nested"]["num"] == 3.14
+    assert secret not in json.dumps(stored)
+
+
+def test_a2a_redaction_handles_scalars_and_nesting(isolated_data_dir):
+    """Nested payload with ints, floats, bools, None and a secret must not raise."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+    secret = _GH_PREFIX + _GH_BODY
+
+    payload = {
+        "count": 0,
+        "ratio": 1.5,
+        "flag": False,
+        "empty": None,
+        "deep": {"a": [1, 2.5, True, None, {"b": f"token {secret}"}]},
+    }
+    asyncio.run(service.a2a_send(
+        "agentA", "scalar test",
+        thread="scalars", data_dir=dd,
+        blocks=[payload],
+    ))
+    msgs = asyncio.run(service.a2a_feed(thread="scalars", data_dir=dd))
+    assert len(msgs) == 1
+    stored = msgs[0]["blocks"][0]
+    assert stored["count"] == 0
+    assert stored["ratio"] == 1.5
+    assert stored["flag"] is False
+    assert stored["empty"] is None
+    assert stored["deep"]["a"] == [1, 2.5, True, None, {"b": f"token [REDACTED:github_pat]"}]
+    assert secret not in json.dumps(stored)
+
+
+# ---------------------------------------------------------------------------
+# Envelope validation in service layer (Part B)
+# ---------------------------------------------------------------------------
+
+def test_a2a_send_invalid_ref_kind_raises(isolated_data_dir):
+    """service.a2a_send rejects an invalid ref kind without the HTTP layer."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+    with pytest.raises(ValueError, match="kind"):
+        asyncio.run(service.a2a_send(
+            "agentA", "msg",
+            thread="inv-kind", data_dir=dd,
+            refs=[{"kind": "invalid", "title": "x", "uri": "u"}],
+        ))
+
+
+def test_a2a_send_over_64kb_raises(isolated_data_dir):
+    """service.a2a_send rejects an oversized envelope."""
+    _setup_stores(isolated_data_dir)
+    dd = str(isolated_data_dir)
+    big_body = "x" * (65 * 1024)
+    with pytest.raises(ValueError, match="64KB"):
+        asyncio.run(service.a2a_send(
+            "agentA", big_body,
+            thread="too-big", data_dir=dd,
+        ))
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from . import _db, migrations
+from .secret_filter import redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,28 @@ CREATE INDEX IF NOT EXISTS idx_a2a_import_dedup_key ON a2a_import_dedup(key);
 """
 
 INDEX_SCHEMA = INDEX_SCHEMA + A2A_ALARM_STATE_SCHEMA + A2A_IMPORT_DEDUP_SCHEMA
+
+
+def _redact_recursive(obj, _depth=0, _max_depth=50):
+    """Recursively redact secrets from a JSON-compatible structure.
+
+    Walks dicts, lists, and strings; applies ``redact_secrets`` to every
+    string value. Preserves all keys, structure, and non-string scalars
+    (int, float, bool, None). A depth guard of 50 prevents stack exhaustion
+    on malicious deeply-nested payloads; no byte-size guard is applied
+    because the archive already writes a bounded number of events per call
+    and the JSON serializer itself has no size cap here.
+    """
+    if _depth > _max_depth:
+        return obj
+    if isinstance(obj, str):
+        redacted, _ = redact_secrets(obj)
+        return redacted
+    if isinstance(obj, dict):
+        return {k: _redact_recursive(v, _depth + 1, _max_depth) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_recursive(item, _depth + 1, _max_depth) for item in obj]
+    return obj
 
 
 class ArchiveStore:
@@ -268,11 +291,8 @@ class ArchiveStore:
             return -1
 
         # Redact secrets before storage
-        from .secret_filter import redact_secrets
         summary, _ = redact_secrets(summary)
-        for key in ("content", "text", "msg", "query", "body"):
-            if key in data and isinstance(data[key], str):
-                data[key], _ = redact_secrets(data[key])
+        data = _redact_recursive(data)
 
         ts = time.time()
         event = {

@@ -170,3 +170,18 @@ def test_a2a_send_with_refs_and_blocks(server):
     assert len(msgs) == 1
     assert msgs[0]["refs"] == refs
     assert msgs[0]["blocks"] == blocks
+
+
+def test_mcp_a2a_send_invalid_ref_kind_rejected(server):
+    """MCP a2a_send surfaces the same rejection instead of storing."""
+    with pytest.raises(ValueError, match="kind"):
+        asyncio.run(_call(
+            server,
+            "a2a_send",
+            {
+                "channel": "mcp-inv-kind",
+                "sender": "mcp-agent",
+                "body": "msg",
+                "refs": [{"kind": "invalid", "title": "x", "uri": "u"}],
+            },
+        ))
