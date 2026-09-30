@@ -27,6 +27,7 @@ from taosmd.memory_extractor import process_conversation_turn
 from taosmd.context_assembler import ContextAssembler
 from taosmd.retrieval import retrieve as _retrieve
 from taosmd.vector_memory import VectorMemory
+from taosmd.temporal import anchor_relative_dates, parse_hit_datetime
 
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json")
@@ -447,6 +448,8 @@ async def retrieve_context(
     llm_client=None,
     graph_expansion: int = 0,
     retrieval_path: str = "retrieve",
+    anchor_dates: bool = False,
+    question_date: str | None = None,
 ) -> str:
     """Assemble the generator context for one question.
 
@@ -460,9 +463,15 @@ async def retrieve_context(
             (0 = off). Requires ``retrieval_path="retrieve"``; the manual
             legacy path cannot honour it, which is what blocked E-030.
         retrieval_path: ``"retrieve"`` (default) routes the vector stage
-            through ``taosmd.retrieval.retrieve`` so runtime controls apply.
+            through ``taosmd.retrieval.retrieve()`` so runtime controls apply.
             ``"legacy"`` reproduces the pre-wiring hand-rolled stage so the
             published anchors can be re-measured side by side.
+        anchor_dates: When True, resolve relative dates in each evidence item
+            against that item's own session date and prepend a
+            ``Question date:`` line when ``question_date`` is given.
+        question_date: The question's date string (from the dataset), used as
+            the reference for the assembled context and for the ``Question
+            date:`` header.
     """
     assembler = ContextAssembler(kg=kg, archive=archive)
     ctx = await assembler.assemble(
@@ -489,9 +498,32 @@ async def retrieve_context(
         graph_expansion=graph_expansion,
         retrieval_path=retrieval_path,
     )
-    vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
 
-    return ctx["context"] + " " + archive_text + " " + vector_text
+    if anchor_dates:
+        anchored_vectors = []
+        for r in vector_results:
+            text = r.get("text", "") or ""
+            meta = r.get("metadata", {}) or {}
+            raw_dt = meta.get("datetime")
+            ref = parse_hit_datetime(raw_dt) if raw_dt is not None else None
+            if ref is not None:
+                text = anchor_relative_dates(text, ref)
+            anchored_vectors.append(text)
+        vector_text = " ".join(anchored_vectors)
+        qd_ref = parse_hit_datetime(question_date) if question_date else None
+        if qd_ref is not None:
+            ctx_text = anchor_relative_dates(ctx["context"], qd_ref)
+            archive_text = anchor_relative_dates(archive_text, qd_ref)
+        else:
+            ctx_text = ctx["context"]
+    else:
+        vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+        ctx_text = ctx["context"]
+
+    parts = [ctx_text, archive_text, vector_text]
+    if anchor_dates and question_date:
+        parts.insert(0, f"Question date: {question_date}")
+    return " ".join(p for p in parts if p)
 
 
 def summarize_retrieval_delta(results: list[dict]) -> dict | None:
@@ -563,6 +595,7 @@ async def run_benchmark(
     retrieval_path = "retrieve"
     report_retrieval_delta = False
     out_path = ""
+    anchor_dates = False
     if args is not None:
         limit = args.limit
         question_type = args.type
@@ -571,6 +604,7 @@ async def run_benchmark(
         retrieval_path = args.retrieval_path
         report_retrieval_delta = args.report_retrieval_delta
         out_path = args.out
+        anchor_dates = getattr(args, "anchor_dates", False)
 
     print("=" * 70)
     print("LongMemEval Benchmark — taOSmd")
@@ -705,6 +739,8 @@ async def run_benchmark(
             llm_client=llm_client,
             graph_expansion=graph_expansion,
             retrieval_path=retrieval_path,
+            anchor_dates=anchor_dates,
+            question_date=item.get("question_date"),
         )
         query_time = time.time() - t1
 
@@ -872,6 +908,13 @@ def main() -> None:
         action="store_true",
         help="Also build the legacy context per question and report how far the "
              "wired path diverges (anchor evidence). Doubles retrieval cost.",
+    )
+    parser.add_argument(
+        "--anchor-dates",
+        action="store_true",
+        help="Resolve relative dates in each evidence item against that item's "
+             "own session date, and prepend a Question date line when the "
+             "dataset provides one. Default off.",
     )
     parser.add_argument(
         "--out",

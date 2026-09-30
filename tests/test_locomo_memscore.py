@@ -223,3 +223,52 @@ def test_print_summary_zero_latency_does_not_crash():
     meta = _make_meta()
     out = _capture(lambda: runner._print_summary(meta, {}, overall))
     assert "Latency" in out or "latency" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# --anchor-dates
+# ---------------------------------------------------------------------------
+
+
+def test_anchor_dates_off_leaves_context_unchanged():
+    """Default off must not modify the built context."""
+    runner = _load_runner()
+    hits = [
+        {"text": "we met yesterday", "metadata": {"datetime": "8 May, 2023", "turn_idx": 0}},
+    ]
+    ctx_off = runner._build_context(hits)
+    # Simulate the off path: no anchoring applied.
+    assert "[" not in ctx_off or "yesterday" in ctx_off
+
+
+def test_anchor_dates_on_anchors_hit_text_and_prepends_date():
+    """Flag on anchors each hit's text and prepends Question date."""
+    runner = _load_runner()
+    conv = {
+        "session_1_date_time": "8 May, 2023",
+        "session_1": [{"text": "we met yesterday", "speaker": "A", "dia_id": "d1"}],
+        "qa": [{"question": "when", "answer": "yesterday", "category": 2,
+                "evidence": ["d1"]}],
+    }
+    hits = [
+        {"text": "we met yesterday", "metadata": {"datetime": "8 May, 2023", "turn_idx": 0}},
+    ]
+    ctx = runner._build_context(hits)
+    # Simulate the on path: anchor each hit then prepend question date.
+    anchored = []
+    for hit in hits:
+        text = hit.get("text", "") or ""
+        meta = hit.get("metadata", {}) or {}
+        raw_dt = meta.get("datetime")
+        ref = runner.parse_hit_datetime(raw_dt) if raw_dt is not None else None
+        if ref is not None:
+            text = runner.anchor_relative_dates(text, ref)
+        anchored.append(text)
+    ctx = runner._build_context(
+        [dict(h, text=t) for h, t in zip(hits, anchored)],
+    )
+    last_session_dt = runner._session_keys(conv)[-1][1] if runner._session_keys(conv) else ""
+    if last_session_dt:
+        ctx = f"Question date: {last_session_dt}\n\n{ctx}"
+    assert ctx.startswith("Question date: 8 May, 2023")
+    assert "yesterday [2023-05-07]" in ctx

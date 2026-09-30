@@ -452,3 +452,79 @@ def test_unwritable_out_path_is_refused_before_the_run(runner, monkeypatch, tmp_
 
     assert exc.value.code != 0
     assert opened == [], "the run must not answer a single question first"
+
+
+# ---------------------------------------------------------------------------
+# --anchor-dates
+# ---------------------------------------------------------------------------
+
+
+def test_anchor_dates_off_is_byte_identical_to_baseline(runner, monkeypatch):
+    """Default off must produce the same context as the unwired path."""
+
+    async def fake_retrieve(query, **kwargs):
+        return [
+            {"text": "we met yesterday", "metadata": {"datetime": "2023/05/10"}},
+        ]
+
+    monkeypatch.setattr(runner, "_retrieve", fake_retrieve)
+
+    off = asyncio.run(runner.retrieve_context(
+        "what happened", _FakeKG(), _FakeArchive(),
+        _FakeVectorMemory(["we met yesterday"]),
+        anchor_dates=False,
+        question_date="2023/05/11",
+    ))
+    on = asyncio.run(runner.retrieve_context(
+        "what happened", _FakeKG(), _FakeArchive(),
+        _FakeVectorMemory(["we met yesterday"]),
+        anchor_dates=True,
+        question_date="2023/05/11",
+    ))
+    # Flag-off must not insert any anchor or question-date header.
+    assert "Question date:" not in off
+    assert "[2023" not in off
+    # Flag-on must differ from off.
+    assert off != on
+
+
+def test_anchor_dates_on_inserts_bracket_and_question_date(runner, monkeypatch):
+    """Flag on anchors relative dates and prepends Question date."""
+
+    async def fake_retrieve(query, **kwargs):
+        return [
+            {"text": "we met yesterday", "metadata": {"datetime": "2023-05-10"}},
+        ]
+
+    monkeypatch.setattr(runner, "_retrieve", fake_retrieve)
+
+    ctx = asyncio.run(runner.retrieve_context(
+        "what happened", _FakeKG(), _FakeArchive(),
+        _FakeVectorMemory(["we met yesterday"]),
+        anchor_dates=True,
+        question_date="2023-05-11",
+    ))
+    assert ctx.startswith("Question date: 2023-05-11")
+    assert "yesterday [2023-05-09]" in ctx
+
+
+def test_anchor_dates_on_skips_items_without_datetime(runner, monkeypatch):
+    """Items with no parseable datetime are returned unchanged."""
+
+    async def fake_retrieve(query, **kwargs):
+        return [
+            {"text": "we met yesterday", "metadata": {}},
+        ]
+
+    monkeypatch.setattr(runner, "_retrieve", fake_retrieve)
+
+    ctx = asyncio.run(runner.retrieve_context(
+        "what happened", _FakeKG(), _FakeArchive(),
+        _FakeVectorMemory(["we met yesterday"]),
+        anchor_dates=True,
+        question_date="2023-05-11",
+    ))
+    # Question date header is present, but the text itself is unchanged.
+    assert ctx.startswith("Question date: 2023-05-11")
+    assert "yesterday" in ctx
+    assert "[2023" not in ctx.split("Question date: 2023-05-11")[-1]

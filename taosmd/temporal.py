@@ -400,6 +400,65 @@ def parse_hit_datetime(value: object) -> datetime | None:
     return None
 
 
+def anchor_relative_dates(
+    text: str,
+    reference: datetime | None,
+) -> str:
+    """Append an absolute date bracket after every relative temporal expression.
+
+    For each relative expression found in ``text``, resolves it against
+    ``reference`` via the existing ``parse_temporal_expression`` and inserts
+    the resulting absolute date or range directly after the original words,
+    keeping the original text intact, e.g. ``last week [2023-05-01..2023-05-07]``
+    or ``yesterday [2023-05-08]``.
+
+    Absolute dates are left unchanged.  When ``reference`` is ``None`` the
+    text is returned unchanged.  Unparseable expressions are silently
+    skipped; this function never raises.
+    """
+    if reference is None:
+        return text
+
+    result: list[str] = []
+    last_end = 0
+    for m in _EXTRACT_RE.finditer(text):
+        expr = m.group(0).strip()
+        parsed = parse_temporal_expression(expr, reference)
+        if parsed is None:
+            continue
+        # Only anchor expressions that are genuinely relative.  Absolute
+        # dates (explicit day dates, quarters, bare month+year) are left
+        # untouched.
+        expr_lower = expr.lower()
+        is_relative = (
+            expr_lower in ("today", "yesterday")
+            or expr_lower in (
+                "this week", "last week", "this month", "last month",
+                "this year", "last year",
+            )
+            or re.fullmatch(
+                r"\d+\s+(?:day|days|week|weeks|month|months|hour|hours)\s+ago",
+                expr_lower,
+            ) is not None
+            or re.fullmatch(
+                r"last\s+\d+\s+(?:day|days|week|weeks|month|months)",
+                expr_lower,
+            ) is not None
+        )
+        if not is_relative:
+            continue
+        from_dt, to_dt = parsed
+        if from_dt.date() == to_dt.date():
+            anchor = from_dt.strftime("%Y-%m-%d")
+        else:
+            anchor = f"{from_dt.strftime('%Y-%m-%d')}..{to_dt.strftime('%Y-%m-%d')}"
+        result.append(text[last_end : m.start()])
+        result.append(f"{expr} [{anchor}]")
+        last_end = m.end()
+    result.append(text[last_end:])
+    return "".join(result)
+
+
 # ---------------------------------------------------------------------------
 # Public: apply_temporal_stage
 # ---------------------------------------------------------------------------

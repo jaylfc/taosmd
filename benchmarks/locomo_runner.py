@@ -61,6 +61,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from taosmd.vector_memory import VectorMemory  # noqa: E402
 from taosmd.retrieval import retrieve  # noqa: E402
 from taosmd.llm_rerank import llm_listwise_rerank  # noqa: E402
+from taosmd.temporal import anchor_relative_dates, parse_hit_datetime  # noqa: E402
 from bench_checkpoint import (  # noqa: E402
     append_conversation,
     config_hash,
@@ -1076,6 +1077,8 @@ async def _process_qa(
     empty_retry: bool = False,
     force_empty_think: bool = False,
     timeline_format: bool = False,
+    anchor_dates: bool = False,
+    last_session_date: str = "",
 ) -> dict | None:
     if "answer" not in qa:
         return None
@@ -1222,6 +1225,27 @@ async def _process_qa(
     context = _build_context(hits, context_format=context_format,
                              adjacent_turns_map=adj_map if adj_map else None,
                              timeline_format=timeline_format)
+
+    if anchor_dates:
+        anchored_hits = []
+        for hit in hits:
+            text = hit.get("text", "") or ""
+            meta = hit.get("metadata", {}) or {}
+            raw_dt = meta.get("datetime")
+            ref = parse_hit_datetime(raw_dt) if raw_dt is not None else None
+            if ref is not None:
+                text = anchor_relative_dates(text, ref)
+            anchored_hits.append(text)
+        context = _build_context(
+            [dict(h, text=t) for h, t in zip(hits, anchored_hits)],
+            context_format=context_format,
+            adjacent_turns_map=adj_map if adj_map else None,
+            timeline_format=timeline_format,
+        )
+        # Conversation's last session date as the question-date header.
+        last_session_dt = last_session_date
+        if last_session_dt:
+            context = f"Question date: {last_session_dt}\n\n{context}"
 
     t1 = time.time()
     retry_fired = False
@@ -1544,6 +1568,7 @@ async def run(args: argparse.Namespace) -> int:
         "empty_retry": args.empty_retry,
         "force_empty_think": args.force_empty_think,
         "timeline_format": args.timeline_format,
+        "anchor_dates": getattr(args, "anchor_dates", False),
         "emem_edu": args.emem_edu,
         "emem_edu_extract_model": args.emem_edu_extract_model if args.emem_edu else "",
         "emem_edu_filter": (args.emem_edu and not args.emem_edu_no_filter),
@@ -1644,6 +1669,8 @@ async def run(args: argparse.Namespace) -> int:
                     empty_retry=args.empty_retry,
                     force_empty_think=args.force_empty_think,
                     timeline_format=args.timeline_format,
+                    anchor_dates=getattr(args, "anchor_dates", False),
+                    last_session_date=_session_keys(conv)[-1][1] if _session_keys(conv) else "",
                 )
             except Exception as e:
                 async with progress_lock:
@@ -1788,6 +1815,7 @@ async def run(args: argparse.Namespace) -> int:
         "empty_retry": meta_for_hash["empty_retry"],
         "force_empty_think": meta_for_hash["force_empty_think"],
         "timeline_format": meta_for_hash["timeline_format"],
+        "anchor_dates": meta_for_hash["anchor_dates"],
         "emem_edu": meta_for_hash["emem_edu"],
         "emem_edu_extract_model": meta_for_hash["emem_edu_extract_model"],
         "emem_edu_filter": meta_for_hash["emem_edu_filter"],
@@ -2171,6 +2199,13 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     # Pause / resume checkpointing flags.
+    p.add_argument(
+        "--anchor-dates",
+        action="store_true",
+        help="Resolve relative dates in each retrieved hit against that hit's "
+             "own session datetime, and prepend a Question date line using "
+             "the conversation's last session timestamp. Default off.",
+    )
     p.add_argument(
         "--ckpt", action="store_true", default=False,
         help=(

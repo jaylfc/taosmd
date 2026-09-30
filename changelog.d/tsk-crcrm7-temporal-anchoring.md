@@ -1,0 +1,4 @@
+### Added
+- Temporal anchoring lever: `--anchor-dates` flag on LongMemEval and LoCoMo benchmark runners (default off). When set, resolves relative dates in each evidence item against that item's own session date via `taosmd.temporal.anchor_relative_dates`, and prepends a `Question date:` line when the dataset provides one.
+- `taosmd.temporal.anchor_relative_dates`: inserts resolved absolute date or range brackets after each relative temporal expression, reusing the existing parser. Absolute dates are left unchanged; reference=None returns text unchanged.
+- Prompt temporal-preservation flag: `PRESERVE_DATES_INSTRUCTION` constant in `taosmd.prompts`, placed before the `JSON:` generation cue in `extraction_prompt`, `session_enrichment_prompt`, and `crystallization_prompt` when `preserve_dates=True`.

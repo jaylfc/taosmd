@@ -122,6 +122,12 @@ def persona_for(agent_name: str) -> str:
     return LIBRARIAN_PERSONA.format(agent_name=agent_name or "default")
 
 
+PRESERVE_DATES_INSTRUCTION = (
+    "Preserve every absolute and relative date or time expression verbatim; "
+    "never paraphrase, round or drop a date."
+)
+
+
 # ---------------------------------------------------------------------------
 # Task templates: every one composes persona_for(agent) + the task body.
 # Each task explains WHERE the output goes, what consumes it, and the
@@ -136,9 +142,10 @@ def extraction_prompt(
     preserve_dates: bool = False,
 ) -> str:
     """Pattern + LLM hybrid fact extraction. Returns subject/predicate/object triples."""
-    extra = ""
     if preserve_dates:
-        extra = "\n\nPreserve every absolute and relative date or time expression verbatim; never paraphrase, round or drop a date."
+        date_block = f"\n\n{PRESERVE_DATES_INSTRUCTION}\n\nJSON:"
+    else:
+        date_block = "\n\nJSON:"
     return f"""{persona_for(agent_name)}
 
 Task: Extract structured knowledge triples from the text below.
@@ -162,9 +169,7 @@ Quality bar before you return:
 - Empty array is the right answer when nothing is extractable.
 
 Text:
-{text[:2000]}
-
-JSON:{extra}"""
+{text[:2000]}{date_block}"""
 
 
 def session_enrichment_prompt(
@@ -174,9 +179,10 @@ def session_enrichment_prompt(
     preserve_dates: bool = False,
 ) -> str:
     """Reading Room enrichment. Returns topic + description + category."""
-    extra = ""
     if preserve_dates:
-        extra = "\n\nPreserve every absolute and relative date or time expression verbatim; never paraphrase, round or drop a date."
+        date_block = f"\n\n{PRESERVE_DATES_INSTRUCTION}\n\nJSON:"
+    else:
+        date_block = "\n\nJSON:"
     return f"""{persona_for(agent_name)}
 
 Task: Read this session log and produce a one-line topic, a 1-2 sentence
@@ -204,9 +210,7 @@ Quality bar:
 - Category matches the session's actual shape, not its aspiration.
 
 Log:
-{session_log[:4000]}
-
-JSON:{extra}"""
+{session_log[:4000]}{date_block}"""
 
 
 def crystallization_prompt(
@@ -216,9 +220,10 @@ def crystallization_prompt(
     preserve_dates: bool = False,
 ) -> str:
     """Digest binding. Returns narrative + outcomes + lessons."""
-    extra = ""
     if preserve_dates:
-        extra = "\n\nPreserve every absolute and relative date or time expression verbatim; never paraphrase, round or drop a date."
+        date_block = f"\n\n{PRESERVE_DATES_INSTRUCTION}\n\nJSON:"
+    else:
+        date_block = "\n\nJSON:"
     return f"""{persona_for(agent_name)}
 
 Task: Bind this session into a Digest — a short reference copy that
@@ -246,9 +251,7 @@ Quality bar:
   the right answer for small-talk, not laziness.
 
 Session:
-{session_text[:6000]}
-
-JSON:{extra}"""
+{session_text[:6000]}{date_block}"""
 
 
 def reflection_prompt(triples: list[tuple[str, str, str]], *, agent_name: str = "default") -> str:
