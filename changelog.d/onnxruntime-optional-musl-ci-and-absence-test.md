@@ -1,0 +1,3 @@
+### Fixed
+- CI now runs `uv sync --extra onnx` so `tests/test_live_embed_backend.py` and `tests/test_cross_encoder.py` install the `onnxruntime` optional extra they mock; a bare `uv sync` left `unittest.mock.patch("onnxruntime.InferenceSession", ...)` importing an absent module and failing with `ModuleNotFoundError` instead of exercising the mocked path.
+- Added a test that simulates `onnxruntime` being genuinely absent (as it is on musl hosts) and asserts `CrossEncoderReranker` degrades to an actionable `ImportError` from `_load()` and to the unranked results from `rerank()`, rather than a bare `ModuleNotFoundError` or an uncaught exception.
