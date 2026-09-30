@@ -97,14 +97,43 @@ def _num_ctx_from_env(raw: str | None) -> int:
 
 
 NUM_CTX = _num_ctx_from_env(os.environ.get("TAOSMD_LME_NUM_CTX"))
+
+
+def _gen_temp_from_env(raw: str | None) -> float:
+    """Parse TAOSMD_LME_GEN_TEMP, falling back to 0 on a bad value.
+
+    Mirrors _num_ctx_from_env: a malformed or empty value used to raise at
+    import time, which killed the runner before it could warn the operator.
+    Falling back to 0 keeps the historical default, and the warning names the
+    offending value so a mis-set temperature is never mistaken for a deliberate
+    one. The parsed value is used ONLY for generation calls (llm_answer and
+    self_verify_answer); the judge always runs at temperature 0.
+    """
+    if not raw:
+        return 0.0
+    try:
+        return float(raw)
+    except ValueError:
+        print(
+            f"  WARNING: TAOSMD_LME_GEN_TEMP={raw!r} is not a float; falling "
+            "back to 0.",
+            file=sys.stderr,
+        )
+        return 0.0
+
+
+GEN_TEMP = _gen_temp_from_env(os.environ.get("TAOSMD_LME_GEN_TEMP"))
+INLINE_JUDGE = os.environ.get("TAOSMD_LME_NO_INLINE_JUDGE", "0") != "1"
 _reranker = None
 
 
 def _gen_options(**extra):
-    """Ollama options dict, carrying num_ctx only when it was explicitly set."""
+    """Ollama options dict, carrying num_ctx and generation temperature."""
     opts = dict(extra)
     if NUM_CTX:
         opts["num_ctx"] = NUM_CTX
+    if GEN_TEMP:
+        opts["temperature"] = GEN_TEMP
     return opts
 
 
@@ -162,8 +191,9 @@ def _parse_verdict(content: str) -> bool:
     return "CORRECT" in j
 
 
-async def score_answer_llm(client, predicted: str, gold: str, question: str) -> bool:
+async def score_answer_llm(client, predicted: str, gold: str, question: str, judge_model: str | None = None) -> bool:
     """Score using LLM-as-judge (official LongMemEval approach)."""
+    model = judge_model or JUDGE_MODEL
     prompt = f"""You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
 
 Rules:
@@ -183,7 +213,7 @@ Verdict: /no_think"""
         resp = await client.post(
             f"{REMOTE_LLM_URL}/api/chat",
             json={
-                "model": JUDGE_MODEL,
+                "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "think": False,
@@ -204,7 +234,7 @@ def score_answer(predicted: str, gold: str) -> bool:
     return score_answer_substring(predicted, gold)
 
 
-async def llm_answer(client, context: str, question: str) -> str:
+async def llm_answer(client, context: str, question: str, temperature: float = 0.0) -> str:
     """Use remote LLM to generate answer from recalled context."""
     try:
         resp = await client.post(
@@ -214,7 +244,7 @@ async def llm_answer(client, context: str, question: str) -> str:
                 "messages": [{"role": "user", "content": ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)}],
                 "stream": False,
                 "think": False,
-                "options": _gen_options(temperature=0, num_predict=100),
+                "options": _gen_options(temperature=temperature, num_predict=100),
             },
             timeout=30,
         )
@@ -273,7 +303,7 @@ Draft answer: {answer}
 Final answer:"""
 
 
-async def self_verify_answer(client, context: str, question: str, answer: str) -> str:
+async def self_verify_answer(client, context: str, question: str, answer: str, temperature: float = 0.0) -> str:
     """One CoVe-style verification pass.
 
     Keeps the draft if it is supported by the context, otherwise returns a
@@ -290,7 +320,7 @@ async def self_verify_answer(client, context: str, question: str, answer: str) -
                 "messages": [{"role": "user", "content": VERIFY_PROMPT.format(context=context[:CONTEXT_CHARS], question=question, answer=answer)}],
                 "stream": False,
                 "think": False,
-                "options": _gen_options(temperature=0, num_predict=100),
+                "options": _gen_options(temperature=temperature, num_predict=100),
             },
             timeout=30,
         )
@@ -638,6 +668,7 @@ async def run_benchmark(
         qtype = item["question_type"]
         question = item["question"]
         gold_answer = item["answer"]
+        question_id = item.get("question_id", "")
         sessions = item.get("haystack_sessions", [])
 
         # Create fresh KG + archive + vector memory per question (isolated test)
@@ -731,14 +762,17 @@ async def run_benchmark(
         if use_llm and llm_client is not None:
             t_llm = time.time()
             # Step 1: LLM generates answer from recalled context
-            answer = await llm_answer(llm_client, full_context, question)
+            answer = await llm_answer(llm_client, full_context, question, temperature=GEN_TEMP)
             if SELF_VERIFY:
-                answer = await self_verify_answer(llm_client, full_context, question, answer)
+                answer = await self_verify_answer(llm_client, full_context, question, answer, temperature=GEN_TEMP)
             # Step 2: LLM judges whether answer matches gold (official eval method)
-            if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
-                correct = await score_answer_llm(llm_client, answer, gold_answer, question)
+            if INLINE_JUDGE:
+                if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
+                    correct = await score_answer_llm(llm_client, answer, gold_answer, question)
+                else:
+                    correct = False
             else:
-                correct = False
+                correct = None
             llm_time = time.time() - t_llm
             # Debug
             if i < 5:
@@ -760,9 +794,12 @@ async def run_benchmark(
         total_time += elapsed
         all_results.append({
             "idx": i,
+            "question_id": question_id,
             "question_type": qtype,
             "question": question,
-            "correct": bool(correct),
+            "answer": answer or "",
+            "gold": str(gold_answer),
+            "correct": bool(correct) if correct is not None else None,
             "retrieved_chars": len(full_context),
             "retrieval_delta": delta,
         })
@@ -828,6 +865,8 @@ async def run_benchmark(
             "fts_limit": FTS_LIMIT,
             "context_chars": CONTEXT_CHARS,
             "num_ctx": NUM_CTX,
+            "gen_temp": GEN_TEMP,
+            "inline_judge": INLINE_JUDGE,
             "retrieval_path": retrieval_path,
             "graph_expansion": graph_expansion,
             "retrieval_delta": delta_summary,

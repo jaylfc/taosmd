@@ -1,0 +1,2 @@
+### Added
+- LongMemEval runner (`benchmarks/longmemeval_runner.py`) now persists `answer`, `gold`, and `question_id` per result row; supports `TAOSMD_LME_GEN_TEMP` (float, generation-only temperature), `TAOSMD_LME_NO_INLINE_JUDGE=1` (skip inline judge, rows carry `correct: null`), and records `gen_temp` and `inline_judge` in the result document. New `benchmarks/longmemeval_rescore.py` re-judges saved result rows using the runner's own `score_answer_llm` (imported, not copied) with the same idk-phrase short-circuit, writing `judge_rejudged` and `judge_model` per row.
