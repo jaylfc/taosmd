@@ -1391,15 +1391,14 @@ def test_task_list_edges_limit_over_500_is_clamped(live_server):
 
 
 @pytest.mark.parametrize("limit_val,expected", [
-    (-1, 1),   # floor: max(1, min(-1, 500)) = 1
-    (0, 1),    # floor: max(1, min(0, 500)) = 1
-    (1, 1),    # exact: max(1, min(1, 500)) = 1
+    (0, 0),    # limit=0 returns 0 rows
+    (1, 1),    # exact: 1
     (499, 499),  # below cap: 499
     (500, 500),  # at cap: 500
     (501, 500),  # above cap: clamped to 500
 ])
 def test_task_list_edges_limit_boundary(live_server, limit_val, expected):
-    """GET /tasks/edges limit values are correctly clamped/floored."""
+    """GET /tasks/edges limit values are correctly clamped (negative returns 400)."""
     # Seed 501 edges so the cap can actually be tested
     tasks = []
     for i in range(11):
@@ -1413,6 +1412,12 @@ def test_task_list_edges_limit_boundary(live_server, limit_val, expected):
     status, body = _get(f"{live_server}/tasks/edges?limit={limit_val}")
     assert status == 200, body
     assert len(body["edges"]) == expected, f"limit={limit_val} expected {expected} edges, got {len(body['edges'])}"
+
+
+def test_task_list_edges_negative_limit_returns_400(live_server):
+    """GET /tasks/edges with negative limit returns 400, not floored to 1 row."""
+    status, body = _get(f"{live_server}/tasks/edges?limit=-1")
+    assert status == 400, body
 
 
 def test_task_list_edges_limit_capped_at_500_with_many_edges(live_server):
@@ -1508,3 +1513,98 @@ def test_memories_limit_at_cap(memories_server):
     status, body = _get(f"{memories_server}/memories?limit=500")
     assert status == 200, body
     assert len(body["memories"]) == 500
+
+
+# ---------------------------------------------------------------------------
+# Limit validation: negative limit must return 400 (tsk-ugcype)
+# ---------------------------------------------------------------------------
+
+
+def test_search_negative_limit_rejected(live_server):
+    """?limit=-1 on /search must 400; SQLite treats -1 as unbounded."""
+    status, body = _get(f"{live_server}/search?q=test&agent=test-agent&limit=-1")
+    assert status == 400, body
+
+
+def test_graph_negative_limit_rejected(live_server):
+    """?limit=-1 on /graph must 400."""
+    status, body = _get(f"{live_server}/graph?limit=-1")
+    assert status == 400, body
+
+
+def test_graph_activations_negative_limit_rejected(live_server):
+    """?limit=-1 on /graph/activations must 400."""
+    status, body = _get(f"{live_server}/graph/activations?limit=-1")
+    assert status == 400, body
+
+
+def test_pending_negative_limit_rejected(live_server):
+    """?limit=-1 on /pending must 400."""
+    status, body = _get(f"{live_server}/pending?agent=test-agent&limit=-1")
+    assert status == 400, body
+
+
+def test_task_list_negative_limit_rejected(live_server):
+    """?limit=-1 on /tasks must 400."""
+    status, body = _get(f"{live_server}/tasks?limit=-1")
+    assert status == 400, body
+
+
+def test_task_ready_negative_limit_rejected(live_server):
+    """?limit=-1 on /tasks/ready must 400."""
+    status, body = _get(f"{live_server}/tasks/ready?limit=-1")
+    assert status == 400, body
+
+
+def test_a2a_messages_negative_limit_rejected(live_server):
+    """?limit=-1 on /a2a/messages must 400."""
+    _post(f"{live_server}/a2a/send", {"from": "neg-limit-alice", "body": "msg", "thread": "neg-test-msgs"})
+    status, body = _get(f"{live_server}/a2a/messages?thread=neg-test-msgs&limit=-1")
+    assert status == 400, body
+
+
+def test_a2a_mentions_negative_limit_rejected(live_server):
+    """?limit=-1 on /a2a/mentions must 400."""
+    _post(f"{live_server}/a2a/send", {"from": "bob", "body": "@alice mention", "thread": "neg-test-mentions"})
+    status, body = _get(f"{live_server}/a2a/mentions?reader=alice&limit=-1")
+    assert status == 400, body
+
+
+def test_a2a_inbox_negative_limit_rejected(live_server):
+    """?limit=-1 on /a2a/inbox must 400."""
+    status, body = _get(f"{live_server}/a2a/inbox?consumer=test-agent&limit=-1")
+    assert status == 400, body
+
+
+def test_a2a_inbox_unhandled_negative_limit_rejected(live_server):
+    """?limit=-1 on /a2a/inbox/unhandled must 400."""
+    status, body = _get(f"{live_server}/a2a/inbox/unhandled?consumer=test-agent&limit=-1")
+    assert status == 400, body
+
+
+def test_a2a_thread_messages_negative_limit_rejected(live_server):
+    """?limit=-1 on /a2a/threads/{thread}/messages must 400."""
+    _post(f"{live_server}/a2a/send", {"from": "alice", "body": "msg", "thread": "neg-limit-test"})
+    status, body = _get(f"{live_server}/a2a/threads/neg-limit-test/messages?limit=-1")
+    assert status == 400, body
+
+
+# ---------------------------------------------------------------------------
+# Limit ceiling tests: limit above cap must be clamped
+# ---------------------------------------------------------------------------
+
+
+def test_search_limit_clamped_to_100(live_server):
+    """?limit=101+ on /search must be clamped to 100."""
+    _post(f"{live_server}/ingest", {"text": "search ceil test", "agent": "ceil-test-agent"})
+    status, body = _get(f"{live_server}/search?q=ceil&agent=ceil-test-agent&limit=500")
+    assert status == 200, body
+
+
+def test_a2a_messages_limit_clamped_to_50(live_server):
+    """?limit=51+ on /a2a/messages must be clamped to 50."""
+    for i in range(60):
+        _post(f"{live_server}/a2a/send", {"from": "limit-alice", "body": f"msg{i}", "thread": "limit-test"})
+    status, body = _get(f"{live_server}/a2a/messages?thread=limit-test&limit=100")
+    assert status == 200, body
+    assert len(body["messages"]) == 50

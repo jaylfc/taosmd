@@ -272,6 +272,17 @@ _A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "
 _A2A_MSG_DEFAULT_LIMIT = 50
 _A2A_MSG_MAX_LIMIT = 200
 
+# Up-caps for various endpoint limits (negative values rejected with 400).
+_SEARCH_MAX_LIMIT = 100
+_GRAPH_MAX_LIMIT = 300
+_GRAPH_ACTIVATIONS_MAX_LIMIT = 100
+_PENDING_MAX_LIMIT = 20
+_TASK_LIST_MAX_LIMIT = 50
+_TASK_READY_MAX_LIMIT = 20
+_A2A_MESSAGES_MAX_LIMIT = 50
+_A2A_MENTIONS_MAX_LIMIT = 50
+_A2A_INBOX_MAX_LIMIT = 1000
+
 # Upper cap for GET /memories?limit=. Negative values are rejected (400), and
 # limit=0 yields zero rows (SQLite LIMIT 0). See tsk-au6qkw.
 _MEMORY_DEFAULT_LIMIT = 50
@@ -1433,6 +1444,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must be a non-negative integer")
+            limit_i = min(limit_i, _SEARCH_MAX_LIMIT)
             if mode is not None and not isinstance(mode, str):
                 raise _BadRequest("'mode' must be a string when provided")
             if collection is not None and not isinstance(collection, str):
@@ -1585,6 +1599,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must be a non-negative integer")
+            limit_i = min(limit_i, _GRAPH_MAX_LIMIT)
             # Optional time-travel: ?as_of=<finite float epoch> reconstructs the
             # graph as it stood then. Any value that is not a finite number is
             # ignored (current graph), so a malformed scrubber value degrades
@@ -1614,6 +1631,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("since/window must be numbers and limit an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must be a non-negative integer")
+            limit_i = min(limit_i, _GRAPH_ACTIVATIONS_MAX_LIMIT)
             result = runner.run(
                 service.graph_activations(since=since_f, window=window_f, limit=limit_i, data_dir=data_dir)
             )
@@ -1633,6 +1653,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must be a non-negative integer")
+            limit_i = min(limit_i, _PENDING_MAX_LIMIT)
             pending = runner.run(
                 service.pending_list(agent=agent, data_dir=data_dir, limit=limit_i)
             )
@@ -1978,6 +2001,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'limit' must be an integer") from exc
             if limit_i < 0:
                 raise _BadRequest("'limit' must not be negative")
+            limit_i = min(limit_i, _A2A_MESSAGES_MAX_LIMIT)
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
             messages = runner.run(
@@ -2017,6 +2041,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must not be negative")
+            limit_i = min(limit_i, _A2A_MENTIONS_MAX_LIMIT)
             # Auth: when a registry verifier is configured, the caller's
             # verified identity is the reader. Unauthenticated requests
             # return 401. When no verifier is configured (standalone), a
@@ -2078,6 +2105,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must not be negative")
+            limit_i = min(limit_i, _A2A_INBOX_MAX_LIMIT)
             if _registry_verifier is not None:
                 token_consumer = self._get_authenticated_agent_id()
                 if token_consumer is None:
@@ -2163,6 +2193,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must not be negative")
+            limit_i = min(limit_i, _A2A_INBOX_MAX_LIMIT)
             if _registry_verifier is not None:
                 token_consumer = self._get_authenticated_agent_id()
                 if token_consumer is None:
@@ -2269,6 +2302,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must not be negative")
+            limit_i = min(limit_i, _A2A_MSG_MAX_LIMIT)
             result = runner.run(
                 service.a2a_thread_messages(
                     thread=thread, before=before, after=after,
@@ -2585,6 +2621,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must be a non-negative integer")
+            limit_i = min(limit_i, _TASK_LIST_MAX_LIMIT)
             project, ok = self._apply_token_binding(assignee, project)
             if not ok:
                 return
@@ -2607,6 +2646,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if limit_i < 0:
+                raise _BadRequest("'limit' must be a non-negative integer")
+            limit_i = min(limit_i, _TASK_READY_MAX_LIMIT)
             project, ok = self._apply_token_binding(assignee, project)
             if not ok:
                 return
@@ -2644,7 +2686,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
-            limit_i = max(1, min(limit_i, 500))
+            if limit_i < 0:
+                raise _BadRequest("'limit' must be a non-negative integer")
+            limit_i = min(limit_i, 500)
             project = (qs.get("project") or [None])[0]
             project, ok = self._apply_token_binding(None, project)
             if not ok:

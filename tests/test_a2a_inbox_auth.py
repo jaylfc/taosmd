@@ -385,3 +385,29 @@ def test_inbox_with_wrong_issuer_via_production_verifier_is_rejected(production_
     token = _make_token("agent-1", iss="wrong-issuer")
     status, _ = _get(f"{production_pinned_server}/a2a/inbox", token=token)
     assert status == 401
+
+
+# ---------------------------------------------------------------------------
+# Limit ceiling tests
+# ---------------------------------------------------------------------------
+
+def test_inbox_limit_clamped_to_1000(authed_server):
+    """?limit=1001+ on /a2a/inbox must be clamped to 1000."""
+    token = _make_token("inbox-ceiling-test-sender")
+    for i in range(1100):
+        _post(f"{authed_server}/a2a/send", {"from": "inbox-ceiling-test-sender", "body": f"@inbox-ceiling-test msg{i}", "thread": "temp"}, token)
+    consumer_token = _make_token("inbox-ceiling-test")
+    status, body = _request(f"{authed_server}/a2a/inbox?limit=2000", "GET", None, consumer_token)
+    assert status == 200, body
+    assert len(body["messages"]) == 1000
+
+
+def test_inbox_unhandled_limit_clamped_to_1000(authed_server):
+    """?limit=1001+ on /a2a/inbox/unhandled must be clamped to 1000."""
+    token = _make_token("inbox-unhandled-ceiling-test-sender")
+    for i in range(1100):
+        _post(f"{authed_server}/a2a/send", {"from": "inbox-unhandled-ceiling-test-sender", "body": f"@inbox-unhandled-ceiling-test msg{i}", "thread": "temp"}, token)
+    consumer_token = _make_token("inbox-unhandled-ceiling-test")
+    status, body = _request(f"{authed_server}/a2a/inbox/unhandled?limit=2000", "GET", None, consumer_token)
+    assert status == 200, body
+    assert len(body["messages"]) == 1000
