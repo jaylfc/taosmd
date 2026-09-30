@@ -589,6 +589,27 @@ stored in `a2a_alarm_state` and survives restarts. Use
 Each channel in `/a2a/channels` has shape:
 `{"channel", "members", "message_count", "created_ts", "last_ts"}`
 
+### Read receipts
+
+`POST /a2a/receipts` records delivery and `PATCH /a2a/receipts` records a
+seen mark. Both write endpoints derive the agent identity from the verified
+registry token's `sub` claim, never from the request body.
+
+The two read endpoints enforce privacy by default when a registry verifier is
+configured:
+
+- `GET /a2a/receipts?message_id=X&agent=Y` returns the single receipt for
+  `(X, Y)` only when the verified caller is `Y` or the sender of message `X`.
+  Any other verified caller receives HTTP 403 with no receipt data. In
+  standalone mode (no registry verifier) the read is unrestricted.
+
+- `GET /a2a/messages/{id}/receipts` returns all receipts for the message when
+  the verified caller is the message sender. For any other verified caller it
+  filters the result to that caller's own rows only. In standalone mode all
+  rows are returned.
+
+For the single-receipt endpoint, a caller reading their own receipt on a missing message gets 404; any other verified caller gets 403, because an unknown sender cannot authorise a cross-agent read. For the listing endpoint an empty result is returned.
+
 ### Strict query parameters
 
 Every `GET /a2a/*` endpoint rejects unknown query parameters **that carry a

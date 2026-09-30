@@ -372,7 +372,7 @@ def test_get_single_receipt_not_found(authed_server):
     """GET /a2a/receipts for a nonexistent receipt returns 404."""
     token = _make_token("alice", iss=REGISTRY_ISS)
     status, body = _get(
-        f"{authed_server}/a2a/receipts?message_id=999&agent=nobody",
+        f"{authed_server}/a2a/receipts?message_id=999&agent=alice",
         token=token,
     )
     assert status == 404, body
