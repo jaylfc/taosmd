@@ -129,8 +129,16 @@ def persona_for(agent_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def extraction_prompt(text: str, *, agent_name: str = "default") -> str:
+def extraction_prompt(
+    text: str,
+    *,
+    agent_name: str = "default",
+    preserve_dates: bool = False,
+) -> str:
     """Pattern + LLM hybrid fact extraction. Returns subject/predicate/object triples."""
+    extra = ""
+    if preserve_dates:
+        extra = "\n\nPreserve every absolute and relative date or time expression verbatim; never paraphrase, round or drop a date."
     return f"""{persona_for(agent_name)}
 
 Task: Extract structured knowledge triples from the text below.
@@ -156,11 +164,19 @@ Quality bar before you return:
 Text:
 {text[:2000]}
 
-JSON:"""
+JSON:{extra}"""
 
 
-def session_enrichment_prompt(session_log: str, *, agent_name: str = "default") -> str:
+def session_enrichment_prompt(
+    session_log: str,
+    *,
+    agent_name: str = "default",
+    preserve_dates: bool = False,
+) -> str:
     """Reading Room enrichment. Returns topic + description + category."""
+    extra = ""
+    if preserve_dates:
+        extra = "\n\nPreserve every absolute and relative date or time expression verbatim; never paraphrase, round or drop a date."
     return f"""{persona_for(agent_name)}
 
 Task: Read this session log and produce a one-line topic, a 1-2 sentence
@@ -190,11 +206,19 @@ Quality bar:
 Log:
 {session_log[:4000]}
 
-JSON:"""
+JSON:{extra}"""
 
 
-def crystallization_prompt(session_text: str, *, agent_name: str = "default") -> str:
+def crystallization_prompt(
+    session_text: str,
+    *,
+    agent_name: str = "default",
+    preserve_dates: bool = False,
+) -> str:
     """Digest binding. Returns narrative + outcomes + lessons."""
+    extra = ""
+    if preserve_dates:
+        extra = "\n\nPreserve every absolute and relative date or time expression verbatim; never paraphrase, round or drop a date."
     return f"""{persona_for(agent_name)}
 
 Task: Bind this session into a Digest — a short reference copy that
@@ -224,7 +248,7 @@ Quality bar:
 Session:
 {session_text[:6000]}
 
-JSON:"""
+JSON:{extra}"""
 
 
 def reflection_prompt(triples: list[tuple[str, str, str]], *, agent_name: str = "default") -> str:
