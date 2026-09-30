@@ -265,6 +265,7 @@ DEFAULT_PORT = 7900
 _A2A_REF_KINDS = frozenset({"doc", "report", "spec", "log"})
 _A2A_MAX_REFS = 8
 _A2A_MAX_MESSAGE_BYTES = 64 * 1024  # 64 KB total (body+refs+blocks)
+_A2A_MAX_IMPORT_BATCH = 100
 _A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "system"})
 
 # Cursor pagination limits for /a2a/threads/{thread}/messages.
@@ -1131,6 +1132,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_pending_resolve()
                 elif method == "POST" and path == "/a2a/send":
                     self._handle_a2a_send()
+                elif method == "POST" and path == "/a2a/import":
+                    self._handle_a2a_import()
                 elif method == "GET" and path == "/a2a/channels":
                     self._handle_a2a_channels(query)
                 elif method == "GET" and path == "/a2a/census":
@@ -1824,6 +1827,140 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     alarm_key=alarm_key, alarm_fingerprint=alarm_fingerprint,
                     data_dir=data_dir,
                 )
+            )
+            self._send_json(200, result)
+
+        def _handle_a2a_import(self) -> None:
+            body = self._read_json_body()
+            envelopes = body.get("envelopes")
+            if not isinstance(envelopes, list):
+                raise _BadRequest("'envelopes' (list) is required")
+            if len(envelopes) > _A2A_MAX_IMPORT_BATCH:
+                raise _BadRequest(
+                    f"'envelopes' must have at most {_A2A_MAX_IMPORT_BATCH} items"
+                )
+            for envelope in envelopes:
+                if not isinstance(envelope, dict):
+                    raise _BadRequest("each envelope must be an object")
+                from_ = envelope.get("from")
+                body_text = envelope.get("body")
+                thread = envelope.get("thread", "general") or "general"
+                reply_to = envelope.get("reply_to")
+                refs = envelope.get("refs")
+                blocks = envelope.get("blocks")
+                kind = envelope.get("kind", "chat")
+                if kind is None:
+                    kind = "chat"
+                recipient = envelope.get("recipient")
+                if not isinstance(from_, str) or not from_:
+                    raise _BadRequest("'from' (non-empty string) is required in each envelope")
+                if not isinstance(body_text, str) or not body_text:
+                    raise _BadRequest("'body' (non-empty string) is required in each envelope")
+                if not isinstance(thread, str) or not thread:
+                    raise _BadRequest("'thread' (non-empty string) is required in each envelope")
+                if not isinstance(kind, str) or kind not in _A2A_KINDS:
+                    raise _BadRequest(
+                        "'kind' must be one of "
+                        f"{sorted(_A2A_KINDS)}; got {kind!r}"
+                    )
+                if refs is not None:
+                    if not isinstance(refs, list):
+                        raise _BadRequest("'refs' must be a list")
+                    if len(refs) > _A2A_MAX_REFS:
+                        raise _BadRequest(f"'refs' must have at most {_A2A_MAX_REFS} items")
+                    for i, ref in enumerate(refs):
+                        if not isinstance(ref, dict):
+                            raise _BadRequest(f"'refs[{i}]' must be an object")
+                        ref_kind = ref.get("kind")
+                        if ref_kind not in _A2A_REF_KINDS:
+                            raise _BadRequest(
+                                f"'refs[{i}].kind' must be one of {sorted(_A2A_REF_KINDS)}"
+                            )
+                if blocks is not None:
+                    if not isinstance(blocks, list):
+                        raise _BadRequest("'blocks' must be a list")
+                    for i, block in enumerate(blocks):
+                        if not isinstance(block, dict):
+                            raise _BadRequest(f"'blocks[{i}]' must be an object")
+                serialized = json.dumps(
+                    {"from": from_, "body": body_text, "thread": thread, "reply_to": reply_to, "refs": refs, "blocks": blocks, "kind": kind, "recipient": recipient}
+                )
+                if len(serialized.encode("utf-8")) > _A2A_MAX_MESSAGE_BYTES:
+                    raise _BadRequest("envelope exceeds 64KB limit")
+            if _registry_verifier is not None:
+                from . import registry_auth  # noqa: PLC0415
+                auth = self.headers.get("Authorization", "")
+                token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+
+                warn_reason: str | None = None
+                _reject_status: int = 403
+                _reject_msg: str = ""
+                token_sub = ""
+
+                if not token:
+                    warn_reason = "missing Bearer token"
+                    _reject_status = 401
+                    _reject_msg = "registry auth: Bearer token required"
+                else:
+                    try:
+                        _first_from = envelopes[0].get("from", "") if envelopes else ""
+                        claims = _registry_verifier.authorize(token, _first_from)
+                    except registry_auth.HumanAuthError as exc:
+                        logger.warning("human principal rejected: %s", exc)
+                        self._send_json(403, {"error": f"registry auth: {exc}"})
+                        return
+                    except registry_auth.AuthError as exc:
+                        _registry_url_cfg = _config.get_registry_url(data_dir)
+                        _registry_token_cfg = _config.get_registry_token(data_dir)
+                        if _registry_url_cfg is not None and _registry_token_cfg is None:
+                            msg = (
+                                "registry auth: registry_token is unset "
+                                "(registry_url is set without registry_token; "
+                                "set it with `taosmd config set-registry-token ...` "
+                                "or clear registry_url)"
+                            )
+                        else:
+                            msg = f"registry auth: {exc}"
+                        logger.warning(
+                            "a2a auth: rejecting presented-credential failure "
+                            "(regardless of enforce mode): %s", msg,
+                        )
+                        self._send_json(403, {"error": msg})
+                        return
+                    token_sub = claims.get("sub", "") or ""
+                    for env in envelopes:
+                        if env.get("from") != token_sub:
+                            self._send_json(
+                                403,
+                                {"error": f"registry auth: token sub {token_sub!r} does not match envelope from {env.get('from')!r}"},
+                            )
+                            return
+
+                if warn_reason is None and _grants_verifier is not None:
+                    if not _registry_verifier.is_human(token_sub):
+                        try:
+                            if not _grants_verifier.has_grant(token_sub):
+                                warn_reason = "no a2a_send grant"
+                                _reject_status = 403
+                                _reject_msg = f"registry auth: no active grant for {token_sub!r}"
+                        except registry_auth.AuthError as exc:
+                            warn_reason = str(exc)
+                            _reject_status = 403
+                            _reject_msg = f"registry auth: {exc}"
+                    else:
+                        logger.info("grants check skipped for human principal %r", token_sub)
+
+                if warn_reason is not None:
+                    enforce = _config.get_a2a_auth_enforce(data_dir)
+                    if enforce:
+                        self._send_json(_reject_status, {"error": _reject_msg})
+                        return
+                    logger.warning(
+                        "a2a verify-and-warn: accepting unverified post from %r: %s",
+                        token_sub, warn_reason,
+                    )
+            result = runner.run(
+                service.a2a_import(envelopes, data_dir=data_dir)
             )
             self._send_json(200, result)
 
