@@ -227,7 +227,15 @@ def test_verify_wake_doc_teaches_positive_and_negative_control():
     # Negative control: a probe that must NOT wake the gate.
     assert "negative control" in lower, section
 
-    # The ambiguous-probe claim is gone: absence of output may no longer be
-    # taught as proof the wake path is configured and listening.
+    # Ordering guard: the negative control must be documented BEFORE the
+    # positive control. With --count 1 the positive control exits the watcher;
+    # a negative control judged after that exit cannot fail (silence is
+    # indistinguishable from a working gate).
     neg_pos = section.lower().find("negative control"), section.lower().find("positive control")
     assert neg_pos[0] < neg_pos[1], "negative control must appear before positive control"
+
+    # Absence-as-proof guard: the historical defective text claimed that
+    # seeing no output "only means the wake path is configured and listening",
+    # teaching silence as evidence of a working path. That exact phrasing must
+    # not reappear in the Verify section.
+    assert "it only means the wake path is configured and listening" not in lower, section
