@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,8 @@ name = "taosmd"
 version = "0.4.1"
 description = "Framework-agnostic, local-first AI memory system. 97.0% Recall@5 on LongMemEval-S, measured on a low-end reference stack."
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [{name = "the taOS project"}]
 requires-python = ">=3.10"
 dependencies = [
