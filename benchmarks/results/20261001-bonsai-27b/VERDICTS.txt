@@ -1,0 +1,6 @@
+E-032 kill criterion, "within 0.02 of A0" read as a non-inferiority floor (>= 0.495), as for E-031.
+B0 Ternary-Bonsai-2-27B 0.590 vs A0 0.515 (+0.075): QUALIFIES; full-1540 confirm + LongMemEval screen, backend confound to be resolved first. 8 GB-tier fit NOT measured (GPU memory after load not captured).
+B0 vs B1 0.620: bar is B1 - 0.02 = 0.600; B0 0.590 MISSES. Ternary is NOT called no worse than conventional 2-bit (N-028). Paired 11 vs 17, within noise.
+B2 0.555, B3 0.495: descriptive; both below B1, B3 below A0.
+B4 0.650 at 20577.9 ms vs B0 8679.4 ms = 2.37x, under the 3x cap: NOT "not worth it". Over B1 paired 21 vs 15, not separable at n=200.
+No default or recipe changed.

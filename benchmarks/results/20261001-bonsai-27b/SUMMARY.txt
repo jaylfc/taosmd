@@ -1,0 +1,24 @@
+E-032 27B-class extreme-quant readers, LoCoMo subset-200, 3060 box, PrismML llama.cpp fork prism-b10743-adfffbe via --llm-backend llama-server, chain_20260930_193626 (COMPLETE 2026-10-01 09:28 local)
+Judge: qwen3:4b (digest 359d7dd4bcda), same family as every B arm. Anchor A0 is E-031's qwen3.5:9b (Ollama backend). GGUF sha256 values are in the chain log.
+GPU memory after load: NOT CAPTURED (llama-server at default log level prints no load-time buffer sizes; only start/final nvidia-smi were logged).
+
+VALIDITY B0_bonsai2_27b_ternary: rows=200 real_predictions=200 think_tags=0
+VALIDITY B1_qwen38_27b_iq2xs: rows=200 real_predictions=200 think_tags=0
+VALIDITY B2_bonsai1_27b_1bit: rows=200 real_predictions=200 think_tags=0
+VALIDITY B3_bonsai1_27b_ternary: rows=200 real_predictions=200 think_tags=0
+VALIDITY B4_bonsai2_27b_think1k: rows=200 real_predictions=200 think_tags=0
+ARMRESULT B0_bonsai2_27b_ternary n=200 overall=0.5900 | MultiHop=0.256(n=43) Temporal=0.683(n=63) OpenDomain=0.615(n=13) SingleHop=0.691(n=81) | lat_mean_ms=8679.4 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT B1_qwen38_27b_iq2xs n=200 overall=0.6200 | MultiHop=0.279(n=43) Temporal=0.778(n=63) OpenDomain=0.846(n=13) SingleHop=0.642(n=81) | lat_mean_ms=9710.3 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT B2_bonsai1_27b_1bit n=200 overall=0.5550 | MultiHop=0.256(n=43) Temporal=0.587(n=63) OpenDomain=0.692(n=13) SingleHop=0.667(n=81) | lat_mean_ms=8291.4 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT B3_bonsai1_27b_ternary n=200 overall=0.4950 | MultiHop=0.209(n=43) Temporal=0.444(n=63) OpenDomain=0.769(n=13) SingleHop=0.642(n=81) | lat_mean_ms=7944.9 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT B4_bonsai2_27b_think1k n=200 overall=0.6500 | MultiHop=0.302(n=43) Temporal=0.825(n=63) OpenDomain=0.692(n=13) SingleHop=0.691(n=81) | lat_mean_ms=20577.9 ctx_tok=1523.3 empty=0 err=0
+PAIRED B0 vs A0: n=200 cand_only=30 ref_only=15 net=15
+PAIRED B0 vs B1: n=200 cand_only=11 ref_only=17 net=-6
+PAIRED B1 vs A0: n=200 cand_only=33 ref_only=12 net=21
+PAIRED B2 vs A0: n=200 cand_only=28 ref_only=20 net=8
+PAIRED B2 vs B1: n=200 cand_only=16 ref_only=29 net=-13
+PAIRED B3 vs A0: n=200 cand_only=22 ref_only=26 net=-4
+PAIRED B3 vs B1: n=200 cand_only=13 ref_only=38 net=-25
+PAIRED B4 vs A0: n=200 cand_only=41 ref_only=14 net=27
+PAIRED B4 vs B1: n=200 cand_only=21 ref_only=15 net=6
+PAIRED B4 vs B0: n=200 cand_only=25 ref_only=13 net=12
