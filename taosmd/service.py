@@ -639,10 +639,8 @@ async def a2a_feed(
     """Return messages from the agent-to-agent bus, oldest-first.
 
     Filters by ``thread`` (when given) and by ``since`` (Unix timestamp,
-    exclusive lower bound). ``limit`` caps the number of rows fetched from
-    the archive (applied before reversing, so it limits the most-recent N
-    messages when ``since`` is None). Returns chronological order (oldest
-    first) suitable for chat-style display.
+    exclusive lower bound). ``limit`` caps the number of rows returned.
+    Returns chronological order (oldest first) suitable for chat-style display.
 
     Each item has shape ``{"id", "ts", "from", "body", "thread",
     "reply_to"}`` plus ``refs`` and/or ``blocks`` when those were
@@ -676,22 +674,46 @@ async def a2a_feed(
         _superseded = set()
         alias_sources = []
 
-    # Query with no thread filter when we need to merge history from aliases
-    if alias_sources and thread is not None:
-        rows_all = await archive.query(event_type=EVENT_A2A, since=since, limit=limit * 10)
-        rows = [
-            r for r in rows_all
-            if (r.get("app_id") == thread or r.get("app_id") in alias_sources)
-        ]
-        rows = rows[:limit]
-    else:
-        rows = await archive.query(
-            event_type=EVENT_A2A,
-            app_id=thread,
-            since=since,
-            limit=limit,
-        )
-    # archive.query returns newest-first; A2A feed is displayed oldest-first.
+    # Bounded scan: page the archive query until we collect `limit` readable
+    # rows, or until we've scanned at most MAX_SCAN_MULTIPLE * limit rows.
+    # This prevents unbounded reads when many rows are filtered out
+    # (deleted/superseded/admin-action).
+    MAX_SCAN_MULTIPLE = 5
+    max_scan = limit * MAX_SCAN_MULTIPLE
+    rows: list = []
+    scan_since = since
+    while len(rows) < limit:
+        batch_limit = min(limit, max_scan - len(rows))
+        if batch_limit <= 0:
+            break
+        if alias_sources and thread is not None:
+            batch = await archive.query(
+                event_type=EVENT_A2A,
+                since=scan_since,
+                limit=batch_limit,
+            )
+            batch = [
+                r for r in batch
+                if (r.get("app_id") == thread or r.get("app_id") in alias_sources)
+            ]
+        else:
+            batch = await archive.query(
+                event_type=EVENT_A2A,
+                app_id=thread,
+                since=scan_since,
+                limit=batch_limit,
+            )
+        if not batch:
+            break
+        rows.extend(batch)
+        # Advance scan_since to the oldest row in this batch (since archive.query
+        # returns newest-first, the last element is the oldest).
+        scan_since = batch[-1]["timestamp"]
+        if len(batch) < batch_limit:
+            break
+
+    # Trim to limit and reverse to oldest-first
+    rows = rows[:limit]
     rows = list(reversed(rows))
     result = []
     for row in rows:
@@ -1877,6 +1899,32 @@ async def admin_a2a_supersede_message(msg_id: int, *, data_dir=None) -> dict:
     return await a2a_admin_supersede_message(msg_id, data_dir=data_dir, stores=stores)
 
 
+async def admin_a2a_set_acl(
+    channel: str,
+    *,
+    read: list[str] | None = None,
+    post: list[str] | None = None,
+    clear: bool = False,
+    data_dir=None,
+) -> dict:
+    """Set or update the ACL for a single channel (admin operation).
+
+    Args:
+        channel: Channel name (non-empty string).
+        read: List of principal patterns allowed to read. None = leave unchanged.
+        post: List of principal patterns allowed to post. None = leave unchanged.
+        clear: When True, remove the channel's ACL entirely.
+        data_dir: Optional data directory override.
+
+    Returns:
+        The normalized ACL map after the update.
+    """
+    from . import config as _config
+    return _config.set_channel_acl(
+        channel, read=read, post=post, clear=clear, data_dir=data_dir
+    )
+
+
 # ---------------------------------------------------------------------------
 # Collections service wrappers
 # ---------------------------------------------------------------------------
@@ -2260,7 +2308,7 @@ __all__ = ["ingest", "search", "pending_list", "pending_resolve", "reconcile", "
            "task_update", "task_add_edge", "task_remove_edge", "task_projects",
            "admin_shelf_create", "admin_shelf_archive", "admin_shelf_unarchive",
            "admin_a2a_delete_channel", "admin_a2a_rename_channel",
-           "admin_a2a_supersede_message",
+           "admin_a2a_supersede_message", "admin_a2a_set_acl",
            "a2a_record_delivered", "a2a_record_seen", "a2a_get_receipts",
            "a2a_get_receipt", "a2a_prune_receipts", "a2a_ack",
            "collections_create", "collections_list", "collections_get",

@@ -69,6 +69,10 @@ _HUMAN_PRINCIPAL_IDS_KEY = "human_principal_ids"
 # one of these directories. Empty (the default) means collections are off.
 _COLLECTIONS_SECTION_KEY = "collections"
 _COLLECTIONS_ALLOWED_ROOTS_KEY = "allowed_roots"
+# Section under which A2A channel ACLs live. Each channel maps to an object with
+# optional "read" and "post" arrays of principal patterns. Missing key defaults
+# to ["*"] (open). A non-object per-channel value fails CLOSED.
+_CHANNEL_ACL_KEY = "channel_acl"
 
 MANAGED_BY_STANDALONE = "standalone"
 MANAGED_BY_TAOS = "taos"
@@ -841,6 +845,113 @@ def set_collections_allowed_roots(roots, *, clear: bool = False, data_dir=None) 
     _write(data, data_dir)
 
 
+# ---------------------------------------------------------------------------
+# A2A Channel ACLs
+# ---------------------------------------------------------------------------
+
+def _normalize_acl(acl: dict) -> dict:
+    """Normalize and validate a channel ACL dict.
+
+    Each channel entry must be an object with optional "read" and "post"
+    arrays of strings. A missing key defaults to ["*"] (open). A non-object
+    per-channel value (list, string, number, etc.) causes the entire ACL to
+    be treated as deny-all for that channel (fail-closed).
+
+    Returns a normalized dict where every channel has both "read" and "post"
+    as lists of strings. Channels with invalid entries are omitted from the
+    result (effectively deny-all).
+    """
+    if not isinstance(acl, dict):
+        return {}
+    normalized = {}
+    for channel, entry in acl.items():
+        if not isinstance(channel, str) or not channel:
+            continue
+        if not isinstance(entry, dict):
+            # Fail closed: non-dict entry means deny all access to this channel
+            continue
+        read_val = entry.get("read")
+        post_val = entry.get("post")
+        read_list = read_val if isinstance(read_val, list) else ["*"]
+        post_list = post_val if isinstance(post_val, list) else ["*"]
+        # Validate that list elements are strings
+        read_list = [p for p in read_list if isinstance(p, str)]
+        post_list = [p for p in post_list if isinstance(p, str)]
+        normalized[channel] = {"read": read_list, "post": post_list}
+    return normalized
+
+
+def get_channel_acl(data_dir=None) -> dict:
+    """Return the normalized channel ACL map.
+
+    Returns a dict mapping channel names to {"read": [...], "post": [...]}
+    with all values as lists of strings. Missing keys default to ["*"].
+    Channels with malformed (non-dict) entries are omitted (deny-all).
+    """
+    data = _read(data_dir)
+    acl = data.get(_CHANNEL_ACL_KEY)
+    return _normalize_acl(acl) if isinstance(acl, dict) else {}
+
+
+def set_channel_acl(
+    channel: str,
+    *,
+    read: list[str] | None = None,
+    post: list[str] | None = None,
+    clear: bool = False,
+    data_dir=None,
+) -> dict:
+    """Set or update the ACL for a single channel.
+
+    Args:
+        channel: Channel name (non-empty string).
+        read: List of principal patterns allowed to read. None = leave unchanged.
+        post: List of principal patterns allowed to post. None = leave unchanged.
+        clear: When True, remove the channel's ACL entirely.
+        data_dir: Optional data directory override.
+
+    Returns:
+        The normalized ACL map after the update.
+
+    Raises:
+        ValueError: if channel is not a non-empty string, if clear is not a
+            boolean, or if read/post are provided but not lists of strings.
+    """
+    if not isinstance(channel, str) or not channel:
+        raise ValueError("channel must be a non-empty string")
+    if not isinstance(clear, bool):
+        raise ValueError("clear must be a boolean")
+    if read is not None:
+        if not isinstance(read, list) or not all(isinstance(p, str) for p in read):
+            raise ValueError("read must be a list of strings")
+    if post is not None:
+        if not isinstance(post, list) or not all(isinstance(p, str) for p in post):
+            raise ValueError("post must be a list of strings")
+
+    data = _read(data_dir)
+    acl_section = data.get(_CHANNEL_ACL_KEY)
+    if not isinstance(acl_section, dict):
+        acl_section = {}
+
+    if clear:
+        acl_section.pop(channel, None)
+    else:
+        existing = acl_section.get(channel)
+        if isinstance(existing, dict):
+            # Merge with existing, preserving dimensions not provided
+            merged_read = read if read is not None else existing.get("read", ["*"])
+            merged_post = post if post is not None else existing.get("post", ["*"])
+        else:
+            # No valid existing entry; use provided values or defaults
+            merged_read = read if read is not None else ["*"]
+            merged_post = post if post is not None else ["*"]
+        acl_section[channel] = {"read": merged_read, "post": merged_post}
+
+    data[_CHANNEL_ACL_KEY] = acl_section
+    _write(data, data_dir)
+    return _normalize_acl(acl_section)
+
+
 __all__ = [
     "get_memory_model",
     "set_memory_model",
@@ -875,4 +986,6 @@ __all__ = [
     "set_generator_profile",
     "get_collections_allowed_roots",
     "set_collections_allowed_roots",
+    "get_channel_acl",
+    "set_channel_acl",
 ]

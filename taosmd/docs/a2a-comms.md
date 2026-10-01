@@ -555,6 +555,58 @@ set, the data plane is gated by the `server_token` and the admin surface by the
 `admin_token`; a caller holding only the `server_token` cannot run admin ops.
 If neither token is set, the admin surface fails closed (403).
 
+### Channel ACLs
+
+Channel ACLs control which principals may **read** and **post** to a channel.
+They are configured via the admin endpoint `POST /a2a/admin/set-acl` and stored
+in `~/.taosmd/config.json` under the `channel_acl` key.
+
+Each channel entry is an object with optional `read` and `post` arrays of
+principal patterns. The special pattern `"*"` (default) means "any principal".
+Patterns are exact-match or `*` wildcard only; no other glob syntax is
+supported.
+
+**Important: always set both `read` and `post` together.** A missing key
+defaults to `["*"]` (open), so setting only `post` without `read` leaves the
+channel readable by everyone, and vice versa. For a private channel, set both:
+
+```bash
+curl -X POST http://127.0.0.1:7900/a2a/admin/set-acl \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <admin_token>" \
+  -d '{"channel": "secret-proj", "read": ["alice", "bob"], "post": ["alice", "bob"]}'
+```
+
+To clear a channel's ACL (revert to open):
+
+```bash
+curl -X POST http://127.0.0.1:7900/a2a/admin/set-acl \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <admin_token>" \
+  -d '{"channel": "secret-proj", "clear": true}'
+```
+
+A malformed per-channel ACL entry (e.g. a string or array where an object is
+expected) fails **closed**: that channel becomes unreadable and unpostable by
+anyone until corrected.
+
+The following endpoints enforce read ACLs:
+- `GET /a2a/channels` — channel list filtered to readable channels
+- `GET /a2a/census` — sender census filtered to readable channels
+- `GET /a2a/members?channel=` — 403 if channel not readable
+- `GET /a2a/messages?thread=` — messages filtered to readable threads
+- `GET /a2a/mentions` — mentions filtered to readable threads
+- `GET /a2a/inbox` — inbox filtered to readable threads
+- `GET /a2a/inbox/unhandled` — unhandled filtered to readable threads
+- `GET /a2a/stream?thread=` — SSE stream filtered to readable threads
+- `GET /a2a/threads` — thread list filtered to readable threads
+- `GET /a2a/threads/{thread}/messages` — 403 if thread not readable
+- `GET /a2a/threads/{thread}/members` — 403 if thread not readable
+
+The following endpoints enforce post ACLs:
+- `POST /a2a/send` — 403 if channel not postable
+- `POST /a2a/import` — 403 if any envelope's thread not postable
+
 ### Registry auth (verify-and-warn)
 
 `POST /a2a/send` can verify sender identity against a taOS registry. Three

@@ -1049,6 +1049,111 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     return None, False
             return project, True
 
+        # ----- A2A Channel ACL helpers ---------------------------------------
+        def _get_request_identity(self) -> str | None:
+            """Return the caller's identity for ACL checks.
+
+            Uses the verified registry token's ``sub`` when available,
+            otherwise falls back to the data-plane token (if configured),
+            otherwise returns None (standalone mode, no identity).
+            """
+            if _registry_verifier is not None:
+                return self._get_authenticated_agent_id()
+            if _server_token:
+                # In data-plane token mode, we don't have a principal identity
+                # from the token itself. The caller must be identified via
+                # other means (e.g. query param for some endpoints). Return
+                # a special marker to indicate "authenticated but unnamed".
+                return "_authenticated_"
+            return None
+
+        def _resolve_channel_acl(self) -> dict:
+            """Resolve and memoize the channel ACL map for this request.
+
+            Caches on (config_path, mtime) so the config file is read at most
+            once per request even when multiple channels are checked.
+            """
+            if not hasattr(self, "_channel_acl_cache"):
+                import os
+                config_path = _config._config_path(data_dir)
+                try:
+                    st = os.stat(config_path)
+                    cache_key = (str(config_path), st.st_mtime_ns)
+                except OSError:
+                    cache_key = (str(config_path), 0)
+                if getattr(self, "_channel_acl_cache_key", None) == cache_key:
+                    return self._channel_acl_cache
+                self._channel_acl_cache = _config.get_channel_acl(data_dir)
+                self._channel_acl_cache_key = cache_key
+            return self._channel_acl_cache
+
+        def _can_read_channel(self, channel: str, identity: str | None) -> bool:
+            """Check if ``identity`` can read ``channel`` per the ACL.
+
+            Returns True when allowed, False when denied. No ACL configured
+            for the channel means open (["*"] default).
+            """
+            acl_map = self._resolve_channel_acl()
+            entry = acl_map.get(channel)
+            if entry is None:
+                # No ACL entry = open
+                return True
+            read_patterns = entry.get("read", ["*"])
+            if identity is None:
+                return "*" in read_patterns
+            return self._match_principal(identity, read_patterns)
+
+        def _can_post_channel(self, channel: str, identity: str | None) -> bool:
+            """Check if ``identity`` can post to ``channel`` per the ACL.
+
+            Returns True when allowed, False when denied. No ACL configured
+            for the channel means open (["*"] default).
+            """
+            acl_map = self._resolve_channel_acl()
+            entry = acl_map.get(channel)
+            if entry is None:
+                return True
+            post_patterns = entry.get("post", ["*"])
+            if identity is None:
+                return "*" in post_patterns
+            return self._match_principal(identity, post_patterns)
+
+        @staticmethod
+        def _match_principal(principal: str, patterns: list[str]) -> bool:
+            """Match a principal against a list of glob-style patterns.
+
+            Patterns support exact match and ``*`` wildcard (matches any
+            non-empty string). ``*`` is the only wildcard supported.
+            """
+            for pat in patterns:
+                if pat == "*":
+                    return True
+                if pat == principal:
+                    return True
+            return False
+
+        def _enforce_channel_read_acl(self, channel: str, identity: str | None) -> bool:
+            """Enforce read ACL for a channel.
+
+            Returns True if allowed (caller proceeds), False if denied
+            (403 already written, caller must return).
+            """
+            if not self._can_read_channel(channel, identity):
+                self._send_json(403, {"error": f"channel ACL: read denied for {channel!r}"})
+                return False
+            return True
+
+        def _enforce_channel_post_acl(self, channel: str, identity: str | None) -> bool:
+            """Enforce post ACL for a channel.
+
+            Returns True if allowed (caller proceeds), False if denied
+            (403 already written, caller must return).
+            """
+            if not self._can_post_channel(channel, identity):
+                self._send_json(403, {"error": f"channel ACL: post denied for {channel!r}"})
+                return False
+            return True
+
         # ----- routing -----------------------------------------------------
         def do_GET(self) -> None:  # noqa: N802 - stdlib signature
             self._dispatch("GET")
@@ -1305,6 +1410,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_admin_a2a_rename_channel()
                 elif method == "POST" and path == "/a2a/admin/supersede-message":
                     self._handle_admin_a2a_supersede_message()
+                elif method == "POST" and path == "/a2a/admin/set-acl":
+                    self._handle_admin_a2a_set_acl()
                 elif method == "GET" and _serve_dashboard and self._try_serve_static(parts.path):
                     return  # static asset served
                 elif method == "GET" and _serve_dashboard:
@@ -1656,19 +1763,35 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_a2a_channels(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
-            channels = runner.run(service.a2a_channels(data_dir=data_dir))
-            self._send_json(200, {"channels": channels})
+            identity = self._get_request_identity()
+            all_channels = runner.run(service.a2a_channels(data_dir=data_dir))
+            # Filter channels by read ACL
+            allowed = [ch for ch in all_channels if self._can_read_channel(ch["channel"], identity)]
+            self._send_json(200, {"channels": allowed})
 
         def _handle_a2a_census(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
-            census = runner.run(service.a2a_sender_census(data_dir=data_dir))
-            self._send_json(200, {"census": census})
+            identity = self._get_request_identity()
+            all_census = runner.run(service.a2a_sender_census(data_dir=data_dir))
+            # Filter census by read ACL on each channel
+            filtered = {}
+            for sender, data in all_census.items():
+                allowed_channels = {
+                    ch: count for ch, count in data.get("channels", {}).items()
+                    if self._can_read_channel(ch, identity)
+                }
+                if allowed_channels:
+                    filtered[sender] = {"total": sum(allowed_channels.values()), "channels": allowed_channels}
+            self._send_json(200, {"census": filtered})
 
         def _handle_a2a_members(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset({"channel"}), self._raw_qs)
             channel = (qs.get("channel") or [None])[0]
             if not channel:
                 raise _BadRequest("'channel' query parameter is required")
+            identity = self._get_request_identity()
+            if not self._enforce_channel_read_acl(channel, identity):
+                return
             members = runner.run(service.a2a_members(channel=channel, data_dir=data_dir))
             self._send_json(200, {"members": members})
 
@@ -1734,6 +1857,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     raise _BadRequest(
                         "'body' (non-empty string) is required when 'blocks' is present"
                     )
+            # Channel post ACL: enforce before registry auth so ACL is the
+            # first line of defence. The sender's identity is the `from` field.
+            if not self._enforce_channel_post_acl(thread, from_):
+                return
             # Registry auth (opt-in): when a verifier is configured, run the
             # identity + grant checks. Two failure classes:
             #   1. Missing Bearer token -> the only tolerated class in
@@ -1980,9 +2107,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'limit' must not be negative")
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
+            identity = self._get_request_identity()
+            if thread and not self._enforce_channel_read_acl(thread, identity):
+                return
             messages = runner.run(
                 service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
             )
+            # Filter messages by read ACL on their thread
+            if thread is None:
+                messages = [m for m in messages if self._can_read_channel(m.get("thread", "general"), identity)]
             # Compact mode: ?fields=id,sender,body projects each message down
             # to the named keys so token-frugal consumers (LLM agents) skip
             # framing they never read. Unknown names are ignored, never a 400,
@@ -2060,6 +2193,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_mentions_feed(reader, since=since, limit=limit_i, data_dir=data_dir)
             )
+            # Filter mentions by read ACL on their thread
+            identity = self._get_request_identity()
+            messages = [m for m in messages if self._can_read_channel(m.get("thread", "general"), identity)]
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_inbox(self, qs: dict) -> None:
@@ -2102,6 +2238,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_inbox(consumer, limit=limit_i, include_kinds=include_kinds, exclude_acked_by=exclude_acked_by, data_dir=data_dir)
             )
+            # Filter inbox by read ACL on each message's thread
+            identity = self._get_request_identity()
+            messages = [m for m in messages if self._can_read_channel(m.get("thread", "general"), identity)]
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_inbox_advance(self) -> None:
@@ -2183,6 +2322,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_inbox_unhandled(consumer, limit=limit_i, data_dir=data_dir)
             )
+            # Filter unhandled by read ACL on each message's thread
+            identity = self._get_request_identity()
+            messages = [m for m in messages if self._can_read_channel(m.get("thread", "general"), identity)]
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_stream(self, qs: dict) -> None:
@@ -2208,6 +2350,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             if last_ts is None:
                 last_ts = time.time()
 
+            identity = self._get_request_identity()
+            # Enforce read ACL upfront for the target thread (if specified)
+            if thread and not self._enforce_channel_read_acl(thread, identity):
+                return
+
             subscriber_agent = self._get_authenticated_agent_id()
 
             # Send SSE response headers before entering the poll loop.
@@ -2226,12 +2373,18 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     )
                     # Keep only messages strictly newer than last_ts to avoid
                     # re-sending the boundary row on subsequent polls.
-                    new_msgs = [m for m in msgs if m["ts"] > last_ts]
+                    # Also advance last_ts across ALL messages (including denied)
+                    # so a run of denied rows doesn't freeze the cursor (item 2).
+                    new_msgs = []
+                    for msg in msgs:
+                        if msg["ts"] > last_ts:
+                            last_ts = msg["ts"]
+                            if self._can_read_channel(msg.get("thread", "general"), identity):
+                                new_msgs.append(msg)
                     if new_msgs:
                         for msg in new_msgs:
                             frame = f"data: {json.dumps(msg)}\n\n"
                             self.wfile.write(frame.encode("utf-8"))
-                            last_ts = msg["ts"]
                             if subscriber_agent is not None:
                                 runner.run(
                                     service.a2a_record_delivered(
@@ -2253,10 +2406,13 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_a2a_threads(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset({"principal"}), self._raw_qs)
             principal = (qs.get("principal") or [None])[0]
-            threads = runner.run(
+            identity = self._get_request_identity()
+            all_threads = runner.run(
                 service.a2a_threads(principal=principal, data_dir=data_dir)
             )
-            self._send_json(200, {"threads": threads})
+            # Filter threads by read ACL
+            allowed = [t for t in all_threads if self._can_read_channel(t["thread"], identity)]
+            self._send_json(200, {"threads": allowed})
 
         def _handle_a2a_thread_messages(self, thread: str, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset({"before", "after", "limit"}), self._raw_qs)
@@ -2269,6 +2425,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            identity = self._get_request_identity()
+            if not self._enforce_channel_read_acl(thread, identity):
+                return
             result = runner.run(
                 service.a2a_thread_messages(
                     thread=thread, before=before, after=after,
@@ -2303,6 +2462,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             """GET /a2a/threads/{thread}/members: list active members."""
             thread = unquote(thread)
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
+            identity = self._get_request_identity()
+            if not self._enforce_channel_read_acl(thread, identity):
+                return
             members = runner.run(
                 service.a2a_list_members(thread=thread, data_dir=data_dir)
             )
@@ -3019,6 +3181,33 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'id' must be an integer") from exc
             result = runner.run(
                 service.admin_a2a_supersede_message(msg_id, data_dir=data_dir)
+            )
+            self._send_json(200, result)
+
+        def _handle_admin_a2a_set_acl(self) -> None:
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            channel = body.get("channel")
+            read = body.get("read")
+            post = body.get("post")
+            clear = body.get("clear", False)
+            if not isinstance(channel, str) or not channel:
+                raise _BadRequest("'channel' (non-empty string) is required")
+            if not isinstance(clear, bool):
+                raise _BadRequest("'clear' must be a boolean")
+            if read is not None and (not isinstance(read, list) or not all(isinstance(p, str) for p in read)):
+                raise _BadRequest("'read' must be a list of strings")
+            if post is not None and (not isinstance(post, list) or not all(isinstance(p, str) for p in post)):
+                raise _BadRequest("'post' must be a list of strings")
+            result = runner.run(
+                service.admin_a2a_set_acl(
+                    channel=channel,
+                    read=read,
+                    post=post,
+                    clear=clear,
+                    data_dir=data_dir,
+                )
             )
             self._send_json(200, result)
 
