@@ -1,0 +1,6 @@
+E-031 kill criterion read as a non-inferiority floor: qualify iff overall >= A0 - 0.02 = 0.495.
+Anchor drift: A0 0.515 vs July 0.515, drift 0.000.
+A1 granite4.2:8b 0.550 (+0.035): QUALIFIES for full-1540 confirm + LongMemEval screen; paired 29 vs 22, lift within noise.
+A2 gemma4:12b-it-qat 0.615 (+0.100): QUALIFIES for full-1540 confirm + LongMemEval screen; paired 33 vs 13, the one lift that separates at n=200.
+A3 granite4.2:3b 0.380 (-0.135): FAILS (N-027).
+No default changed.

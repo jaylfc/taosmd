@@ -1,0 +1,15 @@
+E-031 LoCoMo subset-200 generator screen, 3060 box, ollama 0.33.3, chain_20260930_185439 (COMPLETE 2026-10-01 01:16 local)
+Judge: qwen3:4b (digest 359d7dd4bcda), separate rescore pass (judge_rejudged). Lines below are verbatim from the chain log and a paired comparison over the rescored JSONs (SHA256SUMS.json.txt).
+Model digests (ollama list): qwen3.5:9b 6488c96fa5fa, granite4.2:8b f586c02fdecd, gemma4:12b-it-qat 38044be4f923, granite4.2:3b 40577dc168a3
+
+VALIDITY A0_qwen35_9b: rows=200 real_predictions=200 think_tags=0
+VALIDITY A1_granite42_8b: rows=200 real_predictions=200 think_tags=0
+VALIDITY A2_gemma4_12b_qat: rows=200 real_predictions=200 think_tags=0
+VALIDITY A3_granite42_3b: rows=200 real_predictions=200 think_tags=0
+ARMRESULT A0_qwen35_9b n=200 overall=0.5150 | MultiHop=0.256(n=43) Temporal=0.587(n=63) OpenDomain=0.615(n=13) SingleHop=0.580(n=81) | lat_mean_ms=6886.6 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT A1_granite42_8b n=200 overall=0.5500 | MultiHop=0.256(n=43) Temporal=0.603(n=63) OpenDomain=0.615(n=13) SingleHop=0.654(n=81) | lat_mean_ms=10652.0 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT A2_gemma4_12b_qat n=200 overall=0.6150 | MultiHop=0.326(n=43) Temporal=0.746(n=63) OpenDomain=0.538(n=13) SingleHop=0.679(n=81) | lat_mean_ms=6825.9 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT A3_granite42_3b n=200 overall=0.3800 | MultiHop=0.140(n=43) Temporal=0.365(n=63) OpenDomain=0.154(n=13) SingleHop=0.556(n=81) | lat_mean_ms=15731.6 ctx_tok=1523.3 empty=0 err=0
+PAIRED A1_granite42_8b vs A0: n=200 cand_only_right=29 anchor_only_right=22 net=7
+PAIRED A2_gemma4_12b_qat vs A0: n=200 cand_only_right=33 anchor_only_right=13 net=20
+PAIRED A3_granite42_3b vs A0: n=200 cand_only_right=15 anchor_only_right=42 net=-27

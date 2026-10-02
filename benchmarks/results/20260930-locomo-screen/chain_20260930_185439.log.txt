@@ -1,0 +1,251 @@
+[2026-09-30 18:54:39] repo at f6f8074 onnxruntime is an optional extra, not a core dependency (unblocks every musl host) (#492) | ollama ollama version is 0.33.3
+[2026-09-30 18:54:39] judge digest qwen3:4b: 359d7dd4bcda
+[2026-09-30 18:54:43] reranker onnx sha256: 8c4855a2768d1410cedbdcc80a57375f7fae15e2576b7cfdd87ab0cf206ba20f 9a748c82efb2079d24650c489e053dbb3c71d8acbbcf04d7b2340db66f2748f7 
+[2026-09-30 18:54:43] dataset sha256: 79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4
+[2026-09-30 18:54:43] === ARM A0_qwen35_9b: generation with qwen3.5:9b START ===
+[2026-09-30 18:54:43] digest qwen3.5:9b: 6488c96fa5fa
+1483 MiB
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[conv-26] ingested 419 turns in 1.6s
+  progress: 25 QAs processed
+  progress: 50 QAs processed
+  progress: 75 QAs processed
+  progress: 100 QAs processed
+  progress: 125 QAs processed
+  progress: 150 QAs processed
+[conv-30] ingested 369 turns in 1.3s
+  progress: 175 QAs processed
+  progress: 200 QAs processed
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+=========================================================
+LoCoMo Benchmark — taosmd (commit f6f8074)
+=========================================================
+Conversations: 10 | Questions: 200 | Model: qwen3.5:9b | Strategy: vector-only | Top-K: 10
+---------------------------------------------------------
+Category         Count      F1   BLEU-1    Judge      R@K
+---------------------------------------------------------
+Single-hop (1)      43    0.12     0.08     0.00     0.67
+Temporal  (2)       63    0.21     0.13     0.00     0.87
+Multi-hop (3)       13    0.11     0.07     0.00     0.55
+Open-dom  (4)       81    0.22     0.14     0.00     0.60
+---------------------------------------------------------
+Overall            200    0.19     0.12     0.00     0.70
+=========================================================
+Latency  p50=6887 ms  p95=8737 ms  |  Context ~1523 tok/query (mean)
+=========================================================
+
+wrote ~/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A0_qwen35_9b_s200.json
+VALIDITY A0_qwen35_9b: rows=200 real_predictions=200 think_tags=0
+[2026-09-30 19:17:50] ARM A0_qwen35_9b: rescore with external judge qwen3:4b
+[locomo_20260930_185439_A0_qwen35_9b_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
+  progress: 25/200  ok=25 err=0  0.06 items/s  eta=49.8m
+  progress: 50/200  ok=50 err=0  0.05 items/s  eta=54.4m
+  progress: 75/200  ok=75 err=0  0.05 items/s  eta=44.7m
+  progress: 100/200  ok=100 err=0  0.05 items/s  eta=35.3m
+  progress: 125/200  ok=125 err=0  0.05 items/s  eta=26.9m
+  progress: 150/200  ok=150 err=0  0.05 items/s  eta=17.5m
+  progress: 175/200  ok=175 err=0  0.05 items/s  eta=8.5m
+
+[locomo_20260930_185439_A0_qwen35_9b_s200.json] DONE: 200/200 judged ok, 0 errored in 65.1 min
+
+========================================================================================
+Rescore (streaming) — locomo_20260930_185439_A0_qwen35_9b_s200.json  [judge: qwen3:4b]
+========================================================================================
+Category          Count       F1     Orig      Tol    Rejudge    Delta  Covered
+----------------------------------------------------------------------------------------
+Single-hop (1)       43    0.122     0.00     0.00       0.26    +0.26  43/43 (100%)
+Temporal   (2)       63    0.211     0.00     0.51       0.59    +0.59  63/63 (100%)
+Multi-hop  (3)       13    0.111     0.00     0.00       0.62    +0.62  13/13 (100%)
+Open-dom   (4)       81    0.220     0.00     0.00       0.58    +0.58  81/81 (100%)
+----------------------------------------------------------------------------------------
+Overall                  200    0.189     0.00     0.16       0.52    +0.52  200/200 (100%)
+========================================================================================
+ARMRESULT A0_qwen35_9b n=200 overall=0.5150 | MultiHop=0.256(n=43) Temporal=0.587(n=63) OpenDomain=0.615(n=13) SingleHop=0.580(n=81) | lat_mean_ms=6886.6 ctx_tok=1523.3 empty=0 err=0
+[2026-09-30 20:23:02] === ARM A0_qwen35_9b DONE ===
+[2026-09-30 20:23:02] === ARM A1_granite42_8b: generation with granite4.2:8b START ===
+[2026-09-30 20:23:02] digest granite4.2:8b: f586c02fdecd
+1468 MiB
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[conv-26] ingested 419 turns in 1.5s
+  progress: 25 QAs processed
+  progress: 50 QAs processed
+  progress: 75 QAs processed
+  progress: 100 QAs processed
+  progress: 125 QAs processed
+  progress: 150 QAs processed
+[conv-30] ingested 369 turns in 1.3s
+  progress: 175 QAs processed
+  progress: 200 QAs processed
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+=========================================================
+LoCoMo Benchmark — taosmd (commit f6f8074)
+=========================================================
+Conversations: 10 | Questions: 200 | Model: granite4.2:8b | Strategy: vector-only | Top-K: 10
+---------------------------------------------------------
+Category         Count      F1   BLEU-1    Judge      R@K
+---------------------------------------------------------
+Single-hop (1)      43    0.13     0.09     0.00     0.67
+Temporal  (2)       63    0.16     0.10     0.00     0.87
+Multi-hop (3)       13    0.07     0.04     0.00     0.55
+Open-dom  (4)       81    0.27     0.18     0.00     0.60
+---------------------------------------------------------
+Overall            200    0.19     0.13     0.00     0.70
+=========================================================
+Latency  p50=10652 ms  p95=37222 ms  |  Context ~1523 tok/query (mean)
+=========================================================
+
+wrote ~/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A1_granite42_8b_s200.json
+VALIDITY A1_granite42_8b: rows=200 real_predictions=200 think_tags=0
+[2026-09-30 20:58:42] ARM A1_granite42_8b: rescore with external judge qwen3:4b
+[locomo_20260930_185439_A1_granite42_8b_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
+  progress: 25/200  ok=25 err=0  0.06 items/s  eta=46.0m
+  progress: 50/200  ok=50 err=0  0.05 items/s  eta=49.5m
+  progress: 75/200  ok=75 err=0  0.05 items/s  eta=41.1m
+  progress: 100/200  ok=100 err=0  0.05 items/s  eta=31.1m
+  progress: 125/200  ok=125 err=0  0.05 items/s  eta=23.3m
+  progress: 150/200  ok=150 err=0  0.05 items/s  eta=15.9m
+  progress: 175/200  ok=175 err=0  0.05 items/s  eta=8.0m
+
+[locomo_20260930_185439_A1_granite42_8b_s200.json] DONE: 200/200 judged ok, 0 errored in 63.7 min
+
+========================================================================================
+Rescore (streaming) — locomo_20260930_185439_A1_granite42_8b_s200.json  [judge: qwen3:4b]
+========================================================================================
+Category          Count       F1     Orig      Tol    Rejudge    Delta  Covered
+----------------------------------------------------------------------------------------
+Single-hop (1)       43    0.133     0.00     0.00       0.26    +0.26  43/43 (100%)
+Temporal   (2)       63    0.162     0.00     0.38       0.60    +0.60  63/63 (100%)
+Multi-hop  (3)       13    0.074     0.00     0.00       0.62    +0.62  13/13 (100%)
+Open-dom   (4)       81    0.271     0.00     0.00       0.65    +0.65  81/81 (100%)
+----------------------------------------------------------------------------------------
+Overall                  200    0.194     0.00     0.12       0.55    +0.55  200/200 (100%)
+========================================================================================
+ARMRESULT A1_granite42_8b n=200 overall=0.5500 | MultiHop=0.256(n=43) Temporal=0.603(n=63) OpenDomain=0.615(n=13) SingleHop=0.654(n=81) | lat_mean_ms=10652.0 ctx_tok=1523.3 empty=0 err=0
+[2026-09-30 22:02:30] === ARM A1_granite42_8b DONE ===
+[2026-09-30 22:02:30] === ARM A2_gemma4_12b_qat: generation with gemma4:12b-it-qat START ===
+[2026-09-30 22:02:30] digest gemma4:12b-it-qat: 38044be4f923
+1467 MiB
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[conv-26] ingested 419 turns in 2.0s
+  progress: 25 QAs processed
+  progress: 50 QAs processed
+  progress: 75 QAs processed
+  progress: 100 QAs processed
+  progress: 125 QAs processed
+  progress: 150 QAs processed
+[conv-30] ingested 369 turns in 1.6s
+  progress: 175 QAs processed
+  progress: 200 QAs processed
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+=========================================================
+LoCoMo Benchmark — taosmd (commit f6f8074)
+=========================================================
+Conversations: 10 | Questions: 200 | Model: gemma4:12b-it-qat | Strategy: vector-only | Top-K: 10
+---------------------------------------------------------
+Category         Count      F1   BLEU-1    Judge      R@K
+---------------------------------------------------------
+Single-hop (1)      43    0.17     0.11     0.00     0.67
+Temporal  (2)       63    0.32     0.21     0.00     0.87
+Multi-hop (3)       13    0.10     0.07     0.00     0.55
+Open-dom  (4)       81    0.30     0.21     0.00     0.60
+---------------------------------------------------------
+Overall            200    0.27     0.18     0.00     0.70
+=========================================================
+Latency  p50=6826 ms  p95=8312 ms  |  Context ~1523 tok/query (mean)
+=========================================================
+
+wrote ~/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A2_gemma4_12b_qat_s200.json
+VALIDITY A2_gemma4_12b_qat: rows=200 real_predictions=200 think_tags=0
+[2026-09-30 22:25:25] ARM A2_gemma4_12b_qat: rescore with external judge qwen3:4b
+[locomo_20260930_185439_A2_gemma4_12b_qat_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
+  progress: 25/200  ok=25 err=0  0.06 items/s  eta=52.1m
+  progress: 50/200  ok=50 err=0  0.05 items/s  eta=47.7m
+  progress: 75/200  ok=75 err=0  0.05 items/s  eta=40.9m
+  progress: 100/200  ok=100 err=0  0.05 items/s  eta=31.9m
+  progress: 125/200  ok=125 err=0  0.05 items/s  eta=23.7m
+  progress: 150/200  ok=150 err=0  0.05 items/s  eta=16.1m
+  progress: 175/200  ok=175 err=0  0.05 items/s  eta=8.0m
+
+[locomo_20260930_185439_A2_gemma4_12b_qat_s200.json] DONE: 200/200 judged ok, 0 errored in 63.8 min
+
+========================================================================================
+Rescore (streaming) — locomo_20260930_185439_A2_gemma4_12b_qat_s200.json  [judge: qwen3:4b]
+========================================================================================
+Category          Count       F1     Orig      Tol    Rejudge    Delta  Covered
+----------------------------------------------------------------------------------------
+Single-hop (1)       43    0.174     0.00     0.00       0.33    +0.33  43/43 (100%)
+Temporal   (2)       63    0.318     0.00     0.11       0.75    +0.75  63/63 (100%)
+Multi-hop  (3)       13    0.104     0.00     0.00       0.54    +0.54  13/13 (100%)
+Open-dom   (4)       81    0.305     0.00     0.00       0.68    +0.68  81/81 (100%)
+----------------------------------------------------------------------------------------
+Overall                  200    0.268     0.00     0.04       0.61    +0.61  200/200 (100%)
+========================================================================================
+ARMRESULT A2_gemma4_12b_qat n=200 overall=0.6150 | MultiHop=0.326(n=43) Temporal=0.746(n=63) OpenDomain=0.538(n=13) SingleHop=0.679(n=81) | lat_mean_ms=6825.9 ctx_tok=1523.3 empty=0 err=0
+[2026-09-30 23:29:19] === ARM A2_gemma4_12b_qat DONE ===
+[2026-09-30 23:29:19] === ARM A3_granite42_3b: generation with granite4.2:3b START ===
+[2026-09-30 23:29:19] digest granite4.2:3b: 40577dc168a3
+1467 MiB
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[conv-26] ingested 419 turns in 1.7s
+  progress: 25 QAs processed
+  progress: 50 QAs processed
+  progress: 75 QAs processed
+  progress: 100 QAs processed
+  progress: 125 QAs processed
+  progress: 150 QAs processed
+[conv-30] ingested 369 turns in 1.3s
+  progress: 175 QAs processed
+  progress: 200 QAs processed
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+=========================================================
+LoCoMo Benchmark — taosmd (commit f6f8074)
+=========================================================
+Conversations: 10 | Questions: 200 | Model: granite4.2:3b | Strategy: vector-only | Top-K: 10
+---------------------------------------------------------
+Category         Count      F1   BLEU-1    Judge      R@K
+---------------------------------------------------------
+Single-hop (1)      43    0.16     0.12     0.00     0.67
+Temporal  (2)       63    0.20     0.13     0.00     0.87
+Multi-hop (3)       13    0.09     0.06     0.00     0.55
+Open-dom  (4)       81    0.28     0.19     0.00     0.60
+---------------------------------------------------------
+Overall            200    0.22     0.15     0.00     0.70
+=========================================================
+Latency  p50=15732 ms  p95=25341 ms  |  Context ~1523 tok/query (mean)
+=========================================================
+
+wrote ~/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A3_granite42_3b_s200.json
+VALIDITY A3_granite42_3b: rows=200 real_predictions=200 think_tags=0
+[2026-10-01 00:21:55] ARM A3_granite42_3b: rescore with external judge qwen3:4b
+[locomo_20260930_185439_A3_granite42_3b_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
+  progress: 25/200  ok=25 err=0  0.07 items/s  eta=43.4m
+  progress: 50/200  ok=50 err=0  0.06 items/s  eta=38.6m
+  progress: 75/200  ok=75 err=0  0.06 items/s  eta=32.7m
+  progress: 100/200  ok=100 err=0  0.06 items/s  eta=26.1m
+  progress: 125/200  ok=125 err=0  0.06 items/s  eta=20.2m
+  progress: 150/200  ok=150 err=0  0.06 items/s  eta=14.3m
+  progress: 175/200  ok=175 err=0  0.06 items/s  eta=6.7m
+
+[locomo_20260930_185439_A3_granite42_3b_s200.json] DONE: 200/200 judged ok, 0 errored in 54.5 min
+
+========================================================================================
+Rescore (streaming) — locomo_20260930_185439_A3_granite42_3b_s200.json  [judge: qwen3:4b]
+========================================================================================
+Category          Count       F1     Orig      Tol    Rejudge    Delta  Covered
+----------------------------------------------------------------------------------------
+Single-hop (1)       43    0.160     0.00     0.00       0.14    +0.14  43/43 (100%)
+Temporal   (2)       63    0.196     0.00     0.21       0.37    +0.37  63/63 (100%)
+Multi-hop  (3)       13    0.087     0.00     0.00       0.15    +0.15  13/13 (100%)
+Open-dom   (4)       81    0.281     0.00     0.00       0.56    +0.56  81/81 (100%)
+----------------------------------------------------------------------------------------
+Overall                  200    0.215     0.00     0.07       0.38    +0.38  200/200 (100%)
+========================================================================================
+ARMRESULT A3_granite42_3b n=200 overall=0.3800 | MultiHop=0.140(n=43) Temporal=0.365(n=63) OpenDomain=0.154(n=13) SingleHop=0.556(n=81) | lat_mean_ms=15731.6 ctx_tok=1523.3 empty=0 err=0
+[2026-10-01 01:16:29] === ARM A3_granite42_3b DONE ===
+[2026-10-01 01:16:29] final cleanup: stopping all ollama models
+[2026-10-01 01:16:35] final GPU: 1470 MiB
+[2026-10-01 01:16:35] === CHAIN COMPLETE ===
