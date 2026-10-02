@@ -234,6 +234,11 @@ Verdict: /no_think"""
     return False
 
 
+def score_answer(predicted: str, gold: str) -> bool:
+    """Fast substring check (used when LLM judge not available)."""
+    return score_answer_substring(predicted, gold)
+
+
 async def llm_answer(client, context: str, question: str) -> str:
     """Use remote LLM to generate answer from recalled context."""
     try:
@@ -490,7 +495,7 @@ async def retrieve_context(
             (0 = off). Requires ``retrieval_path="retrieve"``; the manual
             legacy path cannot honour it, which is what blocked E-030.
         retrieval_path: ``"retrieve"`` (default) routes the vector stage
-            through ``taosmd.retrieval.retrieve()`` so runtime controls apply.
+            through ``taosmd.retrieval.retrieve`` so runtime controls apply.
             ``"legacy"`` reproduces the pre-wiring hand-rolled stage so the
             published anchors can be re-measured side by side.
     """
@@ -812,99 +817,13 @@ async def run_benchmark(
         await vmem.close()
         await embed_client.aclose()
 
-    # Results
-    overall = total_correct / total_questions * 100 if total_questions > 0 else 0
-    per_q = total_time / total_questions if total_questions > 0 else 0.0
-
-    delta_summary = summarize_retrieval_delta(all_results)
-    if delta_summary:
-        print(f"\n{'='*70}")
-        print("RETRIEVAL DELTA (wired retrieve() path vs pre-wiring legacy path)")
-        print(f"  questions compared:      {delta_summary['n']}")
-        print(f"  byte-identical contexts: {delta_summary['identical']}"
-              f" ({delta_summary['identical_pct']:.1f}%)")
-        print(f"  mean chars legacy/wired: {delta_summary['mean_legacy_chars']:.0f}"
-              f" / {delta_summary['mean_wired_chars']:.0f}")
-
-    if not NO_INLINE_JUDGE:
-        # Normal mode: show overall results
-        print(f"\n{'='*70}")
-        print("RESULTS")
-        print(f"{'='*70}")
-        print(f"\n  Overall: {total_correct}/{total_questions} ({overall:.1f}%)")
-        print(f"  Total time: {total_time:.1f}s ({per_q:.1f}s per question)")
-
-        print("\n  By question type:")
-        for qtype, data in sorted(results_by_type.items()):
-            pct = data["correct"] / data["total"] * 100 if data["total"] > 0 else 0
-            print(f"    {qtype:30s} {data['correct']:3d}/{data['total']:<3d} ({pct:.1f}%)")
-
-        print("\n  Comparison:")
-        print("    MemPalace (raw verbatim):     96.6%")
-        print("    SuperMemory:                  81.6%")
-        print("    GPT-4o (full context):        ~70%")
-        print(f"    taOSmd (Pi NPU, no cloud):    {overall:.1f}%")
-        print(f"{'='*70}")
-    else:
-        # NO_INLINE_JUDGE mode: don't show fake score
-        print(f"\n{'='*70}")
-        print("RESULTS (NO INLINE JUDGE MODE)")
-        print(f"{'='*70}")
-        print(f"\n  Total questions processed: {total_questions}")
-        print(f"  Total time: {total_time:.1f}s ({per_q:.1f}s per question)")
-        print("\n  By question type (counts only):")
-        for qtype, data in sorted(results_by_type.items()):
-            print(f"    {qtype:30s} {data['total']:<3d} questions")
-
-        print("\n  Comparison:")
-        print("    MemPalace (raw verbatim):     96.6%")
-        print("    SuperMemory:                  81.6%")
-        print("    GPT-4o (full context):        ~70%")
-        print(f"    taOSmd (Pi NPU, no cloud):    (metrics only)")
-        print(f"{'='*70}")
-
-    if llm_client:
-        await llm_client.aclose()
-
-    if total_questions:
-        if not out_path:
-            out_dir = _default_out_dir()
-            os.makedirs(out_dir, exist_ok=True)
-            out_path = os.path.join(out_dir, f"longmemeval_{int(time.time())}.json")
-        result_doc = {
-            "question_type": question_type,
-            "limit": limit,
-            "generator": REMOTE_LLM_MODEL,
-            "judge": JUDGE_MODEL,
-            "rerank": RERANK,
-            "decompose": DECOMPOSE,
-            "self_verify": SELF_VERIFY,
-            "assemble_tokens": ASSEMBLE_TOKENS,
-            "retrieve_limit": RETRIEVE_LIMIT,
-            "fts_limit": FTS_LIMIT,
-            "context_chars": CONTEXT_CHARS,
-            "num_ctx": NUM_CTX,
-            "retrieval_path": retrieval_path,
-            "graph_expansion": graph_expansion,
-            "retrieval_delta": delta_summary,
-            "gen_temp": GEN_TEMP,
-            "inline_judge": not NO_INLINE_JUDGE,
-            "metrics": {
-                "n": total_questions,
-                "by_type": {qtype: {"total": data["total"]} for qtype, data in results_by_type.items()},
-            } if NO_INLINE_JUDGE else {
-                "n": total_questions,
-                "correct": total_correct,
-                "accuracy": overall,
-                "by_type": results_by_type,
-            },
-            "results": all_results,
-        }
-        with open(out_path, "w") as f:
-            json.dump(result_doc, f, indent=2)
-        print(f"  results -> {out_path}")
-
-    return None if NO_INLINE_JUDGE else overall
+    # Metrics
+    metrics = {
+        "n": total_questions,
+        "correct": total_correct if not NO_INLINE_JUDGE else None,
+        "accuracy": overall if not NO_INLINE_JUDGE else None,
+        "by_type": results_by_type,
+    }
 
 
 def main() -> None:
