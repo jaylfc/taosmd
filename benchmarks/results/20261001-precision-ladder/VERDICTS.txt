@@ -1,0 +1,7 @@
+E-033 kill criterion applied verbatim: ternary is "no worse" than its 4-bit Qwen3 base only if overall >= base - 0.02.
+8B:   C0 ternary 0.355 vs C1 base 0.405, bar 0.385: FAILS, -0.050 (paired 15 vs 25). Ternary loses accuracy at 8B.
+4B:   C3 ternary 0.360 vs C4 base 0.415, bar 0.395: FAILS, -0.055 (paired 14 vs 25). Ternary loses accuracy at 4B.
+1.7B: C6 ternary 0.270 vs C7 base 0.355, bar 0.335: FAILS, -0.085 (paired 14 vs 31). Ternary loses accuracy at 1.7B.
+1-bit, descriptive: C2 8B 0.300 (-0.055 vs C0, -0.105 vs C1); C5 4B 0.355 (-0.005 vs C3, -0.060 vs C4); C8 1.7B 0.135 (-0.135 vs C6, -0.220 vs C7, Temporal 0/63).
+Against the E-031 anchor A0 qwen3.5:9b 0.515 (context only, crosses a backend): every arm is below it; best C4 0.415.
+No ternary arm passes, so none becomes a candidate reader. No default or recipe changed.

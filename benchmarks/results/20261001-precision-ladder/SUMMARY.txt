@@ -1,0 +1,42 @@
+E-033 small-model precision ladder, LoCoMo subset-200, 3060 box, PrismML llama.cpp fork prism-b10743-adfffbe via --llm-backend llama-server, chain_20260930_200456 (started 2026-10-01 09:28 local after E-032 exited, COMPLETE 2026-10-01 19:43 local)
+Repo at f6f8074. Judge: qwen3:4b (digest 359d7dd4bcda), same family as every C arm. Scores are judge_rejudged means. GGUF sha256 values are in the chain log.
+GPU memory after load: captured as a DEVICE TOTAL from nvidia-smi, which includes the desktop session (1469 MiB before the chain, 1913 MiB after). It is not attributable to the model: C8, the smallest file at 0.25 GB, read 7293 MiB, while C1 at 5.2 GB read 8660 MiB. Recorded as measured, not used for any fit claim.
+Latency split (computed from per-row retrieval_ms and gen_ms): retrieval is 4244-4659 ms/QA on every arm (bge-v2-m3 reranker, top-50 pool), so end-to-end latency does not separate the arms. Generation alone does:
+  C0_tbonsai_8b gen_ms mean=1118.5 median=1092.7 retrieval_ms mean=4504.8
+  C1_qwen3_8b_q4km gen_ms mean=1414.4 median=1374.8 retrieval_ms mean=4334.0
+  C2_bonsai_8b_1bit gen_ms mean=1095.1 median=1070.8 retrieval_ms mean=4244.4
+  C3_tbonsai_4b gen_ms mean=753.9 median=723.9 retrieval_ms mean=4266.0
+  C4_qwen3_4b_q4km gen_ms mean=906.7 median=879.6 retrieval_ms mean=4602.6
+  C5_bonsai_4b_1bit gen_ms mean=725.7 median=702.6 retrieval_ms mean=4357.6
+  C6_tbonsai_1p7b gen_ms mean=364.2 median=347.2 retrieval_ms mean=4300.6
+  C7_qwen3_1p7b_q4km gen_ms mean=449.0 median=424.7 retrieval_ms mean=4623.3
+  C8_bonsai_1p7b_1bit gen_ms mean=361.1 median=343.0 retrieval_ms mean=4658.8
+
+VALIDITY C0_tbonsai_8b: rows=200 real_predictions=200 think_tags=0
+VALIDITY C1_qwen3_8b_q4km: rows=200 real_predictions=200 think_tags=0
+VALIDITY C2_bonsai_8b_1bit: rows=200 real_predictions=200 think_tags=0
+VALIDITY C3_tbonsai_4b: rows=200 real_predictions=200 think_tags=0
+VALIDITY C4_qwen3_4b_q4km: rows=200 real_predictions=200 think_tags=0
+VALIDITY C5_bonsai_4b_1bit: rows=200 real_predictions=200 think_tags=0
+VALIDITY C6_tbonsai_1p7b: rows=200 real_predictions=200 think_tags=0
+VALIDITY C7_qwen3_1p7b_q4km: rows=200 real_predictions=200 think_tags=0
+VALIDITY C8_bonsai_1p7b_1bit: rows=200 real_predictions=200 think_tags=0
+PAIRED C0_tbonsai_8b vs C1_qwen3_8b_q4km: n=200 cand_only=15 ref_only=25 net=-10
+PAIRED C2_bonsai_8b_1bit vs C1_qwen3_8b_q4km: n=200 cand_only=10 ref_only=31 net=-21
+PAIRED C2_bonsai_8b_1bit vs C0_tbonsai_8b: n=200 cand_only=10 ref_only=21 net=-11
+PAIRED C3_tbonsai_4b vs C4_qwen3_4b_q4km: n=200 cand_only=14 ref_only=25 net=-11
+PAIRED C5_bonsai_4b_1bit vs C4_qwen3_4b_q4km: n=200 cand_only=19 ref_only=31 net=-12
+PAIRED C5_bonsai_4b_1bit vs C3_tbonsai_4b: n=200 cand_only=17 ref_only=18 net=-1
+PAIRED C6_tbonsai_1p7b vs C7_qwen3_1p7b_q4km: n=200 cand_only=14 ref_only=31 net=-17
+PAIRED C8_bonsai_1p7b_1bit vs C7_qwen3_1p7b_q4km: n=200 cand_only=6 ref_only=50 net=-44
+PAIRED C8_bonsai_1p7b_1bit vs C6_tbonsai_1p7b: n=200 cand_only=8 ref_only=35 net=-27
+PAIRED C4_qwen3_4b_q4km vs C1_qwen3_8b_q4km: n=200 cand_only=17 ref_only=15 net=2
+ARMRESULT C0_tbonsai_8b n=200 overall=0.3550 | MultiHop=0.186(n=43) Temporal=0.286(n=63) OpenDomain=0.154(n=13) SingleHop=0.531(n=81) | lat_mean_ms=5623.3 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT C1_qwen3_8b_q4km n=200 overall=0.4050 | MultiHop=0.186(n=43) Temporal=0.349(n=63) OpenDomain=0.385(n=13) SingleHop=0.568(n=81) | lat_mean_ms=5748.4 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT C2_bonsai_8b_1bit n=200 overall=0.3000 | MultiHop=0.140(n=43) Temporal=0.175(n=63) OpenDomain=0.077(n=13) SingleHop=0.519(n=81) | lat_mean_ms=5339.5 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT C3_tbonsai_4b n=200 overall=0.3600 | MultiHop=0.233(n=43) Temporal=0.254(n=63) OpenDomain=0.077(n=13) SingleHop=0.556(n=81) | lat_mean_ms=5019.9 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT C4_qwen3_4b_q4km n=200 overall=0.4150 | MultiHop=0.209(n=43) Temporal=0.365(n=63) OpenDomain=0.462(n=13) SingleHop=0.556(n=81) | lat_mean_ms=5509.3 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT C5_bonsai_4b_1bit n=200 overall=0.3550 | MultiHop=0.233(n=43) Temporal=0.206(n=63) OpenDomain=0.308(n=13) SingleHop=0.543(n=81) | lat_mean_ms=5083.3 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT C6_tbonsai_1p7b n=200 overall=0.2700 | MultiHop=0.209(n=43) Temporal=0.127(n=63) OpenDomain=0.077(n=13) SingleHop=0.444(n=81) | lat_mean_ms=4664.8 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT C7_qwen3_1p7b_q4km n=200 overall=0.3550 | MultiHop=0.140(n=43) Temporal=0.238(n=63) OpenDomain=0.154(n=13) SingleHop=0.593(n=81) | lat_mean_ms=5072.3 ctx_tok=1523.3 empty=0 err=0
+ARMRESULT C8_bonsai_1p7b_1bit n=200 overall=0.1350 | MultiHop=0.070(n=43) Temporal=0.000(n=63) OpenDomain=0.077(n=13) SingleHop=0.284(n=81) | lat_mean_ms=5020.0 ctx_tok=1523.3 empty=0 err=0
