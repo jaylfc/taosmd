@@ -16,7 +16,7 @@
 [conv-30] ingested 369 turns in 1.3s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -35,7 +35,7 @@ Overall            200    0.19     0.12     0.00     0.70
 Latency  p50=6887 ms  p95=8737 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A0_qwen35_9b_s200.json
+wrote ~/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A0_qwen35_9b_s200.json
 VALIDITY A0_qwen35_9b: rows=200 real_predictions=200 think_tags=0
 [2026-09-30 19:17:50] ARM A0_qwen35_9b: rescore with external judge qwen3:4b
 [locomo_20260930_185439_A0_qwen35_9b_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -77,7 +77,7 @@ ARMRESULT A0_qwen35_9b n=200 overall=0.5150 | MultiHop=0.256(n=43) Temporal=0.58
 [conv-30] ingested 369 turns in 1.3s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -96,7 +96,7 @@ Overall            200    0.19     0.13     0.00     0.70
 Latency  p50=10652 ms  p95=37222 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A1_granite42_8b_s200.json
+wrote ~/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A1_granite42_8b_s200.json
 VALIDITY A1_granite42_8b: rows=200 real_predictions=200 think_tags=0
 [2026-09-30 20:58:42] ARM A1_granite42_8b: rescore with external judge qwen3:4b
 [locomo_20260930_185439_A1_granite42_8b_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -138,7 +138,7 @@ ARMRESULT A1_granite42_8b n=200 overall=0.5500 | MultiHop=0.256(n=43) Temporal=0
 [conv-30] ingested 369 turns in 1.6s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -157,7 +157,7 @@ Overall            200    0.27     0.18     0.00     0.70
 Latency  p50=6826 ms  p95=8312 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A2_gemma4_12b_qat_s200.json
+wrote ~/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A2_gemma4_12b_qat_s200.json
 VALIDITY A2_gemma4_12b_qat: rows=200 real_predictions=200 think_tags=0
 [2026-09-30 22:25:25] ARM A2_gemma4_12b_qat: rescore with external judge qwen3:4b
 [locomo_20260930_185439_A2_gemma4_12b_qat_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -199,7 +199,7 @@ ARMRESULT A2_gemma4_12b_qat n=200 overall=0.6150 | MultiHop=0.326(n=43) Temporal
 [conv-30] ingested 369 turns in 1.3s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -218,7 +218,7 @@ Overall            200    0.22     0.15     0.00     0.70
 Latency  p50=15732 ms  p95=25341 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A3_granite42_3b_s200.json
+wrote ~/taosmd/bench-logs/20260930-locomo-screen/locomo_20260930_185439_A3_granite42_3b_s200.json
 VALIDITY A3_granite42_3b: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 00:21:55] ARM A3_granite42_3b: rescore with external judge qwen3:4b
 [locomo_20260930_185439_A3_granite42_3b_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)

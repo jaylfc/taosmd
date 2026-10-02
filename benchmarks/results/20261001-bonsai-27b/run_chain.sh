@@ -6,20 +6,20 @@
 # Changes vs July: interpreter (.venv on the rebuilt host), arms, output dir,
 # and the pre-registered validity checks (<90% real preds OR any <think => VOID).
 set -u
-cd /home/jay/taosmd || exit 1
-DIR="/home/jay/taosmd/bench-logs/20261001-bonsai-27b"
+cd $HOME/taosmd || exit 1
+DIR="$HOME/taosmd/bench-logs/20261001-bonsai-27b"
 mkdir -p "$DIR"
 TS="$(date +%Y%m%d_%H%M%S)"
 LOG="${DIR}/chain_${TS}.log"
-PY="/home/jay/taosmd/.venv/bin/python"
+PY="$HOME/taosmd/.venv/bin/python"
 OLLAMA="http://localhost:11434"
 JUDGE="qwen3:4b"
 export TQDM_DISABLE=1
 log(){ echo "[$(date "+%F %T")] $*" | tee -a "$LOG"; }
 unload(){ curl -s "${OLLAMA}/api/generate" -d "{\"model\":\"$1\",\"keep_alive\":0}" >/dev/null 2>&1 || true; sleep 5; }
 
-B=/home/jay/llama-prism/b10743/llama-prism-b10743-adfffbe
-export LD_LIBRARY_PATH="$(cat /home/jay/llama-prism/ldpath.txt):$B"
+B=$HOME/llama-prism/b10743/llama-prism-b10743-adfffbe
+export LD_LIBRARY_PATH="$(cat $HOME/llama-prism/ldpath.txt):$B"
 PORT=8091
 SRV_PID=""
 start_server(){  # $1 gguf path, rest = extra server flags
@@ -108,11 +108,11 @@ log "prism llama-server: $("$B/llama-server" --version 2>&1 | head -1)"
 log "judge digest ${JUDGE}: $(ollama list | awk -v m="$JUDGE" '$1==m{print $2}')"
 log "reranker onnx sha256: $(sha256sum models/bge-reranker-v2-m3-onnx/model.onnx models/bge-reranker-v2-m3-onnx/model.onnx_data | awk '{print $1}' | tr '\n' ' ')"
 log "dataset sha256: $(sha256sum data/locomo/data/locomo10.json | awk '{print $1}')"
-run_arm "/home/jay/models/Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-PTQ1_0.gguf" "B0_bonsai2_27b_ternary" "--reasoning off" "" || log "ARM B0 FAILED"
-run_arm "/home/jay/models/Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp/Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp.gguf" "B1_qwen38_27b_iq2xs" "--reasoning off" "" || log "ARM B1 FAILED"
-run_arm "/home/jay/models/Bonsai-27B-gguf/Bonsai-27B-Q1_0.gguf" "B2_bonsai1_27b_1bit" "--reasoning off" "" || log "ARM B2 FAILED"
-run_arm "/home/jay/models/Ternary-Bonsai-27B-gguf/Ternary-Bonsai-27B-PQ2_0.gguf" "B3_bonsai1_27b_ternary" "--reasoning off" "" || log "ARM B3 FAILED"
-run_arm "/home/jay/models/Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-PTQ1_0.gguf" "B4_bonsai2_27b_think1k" "--reasoning-budget 1024 --reasoning-effort medium" "--thinking-mode --num-predict 4096" || log "ARM B4 FAILED"
+run_arm "$HOME/models/Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-PTQ1_0.gguf" "B0_bonsai2_27b_ternary" "--reasoning off" "" || log "ARM B0 FAILED"
+run_arm "$HOME/models/Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp/Qwen3.8-27B-GSQ-RCO-IQ2_XS-mtp.gguf" "B1_qwen38_27b_iq2xs" "--reasoning off" "" || log "ARM B1 FAILED"
+run_arm "$HOME/models/Bonsai-27B-gguf/Bonsai-27B-Q1_0.gguf" "B2_bonsai1_27b_1bit" "--reasoning off" "" || log "ARM B2 FAILED"
+run_arm "$HOME/models/Ternary-Bonsai-27B-gguf/Ternary-Bonsai-27B-PQ2_0.gguf" "B3_bonsai1_27b_ternary" "--reasoning off" "" || log "ARM B3 FAILED"
+run_arm "$HOME/models/Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-PTQ1_0.gguf" "B4_bonsai2_27b_think1k" "--reasoning-budget 1024 --reasoning-effort medium" "--thinking-mode --num-predict 4096" || log "ARM B4 FAILED"
 log "final cleanup: stopping all ollama models"
 for M in $(ollama ps 2>/dev/null | awk "NR>1{print \$1}"); do ollama stop "$M" >/dev/null 2>&1 || true; done
 sleep 5

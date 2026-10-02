@@ -4,12 +4,12 @@
 # Changes vs July: interpreter (.venv on the rebuilt host), arms, output dir,
 # and the pre-registered validity checks (<90% real preds OR any <think => VOID).
 set -u
-cd /home/jay/taosmd || exit 1
-DIR="/home/jay/taosmd/bench-logs/20260930-locomo-screen"
+cd $HOME/taosmd || exit 1
+DIR="$HOME/taosmd/bench-logs/20260930-locomo-screen"
 mkdir -p "$DIR"
 TS="$(date +%Y%m%d_%H%M%S)"
 LOG="${DIR}/chain_${TS}.log"
-PY="/home/jay/taosmd/.venv/bin/python"
+PY="$HOME/taosmd/.venv/bin/python"
 OLLAMA="http://localhost:11434"
 JUDGE="qwen3:4b"
 export TQDM_DISABLE=1
