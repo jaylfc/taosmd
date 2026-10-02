@@ -406,10 +406,42 @@ async def fetch_by_ref(ref: dict, *, agent: str, data_dir=None) -> dict:
 
 
 _A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "system"})
+_A2A_REF_KINDS = frozenset({"doc", "report", "spec", "log"})
 _A2A_ALARM_MIN_INTERVAL = 5.0
 _A2A_MAX_REFS = 8
 _A2A_MAX_MESSAGE_BYTES = 64 * 1024
 _A2A_MAX_IMPORT_BATCH = 100
+
+
+def validate_a2a_envelope(refs, blocks, body_text):
+    """Validate A2A envelope fields (refs, blocks, total size).
+
+    Raises ValueError with the same messages the HTTP layer used before
+    this helper was extracted, so the HTTP handler can map ValueError to
+    _BadRequest and preserve the exact 400 response shape.
+    """
+    if refs is not None:
+        if not isinstance(refs, list):
+            raise ValueError("'refs' must be a list")
+        if len(refs) > _A2A_MAX_REFS:
+            raise ValueError(f"'refs' must have at most {_A2A_MAX_REFS} items")
+        for i, ref in enumerate(refs):
+            if not isinstance(ref, dict):
+                raise ValueError(f"'refs[{i}]' must be an object")
+            ref_kind = ref.get("kind")
+            if ref_kind not in _A2A_REF_KINDS:
+                raise ValueError(
+                    f"'refs[{i}].kind' must be one of {sorted(_A2A_REF_KINDS)}"
+                )
+    if blocks is not None:
+        if not isinstance(blocks, list):
+            raise ValueError("'blocks' must be a list")
+        for i, block in enumerate(blocks):
+            if not isinstance(block, dict):
+                raise ValueError(f"'blocks[{i}]' must be an object")
+    serialized = json.dumps({"body": body_text, "refs": refs, "blocks": blocks})
+    if len(serialized.encode("utf-8")) > _A2A_MAX_MESSAGE_BYTES:
+        raise ValueError("message (body+refs+blocks) exceeds 64KB limit")
 
 
 async def a2a_send(
@@ -469,6 +501,7 @@ async def a2a_send(
         raise ValueError(
             f"'kind' must be one of {sorted(_A2A_KINDS)}; got {kind!r}"
         )
+    validate_a2a_envelope(refs, blocks, body)
     remote = _get_remote(data_dir)
     if remote is not None:
         return await remote.a2a_send(

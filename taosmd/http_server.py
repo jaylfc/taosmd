@@ -1692,36 +1692,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     "'kind' must be one of "
                     f"{sorted(_A2A_KINDS)}; got {kind!r}"
                 )
-            # --- Envelope field validation (taOSmd #211) ---
-            # refs: optional list of dicts, <=8 items, kind in the enum.
-            if refs is not None:
-                if not isinstance(refs, list):
-                    raise _BadRequest("'refs' must be a list")
-                if len(refs) > _A2A_MAX_REFS:
-                    raise _BadRequest(f"'refs' must have at most {_A2A_MAX_REFS} items")
-                for i, ref in enumerate(refs):
-                    if not isinstance(ref, dict):
-                        raise _BadRequest(f"'refs[{i}]' must be an object")
-                    ref_kind = ref.get("kind")
-                    if ref_kind not in _A2A_REF_KINDS:
-                        raise _BadRequest(
-                            f"'refs[{i}].kind' must be one of {sorted(_A2A_REF_KINDS)}"
-                        )
-            # blocks: optional list of dicts; no inner schema validation.
-            if blocks is not None:
-                if not isinstance(blocks, list):
-                    raise _BadRequest("'blocks' must be a list")
-                for i, block in enumerate(blocks):
-                    if not isinstance(block, dict):
-                        raise _BadRequest(f"'blocks[{i}]' must be an object")
-            # Total serialized message (body+refs+blocks) <= 64KB.
-            serialized = json.dumps(
-                {"body": body_text, "refs": refs, "blocks": blocks}
-            )
-            if len(serialized.encode("utf-8")) > _A2A_MAX_MESSAGE_BYTES:
-                raise _BadRequest(
-                    "message (body+refs+blocks) exceeds 64KB limit"
-                )
+            # --- Envelope field validation (shared helper, taOSmd #221/#222) ---
+            try:
+                service.validate_a2a_envelope(refs, blocks, body_text)
+            except ValueError as exc:
+                raise _BadRequest(str(exc))
             # Body validation: required when blocks is absent (existing behaviour).
             # Invariant: blocks present => body must be non-empty (body is ALWAYS
             # the flattened plain-text rendering; an empty body with blocks would
@@ -1863,25 +1838,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         "'kind' must be one of "
                         f"{sorted(_A2A_KINDS)}; got {kind!r}"
                     )
-                if refs is not None:
-                    if not isinstance(refs, list):
-                        raise _BadRequest("'refs' must be a list")
-                    if len(refs) > _A2A_MAX_REFS:
-                        raise _BadRequest(f"'refs' must have at most {_A2A_MAX_REFS} items")
-                    for i, ref in enumerate(refs):
-                        if not isinstance(ref, dict):
-                            raise _BadRequest(f"'refs[{i}]' must be an object")
-                        ref_kind = ref.get("kind")
-                        if ref_kind not in _A2A_REF_KINDS:
-                            raise _BadRequest(
-                                f"'refs[{i}].kind' must be one of {sorted(_A2A_REF_KINDS)}"
-                            )
-                if blocks is not None:
-                    if not isinstance(blocks, list):
-                        raise _BadRequest("'blocks' must be a list")
-                    for i, block in enumerate(blocks):
-                        if not isinstance(block, dict):
-                            raise _BadRequest(f"'blocks[{i}]' must be an object")
+                try:
+                    service.validate_a2a_envelope(refs, blocks, body_text)
+                except ValueError as exc:
+                    raise _BadRequest(str(exc))
                 serialized = json.dumps(
                     {"from": from_, "body": body_text, "thread": thread, "reply_to": reply_to, "refs": refs, "blocks": blocks, "kind": kind, "recipient": recipient}
                 )
