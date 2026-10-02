@@ -371,6 +371,8 @@ def test_do_fire_runs_as_subprocess(tmp_path, monkeypatch):
         + WATCHER_LINE
     )
     state = _install_fake_crontab(tmp_path, monkeypatch, initial_crontab)
+    # Force a2a_send to fail so the fallback log is written (test asserts on log content)
+    monkeypatch.setenv("TAOSMD_SERVER_URL", "http://invalid.invalid")
 
     proc = subprocess.run(
         ["/usr/bin/python3", str(SCRIPT), "--fire", "primary", fire_dt.isoformat()],
