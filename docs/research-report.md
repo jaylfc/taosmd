@@ -557,7 +557,7 @@ E-032 asked whether PrismML's ternary training holds up as a reader, with a same
 
 **N-029. PrismML ternary Bonsai loses LoCoMo accuracy against its own 4-bit Qwen3 base at every size tested (2026-10-02, E-033).**
 
-E-033 put each PrismML ternary model (PQ2_0) next to the Qwen3 model it was built from at an ordinary Q4_K_M, at 8B, 4B and 1.7B, plus the 1-bit (Q1_0) sibling at each size. All nine arms ran on the same PrismML llama-server build with thinking off, the same subset, the same retrieval config and the same judge, so within a size only the weights changed. Every arm passed the validity gate (200 of 200 real predictions, zero `<think` tags, zero empty or error rows, 1523 context tokens per QA), and retrieval recall was 0.702 on every arm.
+E-033 put each PrismML ternary model (PQ2_0) next to the Qwen3 model it was built from at an ordinary Q4_K_M, at 8B, 4B and 1.7B, plus the 1-bit (Q1_0) sibling at each size. All nine arms ran on the same PrismML llama-server build with thinking off, the same subset, the same retrieval config and the same judge, so within a size only the weights changed. Every arm passed the validity gate (200 of 200 real predictions, zero `<think` tags, zero empty or error rows, 1523 context tokens per QA), and retrieval recall was 0.702 on every arm (the `retrieval_recall` field of each arm's per-question result JSON, which stays on the bench host; the chain log rounds it to 0.70).
 
 | Arm | Model | File | Overall | MultiHop (43) | Temporal (63) | OpenDomain (13) | SingleHop (81) | Gen ms/QA | End-to-end ms/QA |
 |---|---|---|---|---|---|---|---|---|---|

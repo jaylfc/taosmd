@@ -5,8 +5,8 @@
 [2026-10-01 09:28:56] judge digest qwen3:4b: 359d7dd4bcda
 [2026-10-01 09:29:01] reranker onnx sha256: 8c4855a2768d1410cedbdcc80a57375f7fae15e2576b7cfdd87ab0cf206ba20f 9a748c82efb2079d24650c489e053dbb3c71d8acbbcf04d7b2340db66f2748f7 
 [2026-10-01 09:29:01] dataset sha256: 79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4
-[2026-10-01 09:29:01] === ARM C0_tbonsai_8b: generation with /home/jay/models/Ternary-Bonsai-8B-gguf/Ternary-Bonsai-8B-PQ2_0.gguf START ===
-[2026-10-01 09:29:07] gguf sha256 /home/jay/models/Ternary-Bonsai-8B-gguf/Ternary-Bonsai-8B-PQ2_0.gguf: 1376f942aa90e60f7b570c1d81b3916fea1315ff85aa1c4d19006af68fb4b922
+[2026-10-01 09:29:01] === ARM C0_tbonsai_8b: generation with ~/models/Ternary-Bonsai-8B-gguf/Ternary-Bonsai-8B-PQ2_0.gguf START ===
+[2026-10-01 09:29:07] gguf sha256 ~/models/Ternary-Bonsai-8B-gguf/Ternary-Bonsai-8B-PQ2_0.gguf: 1376f942aa90e60f7b570c1d81b3916fea1315ff85aa1c4d19006af68fb4b922
 [2026-10-01 09:29:07] server flags: --reasoning off | runner extra: 
 5937 MiB
 [transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
@@ -20,7 +20,7 @@
 [conv-30] ingested 369 turns in 1.6s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -39,7 +39,7 @@ Overall            200    0.29     0.22     0.00     0.70
 Latency  p50=5623 ms  p95=7243 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C0_tbonsai_8b_s200.json
+wrote ~/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C0_tbonsai_8b_s200.json
 VALIDITY C0_tbonsai_8b: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 09:48:05] ARM C0_tbonsai_8b: rescore with external judge qwen3:4b
 [locomo_20260930_200456_C0_tbonsai_8b_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -82,7 +82,7 @@ ARMRESULT C0_tbonsai_8b n=200 overall=0.3550 | MultiHop=0.186(n=43) Temporal=0.2
 [conv-30] ingested 369 turns in 1.4s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -101,7 +101,7 @@ Overall            200    0.30     0.21     0.00     0.70
 Latency  p50=5748 ms  p95=7313 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C1_qwen3_8b_q4km_s200.json
+wrote ~/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C1_qwen3_8b_q4km_s200.json
 VALIDITY C1_qwen3_8b_q4km: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 11:01:30] ARM C1_qwen3_8b_q4km: rescore with external judge qwen3:4b
 [locomo_20260930_200456_C1_qwen3_8b_q4km_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -129,8 +129,8 @@ Overall                  200    0.296     0.00     0.12       0.41    +0.41  200
 ========================================================================================
 ARMRESULT C1_qwen3_8b_q4km n=200 overall=0.4050 | MultiHop=0.186(n=43) Temporal=0.349(n=63) OpenDomain=0.385(n=13) SingleHop=0.568(n=81) | lat_mean_ms=5748.4 ctx_tok=1523.3 empty=0 err=0
 [2026-10-01 12:01:09] === ARM C1_qwen3_8b_q4km DONE ===
-[2026-10-01 12:01:09] === ARM C2_bonsai_8b_1bit: generation with /home/jay/models/Bonsai-8B-gguf/Bonsai-8B-Q1_0.gguf START ===
-[2026-10-01 12:01:12] gguf sha256 /home/jay/models/Bonsai-8B-gguf/Bonsai-8B-Q1_0.gguf: 284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54
+[2026-10-01 12:01:09] === ARM C2_bonsai_8b_1bit: generation with ~/models/Bonsai-8B-gguf/Bonsai-8B-Q1_0.gguf START ===
+[2026-10-01 12:01:12] gguf sha256 ~/models/Bonsai-8B-gguf/Bonsai-8B-Q1_0.gguf: 284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54
 [2026-10-01 12:01:12] server flags: --reasoning off | runner extra: 
 5035 MiB
 [transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
@@ -144,7 +144,7 @@ ARMRESULT C1_qwen3_8b_q4km n=200 overall=0.4050 | MultiHop=0.186(n=43) Temporal=
 [conv-30] ingested 369 turns in 1.3s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -163,7 +163,7 @@ Overall            200    0.20     0.14     0.00     0.70
 Latency  p50=5340 ms  p95=6990 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C2_bonsai_8b_1bit_s200.json
+wrote ~/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C2_bonsai_8b_1bit_s200.json
 VALIDITY C2_bonsai_8b_1bit: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 12:19:13] ARM C2_bonsai_8b_1bit: rescore with external judge qwen3:4b
 [locomo_20260930_200456_C2_bonsai_8b_1bit_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -191,8 +191,8 @@ Overall                  200    0.204     0.00     0.04       0.30    +0.30  200
 ========================================================================================
 ARMRESULT C2_bonsai_8b_1bit n=200 overall=0.3000 | MultiHop=0.140(n=43) Temporal=0.175(n=63) OpenDomain=0.077(n=13) SingleHop=0.519(n=81) | lat_mean_ms=5339.5 ctx_tok=1523.3 empty=0 err=0
 [2026-10-01 13:10:27] === ARM C2_bonsai_8b_1bit DONE ===
-[2026-10-01 13:10:27] === ARM C3_tbonsai_4b: generation with /home/jay/models/Ternary-Bonsai-4B-gguf/Ternary-Bonsai-4B-PQ2_0.gguf START ===
-[2026-10-01 13:10:31] gguf sha256 /home/jay/models/Ternary-Bonsai-4B-gguf/Ternary-Bonsai-4B-PQ2_0.gguf: 829abec7eb92f5bf464762be7c9e8a45d777c714543a1474fc90cee20e698beb
+[2026-10-01 13:10:27] === ARM C3_tbonsai_4b: generation with ~/models/Ternary-Bonsai-4B-gguf/Ternary-Bonsai-4B-PQ2_0.gguf START ===
+[2026-10-01 13:10:31] gguf sha256 ~/models/Ternary-Bonsai-4B-gguf/Ternary-Bonsai-4B-PQ2_0.gguf: 829abec7eb92f5bf464762be7c9e8a45d777c714543a1474fc90cee20e698beb
 [2026-10-01 13:10:31] server flags: --reasoning off | runner extra: 
 5426 MiB
 [transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
@@ -206,7 +206,7 @@ ARMRESULT C2_bonsai_8b_1bit n=200 overall=0.3000 | MultiHop=0.140(n=43) Temporal
 [conv-30] ingested 369 turns in 1.4s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -225,7 +225,7 @@ Overall            200    0.27     0.20     0.00     0.70
 Latency  p50=5020 ms  p95=6564 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C3_tbonsai_4b_s200.json
+wrote ~/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C3_tbonsai_4b_s200.json
 VALIDITY C3_tbonsai_4b: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 13:27:26] ARM C3_tbonsai_4b: rescore with external judge qwen3:4b
 [locomo_20260930_200456_C3_tbonsai_4b_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -253,8 +253,8 @@ Overall                  200    0.273     0.00     0.10       0.36    +0.36  200
 ========================================================================================
 ARMRESULT C3_tbonsai_4b n=200 overall=0.3600 | MultiHop=0.233(n=43) Temporal=0.254(n=63) OpenDomain=0.077(n=13) SingleHop=0.556(n=81) | lat_mean_ms=5019.9 ctx_tok=1523.3 empty=0 err=0
 [2026-10-01 14:19:47] === ARM C3_tbonsai_4b DONE ===
-[2026-10-01 14:19:47] === ARM C4_qwen3_4b_q4km: generation with /home/jay/models/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf START ===
-[2026-10-01 14:19:54] gguf sha256 /home/jay/models/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
+[2026-10-01 14:19:47] === ARM C4_qwen3_4b_q4km: generation with ~/models/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf START ===
+[2026-10-01 14:19:54] gguf sha256 ~/models/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
 [2026-10-01 14:19:54] server flags: --reasoning off | runner extra: 
 6839 MiB
 [transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
@@ -268,7 +268,7 @@ ARMRESULT C3_tbonsai_4b n=200 overall=0.3600 | MultiHop=0.233(n=43) Temporal=0.2
 [conv-30] ingested 369 turns in 1.3s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -287,7 +287,7 @@ Overall            200    0.26     0.19     0.00     0.70
 Latency  p50=5509 ms  p95=7217 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C4_qwen3_4b_q4km_s200.json
+wrote ~/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C4_qwen3_4b_q4km_s200.json
 VALIDITY C4_qwen3_4b_q4km: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 14:38:28] ARM C4_qwen3_4b_q4km: rescore with external judge qwen3:4b
 [locomo_20260930_200456_C4_qwen3_4b_q4km_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -315,8 +315,8 @@ Overall                  200    0.262     0.00     0.01       0.41    +0.41  200
 ========================================================================================
 ARMRESULT C4_qwen3_4b_q4km n=200 overall=0.4150 | MultiHop=0.209(n=43) Temporal=0.365(n=63) OpenDomain=0.462(n=13) SingleHop=0.556(n=81) | lat_mean_ms=5509.3 ctx_tok=1523.3 empty=0 err=0
 [2026-10-01 15:34:49] === ARM C4_qwen3_4b_q4km DONE ===
-[2026-10-01 15:34:49] === ARM C5_bonsai_4b_1bit: generation with /home/jay/models/Bonsai-4B-gguf/Bonsai-4B-Q1_0.gguf START ===
-[2026-10-01 15:34:51] gguf sha256 /home/jay/models/Bonsai-4B-gguf/Bonsai-4B-Q1_0.gguf: 4524b3f997f0f06444e568d1f26e2efd69effa3218c7ad3047432fb171e42168
+[2026-10-01 15:34:49] === ARM C5_bonsai_4b_1bit: generation with ~/models/Bonsai-4B-gguf/Bonsai-4B-Q1_0.gguf START ===
+[2026-10-01 15:34:51] gguf sha256 ~/models/Bonsai-4B-gguf/Bonsai-4B-Q1_0.gguf: 4524b3f997f0f06444e568d1f26e2efd69effa3218c7ad3047432fb171e42168
 [2026-10-01 15:34:51] server flags: --reasoning off | runner extra: 
 5005 MiB
 [transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
@@ -330,7 +330,7 @@ ARMRESULT C4_qwen3_4b_q4km n=200 overall=0.4150 | MultiHop=0.209(n=43) Temporal=
 [conv-30] ingested 369 turns in 1.3s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -349,7 +349,7 @@ Overall            200    0.28     0.20     0.00     0.70
 Latency  p50=5083 ms  p95=6752 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C5_bonsai_4b_1bit_s200.json
+wrote ~/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C5_bonsai_4b_1bit_s200.json
 VALIDITY C5_bonsai_4b_1bit: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 15:51:59] ARM C5_bonsai_4b_1bit: rescore with external judge qwen3:4b
 [locomo_20260930_200456_C5_bonsai_4b_1bit_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -377,8 +377,8 @@ Overall                  200    0.277     0.00     0.11       0.35    +0.35  200
 ========================================================================================
 ARMRESULT C5_bonsai_4b_1bit n=200 overall=0.3550 | MultiHop=0.233(n=43) Temporal=0.206(n=63) OpenDomain=0.308(n=13) SingleHop=0.543(n=81) | lat_mean_ms=5083.3 ctx_tok=1523.3 empty=0 err=0
 [2026-10-01 16:41:49] === ARM C5_bonsai_4b_1bit DONE ===
-[2026-10-01 16:41:49] === ARM C6_tbonsai_1p7b: generation with /home/jay/models/Ternary-Bonsai-1.7B-gguf/Ternary-Bonsai-1.7B-PQ2_0.gguf START ===
-[2026-10-01 16:41:51] gguf sha256 /home/jay/models/Ternary-Bonsai-1.7B-gguf/Ternary-Bonsai-1.7B-PQ2_0.gguf: de68ba48a8dacb21979915991e7741b917869d71410a370df951c0c3a237ae50
+[2026-10-01 16:41:49] === ARM C6_tbonsai_1p7b: generation with ~/models/Ternary-Bonsai-1.7B-gguf/Ternary-Bonsai-1.7B-PQ2_0.gguf START ===
+[2026-10-01 16:41:51] gguf sha256 ~/models/Ternary-Bonsai-1.7B-gguf/Ternary-Bonsai-1.7B-PQ2_0.gguf: de68ba48a8dacb21979915991e7741b917869d71410a370df951c0c3a237ae50
 [2026-10-01 16:41:51] server flags: --reasoning off | runner extra: 
 4364 MiB
 [transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
@@ -392,7 +392,7 @@ ARMRESULT C5_bonsai_4b_1bit n=200 overall=0.3550 | MultiHop=0.233(n=43) Temporal
 [conv-30] ingested 369 turns in 1.3s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -411,7 +411,7 @@ Overall            200    0.19     0.14     0.00     0.70
 Latency  p50=4665 ms  p95=6326 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C6_tbonsai_1p7b_s200.json
+wrote ~/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C6_tbonsai_1p7b_s200.json
 VALIDITY C6_tbonsai_1p7b: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 16:57:36] ARM C6_tbonsai_1p7b: rescore with external judge qwen3:4b
 [locomo_20260930_200456_C6_tbonsai_1p7b_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -454,7 +454,7 @@ ARMRESULT C6_tbonsai_1p7b n=200 overall=0.2700 | MultiHop=0.209(n=43) Temporal=0
 [conv-30] ingested 369 turns in 1.4s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -473,7 +473,7 @@ Overall            200    0.25     0.18     0.00     0.70
 Latency  p50=5072 ms  p95=6789 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C7_qwen3_1p7b_q4km_s200.json
+wrote ~/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C7_qwen3_1p7b_q4km_s200.json
 VALIDITY C7_qwen3_1p7b_q4km: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 17:56:41] ARM C7_qwen3_1p7b_q4km: rescore with external judge qwen3:4b
 [locomo_20260930_200456_C7_qwen3_1p7b_q4km_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
@@ -501,8 +501,8 @@ Overall                  200    0.253     0.00     0.07       0.35    +0.35  200
 ========================================================================================
 ARMRESULT C7_qwen3_1p7b_q4km n=200 overall=0.3550 | MultiHop=0.140(n=43) Temporal=0.238(n=63) OpenDomain=0.154(n=13) SingleHop=0.593(n=81) | lat_mean_ms=5072.3 ctx_tok=1523.3 empty=0 err=0
 [2026-10-01 18:54:23] === ARM C7_qwen3_1p7b_q4km DONE ===
-[2026-10-01 18:54:23] === ARM C8_bonsai_1p7b_1bit: generation with /home/jay/models/Bonsai-1.7B-gguf/Bonsai-1.7B-Q1_0.gguf START ===
-[2026-10-01 18:54:24] gguf sha256 /home/jay/models/Bonsai-1.7B-gguf/Bonsai-1.7B-Q1_0.gguf: 3d7c6c90dd98717a203adb22d5eacd2581850e40aa5327e144b97766cae5f7e3
+[2026-10-01 18:54:23] === ARM C8_bonsai_1p7b_1bit: generation with ~/models/Bonsai-1.7B-gguf/Bonsai-1.7B-Q1_0.gguf START ===
+[2026-10-01 18:54:24] gguf sha256 ~/models/Bonsai-1.7B-gguf/Bonsai-1.7B-Q1_0.gguf: 3d7c6c90dd98717a203adb22d5eacd2581850e40aa5327e144b97766cae5f7e3
 [2026-10-01 18:54:24] server flags: --reasoning off | runner extra: 
 7293 MiB
 [transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
@@ -516,7 +516,7 @@ ARMRESULT C7_qwen3_1p7b_q4km n=200 overall=0.3550 | MultiHop=0.140(n=43) Tempora
 [conv-30] ingested 369 turns in 1.3s
   progress: 175 QAs processed
   progress: 200 QAs processed
-/home/jay/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+~/taosmd/benchmarks/locomo_runner.py:1758: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
   timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 =========================================================
 LoCoMo Benchmark — taosmd (commit f6f8074)
@@ -535,7 +535,7 @@ Overall            200    0.08     0.06     0.00     0.70
 Latency  p50=5020 ms  p95=6627 ms  |  Context ~1523 tok/query (mean)
 =========================================================
 
-wrote /home/jay/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C8_bonsai_1p7b_1bit_s200.json
+wrote ~/taosmd/bench-logs/20261001-precision-ladder/locomo_20260930_200456_C8_bonsai_1p7b_1bit_s200.json
 VALIDITY C8_bonsai_1p7b_1bit: rows=200 real_predictions=200 think_tags=0
 [2026-10-01 19:11:19] ARM C8_bonsai_1p7b_1bit: rescore with external judge qwen3:4b
 [locomo_20260930_200456_C8_bonsai_1p7b_1bit_s200.json] 200 / 200 items to rejudge (judge=qwen3:4b, concurrency=2, timeout=300.0s, ckpt every 25)
