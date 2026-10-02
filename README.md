@@ -879,9 +879,11 @@ If taOSmd is useful to you:
 
 ## License
 
-MIT + Commons Clause v1.0, copyright jaylfc.
+taOSmd is open source under the [GNU Affero General Public License v3.0 or later](./LICENSE) (AGPL-3.0-or-later), copyright jaylfc.
 
-Free to use, fork, modify, and embed. You may not sell taOSmd itself as a hosted or managed service. See [LICENSE](./LICENSE) for the full terms.
+You may use, modify, fork, embed and self-host taOSmd freely under the AGPL, including for your own organisation's internal purposes. The AGPL's one condition for network use is that if you run a modified taOSmd as a service for others, you make your modified source available to those users, also under the AGPL.
+
+There is no separate commercial license: AGPL-3.0-or-later is the only license taOSmd is offered under, and contributions are accepted under the same terms. Releases before this change were published under MIT with the Commons Clause, and copies obtained under those terms keep them.
 
 ## Dependencies & Acknowledgements
 
