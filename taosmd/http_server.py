@@ -2419,6 +2419,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
             A receipt is private to the agent it is about, except that the
             message's SENDER may see all receipts for their own message.
+
+            The auth gate runs before parameter validation: an unauthenticated
+            request carrying an unknown query parameter receives 401 (not 400)
+            when a verifier is configured. Standalone mode is unchanged.
             """
             caller_id = self._get_authenticated_agent_id()
             if caller_id is None and _registry_verifier is not None:
@@ -2452,6 +2456,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
             A receipt is private to the agent it is about, except that the
             message's SENDER may read any agent's receipt for their own message.
+
+            The auth gate runs before parameter validation: an unauthenticated
+            request carrying an unknown query parameter receives 401 (not 400)
+            when a verifier is configured. Standalone mode is unchanged.
             """
             caller_id = self._get_authenticated_agent_id()
             if caller_id is None and _registry_verifier is not None:
