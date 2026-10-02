@@ -35,9 +35,9 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     ("npm_token", re.compile(r"npm_[A-Za-z0-9]{36,}"), "[REDACTED:npm_token]"),
     ("digitalocean", re.compile(r"dop_v1_[A-Za-z0-9]{64}"), "[REDACTED:do_token]"),
     ("slack_token", re.compile(r"xox[bpras]-[A-Za-z0-9\-]{10,}"), "[REDACTED:slack_token]"),
-    ("generic_api_key", re.compile(r"""(?:api[_-]?key|apikey|api[_-]?secret|api[_-]?token)\s*[=:]\s*['"]?([A-Za-z0-9\-._]{20,})""", re.IGNORECASE), "[REDACTED:api_key]"),
+    ("generic_api_key", re.compile(r"""(?:api[_-]?key|apikey|api[_-]?secret|api[_-]?token)\s*[=:]\s*([A-Za-z0-9\-._]{20,})(?!:)\b""", re.IGNORECASE), "[REDACTED:api_key]"),
     ("private_key_block", re.compile(r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA )?PRIVATE KEY-----"), "[REDACTED:private_key]"),
-    ("password_field", re.compile(r"""(?:password|passwd|pwd)\s*[=:]\s*['"]?(\S{8,})""", re.IGNORECASE), "[REDACTED:password]"),
+    ("password_field", re.compile(r"""(?:password|passwd|pwd)\s*[=:]\s*([A-Za-z0-9/+=]{8,})(?!:)\b""", re.IGNORECASE), "[REDACTED:password]"),
     ("connection_string", re.compile(r"(?:mongodb|postgres|mysql|redis)://[^\s'\"]+", re.IGNORECASE), "[REDACTED:connection_string]"),
     ("private_tag", re.compile(r"<private>[\s\S]*?</private>"), "[REDACTED:private]"),
 ]

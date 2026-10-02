@@ -610,7 +610,12 @@ async def a2a_import(
         if existing is not None:
             deduped += 1
             continue
-        data = {"from": from_, "body": body, "thread": thread, "reply_to": reply_to, "kind": kind}
+        
+        # Apply reject mode filtering for A2A ingest path
+        from .secret_filter import filter_text
+        body_filtered = filter_text(body, mode="reject")
+        
+        data = {"from": from_, "body": body_filtered, "thread": thread, "reply_to": reply_to, "kind": kind}
         if recipient is not None:
             data["recipient"] = recipient
         if refs is not None:
@@ -622,7 +627,7 @@ async def a2a_import(
             data=data,
             agent_name=from_,
             app_id=thread,
-            summary=body[:200],
+            summary=body_filtered[:200],
         )
         await archive.record_import_dedup(key, row_id)
         imported += 1
