@@ -438,20 +438,24 @@ def _reranker_present(onnx_path: str) -> bool:
 
 
 def _fetch_reranker_onnx(dest: str, on_progress) -> str | None:
-    """Download the bge-v2-m3 ONNX into dest, reporting progress. Network IO.
+    """RAISES: BAAI/bge-reranker-v2-m3 publishes no ONNX file.
 
-    Uses huggingface_hub (already a transitive dep via transformers) with
-    tqdm progress mapped to on_progress events. Raises on failure.
+    The repo has only config/tokenizer/safetensors. Downloading with
+    allow_patterns *.onnx yields no model.onnx, so this function now fails
+    loudly instead of silently producing an incomplete directory.
+
+    To obtain the ONNX model, run the export script:
+      bash scripts/export_reranker_onnx.sh <dest>
+
+    The script creates a throwaway venv, installs CPU torch + optimum-onnx,
+    and exports the model via optimum-cli (revision 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e).
+    Output is ~2.2 GB fp32.
     """
-    from huggingface_hub import snapshot_download  # noqa: PLC0415
-    on_progress({"phase": "start", "pct": 0, "repo": _RERANKER_REPO})
-    path = snapshot_download(
-        repo_id=_RERANKER_REPO,
-        allow_patterns=["*.onnx", "*.json", "tokenizer*", "*.txt"],
-        local_dir=dest,
+    raise RuntimeError(
+        f"Reranker ONNX not found at {dest}. "
+        f"BAAI/bge-reranker-v2-m3 publishes no ONNX file (only config/tokenizer/safetensors). "
+        f"Export it with: bash scripts/export_reranker_onnx.sh {dest}"
     )
-    on_progress({"phase": "done", "pct": 100})
-    return path
 
 
 def ensure_reranker_model(onnx_path: str = "models/cross-encoder-onnx",
@@ -461,6 +465,12 @@ def ensure_reranker_model(onnx_path: str = "models/cross-encoder-onnx",
     Returns "ready" if present, "downloading" if a background fetch is in
     flight (block=False), or "error". Never blocks a caller unless block=True.
     Progress events are dicts {phase, pct, ...} passed to on_progress.
+
+    NOTE: BAAI/bge-reranker-v2-m3 publishes no ONNX file. The internal
+    _fetch_reranker_onnx now raises RuntimeError with the export command.
+    This function only marks "ready" if _reranker_present(onnx_path) is True
+    after the fetch attempt; otherwise it marks "error" and emits an error
+    progress event naming the missing path and the export command.
     """
     on_progress = on_progress or (lambda e: None)
     if _reranker_present(onnx_path):
@@ -476,7 +486,11 @@ def ensure_reranker_model(onnx_path: str = "models/cross-encoder-onnx",
     def _run():
         try:
             _fetch_reranker_onnx(onnx_path, on_progress)
-            _RERANKER_DOWNLOADS[onnx_path] = "ready"
+            if _reranker_present(onnx_path):
+                _RERANKER_DOWNLOADS[onnx_path] = "ready"
+            else:
+                _RERANKER_DOWNLOADS[onnx_path] = "error"
+                on_progress({"phase": "error", "error": f"Reranker ONNX not found at {onnx_path}. Export it with: bash scripts/export_reranker_onnx.sh {onnx_path}"})
         except Exception as exc:  # noqa: BLE001
             _RERANKER_DOWNLOADS[onnx_path] = "error"
             on_progress({"phase": "error", "error": str(exc)})
