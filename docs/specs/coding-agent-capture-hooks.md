@@ -38,15 +38,19 @@ appends to. Capture reads the transcript from a saved cursor instead of trusting
 hook's payload. That is what makes it lossless: whichever hook fires next picks up
 everything since the last successful read.
 
-- Cursor state: one row per `session_id` (`transcript_path`, byte offset, last entry id,
-  updated_at) in a small SQLite file under the data dir (`capture-cursors.db`, opened via
+- Cursor state: one row per `session_id` (`transcript_path`, `cwd`, project id, byte
+  offset, last entry id, updated_at; `cwd` and project are taken from the hook payload when
+  the row is created, so `hooks sync --all` can scope a backfill without a live hook) in a small SQLite file under the data dir (`capture-cursors.db`, opened via
   `taosmd._db.connect`).
 - Read from the offset to the last complete line only. A trailing line without `\n` is
   being written; leave it for next time.
 - If the file is now shorter than the offset (rewritten or truncated), re-read from 0.
   Dedup (below) makes that safe.
-- Keep user and assistant message entries. Tool calls and tool results are kept as
-  `tool_call` items in phase 1, with content capped (configurable, default 8 KB per
+- Keep user and assistant message entries. Tool calls and tool results are kept too, in
+  phase 1 as ordinary `ingest_batch` items (which `taosmd.api.ingest_batch` always records
+  as archive event type `conversation`; there is no event-type parameter and phase 1 does
+  not add one), marked by `metadata.kind` = `"tool_use"` or `"tool_result"`, with content
+  capped (configurable, default 8 KB per
   field, the cap recorded in metadata as `truncated: true`) so a huge file read does not
   bloat the archive. Other entry types (summaries, system, attachments metadata) are
   skipped and counted.
@@ -56,25 +60,33 @@ everything since the last successful read.
 
 ### Write path: `ingest_batch` with stable ids
 
-Each kept entry becomes one `ingest_batch` item whose `id` is
+Each kept entry becomes one `ingest_batch` item, a dict `{"text", "id", "metadata"}`
+(`text` is required and non-empty; an entry that renders to empty text is skipped and
+counted). `metadata.kind` is `"message"`, `"tool_use"` or `"tool_result"`. Its `id` is
 `claude-code:<session_id>:<entry uuid>` (fall back to a sha256 of the raw line if an entry
-has no uuid). `ingest_batch` already skips ids it has stored (#25 contract), so replays,
-truncation re-reads and overlapping hooks cannot duplicate. Metadata carries `source:
+has no uuid). `ingest_batch` skips ids it has stored (#25 contract), so replays, truncation re-reads
+and overlapping hooks do not duplicate. Caveat, measured at `taosmd/api.py`: the stored-id
+set is read from the VECTOR store (`existing_source_ids`), so an item whose vector write
+failed has an archive row but an unseen id. The batch then returns `degraded: true` and
+`vector_failures`. Rule: a returned result, degraded or not, ADVANCES the cursor (the
+archive rows exist and `reconcile()` re-embeds them); only a raised exception or a timeout
+holds it. Never retry a degraded batch, or its archive rows duplicate. Metadata carries `source:
 "hook:claude-code"`, `session_id`, `role`, `cwd`, entry timestamp and `transcript_path`.
 
 - Agent name: `claude-code` by default, overridable in the hook config.
 - Project: `taosmd.project.get_project_id(cwd)`, so sessions in the same repo share
   project-scoped memory.
-- Local vs remote: if a server URL is configured (`taosmd config set-server`), use the
-  remote client's `ingest_batch`; otherwise call `taosmd.api.ingest_batch` in-process.
+- Local vs remote: call `taosmd.service.ingest_batch`, which already forwards to the
+  remote client when a server URL is configured (`taosmd config set-server`) and calls
+  `taosmd.api.ingest_batch` in-process otherwise. Do not re-implement that switch.
 - Secrets: the archive already runs `redact_secrets` on record. Nothing extra here.
 
 ### Never block the agent
 
 - Every hook command wraps its work in a hard timeout (default 5 s for capture, 3 s for
   injection) and exits 0 on any error, logging to `<data dir>/logs/hooks.log`.
-- If the write fails (server down, database locked), the cursor does NOT advance, so the
-  next firing retries. There is no separate spool: the transcript is the spool.
+- If the write raises (server down, database locked) or times out, the cursor does NOT
+  advance, so the next firing retries. A degraded result is not a failure (see above). There is no separate spool: the transcript is the spool.
 - Capture hooks print nothing to stdout, so they cannot inject noise into context.
 
 ### Which hooks
@@ -109,7 +121,9 @@ every cursor row so a crashed session can be backfilled.
 `taosmd hooks install --agent claude-code [--scope user|project] [--inject-prompts]`
 
 - Writes the hook entries into `~/.claude/settings.json` (user) or
-  `.claude/settings.json` (project). It merges: existing hooks, including other tools'
+  `.claude/settings.local.json` (project; the local file, because the hook command holds
+  an absolute path that is machine-specific and must not land in a committed
+  `.claude/settings.json`). It merges: existing hooks, including other tools'
   entries for the same events, are kept. Our entries are recognisable by their command
   (`taosmd hooks run ...`) so install is idempotent and uninstall removes only ours.
 - Before any write, copy the settings file to `settings.json.taosmd-bak-<UTC ts>`. Never
@@ -144,7 +158,9 @@ All with `tmp_path`, no network, no models (use the existing test embedder/fakes
 2. Idempotency: sync twice, the row count does not change; truncate the file and sync,
    no duplicates.
 3. Partial trailing line is not consumed; once completed, it is.
-4. Write failure leaves the cursor where it was; the next sync writes the rows.
+4. Write failure leaves the cursor where it was; the next sync writes the rows
+   A degraded result (fake vector store returning -1) advances the cursor, and a second
+   sync adds no archive rows.
 5. Hook entry point exits 0 and prints nothing when the data dir is unwritable, and it
    returns within the timeout when the write hangs (simulate with a sleeping fake).
 6. Installer: merges into a settings file that already has another tool's hooks for the
@@ -155,6 +171,8 @@ All with `tmp_path`, no network, no models (use the existing test embedder/fakes
 ## Acceptance
 
 A real Claude Code session with the hooks installed: after the session, the archive rows
-tagged `hook:claude-code` for that `session_id` equal the user plus assistant entries in
-its transcript, and a second session in the same repo starts with the briefing. Paste
+tagged `hook:claude-code` for that `session_id`, counted by distinct `source_id`, equal
+the entries the parser kept from its transcript (user and assistant messages plus tool
+use and tool result entries; skipped types excluded), and the PR also shows the per-kind
+split from `metadata.kind`, and a second session in the same repo starts with the briefing. Paste
 both counts in the PR.
