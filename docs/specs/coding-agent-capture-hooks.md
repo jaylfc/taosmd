@@ -39,7 +39,7 @@ hook's payload. That is what makes it lossless: whichever hook fires next picks 
 everything since the last successful read.
 
 - Cursor state: one row per `session_id` (`transcript_path`, `cwd`, project id, byte
-  offset, last entry id, updated_at; `cwd` from the hook payload; project id computed with `taosmd.project.get_project_id(cwd)` and stored, so `hooks sync --all` can scope a backfill without a live hook) in a small SQLite file under the data dir (`capture-cursors.db`, opened via
+  offset, last entry id, updated_at; `cwd` from the hook payload; project id computed with `taosmd.project.get_project_id(cwd=cwd)` and stored, so `hooks sync --all` can scope a backfill without a live hook) in a small SQLite file under the data dir (`capture-cursors.db`, opened via
   `taosmd._db.connect`).
 - Read from the offset to the last complete line only. A trailing line without `\n` is
   being written; leave it for next time.
@@ -71,11 +71,11 @@ failed has an archive row but an unseen id. The batch then returns `degraded: tr
 archive rows exist and `reconcile()` re-embeds them); only a raised exception or a timeout
 holds it. A timeout can strand at most the in-flight item (archive row written, vector row not);
 the retry re-writes that one archive row. Acceptance counts distinct source_id, so this is tolerated;
-`taosmd hooks sync` runs `reconcile()` after a sync that timed out, and batches are chunked so a timeout is rare. Never retry a degraded batch, or its archive rows do not duplicate except as noted below. Metadata carries `source:
+`taosmd hooks sync` runs `reconcile()` after a sync that timed out, and batches are chunked so a timeout is rare. Never retry a degraded batch, or its archive rows duplicate. Metadata carries `source:
 "hook:claude-code"`, `session_id`, `role`, `cwd`, entry timestamp and `transcript_path`.
 
 - Agent name: `claude-code` by default, overridable in the hook config.
-- Project: `taosmd.project.get_project_id(cwd)`, so sessions in the same repo share
+- Project: `taosmd.project.get_project_id(cwd=cwd)`, so sessions in the same repo share
   project-scoped memory.
 - Local vs remote: call `taosmd.service.ingest_batch`, which already forwards to the
   remote client when a server URL is configured (`taosmd config set-server`) and calls
