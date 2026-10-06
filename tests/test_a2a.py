@@ -320,7 +320,7 @@ def test_a2a_redaction_preserves_structure_and_keys(isolated_data_dir):
     assert len(blocks) == 1
     stored = blocks[0]
     assert list(stored.keys()) == list(payload.keys())
-    assert stored["nested"]["list"] == [1, {"inner": f"also [REDACTED:github_pat]"}, None]
+    assert stored["nested"]["list"] == [1, {"inner": "also [REDACTED:github_pat]"}, None]
     assert stored["nested"]["bool"] is True
     assert stored["nested"]["num"] == 3.14
     assert secret not in json.dumps(stored)
@@ -351,7 +351,7 @@ def test_a2a_redaction_handles_scalars_and_nesting(isolated_data_dir):
     assert stored["ratio"] == 1.5
     assert stored["flag"] is False
     assert stored["empty"] is None
-    assert stored["deep"]["a"] == [1, 2.5, True, None, {"b": f"token [REDACTED:github_pat]"}]
+    assert stored["deep"]["a"] == [1, 2.5, True, None, {"b": "token [REDACTED:github_pat]"}]
     assert secret not in json.dumps(stored)
 
 
