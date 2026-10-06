@@ -676,8 +676,8 @@ This is the author's primary deployment and the exact stack the 97.0% benchmark 
 |-------|------|--------|
 | all-MiniLM-L6-v2 ONNX | 90MB | [onnx-models/all-MiniLM-L6-v2-onnx](https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx) |
 | embeddinggemma-300M GGUF | ~320MB | Auto-fetched by `qmd` (CPU embedding backend) |
-| Qwen3-Reranker-0.6B | 935MB | GGUF Q8_0, auto-fetched by `qmd` (an RKLLM build ships with rkllama but is optional) |
-| qmd-query-expansion | 2.4GB | GGUF q4_k_m, auto-fetched by `qmd` |
+| Qwen3-Reranker-0.6B | 639MB | GGUF Q8_0, auto-fetched by `qmd` (an RKLLM build ships with rkllama but is optional) |
+| qmd-query-expansion 1.7B | 1.28GB | GGUF q4_k_m, auto-fetched by `qmd` |
 | Qwen3-4B RKLLM | 4.6GB | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) |
 
 ## Platform-Specific Setup
