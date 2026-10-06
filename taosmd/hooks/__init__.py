@@ -404,25 +404,17 @@ async def sync_session(
         except asyncio.TimeoutError:
             timed_out = True
             had_error = "timeout"
-            return {
-                "ok": False, "ingested": 0, "skipped": skipped,
-                "timed_out": True, "error": "timeout",
-            }
         except Exception as exc:
             had_error = str(exc)
-            return {
-                "ok": False, "ingested": 0, "skipped": skipped,
-                "timed_out": False, "error": had_error,
-            }
+        else:
+            ingested_count = result.get("ingested", 0)
+            last_id = ""
+            for item in items:
+                mid = item.get("id")
+                if mid:
+                    last_id = mid
 
-        ingested_count = result.get("ingested", 0)
-        last_id = ""
-        for item in items:
-            mid = item.get("id")
-            if mid:
-                last_id = mid
-
-        store.upsert(session_id, transcript_path, cwd, project_id, new_offset, last_id, time.time())
+            store.upsert(session_id, transcript_path, cwd, project_id, new_offset, last_id, time.time())
 
         if timed_out:
             try:

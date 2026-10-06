@@ -358,6 +358,55 @@ class TestSyncSession:
 # ---------------------------------------------------------------------------
 
 class TestRunHook:
+    def test_returns_within_timeout_when_write_hangs(self, tmp_path, monkeypatch):
+        """run_hook returns within the timeout when the write hangs (sleeping fake)."""
+        import time as _time
+
+        data_dir = tmp_path / "taosmd"
+        data_dir.mkdir()
+
+        session_id = "s-hang"
+        transcript = data_dir / "hang.jsonl"
+        transcript.write_text(
+            json.dumps({"type": "user", "message": {"content": "hello", "role": "user"}, "session_id": session_id, "timestamp": 1.0})
+            + "\n"
+        )
+
+        from taosmd.hooks import CaptureCursorStore
+        store = CaptureCursorStore(str(data_dir))
+        try:
+            store.upsert(session_id, str(transcript), "/tmp", "", 0, "", _time.time())
+        finally:
+            store.close()
+
+        original = taosmd.service.ingest_batch
+
+        async def hanging_ingest(*args, **kwargs):
+            await asyncio.sleep(30)
+
+        taosmd.service.ingest_batch = hanging_ingest  # type: ignore[assignment]
+        try:
+            old_defaults = taosmd.hooks.sync_session.__kwdefaults__
+            taosmd.hooks.sync_session.__kwdefaults__ = {
+                **old_defaults,
+                "timeout_s": 0.5,
+            }
+            payload = {
+                "session_id": session_id,
+                "transcript_path": str(transcript),
+                "cwd": "/tmp",
+                "hook_event_name": "Stop",
+            }
+            start = _time.monotonic()
+            rc = run_hook(str(data_dir), payload)
+            elapsed = _time.monotonic() - start
+        finally:
+            taosmd.hooks.sync_session.__kwdefaults__ = old_defaults
+            taosmd.service.ingest_batch = original  # type: ignore[assignment]
+
+        assert rc == 0
+        assert elapsed < 2.0
+
     def test_exits_0_when_data_dir_unwritable(self, tmp_path, monkeypatch):
         """hook run exits 0 and prints nothing when the data dir is unwritable."""
         import io
