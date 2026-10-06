@@ -838,6 +838,29 @@ taosmd reconcile --check          # dry-run: report missing counts without modif
 
 `--check` exits non-zero when any turn is missing, so you can run it from a cron health-check. The repair path re-adds only turns that are genuinely absent; it never resurrects turns that were intentionally superseded by a correction. Safe to run after a crash or periodically via cron.
 
+### Backup and restore
+
+`taosmd backup create` snapshots the entire data dir to a single `.tar.gz` file. SQLite databases are copied with `sqlite3.Connection.backup()`, so committed WAL pages are included in the snapshot and the copy is consistent without needing a checkpoint. Sidecar files (`-wal`, `-shm`, `-journal`) are skipped. `config.json` is excluded by default because it holds bearer tokens; pass `--include-secrets` to include it (the archive is unencrypted, so the backup is also unencrypted).
+
+```bash
+taosmd backup create                     # write taosmd-backup-<UTC ts>.tar.gz to cwd
+taosmd backup create --out /mnt/backup    # custom path
+taosmd backup create --include-secrets   # include config.json
+```
+
+`taosmd backup verify` re-hashes every member against the embedded manifest and re-runs `PRAGMA integrity_check` on each SQLite file:
+
+```bash
+taosmd backup verify taosmd-backup-20261006T120000Z.tar.gz
+```
+
+`taosmd backup restore` verifies first (refuses on any verify failure) and then extracts. It never overwrites existing content: if the target directory exists and is non-empty, the restore is refused unless `--move-existing` is passed, which renames the existing directory to `DIR.pre-restore-<UTC ts>` first:
+
+```bash
+taosmd backup restore taosmd-backup-*.tar.gz --to /mnt/restore
+taosmd backup restore taosmd-backup-*.tar.gz --to /mnt/restore --move-existing
+```
+
 ### Install the taOSmd-a2a skill
 
 ```bash
