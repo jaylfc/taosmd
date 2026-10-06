@@ -9,10 +9,8 @@ These tests verify the fixes for:
 import asyncio
 import json
 import os
-import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from benchmarks.longmemeval_runner import run_benchmark
 

@@ -860,7 +860,7 @@ async def run_benchmark(
         print("    MemPalace (raw verbatim):     96.6%")
         print("    SuperMemory:                  81.6%")
         print("    GPT-4o (full context):        ~70%")
-        print(f"    taOSmd (Pi NPU, no cloud):    (metrics only)")
+        print("    taOSmd (Pi NPU, no cloud):    (metrics only)")
         print(f"{'='*70}")
 
     if llm_client:
