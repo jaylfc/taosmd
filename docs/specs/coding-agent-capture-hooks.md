@@ -39,8 +39,7 @@ hook's payload. That is what makes it lossless: whichever hook fires next picks 
 everything since the last successful read.
 
 - Cursor state: one row per `session_id` (`transcript_path`, `cwd`, project id, byte
-  offset, last entry id, updated_at; `cwd` and project are taken from the hook payload when
-  the row is created, so `hooks sync --all` can scope a backfill without a live hook) in a small SQLite file under the data dir (`capture-cursors.db`, opened via
+  offset, last entry id, updated_at; `cwd` from the hook payload; project id computed with `taosmd.project.get_project_id(cwd)` and stored, so `hooks sync --all` can scope a backfill without a live hook) in a small SQLite file under the data dir (`capture-cursors.db`, opened via
   `taosmd._db.connect`).
 - Read from the offset to the last complete line only. A trailing line without `\n` is
   being written; leave it for next time.
@@ -63,14 +62,16 @@ everything since the last successful read.
 Each kept entry becomes one `ingest_batch` item, a dict `{"text", "id", "metadata"}`
 (`text` is required and non-empty; an entry that renders to empty text is skipped and
 counted). `metadata.kind` is `"message"`, `"tool_use"` or `"tool_result"`. Its `id` is
-`claude-code:<session_id>:<entry uuid>` (fall back to a sha256 of the raw line if an entry
+`claude-code:<session_id>:<entry uuid>` (fall back to a sha256 of the line's byte offset in the transcript plus the raw line if an entry
 has no uuid). `ingest_batch` skips ids it has stored (#25 contract), so replays, truncation re-reads
-and overlapping hooks do not duplicate. Caveat, measured at `taosmd/api.py`: the stored-id
+and overlapping hooks do not duplicate except as noted below. Caveat, measured at `taosmd/api.py`: the stored-id
 set is read from the VECTOR store (`existing_source_ids`), so an item whose vector write
 failed has an archive row but an unseen id. The batch then returns `degraded: true` and
 `vector_failures`. Rule: a returned result, degraded or not, ADVANCES the cursor (the
 archive rows exist and `reconcile()` re-embeds them); only a raised exception or a timeout
-holds it. Never retry a degraded batch, or its archive rows duplicate. Metadata carries `source:
+holds it. A timeout can strand at most the in-flight item (archive row written, vector row not);
+the retry re-writes that one archive row. Acceptance counts distinct source_id, so this is tolerated;
+`taosmd hooks sync` runs `reconcile()` after a sync that timed out, and batches are chunked so a timeout is rare. Never retry a degraded batch, or its archive rows duplicate. Metadata carries `source:
 "hook:claude-code"`, `session_id`, `role`, `cwd`, entry timestamp and `transcript_path`.
 
 - Agent name: `claude-code` by default, overridable in the hook config.
@@ -130,9 +131,10 @@ every cursor row so a crashed session can be backfilled.
   delete a user's file.
 - Refuse to write if the existing file is not valid JSON; print the parse error.
 - `taosmd hooks uninstall --agent claude-code [--scope ...]` and `taosmd hooks status`
-  (installed where, cursor rows, last sync time, last error from the log).
+  (installed where, cursor rows, last sync time, last error from the log, count of degraded batches since the last `reconcile()`).
 - The hook command must resolve `taosmd` by absolute path at install time (the hook runs
   in a non-interactive shell where a venv may not be on PATH).
+- Each installed hook entry sets an explicit `timeout` (seconds) matching its budget: 5 for capture hooks, 3 for injection.
 
 ### AGENTS.md
 
