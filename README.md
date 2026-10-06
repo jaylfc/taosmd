@@ -661,8 +661,8 @@ This is the author's primary deployment and the exact stack the 97.0% benchmark 
 |-----------|-------|---------|---------|
 | **Embedding** | all-MiniLM-L6-v2 (22M params) | Semantic vector search | ONNX Runtime on ARM CPU (0.3ms/embed) |
 | **Embedding (alt)** | embeddinggemma-300M | Higher-quality 768-dim embeddings (vs MiniLM 384-dim) | qmd serve (llama.cpp, CPU) |
-| **Reranker** | Qwen3-Reranker-0.6B | Result reranking | rkllama on RK3588 NPU |
-| **Query Expansion** | qmd-query-expansion 1.7B | Search query enrichment | rkllama on RK3588 NPU |
+| **Reranker** | Qwen3-Reranker-0.6B | Result reranking | qmd serve (llama.cpp, CPU); rkllama NPU build installed but not used by default |
+| **Query Expansion** | qmd-query-expansion 1.7B | Search query enrichment | qmd serve (llama.cpp, CPU) |
 | **LLM (extraction + answering)** | Qwen3-4B | Fact extraction (72% recall) + QA from context | rkllama on RK3588 NPU (17s/turn) |
 | **Vector Store** | SQLite + numpy | Cosine similarity search | CPU |
 | **Full-Text Search** | SQLite FTS5 | Keyword search over archive | CPU |
@@ -676,8 +676,8 @@ This is the author's primary deployment and the exact stack the 97.0% benchmark 
 |-------|------|--------|
 | all-MiniLM-L6-v2 ONNX | 90MB | [onnx-models/all-MiniLM-L6-v2-onnx](https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx) |
 | embeddinggemma-300M GGUF | ~320MB | Auto-fetched by `qmd` (CPU embedding backend) |
-| Qwen3-Reranker-0.6B RKLLM | 935MB | Pre-installed with rkllama |
-| qmd-query-expansion 1.7B RKLLM | 2.4GB | Custom conversion |
+| Qwen3-Reranker-0.6B | 639MB | GGUF Q8_0, auto-fetched by `qmd` (an RKLLM build ships with rkllama but is optional) |
+| qmd-query-expansion 1.7B | 1.28GB | GGUF q4_k_m, auto-fetched by `qmd` |
 | Qwen3-4B RKLLM | 4.6GB | [dulimov/Qwen3-4B-rk3588-1.2.1-base](https://huggingface.co/dulimov/Qwen3-4B-rk3588-1.2.1-base) |
 
 ## Platform-Specific Setup
