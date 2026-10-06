@@ -71,7 +71,7 @@ failed has an archive row but an unseen id. The batch then returns `degraded: tr
 archive rows exist and `reconcile()` re-embeds them); only a raised exception or a timeout
 holds it. A timeout can strand at most the in-flight item (archive row written, vector row not);
 the retry re-writes that one archive row. Acceptance counts distinct source_id, so this is tolerated;
-`taosmd hooks sync` runs `reconcile()` after a sync that timed out, and batches are chunked so a timeout is rare. Never retry a degraded batch, or its archive rows duplicate. Metadata carries `source:
+`taosmd hooks sync` runs `reconcile()` after a sync that timed out, and batches are chunked so a timeout is rare. Never retry a degraded batch, or its archive rows do not duplicate except as noted below. Metadata carries `source:
 "hook:claude-code"`, `session_id`, `role`, `cwd`, entry timestamp and `transcript_path`.
 
 - Agent name: `claude-code` by default, overridable in the hook config.
