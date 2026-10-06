@@ -1,0 +1,11 @@
+{"type": "summary", "summary": "Session started", "session_id": "session-abc123", "timestamp": 1728000000.0}
+{"type": "user", "message": {"content": "List the files in the current directory.", "role": "user"}, "session_id": "session-abc123", "timestamp": 1728000001.0}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "I will list the files for you."}], "role": "assistant"}, "session_id": "session-abc123", "uuid": "entry-001", "timestamp": 1728000002.0}
+{"type": "tool_use", "id": "tu_001", "name": "list_directory", "input": {"path": "."}, "session_id": "session-abc123", "uuid": "entry-002", "timestamp": 1728000003.0}
+{"type": "tool_result", "content": "file1.txt\nfile2.txt\nsubdir/", "tool_use_id": "tu_001", "session_id": "session-abc123", "uuid": "entry-003", "timestamp": 1728000004.0}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "Here are the files: file1.txt, file2.txt, and subdir/."}], "role": "assistant"}, "session_id": "session-abc123", "uuid": "entry-004", "timestamp": 1728000005.0}
+{"type": "system", "content": "Context window compacted", "session_id": "session-abc123", "timestamp": 1728000006.0}
+{"type": "user", "message": {"content": "Read file1.txt", "role": "user"}, "session_id": "session-abc123", "timestamp": 1728000007.0}
+{"type": "tool_use", "id": "tu_002", "name": "read_file", "input": {"path": "file1.txt"}, "session_id": "session-abc123", "uuid": "entry-005", "timestamp": 1728000008.0}
+{"type": "tool_result", "content": "Hello, this is file1.", "tool_use_id": "tu_002", "session_id": "session-abc123", "uuid": "entry-006", "timestamp": 1728000009.0}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "The file contains: Hello, this is file1."}], "role": "assistant"}, "session_id": "session-abc123", "uuid": "entry-007", "timestamp": 1728000010.0}

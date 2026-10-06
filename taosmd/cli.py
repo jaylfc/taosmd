@@ -1376,6 +1376,44 @@ async def _fetch_spans(archive):
     return fetch
 
 
+def _hooks_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd hooks run`` and ``taosmd hooks sync``."""
+    from .hooks import run_hook, sync_all, sync_session_sync  # noqa: PLC0415
+
+    data_dir = args.data_dir
+
+    if args.hooks_cmd == "run":
+        payload_str = sys.stdin.read()
+        try:
+            payload = json.loads(payload_str) if payload_str.strip() else {}
+        except json.JSONDecodeError:
+            payload = {}
+        return run_hook(data_dir, payload)
+
+    if args.hooks_cmd == "sync":
+        if args.session:
+            result = sync_session_sync(data_dir, args.session)
+            print(
+                f"session={args.session} "
+                f"ingested={result.get('ingested', 0)} "
+                f"skipped={result.get('skipped', 0)}"
+            )
+            return 0
+        if args.all:
+            result = sync_all(data_dir)
+            print(
+                f"sessions={result['sessions']} "
+                f"ingested={result['ingested']} "
+                f"skipped={result['skipped']} "
+                f"errors={result['errors']}"
+            )
+            return 0
+        print("error: specify --session ID or --all", file=sys.stderr)
+        return 2
+
+    return 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level argument parser.
 
@@ -1933,6 +1971,38 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Claims to pull per batch (default: 100)",
     )
 
+    # ----- hooks subcommand (Claude Code capture) -----------------------
+    hooks_p = sub.add_parser(
+        "hooks",
+        help="Claude Code capture hooks: run or sync transcripts",
+    )
+    hooks_sub = hooks_p.add_subparsers(dest="hooks_cmd", required=True)
+
+    hooks_run_p = hooks_sub.add_parser(
+        "run",
+        help="Run a single hook invocation (reads JSON payload from stdin)",
+    )
+    hooks_run_p.add_argument(
+        "event",
+        help="Hook event name (e.g. SessionStart, Stop, PreCompact)",
+    )
+
+    hooks_sync_p = hooks_sub.add_parser(
+        "sync",
+        help="Sync Claude Code transcripts by session or across all sessions",
+    )
+    hooks_sync_p.add_argument(
+        "--session",
+        default=None,
+        metavar="ID",
+        help="Sync one specific session id",
+    )
+    hooks_sync_p.add_argument(
+        "--all",
+        action="store_true",
+        help="Sync every recorded session",
+    )
+
     return parser
 
 
@@ -2029,6 +2099,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "verify":
         return _verify_cmd(args)
+
+    if args.cmd == "hooks":
+        return _hooks_cmd(args)
 
     registry = AgentRegistry(args.data_dir)
 
