@@ -65,6 +65,7 @@ async def expand_from_results(
     vector_results: list[dict],
     max_hops: int = 2,
     max_expanded: int = 10,
+    max_seeds: int = 10,
     as_of: float | None = None,
 ) -> list[dict]:
     """BFS graph traversal starting from entities found in vector results.
@@ -78,11 +79,17 @@ async def expand_from_results(
         vector_results: Results from VectorMemory.search().
         max_hops: Maximum BFS depth (default 2).
         max_expanded: Maximum number of expanded triples to return.
+        max_seeds: Maximum number of seed entities to expand (default 10,
+            follows relevance ranking when scores are present; 0 or less
+            returns an empty list).
         as_of: Point-in-time for temporal filtering.
 
     Returns:
         List of {subject, predicate, object, score, hop} dicts.
     """
+    if max_seeds <= 0:
+        return []
+
     # Extract entities from all vector results
     all_entities: list[str] = []
     for result in vector_results:
@@ -101,10 +108,38 @@ async def expand_from_results(
     if not unique_entities:
         return []
 
+    # Rank by relevance when scores are present; otherwise keep encounter order.
+    def _result_score(result: dict):
+        return result.get("score", result.get("source_score"))
+
+    if any(_result_score(r) is not None for r in vector_results):
+        entity_best_score: dict[str, float] = {}
+        entity_mention_count: dict[str, int] = {}
+        for idx, result in enumerate(vector_results):
+            score = _result_score(result)
+            if score is None:
+                continue
+            text = result.get("text", "")
+            for e in extract_entities_from_text(text):
+                key = e.lower()
+                if key not in entity_best_score or score > entity_best_score[key]:
+                    entity_best_score[key] = score
+                entity_mention_count[key] = entity_mention_count.get(key, 0) + 1
+
+        ranked = sorted(
+            range(len(unique_entities)),
+            key=lambda i: (
+                -entity_best_score.get(unique_entities[i].lower(), float("-inf")),
+                -entity_mention_count.get(unique_entities[i].lower(), 0),
+                i,
+            ),
+        )
+        unique_entities = [unique_entities[i] for i in ranked]
+
     # BFS expansion
     expanded: list[dict] = []
     visited_triples: set[str] = set()
-    frontier = [(e, 0) for e in unique_entities[:10]]  # Cap seed entities
+    frontier = [(e, 0) for e in unique_entities[:max_seeds]]
 
     while frontier and len(expanded) < max_expanded:
         entity, hop = frontier.pop(0)
