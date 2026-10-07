@@ -16,7 +16,7 @@ Honesty note (corrected 2026-06-14): an earlier edition of this section labelled
 | multi-session | **98.5%** (131/133) | 95.5% |
 | single-session-user | **97.1%** (68/70) | 90.0% |
 | single-session-assistant | **96.4%** (54/56) | 96.4% |
-| temporal-reasoning | 94.0% (125/133) | 94.0% |
+| temporal-reasoning | **95.5%** (127/133) | 94.0% |
 | single-session-preference | 90.0% (27/30) | 93.3% |
 | **Overall** | **97.0%** (485/500) | 95.0% (475/500) |
 
