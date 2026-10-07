@@ -131,7 +131,7 @@ def _parse_gen_temp(raw: str | None) -> float:
 GEN_TEMP = _parse_gen_temp(os.environ.get("TAOSMD_LME_GEN_TEMP"))
 
 
-def _parse_bool_env(raw: str | None, default: int = 0) -> int:
+def _parse_bool_env(raw: str | None, default: int = 0, name: str = "TAOSMD_LME_NO_INLINE_JUDGE") -> int:
     """Parse a boolean-ish env var, falling back to default on a bad value."""
     if raw is None:
         return default
@@ -139,7 +139,7 @@ def _parse_bool_env(raw: str | None, default: int = 0) -> int:
         return int(raw)
     except ValueError:
         print(
-            f"  WARNING: TAOSMD_LME_NO_INLINE_JUDGE={raw!r} is not an integer; "
+            f"  WARNING: {name}={raw!r} is not an integer; "
             f"falling back to {default}.",
             file=sys.stderr,
         )
@@ -155,6 +155,8 @@ def _gen_options(**extra):
     opts = dict(extra)
     if NUM_CTX:
         opts["num_ctx"] = NUM_CTX
+    if "temperature" in opts and isinstance(opts["temperature"], float) and opts["temperature"] == int(opts["temperature"]):
+        opts["temperature"] = int(opts["temperature"])
     return opts
 
 
@@ -780,26 +782,21 @@ async def run_benchmark(
 
         answer = ""
         correct = False
-        if use_llm and llm_client is not None and not NO_INLINE_JUDGE:
+        if use_llm and llm_client is not None:
             t_llm = time.time()
             answer = await llm_answer(llm_client, full_context, question)
             if SELF_VERIFY:
                 answer = await self_verify_answer(llm_client, full_context, question, answer)
-            if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
+            if not NO_INLINE_JUDGE and answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
                 correct = await score_answer_llm(llm_client, answer, gold_answer, question)
             else:
                 correct = False
             llm_time = time.time() - t_llm
             if i < 5:
-                print(f"      [{llm_time:.1f}s] Answer: {(answer or 'EMPTY')[:80]} -> {'PASS' if correct else 'FAIL'}")
-        elif use_llm and llm_client is not None and NO_INLINE_JUDGE:
-            t_llm = time.time()
-            answer = await llm_answer(llm_client, full_context, question)
-            if SELF_VERIFY:
-                answer = await self_verify_answer(llm_client, full_context, question, answer)
-            llm_time = time.time() - t_llm
-            if i < 5:
-                print(f"      [{llm_time:.1f}s] Answer (no inline judge): {(answer or 'EMPTY')[:80]}")
+                if NO_INLINE_JUDGE:
+                    print(f"      [{llm_time:.1f}s] Answer: {(answer or 'EMPTY')[:80]}")
+                else:
+                    print(f"      [{llm_time:.1f}s] Answer: {(answer or 'EMPTY')[:80]} → {'✓' if correct else '✗'}")
         else:
             correct = score_answer_substring(full_context, gold_answer)
 
@@ -838,7 +835,6 @@ async def run_benchmark(
         await embed_client.aclose()
 
     # Results
-    overall = total_correct / total_questions * 100 if total_questions > 0 else 0
     per_q = total_time / total_questions if total_questions > 0 else 0.0
 
     delta_summary = summarize_retrieval_delta(all_results)
@@ -855,6 +851,7 @@ async def run_benchmark(
     print("RESULTS")
     print(f"{'='*70}")
     if not NO_INLINE_JUDGE:
+        overall = total_correct / total_questions * 100 if total_questions > 0 else 0
         print(f"\n  Overall: {total_correct}/{total_questions} ({overall:.1f}%)")
     else:
         print(f"\n  Total questions answered: {total_questions}")
@@ -865,15 +862,17 @@ async def run_benchmark(
         if NO_INLINE_JUDGE:
             print(f"    {qtype:30s} {data['total']:<3d} questions")
         else:
+            overall = total_correct / total_questions * 100 if total_questions > 0 else 0
             pct = data["correct"] / data["total"] * 100 if data["total"] > 0 else 0
             print(f"    {qtype:30s} {data['correct']:3d}/{data['total']:<3d} ({pct:.1f}%)")
 
-    print("\n  Comparison:")
-    print("    MemPalace (raw verbatim):     96.6%")
-    print("    SuperMemory:                  81.6%")
-    print("    GPT-4o (full context):        ~70%")
-    print(f"    taOSmd (Pi NPU, no cloud):    {overall:.1f}%")
-    print(f"{'='*70}")
+    if not NO_INLINE_JUDGE:
+        print("\n  Comparison:")
+        print("    MemPalace (raw verbatim):     96.6%")
+        print("    SuperMemory:                  81.6%")
+        print("    GPT-4o (full context):        ~70%")
+        print(f"    taOSmd (Pi NPU, no cloud):    {overall:.1f}%")
+        print(f"{'='*70}")
 
     if llm_client:
         await llm_client.aclose()

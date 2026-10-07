@@ -19,7 +19,7 @@ _SYNTHETIC_DATASET = [
         "question_id": "q-1",
         "question_type": "temporal",
         "question": "Who is the CEO?",
-        "answer": "Alice",
+        "answer": "Bob",
         "haystack_sessions": [],
     }
 ]
@@ -80,6 +80,9 @@ class _FakeVectorMemory:
     async def close(self):
         pass
 
+    async def aclose(self):
+        pass
+
 
 class _FakeArchive:
     async def init(self):
@@ -91,12 +94,18 @@ class _FakeArchive:
     async def close(self):
         pass
 
+    async def aclose(self):
+        pass
+
 
 class _FakeKG:
     async def init(self):
         pass
 
     async def close(self):
+        pass
+
+    async def aclose(self):
         pass
 
 
@@ -167,9 +176,12 @@ def test_no_inline_judge_no_correct_or_accuracy_in_metrics(tmp_path, monkeypatch
     monkeypatch.setattr(mod, "VectorMemory", lambda db_path, embed_mode, onnx_path: _FakeVectorMemory(["chunk"]))
     monkeypatch.setattr(mod, "process_conversation_turn", lambda *a, **kw: None)
     monkeypatch.setattr(mod, "load_dataset", lambda: list(_SYNTHETIC_DATASET))
-    # Stub the generation so the run completes without real HTTP.
-    monkeypatch.setattr(mod, "llm_answer", _fake_llm_answer)
-    monkeypatch.setattr(mod, "self_verify_answer", _fake_self_verify)
+    recording_client = _RecordingClient("Alice")
+
+    def fake_async_client(*args, **kwargs):
+        return recording_client
+
+    monkeypatch.setattr("httpx.AsyncClient", fake_async_client)
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()
@@ -241,15 +253,11 @@ def test_generation_payload_temperature_is_int_zero(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "VectorMemory", lambda db_path, embed_mode, onnx_path: _FakeVectorMemory(["chunk"]))
     monkeypatch.setattr(mod, "process_conversation_turn", lambda *a, **kw: None)
     monkeypatch.setattr(mod, "load_dataset", lambda: list(_SYNTHETIC_DATASET))
-    # Stub llm_answer but capture the HTTP call by replacing the AsyncClient factory.
     recording_client = _RecordingClient("Alice")
 
     def fake_async_client(*args, **kwargs):
         return recording_client
 
-    monkeypatch.setattr(mod, "llm_answer", _fake_llm_answer)
-    monkeypatch.setattr(mod, "self_verify_answer", _fake_self_verify)
-    # Patch the client constructor that run_benchmark calls internally.
     monkeypatch.setattr("httpx.AsyncClient", fake_async_client)
 
     out_dir = tmp_path / "out"
@@ -286,8 +294,6 @@ def test_judge_payload_unchanged(tmp_path, monkeypatch):
     def fake_async_client(*args, **kwargs):
         return recording_client
 
-    monkeypatch.setattr(mod, "llm_answer", _fake_llm_answer)
-    monkeypatch.setattr(mod, "self_verify_answer", _fake_self_verify)
     monkeypatch.setattr("httpx.AsyncClient", fake_async_client)
 
     out_dir = tmp_path / "out"
@@ -306,7 +312,7 @@ def test_judge_payload_unchanged(tmp_path, monkeypatch):
 
     judge_calls = [c for c in recording_client.calls if c.get("json", {}).get("model") == mod.JUDGE_MODEL]
     assert judge_calls, "expected at least one judge call"
-    judge_payload = judge_calls[0]["json"]
+    judge_payload = judge_calls[-1]["json"]
     assert judge_payload["options"] == {"temperature": 0, "num_predict": 16}, (
         f"judge payload drifted: {judge_payload['options']}"
     )
@@ -332,6 +338,12 @@ def test_result_doc_has_gen_temp_and_inline_judge(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "load_dataset", lambda: list(_SYNTHETIC_DATASET))
     monkeypatch.setattr(mod, "llm_answer", _fake_llm_answer)
     monkeypatch.setattr(mod, "self_verify_answer", _fake_self_verify)
+    recording_client = _RecordingClient("Alice")
+
+    def fake_async_client(*args, **kwargs):
+        return recording_client
+
+    monkeypatch.setattr("httpx.AsyncClient", fake_async_client)
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()
@@ -366,6 +378,12 @@ def test_answer_and_gold_persisted(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "load_dataset", lambda: list(_SYNTHETIC_DATASET))
     monkeypatch.setattr(mod, "llm_answer", _fake_llm_answer)
     monkeypatch.setattr(mod, "self_verify_answer", _fake_self_verify)
+    recording_client = _RecordingClient("Alice")
+
+    def fake_async_client(*args, **kwargs):
+        return recording_client
+
+    monkeypatch.setattr("httpx.AsyncClient", fake_async_client)
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()
@@ -387,8 +405,10 @@ def test_answer_and_gold_persisted(tmp_path, monkeypatch):
     first_result = doc["results"][0]
     assert "answer" in first_result, f"'answer' missing from result row: {first_result.keys()}"
     assert "gold_answer" in first_result, f"'gold_answer' missing from result row: {first_result.keys()}"
+    assert "question_id" in first_result, f"'question_id' missing from result row: {first_result.keys()}"
     assert first_result["answer"] == "Alice"
-    assert first_result["gold_answer"] == "Alice"
+    assert first_result["gold_answer"] == "Bob"
+    assert first_result["question_id"] == "q-1"
 
 
 def test_no_inline_judge_correct_is_none(tmp_path, monkeypatch):
@@ -400,8 +420,12 @@ def test_no_inline_judge_correct_is_none(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "VectorMemory", lambda db_path, embed_mode, onnx_path: _FakeVectorMemory(["chunk"]))
     monkeypatch.setattr(mod, "process_conversation_turn", lambda *a, **kw: None)
     monkeypatch.setattr(mod, "load_dataset", lambda: list(_SYNTHETIC_DATASET))
-    monkeypatch.setattr(mod, "llm_answer", _fake_llm_answer)
-    monkeypatch.setattr(mod, "self_verify_answer", _fake_self_verify)
+    recording_client = _RecordingClient("Alice")
+
+    def fake_async_client(*args, **kwargs):
+        return recording_client
+
+    monkeypatch.setattr("httpx.AsyncClient", fake_async_client)
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()

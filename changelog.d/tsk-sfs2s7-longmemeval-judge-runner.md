@@ -14,11 +14,12 @@
   question, omits `correct`/`accuracy` from the result metrics and the `Overall`
   summary line, and returns `None` instead of a float.
 - `benchmarks/longmemeval_runner.py` adds `gen_temp` and `inline_judge` to the
-  result JSON metadata, and persists `question_id`, `answer` and `gold_answer`
-  in each per-question result row.
+  result JSON metadata.
 
 ### Added
 
+- `benchmarks/longmemeval_runner.py` persists `question_id`, `answer` and
+  `gold_answer` in each per-question result row.
 - `tests/test_longmemeval_runner_new_features.py` exercises the shipped
   `run_benchmark` (no reimplementation) and covers: substring-mode completion,
   NO_INLINE_JUDGE metric shape and return value, GEN_TEMP edge-case parsing,
