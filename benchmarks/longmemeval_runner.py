@@ -10,6 +10,7 @@ Each question has conversation sessions as context. We:
 Usage: .venv/bin/python benchmarks/longmemeval_runner.py [--limit N] [--type TYPE]
 """
 
+import math
 import argparse
 import asyncio
 import inspect
@@ -97,6 +98,55 @@ def _num_ctx_from_env(raw: str | None) -> int:
 
 
 NUM_CTX = _num_ctx_from_env(os.environ.get("TAOSMD_LME_NUM_CTX"))
+
+
+def _parse_gen_temp(raw: str | None) -> float:
+    """Parse TAOSMD_LME_GEN_TEMP, falling back to 0 on a bad value.
+
+    Empty, non-numeric, negative, nan and inf all fall back to 0 with a
+    warning, so a mis-set temperature never propagates into the Ollama
+    payload.
+    """
+    if not raw:
+        return 0.0
+    try:
+        val = float(raw)
+    except ValueError:
+        print(
+            f"  WARNING: TAOSMD_LME_GEN_TEMP={raw!r} is not numeric; falling "
+            "back to 0.0.",
+            file=sys.stderr,
+        )
+        return 0.0
+    if val < 0 or math.isnan(val) or math.isinf(val):
+        print(
+            f"  WARNING: TAOSMD_LME_GEN_TEMP={raw!r} is out of range; falling "
+            "back to 0.0.",
+            file=sys.stderr,
+        )
+        return 0.0
+    return val
+
+
+GEN_TEMP = _parse_gen_temp(os.environ.get("TAOSMD_LME_GEN_TEMP"))
+
+
+def _parse_bool_env(raw: str | None, default: int = 0) -> int:
+    """Parse a boolean-ish env var, falling back to default on a bad value."""
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(
+            f"  WARNING: TAOSMD_LME_NO_INLINE_JUDGE={raw!r} is not an integer; "
+            f"falling back to {default}.",
+            file=sys.stderr,
+        )
+        return default
+
+
+NO_INLINE_JUDGE = _parse_bool_env(os.environ.get("TAOSMD_LME_NO_INLINE_JUDGE")) == 1
 _reranker = None
 
 
@@ -214,7 +264,7 @@ async def llm_answer(client, context: str, question: str) -> str:
                 "messages": [{"role": "user", "content": ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)}],
                 "stream": False,
                 "think": False,
-                "options": _gen_options(temperature=0, num_predict=100),
+                "options": _gen_options(temperature=GEN_TEMP, num_predict=100),
             },
             timeout=30,
         )
@@ -728,41 +778,53 @@ async def run_benchmark(
                 f"wired={delta['wired_chars']} identical={delta['identical']}"
             )
 
-        if use_llm and llm_client is not None:
+        answer = ""
+        correct = False
+        if use_llm and llm_client is not None and not NO_INLINE_JUDGE:
             t_llm = time.time()
-            # Step 1: LLM generates answer from recalled context
             answer = await llm_answer(llm_client, full_context, question)
             if SELF_VERIFY:
                 answer = await self_verify_answer(llm_client, full_context, question, answer)
-            # Step 2: LLM judges whether answer matches gold (official eval method)
             if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
                 correct = await score_answer_llm(llm_client, answer, gold_answer, question)
             else:
                 correct = False
             llm_time = time.time() - t_llm
-            # Debug
             if i < 5:
-                print(f"      [{llm_time:.1f}s] Answer: {(answer or 'EMPTY')[:80]} → {'✓' if correct else '✗'}")
+                print(f"      [{llm_time:.1f}s] Answer: {(answer or 'EMPTY')[:80]} -> {'PASS' if correct else 'FAIL'}")
+        elif use_llm and llm_client is not None and NO_INLINE_JUDGE:
+            t_llm = time.time()
+            answer = await llm_answer(llm_client, full_context, question)
+            if SELF_VERIFY:
+                answer = await self_verify_answer(llm_client, full_context, question, answer)
+            llm_time = time.time() - t_llm
+            if i < 5:
+                print(f"      [{llm_time:.1f}s] Answer (no inline judge): {(answer or 'EMPTY')[:80]}")
         else:
             correct = score_answer_substring(full_context, gold_answer)
 
         total_questions += 1
-        if correct:
+        if not NO_INLINE_JUDGE and correct:
             total_correct += 1
 
         if qtype not in results_by_type:
-            results_by_type[qtype] = {"correct": 0, "total": 0}
+            results_by_type[qtype] = {"total": 0}
         results_by_type[qtype]["total"] += 1
-        if correct:
-            results_by_type[qtype]["correct"] += 1
+        if not NO_INLINE_JUDGE:
+            if "correct" not in results_by_type[qtype]:
+                results_by_type[qtype]["correct"] = 0
+            if correct:
+                results_by_type[qtype]["correct"] += 1
 
         elapsed = ingest_time + query_time
         total_time += elapsed
         all_results.append({
             "idx": i,
-            "question_type": qtype,
+            "question_id": item.get("question_id"),
             "question": question,
-            "correct": bool(correct),
+            "answer": answer,
+            "gold_answer": gold_answer,
+            "correct": bool(correct) if not NO_INLINE_JUDGE else None,
             "retrieved_chars": len(full_context),
             "retrieval_delta": delta,
         })
@@ -792,13 +854,19 @@ async def run_benchmark(
     print(f"\n{'='*70}")
     print("RESULTS")
     print(f"{'='*70}")
-    print(f"\n  Overall: {total_correct}/{total_questions} ({overall:.1f}%)")
+    if not NO_INLINE_JUDGE:
+        print(f"\n  Overall: {total_correct}/{total_questions} ({overall:.1f}%)")
+    else:
+        print(f"\n  Total questions answered: {total_questions}")
     print(f"  Total time: {total_time:.1f}s ({per_q:.1f}s per question)")
 
     print("\n  By question type:")
     for qtype, data in sorted(results_by_type.items()):
-        pct = data["correct"] / data["total"] * 100 if data["total"] > 0 else 0
-        print(f"    {qtype:30s} {data['correct']:3d}/{data['total']:<3d} ({pct:.1f}%)")
+        if NO_INLINE_JUDGE:
+            print(f"    {qtype:30s} {data['total']:<3d} questions")
+        else:
+            pct = data["correct"] / data["total"] * 100 if data["total"] > 0 else 0
+            print(f"    {qtype:30s} {data['correct']:3d}/{data['total']:<3d} ({pct:.1f}%)")
 
     print("\n  Comparison:")
     print("    MemPalace (raw verbatim):     96.6%")
@@ -820,6 +888,8 @@ async def run_benchmark(
             "limit": limit,
             "generator": REMOTE_LLM_MODEL,
             "judge": JUDGE_MODEL,
+            "gen_temp": GEN_TEMP,
+            "inline_judge": not NO_INLINE_JUDGE,
             "rerank": RERANK,
             "decompose": DECOMPOSE,
             "self_verify": SELF_VERIFY,
@@ -833,16 +903,19 @@ async def run_benchmark(
             "retrieval_delta": delta_summary,
             "metrics": {
                 "n": total_questions,
-                "correct": total_correct,
-                "accuracy": overall,
-                "by_type": results_by_type,
             },
             "results": all_results,
         }
+        if not NO_INLINE_JUDGE:
+            result_doc["metrics"]["correct"] = total_correct
+            result_doc["metrics"]["accuracy"] = overall
+            result_doc["metrics"]["by_type"] = results_by_type
         with open(out_path, "w") as f:
             json.dump(result_doc, f, indent=2)
         print(f"  results -> {out_path}")
 
+    if NO_INLINE_JUDGE:
+        return None
     return overall
 
 
