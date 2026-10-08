@@ -1311,6 +1311,40 @@ async def _claims_rate(store) -> dict:
         await store.close()
 
 
+def _backup_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd backup`` subcommands."""
+    from . import backup as _backup  # noqa: PLC0415
+
+    data_dir = args.data_dir
+
+    if args.backup_cmd == "create":
+        out = _backup.create(
+            data_dir=data_dir,
+            out_path=getattr(args, "out", None),
+            include_secrets=getattr(args, "include_secrets", False),
+        )
+        print(f"created: {out}")
+        return 0
+
+    if args.backup_cmd == "verify":
+        ok = _backup.verify(args.path)
+        if ok:
+            print(f"verify: ok ({args.path})")
+            return 0
+        return 1
+
+    if args.backup_cmd == "restore":
+        _backup.restore(
+            args.path,
+            to_dir=args.to,
+            move_existing=getattr(args, "move_existing", False),
+        )
+        print(f"restored: {args.path} -> {args.to}")
+        return 0
+
+    return 1
+
+
 def _verify_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd verify``: run a verification pass over unverified claims."""
     import asyncio  # noqa: PLC0415
@@ -1933,6 +1967,53 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Claims to pull per batch (default: 100)",
     )
 
+    # ----- backup subcommand -------------------------------------------
+    backup_p = sub.add_parser(
+        "backup",
+        help="Backup, verify, and restore the taOSmd data dir",
+    )
+    backup_sub = backup_p.add_subparsers(dest="backup_cmd", required=True)
+
+    # backup create
+    b_create_p = backup_sub.add_parser(
+        "create",
+        help="Create a .tar.gz backup of the data dir",
+    )
+    b_create_p.add_argument(
+        "--out",
+        default=None,
+        help="Output path for the tarball (default: taosmd-backup-<UTC ts>.tar.gz in cwd)",
+    )
+    b_create_p.add_argument(
+        "--include-secrets",
+        action="store_true",
+        help="Include config.json (holds bearer tokens; the archive is unencrypted)",
+    )
+
+    # backup verify
+    b_verify_p = backup_sub.add_parser(
+        "verify",
+        help="Verify a backup tarball against its MANIFEST.json",
+    )
+    b_verify_p.add_argument("path", help="Path to the .tar.gz backup to verify")
+
+    # backup restore
+    b_restore_p = backup_sub.add_parser(
+        "restore",
+        help="Restore a backup tarball to a data dir",
+    )
+    b_restore_p.add_argument("path", help="Path to the .tar.gz backup to restore")
+    b_restore_p.add_argument(
+        "--to",
+        required=True,
+        help="Target data dir (must not exist or be empty unless --move-existing is used)",
+    )
+    b_restore_p.add_argument(
+        "--move-existing",
+        action="store_true",
+        help="Rename a non-empty target to <name>.pre-restore-<ts> before restoring",
+    )
+
     return parser
 
 
@@ -2029,6 +2110,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "verify":
         return _verify_cmd(args)
+
+    if args.cmd == "backup":
+        try:
+            return _backup_cmd(args)
+        except (ValueError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
     registry = AgentRegistry(args.data_dir)
 
