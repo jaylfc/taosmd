@@ -270,9 +270,20 @@ class ArchiveStore:
         # Redact secrets before storage
         from .secret_filter import redact_secrets
         summary, _ = redact_secrets(summary)
-        for key in ("content", "text", "msg", "query", "body"):
-            if key in data and isinstance(data[key], str):
-                data[key], _ = redact_secrets(data[key])
+        
+        def _redact_recursive(value):
+            """Recursively redact secrets from JSON-compatible structures."""
+            if isinstance(value, dict):
+                return {k: _redact_recursive(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [_redact_recursive(v) for v in value]
+            elif isinstance(value, str):
+                return redact_secrets(value)[0]
+            else:
+                return value
+        
+        # Apply recursive redaction to all string values in data
+        data = _redact_recursive(data)
 
         ts = time.time()
         event = {
