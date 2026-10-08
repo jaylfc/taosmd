@@ -1,0 +1,2 @@
+### Fixed
+- Fixed export_reranker_onnx.sh and export_reranker_onnx.ps1 to use the export venv's own optimum-cli binary instead of `uv run` which incorrectly resolves to the repo's project environment. Added uv pip install with venv python to ensure pip is available in the export venv. Added tests to verify scripts invoke optimum-cli from the export venv and do not use bare pip commands.
