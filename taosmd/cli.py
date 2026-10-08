@@ -1376,6 +1376,102 @@ async def _fetch_spans(archive):
     return fetch
 
 
+def _hooks_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd hooks`` subcommands."""
+    import asyncio  # noqa: PLC0415
+    import json  # noqa: PLC0415
+    import logging  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from taosmd.hooks import sync as hooks_sync  # noqa: PLC0415
+
+    data_dir = args.data_dir
+    log_path = Path(data_dir) / "logs" / "hooks.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(str(log_path))
+    except OSError:
+        return 0
+
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    hooks_logger = logging.getLogger("taosmd.hooks")
+    hooks_logger.addHandler(handler)
+    hooks_logger.setLevel(logging.ERROR)
+
+    if args.hooks_cmd == "run":
+        try:
+            raw = sys.stdin.read()
+        except OSError as exc:
+            hooks_logger.error(
+                "hooks run: stdin read failed error_type=%s", type(exc).__name__
+            )
+            return 0
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            hooks_logger.error(
+                "hooks run: bad stdin error_type=%s", type(exc).__name__
+            )
+            return 0
+        if not isinstance(payload, dict):
+            hooks_logger.error("hooks run: non-dict payload")
+            return 0
+
+        session_id = payload.get("session_id", "")
+        transcript_path = payload.get("transcript_path", "")
+        cwd = payload.get("cwd", "")
+
+        if not session_id or not transcript_path:
+            hooks_logger.error(
+                "hooks run: missing session_id or transcript_path"
+            )
+            return 0
+
+        try:
+            asyncio.run(
+                hooks_sync.sync_session(
+                    data_dir, session_id, transcript_path, cwd, timeout=5
+                )
+            )
+        except Exception as exc:
+            hooks_logger.error(
+                "hooks run: sync failed session_id=%s error_type=%s",
+                session_id,
+                type(exc).__name__,
+            )
+        return 0
+
+    if args.hooks_cmd == "sync":
+        session = getattr(args, "session", None)
+        sync_all = getattr(args, "sync_all", False)
+
+        if not session and not sync_all:
+            print("error: specify --session ID or --all", file=sys.stderr)
+            return 2
+
+        try:
+            if session:
+                result = asyncio.run(
+                    hooks_sync.sync_session(
+                        data_dir, session, "", "", timeout=5
+                    )
+                )
+            else:
+                result = asyncio.run(
+                    hooks_sync.sync_all(data_dir, timeout=5)
+                )
+        except Exception as exc:
+            hooks_logger.error(
+                "hooks sync: failed error_type=%s", type(exc).__name__
+            )
+            return 1
+
+        return 0 if result.get("ok", False) else 1
+
+    return 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level argument parser.
 
@@ -1930,7 +2026,41 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     verify_p.add_argument(
         "--batch", type=int, default=100,
-        help="Claims to pull per batch (default: 100)",
+        help="Claims to pull per batch (default 100)",
+    )
+
+    # ----- hooks subcommand (Claude Code capture) -----------------------
+    hooks_p = sub.add_parser(
+        "hooks",
+        help="Claude Code capture hook helpers (run, sync)",
+    )
+    hooks_sub = hooks_p.add_subparsers(dest="hooks_cmd", required=True)
+
+    hooks_run_p = hooks_sub.add_parser(
+        "run",
+        help="Run capture sync for a hook event (reads hook JSON from stdin)",
+    )
+    hooks_run_p.add_argument(
+        "event",
+        nargs="?",
+        default="",
+        help="Hook event name (fallback if not provided in stdin payload)",
+    )
+
+    hooks_sync_p = hooks_sub.add_parser(
+        "sync",
+        help="Manually run capture sync for a session or all sessions",
+    )
+    hooks_sync_p.add_argument(
+        "--session",
+        default=None,
+        help="Sync only this session id",
+    )
+    hooks_sync_p.add_argument(
+        "--all",
+        dest="sync_all",
+        action="store_true",
+        help="Sync all tracked sessions",
     )
 
     return parser
@@ -2083,6 +2213,9 @@ def main(argv: list[str] | None = None) -> int:
             return _generator_profile_show(args.profile_id, data_dir=args.data_dir)
         if args.generator_profile_cmd == "set":
             return _generator_profile_set(args.profile_id, agent=args.agent, data_dir=args.data_dir)
+
+    if args.cmd == "hooks":
+        return _hooks_cmd(args)
 
     parser.print_help()
     return 1

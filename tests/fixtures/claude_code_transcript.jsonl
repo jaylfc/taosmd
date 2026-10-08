@@ -1,0 +1,16 @@
+{"type":"user","message":{"role":"user","content":"plain string prompt"},"uuid":"u1","parentUuid":"","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"blocks prompt"}]},"uuid":"u2","parentUuid":"","timestamp":"2026-10-07T22:53:26.123Z","sessionId":"s1"}
+{"type":"assistant","message":{"role":"assistant","model":"claude","id":"msg1","content":[{"type":"text","text":"assistant reply"}],"usage":{}},"uuid":"a1","parentUuid":"","timestamp":"2026-10-07T22:53:27.123Z","sessionId":"s1"}
+{"type":"assistant","message":{"role":"assistant","model":"claude","id":"msg2","content":[{"type":"thinking","thinking":"hmm","signature":"sig"}]},"uuid":"a2","parentUuid":"a1","timestamp":"2026-10-07T22:53:28.123Z","sessionId":"s1"}
+{"type":"assistant","message":{"role":"assistant","model":"claude","id":"msg3","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]},"uuid":"a3","parentUuid":"a2","timestamp":"2026-10-07T22:53:29.123Z","sessionId":"s1"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"output text","is_error":false}]},"toolUseResult":{"stdout":"ok","stderr":""},"uuid":"u3","parentUuid":"a3","timestamp":"2026-10-07T22:53:30.123Z","sessionId":"s1"}
+{"type":"assistant","message":{"role":"assistant","model":"claude","id":"msg4","content":[{"type":"text","text":"let me run that"},{"type":"tool_use","id":"toolu_2","name":"Read","input":{"path":"/tmp/test.txt"}}]},"uuid":"a4","parentUuid":"u3","timestamp":"2026-10-07T22:53:38.123Z","sessionId":"s1"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"result text"}],"is_error":false}]},"toolUseResult":{"stdout":"ok","stderr":""},"uuid":"u4","parentUuid":"a4","timestamp":"2026-10-07T22:53:39.123Z","sessionId":"s1"}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-07T22:53:31.123Z","sessionId":"s1","content":".."}
+{"type":"attachment","filename":"test.txt","uuid":"att1","parentUuid":"","timestamp":"2026-10-07T22:53:32.123Z","sessionId":"s1"}
+{"type":"system","subtype":"info","content":"system","timestamp":"2026-10-07T22:53:33.123Z","sessionId":"s1"}
+{"type":"file-history-snapshot","content":"..","timestamp":"2026-10-07T22:53:34.123Z","sessionId":"s1"}
+{"type":"last-prompt","content":"..","timestamp":"2026-10-07T22:53:35.123Z","sessionId":"s1"}
+{"type":"ai-title","content":"..","timestamp":"2026-10-07T22:53:36.123Z","sessionId":"s1"}
+{"type":"cost-state","content":"..","timestamp":"2026-10-07T22:53:37.123Z","sessionId":"s1"}
+{"sessionId":"s1"}
