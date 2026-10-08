@@ -104,8 +104,6 @@ def _walk_files(data_dir: Path):
                 rel = path.relative_to(data_dir)
             except ValueError:
                 continue
-            if any(part.startswith(".") for part in rel.parts):
-                continue
             if any(rel.name.endswith(sfx) for sfx in SIDECAR_SUFFIXES):
                 continue
             yield rel
@@ -137,12 +135,10 @@ def create(
 
     try:
         out.relative_to(data_dir)
+    except ValueError:
+        pass
+    else:
         raise ValueError(f"--out must not lie inside the data dir: {out}")
-    except ValueError as exc:
-        if "must not lie inside" not in str(exc):
-            pass
-        else:
-            raise
 
     tmpdir = Path(tempfile.mkdtemp(prefix="taosmd-backup-"))
     staging = tmpdir / "staging"
@@ -225,11 +221,12 @@ def create(
 
 
 def _extract_members(tf: tarfile.TarFile, dest: Path) -> None:
-    for member in tf.getmembers():
+    _validate_tar_members(tf)
+    members = tf.getmembers()
+    for member in members:
         name = member.name
-        # DISABLED FOR RED PROOF
-        if member.issym() or member.islnk():
-            raise ValueError(f"unsafe link member: {name}")
+        if os.path.isabs(name) or ".." in name.split("/"):
+            raise ValueError(f"unsafe tar member: {name}")
     try:
         tf.extractall(str(dest), filter="data")
     except TypeError:
@@ -239,9 +236,10 @@ def _extract_members(tf: tarfile.TarFile, dest: Path) -> None:
 def _validate_tar_members(tf: tarfile.TarFile) -> None:
     for member in tf.getmembers():
         name = member.name
-        # DISABLED FOR RED PROOF
         if member.issym() or member.islnk():
             raise ValueError(f"unsafe link member: {name}")
+        if os.path.isabs(name) or ".." in name.split("/"):
+            raise ValueError(f"unsafe tar member: {name}")
 
 
 def verify(path: str | Path) -> None:
@@ -278,9 +276,13 @@ def verify(path: str | Path) -> None:
                 continue
 
             if entry.get("integrity_check") and _is_sqlite_from_bytes(data):
-                tmp_db = Path(tempfile.mkdtemp()) / "check.db"
-                tmp_db.write_bytes(data)
-                actual_integrity = _sqlite_integrity(tmp_db)
+                tmp_dir = Path(tempfile.mkdtemp())
+                try:
+                    tmp_db = tmp_dir / "check.db"
+                    tmp_db.write_bytes(data)
+                    actual_integrity = _sqlite_integrity(tmp_db)
+                finally:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
                 if actual_integrity != entry.get("integrity_check", ""):
                     bad.append(f"{member.name} (integrity_check mismatch: {actual_integrity})")
 
