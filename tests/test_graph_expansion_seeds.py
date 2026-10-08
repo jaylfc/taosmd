@@ -79,11 +79,13 @@ async def test_unscored_results_preserve_encounter_order():
 @pytest.mark.asyncio
 async def test_tie_on_score_more_mentioned_entity_wins():
     kg = _RecordingKG()
+    # Beta is mentioned first in encounter order but only in 1 result;
+    # Alpha appears later in encounter order but in 2 results.
+    # The encounter-order tiebreak must NOT beat the mention-count tiebreak.
     vector_results = [
         {"text": "Beta", "score": 1, "id": 0},
-        {"text": "Beta and Alpha", "score": 1, "id": 1},
+        {"text": "Alpha", "score": 1, "id": 1},
         {"text": "Alpha", "score": 1, "id": 2},
-        {"text": "Alpha", "score": 1, "id": 3},
     ]
     await expand_from_results(kg, vector_results, max_seeds=2)
     assert kg.queried == ["Alpha", "Beta"]

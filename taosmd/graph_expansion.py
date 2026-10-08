@@ -149,23 +149,22 @@ async def expand_from_results(
 
         for result in vector_results:
             score = _result_score(result)
-            if score is None:
-                continue
             text = result.get("text", "")
             for e in unique_entities:
                 if e in text:
-                    if entity_scores[e] is None or score > entity_scores[e]:
-                        entity_scores[e] = score
+                    if score is not None:
+                        if entity_scores[e] is None or score > entity_scores[e]:
+                            entity_scores[e] = score
                     entity_mentions[e] += 1
 
         # Stable sort: best score first, then most mentions first, then
-        # encounter order first.
+        # encounter order.
         ranked = sorted(
             range(len(unique_entities)),
             key=lambda i: (
                 entity_scores[unique_entities[i]] if entity_scores[unique_entities[i]] is not None else float("-inf"),
                 entity_mentions[unique_entities[i]],
-                -i,
+                i,
             ),
             reverse=True,
         )
