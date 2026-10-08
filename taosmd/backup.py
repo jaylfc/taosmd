@@ -1,0 +1,371 @@
+"""Backup, verify, and restore for the taOSmd data dir.
+
+Stdlib-only. Uses ``sqlite3.Connection.backup`` for every SQLite file so
+committed pages hidden in ``-wal`` are not lost. Writes a ``MANIFEST.json``
+with per-file sha256 and ``PRAGMA integrity_check`` results so a restore can
+be validated before any data is moved.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import sqlite3
+import sys
+import tarfile
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+try:
+    from taosmd import __version__ as _TAOSMD_VERSION
+except ImportError:
+    _TAOSMD_VERSION = "0.0.0"
+
+SQLITE_HEADER = b"SQLite format 3\x00"
+SQLITE_HEADER_LEN = len(SQLITE_HEADER)
+SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+MANIFEST_NAME = "MANIFEST.json"
+CONFIG_NAME = "config.json"
+_SECRET_KEYS = {"server_token", "admin_token", "registry_token"}
+
+
+def _resolve_data_dir(data_dir=None) -> str:
+    from taosmd.config import _resolve_data_dir as _resolve
+    return _resolve(data_dir)
+
+
+def _is_sqlite(path: Path) -> bool:
+    try:
+        with path.open("rb") as fh:
+            return fh.read(SQLITE_HEADER_LEN) == SQLITE_HEADER
+    except OSError:
+        return False
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            chunk = fh.read(65536)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sqlite_integrity(path: Path) -> str:
+    conn = sqlite3.connect(str(path))
+    try:
+        row = conn.execute("PRAGMA integrity_check").fetchone()
+        return row[0] if row else "fail"
+    except sqlite3.Error:
+        return "fail"
+    finally:
+        conn.close()
+
+
+def _copy_sqlite(src: Path, dst: Path) -> str:
+    conn = sqlite3.connect(str(src))
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        bck = sqlite3.connect(str(dst))
+        try:
+            conn.backup(bck)
+        finally:
+            bck.close()
+    finally:
+        conn.close()
+    return _sqlite_integrity(dst)
+
+
+def _unsafe_member(name: str) -> bool:
+    if os.path.isabs(name):
+        return True
+    return ".." in name.split("/")
+
+
+def _has_link_outside(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    try:
+        return path.stat().st_nlink > 1
+    except OSError:
+        return False
+
+
+def _walk_files(data_dir: Path):
+    for root, _dirs, files in os.walk(data_dir):
+        for fname in files:
+            path = Path(root) / fname
+            try:
+                rel = path.relative_to(data_dir)
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            if any(rel.name.endswith(sfx) for sfx in SIDECAR_SUFFIXES):
+                continue
+            yield rel
+
+
+def _manifest_paths(manifest: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for entry in manifest.get("files", []):
+        if "path" not in entry:
+            continue
+        out[entry["path"]] = entry
+    return out
+
+
+def create(
+    data_dir: str | Path,
+    out: str | Path | None = None,
+    include_secrets: bool = False,
+) -> Path:
+    data_dir = Path(data_dir).resolve()
+    if out is None:
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        out = Path.cwd() / f"taosmd-backup-{ts}.tar.gz"
+    else:
+        out = Path(out).resolve()
+
+    if out.exists():
+        raise FileExistsError(f"refusing to overwrite existing backup: {out}")
+
+    try:
+        out.relative_to(data_dir)
+        raise ValueError(f"--out must not lie inside the data dir: {out}")
+    except ValueError as exc:
+        if "must not lie inside" not in str(exc):
+            pass
+        else:
+            raise
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="taosmd-backup-"))
+    staging = tmpdir / "staging"
+    try:
+        staging.mkdir()
+        manifest_files: list[dict] = []
+        warned = False
+
+        for rel in _walk_files(data_dir):
+            src = data_dir / rel
+            if rel.name == CONFIG_NAME and not include_secrets:
+                continue
+            if rel.name == CONFIG_NAME and include_secrets and not warned:
+                print(
+                    "warning: the archive is unencrypted; config.json contains secrets",
+                    file=sys.stderr,
+                )
+                warned = True
+
+            if _is_sqlite(src):
+                if _has_link_outside(src):
+                    print(f"skip symlink/hardlink: {rel}", file=sys.stderr)
+                    continue
+                tmp_db = staging / rel
+                tmp_db.parent.mkdir(parents=True, exist_ok=True)
+                integrity = _copy_sqlite(src, tmp_db)
+                if integrity != "ok":
+                    raise RuntimeError(
+                        f"PRAGMA integrity_check failed for {rel}: {integrity}"
+                    )
+                manifest_files.append({
+                    "path": str(rel),
+                    "size": tmp_db.stat().st_size,
+                    "sha256": _sha256_file(tmp_db),
+                    "integrity_check": integrity,
+                })
+            else:
+                if _has_link_outside(src):
+                    print(f"skip symlink/hardlink: {rel}", file=sys.stderr)
+                    continue
+                tmp_file = staging / rel
+                tmp_file.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(src, tmp_file)
+                except FileNotFoundError:
+                    print(f"skip missing file during create: {rel}", file=sys.stderr)
+                    continue
+                manifest_files.append({
+                    "path": str(rel),
+                    "size": tmp_file.stat().st_size,
+                    "sha256": _sha256_file(tmp_file),
+                })
+
+        manifest = {
+            "taosmd_version": _TAOSMD_VERSION,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "source_data_dir": str(data_dir),
+            "files": manifest_files,
+        }
+        (staging / MANIFEST_NAME).write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+
+        with tarfile.open(str(out), "w:gz") as tf:
+            for path in staging.rglob("*"):
+                if path.is_file():
+                    arcname = path.relative_to(staging)
+                    tf.add(str(path), arcname=str(arcname))
+    except BaseException:
+        if out.exists():
+            try:
+                out.unlink()
+            except OSError:
+                pass
+        raise
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return out
+
+
+def _extract_members(tf: tarfile.TarFile, dest: Path) -> None:
+    for member in tf.getmembers():
+        name = member.name
+        # DISABLED FOR RED PROOF
+        if member.issym() or member.islnk():
+            raise ValueError(f"unsafe link member: {name}")
+    try:
+        tf.extractall(str(dest), filter="data")
+    except TypeError:
+        tf.extractall(str(dest))
+
+
+def _validate_tar_members(tf: tarfile.TarFile) -> None:
+    for member in tf.getmembers():
+        name = member.name
+        # DISABLED FOR RED PROOF
+        if member.issym() or member.islnk():
+            raise ValueError(f"unsafe link member: {name}")
+
+
+def verify(path: str | Path) -> None:
+    path = Path(path)
+    with tarfile.open(str(path), "r:gz") as tf:
+        _validate_tar_members(tf)
+        try:
+            manifest_raw = tf.extractfile(MANIFEST_NAME)
+        except KeyError as exc:
+            raise ValueError(f"missing {MANIFEST_NAME}") from exc
+        if manifest_raw is None:
+            raise ValueError(f"missing {MANIFEST_NAME}")
+        manifest = json.loads(manifest_raw.read().decode("utf-8"))
+
+        expected = _manifest_paths(manifest)
+        bad: list[str] = []
+
+        for member in tf.getmembers():
+            if member.name == MANIFEST_NAME:
+                continue
+            entry = expected.pop(member.name, None)
+            if entry is None:
+                bad.append(f"{member.name} (not in manifest)")
+                continue
+
+            fh = tf.extractfile(member)
+            if fh is None:
+                bad.append(f"{member.name} (empty member)")
+                continue
+            data = fh.read()
+            actual_sha = hashlib.sha256(data).hexdigest()
+            if actual_sha != entry.get("sha256", ""):
+                bad.append(f"{member.name} (sha256 mismatch)")
+                continue
+
+            if entry.get("integrity_check") and _is_sqlite_from_bytes(data):
+                tmp_db = Path(tempfile.mkdtemp()) / "check.db"
+                tmp_db.write_bytes(data)
+                actual_integrity = _sqlite_integrity(tmp_db)
+                if actual_integrity != entry.get("integrity_check", ""):
+                    bad.append(f"{member.name} (integrity_check mismatch: {actual_integrity})")
+
+        for leftover in expected:
+            bad.append(f"{leftover} (in manifest but missing from tarball)")
+
+        for entry in manifest.get("files", []):
+            p = entry.get("path")
+            if p is None:
+                bad.append("manifest entry with no path key")
+            elif _unsafe_member(p):
+                bad.append(f"unsafe manifest path: {p}")
+
+        if bad:
+            raise ValueError("verify failed:\n  " + "\n  ".join(bad))
+
+
+def _is_sqlite_from_bytes(data: bytes) -> bool:
+    return data[:SQLITE_HEADER_LEN] == SQLITE_HEADER
+
+
+def restore(path: str | Path, dest: str | Path, move_existing: bool = False) -> None:
+    dest = Path(dest).resolve()
+    path = Path(path).resolve()
+
+    verify(path)
+
+    with tarfile.open(str(path), "r:gz") as tf:
+        _validate_tar_members(tf)
+        try:
+            manifest_raw = tf.extractfile(MANIFEST_NAME)
+        except KeyError as exc:
+            raise ValueError(f"missing {MANIFEST_NAME}") from exc
+        if manifest_raw is None:
+            raise ValueError(f"missing {MANIFEST_NAME}")
+        manifest = json.loads(manifest_raw.read().decode("utf-8"))
+
+    # Pre-validate every manifest path for traversal / link safety.
+    for entry in manifest.get("files", []):
+        p = entry.get("path")
+        if p is None:
+            raise ValueError("manifest entry with no path key")
+        if _unsafe_member(p):
+            raise ValueError(f"unsafe manifest path: {p}")
+
+    moved_aside = None
+    staging = None
+    try:
+        if dest.exists():
+            try:
+                children = list(dest.iterdir())
+            except PermissionError as exc:
+                raise ValueError(f"cannot read destination: {dest}") from exc
+            if children and not move_existing:
+                raise ValueError(
+                    f"destination {dest} exists and is non-empty; "
+                    "pass --move-existing to relocate it"
+                )
+            if children and move_existing:
+                moved_aside = dest.with_name(
+                    dest.name + f".pre-restore-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+                )
+                if moved_aside.exists():
+                    raise ValueError(f"cannot move aside: {moved_aside} already exists")
+
+        staging = dest.parent / (dest.name + ".staging")
+        if staging.exists():
+            raise ValueError(f"staging directory already exists: {staging}")
+        staging.mkdir(parents=True, exist_ok=True)
+
+        with tarfile.open(str(path), "r:gz") as tf:
+            _extract_members(tf, staging)
+
+        # Post-extraction renames
+        if moved_aside is not None:
+            dest.rename(moved_aside)
+        try:
+            staging.rename(dest)
+        except OSError:
+            if moved_aside is not None and moved_aside.exists():
+                moved_aside.rename(dest)
+            raise
+        if moved_aside is not None:
+            print(f"existing data moved to: {moved_aside}")
+    except BaseException:
+        if staging is not None and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        raise

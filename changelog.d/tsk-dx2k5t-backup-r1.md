@@ -1,0 +1,2 @@
+### Added
+- `taosmd backup create`, `taosmd backup verify`, and `taosmd backup restore` commands for a stdlib-only backup of the taOSmd data dir. Backups are single `.tar.gz` files with a `MANIFEST.json` containing per-file sha256 and `PRAGMA integrity_check` results. SQLite files are copied via `sqlite3.Connection.backup()` to capture WAL pages. `config.json` is excluded by default; pass `--include-secrets` to include it. Restore is atomic (staging dir + rename) and never overwrites existing data. `--move-existing` relocates a non-empty destination before restoring.

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
+import tarfile
 from datetime import datetime, timezone
 
 from .agents import (
@@ -1361,6 +1363,48 @@ def _verify_cmd(args: argparse.Namespace) -> int:
     return asyncio.run(_run())
 
 
+def _backup_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd backup`` subcommands."""
+    from .backup import create, restore, verify  # noqa: PLC0415
+
+    try:
+        if args.backup_cmd == "create":
+            out = create(
+                args.data_dir,
+                out=getattr(args, "out", None),
+                include_secrets=args.include_secrets,
+            )
+            print(f"backup created: {out}")
+            return 0
+
+        if args.backup_cmd == "verify":
+            verify(args.path)
+            print("backup verified: ok")
+            return 0
+
+        if args.backup_cmd == "restore":
+            restore(
+                args.path,
+                dest=args.to,
+                move_existing=args.move_existing,
+            )
+            return 0
+    except (RuntimeError, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except tarfile.TarError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except sqlite3.Error as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except KeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    return 1
+
+
 async def _fetch_spans(archive):
     async def fetch(span_ids: list[int]) -> list[str]:
         out = []
@@ -1933,6 +1977,48 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Claims to pull per batch (default: 100)",
     )
 
+    # ----- backup subcommand -------------------------------------------
+    backup_p = sub.add_parser(
+        "backup",
+        help="Backup, verify, and restore the taOSmd data dir",
+    )
+    backup_sub = backup_p.add_subparsers(dest="backup_cmd", required=True)
+
+    # backup create
+    create_p = backup_sub.add_parser("create", help="Create a .tar.gz backup of the data dir")
+    create_p.add_argument(
+        "--out",
+        default=None,
+        help="Output tarball path (default: taosmd-backup-<UTC yyyymmddThhmmssZ>.tar.gz in cwd)",
+    )
+    create_p.add_argument(
+        "--include-secrets",
+        action="store_true",
+        help="Include config.json (contains tokens; archive is unencrypted)",
+    )
+
+    # backup verify
+    verify_bk_p = backup_sub.add_parser(
+        "verify", help="Verify a backup tarball against its manifest"
+    )
+    verify_bk_p.add_argument("path", help="Path to the .tar.gz backup to verify")
+
+    # backup restore
+    restore_p = backup_sub.add_parser(
+        "restore", help="Restore a backup tarball to a data dir"
+    )
+    restore_p.add_argument("path", help="Path to the .tar.gz backup to restore")
+    restore_p.add_argument(
+        "--to",
+        required=True,
+        help="Destination data dir",
+    )
+    restore_p.add_argument(
+        "--move-existing",
+        action="store_true",
+        help="Move an existing non-empty destination aside before restoring",
+    )
+
     return parser
 
 
@@ -2029,6 +2115,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "verify":
         return _verify_cmd(args)
+
+    if args.cmd == "backup":
+        return _backup_cmd(args)
 
     registry = AgentRegistry(args.data_dir)
 

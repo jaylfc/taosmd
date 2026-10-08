@@ -846,6 +846,26 @@ taosmd install-skill
 
 Copies the bundled `taosmd-a2a` agent-setup skill into `~/.claude/skills/taosmd-a2a/` so it is available across all Claude Code projects. Pass `--force` to overwrite an existing installation.
 
+### Backup and restore
+
+The data dir is the archive, the vector store, the knowledge graph and every other persistent store. `taosmd backup` creates a single `.tar.gz` that captures it all, verifies every SQLite database with `PRAGMA integrity_check`, and can restore to any empty or moved-aside directory.
+
+```bash
+taosmd backup create                  # writes taosmd-backup-<UTC ts>.tar.gz in cwd
+taosmd backup create --out /mnt/usb/backup.tar.gz
+taosmd backup create --include-secrets # also includes config.json (contains tokens; archive is unencrypted)
+
+taosmd backup verify /mnt/usb/backup.tar.gz
+taosmd backup restore /mnt/usb/backup.tar.gz --to /mnt/restored
+taosmd backup restore /mnt/usb/backup.tar.gz --to /mnt/restored --move-existing
+```
+
+`backup create` walks the data dir recursively and detects SQLite files by their 16-byte header, not by extension. Every SQLite file is copied through `sqlite3.Connection.backup()` so committed pages in the WAL are not lost, then `PRAGMA integrity_check` is run on the copy. WAL sidecars (`-wal`, `-shm`, `-journal`) are skipped. Every other file is copied byte-for-byte. `config.json` is excluded by default because it holds `server_token`, `admin_token` and `registry_token`; pass `--include-secrets` to include it. A `MANIFEST.json` is written inside the tarball with per-file sha256 and integrity_check results so a restore can be fully validated before any data is moved.
+
+`backup verify` re-hashes every member against `MANIFEST.json`, re-runs `PRAGMA integrity_check` on each SQLite member, and exits 0 only if everything matches. A file present in the tarball but not in the manifest, or vice versa, is a failure.
+
+`backup restore` verifies first, then extracts into a staging directory next to the destination and renames it into place only after every member has been written safely. It never deletes or overwrites existing data. If the destination exists and is non-empty, pass `--move-existing` to relocate the old directory to `<name>.pre-restore-<UTC ts>` before restoring. Unsafe tar members (absolute paths, `..` components, symlinks or hardlinks) are rejected on both verify and restore.
+
 ## Running Benchmarks
 
 ```bash
