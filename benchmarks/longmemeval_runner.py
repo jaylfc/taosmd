@@ -18,6 +18,7 @@ import os
 import sys
 import tempfile
 import time
+import math
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -96,13 +97,46 @@ def _num_ctx_from_env(raw: str | None) -> int:
         return 0
 
 
+def _parse_gen_temp(raw: str | None) -> float:
+    """Parse TAOSMD_LME_GEN_TEMP, falling back to 0.0 on a bad value.
+
+    Empty, non-numeric, negative, nan and inf all warn and fall back to 0.0.
+    Unset stays silent and returns 0.0.
+    """
+    if raw is None:
+        return 0.0
+    raw = raw.strip()
+    if not raw:
+        print(
+            "  WARNING: TAOSMD_LME_GEN_TEMP is empty; falling back to 0.",
+            file=sys.stderr,
+        )
+        return 0.0
+    try:
+        val = float(raw)
+        if val < 0 or math.isnan(val) or math.isinf(val):
+            raise ValueError
+        return val
+    except ValueError:
+        print(
+            f"  WARNING: TAOSMD_LME_GEN_TEMP={raw!r} is not a valid non-negative "
+            "finite number; falling back to 0.",
+            file=sys.stderr,
+        )
+        return 0.0
+
+
 NUM_CTX = _num_ctx_from_env(os.environ.get("TAOSMD_LME_NUM_CTX"))
+GEN_TEMP = _parse_gen_temp(os.environ.get("TAOSMD_LME_GEN_TEMP"))
+NO_INLINE_JUDGE = os.environ.get("TAOSMD_LME_NO_INLINE_JUDGE", "0") == "1"
 _reranker = None
 
 
 def _gen_options(**extra):
     """Ollama options dict, carrying num_ctx only when it was explicitly set."""
     opts = dict(extra)
+    if "temperature" not in opts:
+        opts["temperature"] = GEN_TEMP if GEN_TEMP else 0
     if NUM_CTX:
         opts["num_ctx"] = NUM_CTX
     return opts
@@ -214,7 +248,7 @@ async def llm_answer(client, context: str, question: str) -> str:
                 "messages": [{"role": "user", "content": ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)}],
                 "stream": False,
                 "think": False,
-                "options": _gen_options(temperature=0, num_predict=100),
+                "options": _gen_options(num_predict=100),
             },
             timeout=30,
         )
@@ -290,7 +324,7 @@ async def self_verify_answer(client, context: str, question: str, answer: str) -
                 "messages": [{"role": "user", "content": VERIFY_PROMPT.format(context=context[:CONTEXT_CHARS], question=question, answer=answer)}],
                 "stream": False,
                 "think": False,
-                "options": _gen_options(temperature=0, num_predict=100),
+                "options": _gen_options(num_predict=100),
             },
             timeout=30,
         )
@@ -728,7 +762,18 @@ async def run_benchmark(
                 f"wired={delta['wired_chars']} identical={delta['identical']}"
             )
 
-        if use_llm and llm_client is not None:
+        answer = ""
+        if NO_INLINE_JUDGE:
+            if use_llm and llm_client is not None:
+                t_llm = time.time()
+                answer = await llm_answer(llm_client, full_context, question)
+                if SELF_VERIFY:
+                    answer = await self_verify_answer(llm_client, full_context, question, answer)
+                llm_time = time.time() - t_llm
+                if i < 5:
+                    print(f"      [{llm_time:.1f}s] Answer: {(answer or 'EMPTY')[:80]} (no inline judge)")
+            correct = False
+        elif use_llm and llm_client is not None:
             t_llm = time.time()
             # Step 1: LLM generates answer from recalled context
             answer = await llm_answer(llm_client, full_context, question)
@@ -760,9 +805,12 @@ async def run_benchmark(
         total_time += elapsed
         all_results.append({
             "idx": i,
+            "question_id": item.get("question_id", i),
             "question_type": qtype,
             "question": question,
-            "correct": bool(correct),
+            "answer": answer,
+            "gold_answer": gold_answer,
+            "correct": bool(correct) if not NO_INLINE_JUDGE else False,
             "retrieved_chars": len(full_context),
             "retrieval_delta": delta,
         })
@@ -792,19 +840,22 @@ async def run_benchmark(
     print(f"\n{'='*70}")
     print("RESULTS")
     print(f"{'='*70}")
-    print(f"\n  Overall: {total_correct}/{total_questions} ({overall:.1f}%)")
+    if not NO_INLINE_JUDGE:
+        print(f"\n  Overall: {total_correct}/{total_questions} ({overall:.1f}%)")
     print(f"  Total time: {total_time:.1f}s ({per_q:.1f}s per question)")
 
-    print("\n  By question type:")
-    for qtype, data in sorted(results_by_type.items()):
-        pct = data["correct"] / data["total"] * 100 if data["total"] > 0 else 0
-        print(f"    {qtype:30s} {data['correct']:3d}/{data['total']:<3d} ({pct:.1f}%)")
+    if not NO_INLINE_JUDGE:
+        print("\n  By question type:")
+        for qtype, data in sorted(results_by_type.items()):
+            pct = data["correct"] / data["total"] * 100 if data["total"] > 0 else 0
+            print(f"    {qtype:30s} {data['correct']:3d}/{data['total']:<3d} ({pct:.1f}%)")
 
     print("\n  Comparison:")
     print("    MemPalace (raw verbatim):     96.6%")
     print("    SuperMemory:                  81.6%")
     print("    GPT-4o (full context):        ~70%")
-    print(f"    taOSmd (Pi NPU, no cloud):    {overall:.1f}%")
+    if not NO_INLINE_JUDGE:
+        print(f"    taOSmd (Pi NPU, no cloud):    {overall:.1f}%")
     print(f"{'='*70}")
 
     if llm_client:
@@ -815,6 +866,11 @@ async def run_benchmark(
             out_dir = _default_out_dir()
             os.makedirs(out_dir, exist_ok=True)
             out_path = os.path.join(out_dir, f"longmemeval_{int(time.time())}.json")
+        metrics = {"n": total_questions}
+        if not NO_INLINE_JUDGE:
+            metrics["correct"] = total_correct
+            metrics["accuracy"] = overall
+            metrics["by_type"] = results_by_type
         result_doc = {
             "question_type": question_type,
             "limit": limit,
@@ -828,21 +884,20 @@ async def run_benchmark(
             "fts_limit": FTS_LIMIT,
             "context_chars": CONTEXT_CHARS,
             "num_ctx": NUM_CTX,
+            "gen_temp": GEN_TEMP,
+            "inline_judge": not NO_INLINE_JUDGE,
             "retrieval_path": retrieval_path,
             "graph_expansion": graph_expansion,
             "retrieval_delta": delta_summary,
-            "metrics": {
-                "n": total_questions,
-                "correct": total_correct,
-                "accuracy": overall,
-                "by_type": results_by_type,
-            },
+            "metrics": metrics,
             "results": all_results,
         }
         with open(out_path, "w") as f:
             json.dump(result_doc, f, indent=2)
         print(f"  results -> {out_path}")
 
+    if NO_INLINE_JUDGE:
+        return None
     return overall
 
 
