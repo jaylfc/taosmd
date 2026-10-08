@@ -18,6 +18,7 @@ Configs:
 
 import asyncio
 import json
+import math
 import os
 import sys
 import tempfile
@@ -34,7 +35,106 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_full.
 ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx")
 
 
-async def run_question(item, top_k, config):
+def arm_config_from_env(env: dict) -> dict:
+    """Return embedder arm config from environment variables.
+
+    Keys:
+      - onnx_path: str (default: module ONNX_PATH)
+      - binary_quant: bool (default: False)
+      - mrl_dim: int | None (default: None)
+      - rescore_oversample: int | None (default: None)
+
+    Raises ValueError on invalid values.
+    """
+    onnx_path = env.get("TAOSMD_BENCH_ONNX_PATH", ONNX_PATH)
+
+    binary_quant_str = env.get("TAOSMD_BENCH_BINARY_QUANT", "0")
+    binary_quant = binary_quant_str == "1"
+
+    mrl_dim = None
+    mrl_dim_str = env.get("TAOSMD_BENCH_MRL_DIM")
+    if mrl_dim_str is not None:
+        try:
+            mrl_dim = int(mrl_dim_str)
+        except ValueError:
+            raise ValueError(f"TAOSMD_BENCH_MRL_DIM must be an integer, got '{mrl_dim_str}'")
+        if mrl_dim <= 0:
+            raise ValueError(f"TAOSMD_BENCH_MRL_DIM must be positive, got {mrl_dim}")
+
+    rescore_oversample = None
+    rescore_oversample_str = env.get("TAOSMD_BENCH_RESCORE_OVERSAMPLE")
+    if rescore_oversample_str is not None:
+        try:
+            rescore_oversample = int(rescore_oversample_str)
+        except ValueError:
+            raise ValueError(f"TAOSMD_BENCH_RESCORE_OVERSAMPLE must be an integer, got '{rescore_oversample_str}'")
+        if rescore_oversample < 2:
+            raise ValueError(f"TAOSMD_BENCH_RESCORE_OVERSAMPLE must be >= 2, got {rescore_oversample}")
+        if not binary_quant:
+            raise ValueError("TAOSMD_BENCH_RESCORE_OVERSAMPLE requires TAOSMD_BENCH_BINARY_QUANT=1")
+
+    return {
+        "onnx_path": onnx_path,
+        "binary_quant": binary_quant,
+        "mrl_dim": mrl_dim,
+        "rescore_oversample": rescore_oversample,
+    }
+
+
+def mrl_truncate(vec: list[float], dim: int) -> list[float]:
+    """Truncate vector to first dim values and L2-renormalise.
+
+    Returns the vector as-is if norm is 0.
+    """
+    if dim >= len(vec):
+        return vec
+    truncated = vec[:dim]
+    norm = math.sqrt(sum(x * x for x in truncated))
+    if norm == 0.0:
+        return truncated
+    return [x / norm for x in truncated]
+
+
+def rescore(query_vec: list[float], candidates: list[dict], floats_by_text: dict[str, list[float]], k: int) -> list[dict]:
+    """Re-rank candidates by float cosine similarity.
+
+    Args:
+        query_vec: Float query vector (after any MRL truncation).
+        candidates: List of candidate dicts from vmem.search (binary scores).
+        floats_by_text: Mapping from text to its float vector (after MRL, before binary).
+        k: Number of top candidates to keep.
+
+    Returns:
+        Top-k candidates reordered by float cosine similarity.
+    """
+    if not candidates:
+        return []
+
+    def cosine(a: list[float], b: list[float]) -> float:
+        if not a or not b:
+            return -1.0
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(y * y for y in b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return -1.0
+        return dot / (norm_a * norm_b)
+
+    scored = []
+    for cand in candidates:
+        text = cand.get("text", "")
+        float_vec = floats_by_text.get(text)
+        if float_vec is not None:
+            score = cosine(query_vec, float_vec)
+        else:
+            score = -1.0
+        scored.append((score, cand))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [cand for _, cand in scored[:k]]
+
+
+async def run_question(item, top_k, config, arm_cfg):
     question = item["question"]
     answer_session_ids = item.get("answer_session_ids", [])
     sessions = item.get("haystack_sessions", [])
@@ -44,9 +144,25 @@ async def run_question(item, top_k, config):
     vmem = VectorMemory(
         db_path=os.path.join(tmp, "v.db"),
         embed_mode="onnx",
-        onnx_path=ONNX_PATH,
+        onnx_path=arm_cfg["onnx_path"],
+        binary_quant=arm_cfg["binary_quant"],
     )
     await vmem.init()
+
+    # Wrap embed for MRL truncation and float recording (for rescoring)
+    original_embed = vmem.embed
+    floats_by_text: dict[str, list[float]] = {}
+    mrl_dim = arm_cfg["mrl_dim"]
+
+    async def wrapped_embed(text: str, task: str = "search_document") -> list[float]:
+        vec = await original_embed(text, task)
+        if mrl_dim is not None:
+            vec = mrl_truncate(vec, mrl_dim)
+        if arm_cfg["rescore_oversample"] is not None:
+            floats_by_text[text] = vec
+        return vec
+
+    vmem.embed = wrapped_embed
 
     # Ingest: user-turns only (proven best strategy)
     session_map = {}
@@ -87,7 +203,14 @@ async def run_question(item, top_k, config):
         retrieve_k = top_k * 2  # Retrieve 10, rerank to 5
 
     # Retrieve
-    results = await vmem.search(search_query, limit=retrieve_k, hybrid=True)
+    oversample = arm_cfg["rescore_oversample"]
+    search_limit = retrieve_k * oversample if oversample else retrieve_k
+    results = await vmem.search(search_query, limit=search_limit, hybrid=True)
+
+    # Rescoring with float vectors
+    if oversample is not None:
+        query_vec = await wrapped_embed(search_query, task="search_query")
+        results = rescore(query_vec, results, floats_by_text, retrieve_k)
 
     # Temporal reranking for temporal queries
     if config in ("temporal_boost", "combined_v2", "wider_retrieval"):
@@ -115,9 +238,14 @@ async def run_question(item, top_k, config):
 
 
 async def run_benchmark(limit: int = 500, top_k: int = 5):
+    # Load arm config from environment
+    arm_cfg = arm_config_from_env(os.environ)
+    onnx_basename = os.path.basename(arm_cfg["onnx_path"])
+
     print("=" * 74)
     print(f"LongMemEval-S Enhanced Retrieval Experiments — Recall@{top_k}")
-    print("Model: all-MiniLM-L6-v2 (ONNX) — same as MemPalace")
+    print(f"Arm config: onnx_path={onnx_basename}, binary_quant={arm_cfg['binary_quant']}, "
+          f"mrl_dim={arm_cfg['mrl_dim']}, rescore_oversample={arm_cfg['rescore_oversample']}")
     print(f"Target: beat 96.6% (MemPalace) on {limit} questions")
     print("=" * 74)
 
@@ -147,7 +275,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
 
         for i, item in enumerate(dataset):
             qtype = item["question_type"]
-            recall_hit = await run_question(item, top_k, config_name)
+            recall_hit = await run_question(item, top_k, config_name, arm_cfg)
 
             total_questions += 1
             if recall_hit:
@@ -200,8 +328,13 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
                                f"enhanced_{time.strftime('%Y%m%d_%H%M%S')}.json")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as f:
-        json.dump({"benchmark": "enhanced", "top_k": top_k, "results": all_results,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")}, f, indent=2)
+        json.dump({
+            "benchmark": "enhanced",
+            "top_k": top_k,
+            "results": all_results,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "arm_config": arm_cfg,
+        }, f, indent=2)
     print(f"\nResults saved to: {output_path}")
 
 

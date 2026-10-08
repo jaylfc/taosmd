@@ -1,0 +1,2 @@
+### Added
+- Environment-driven embedder arms in `benchmarks/longmemeval_enhanced.py` (E-035): `TAOSMD_BENCH_ONNX_PATH`, `TAOSMD_BENCH_BINARY_QUANT`, `TAOSMD_BENCH_MRL_DIM`, `TAOSMD_BENCH_RESCORE_OVERSAMPLE` control ONNX model, binary quantisation, Matryoshka truncation, and float rescoring; arm config printed and saved in results JSON.
