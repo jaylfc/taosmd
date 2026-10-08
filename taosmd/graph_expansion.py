@@ -12,6 +12,7 @@ that aren't captured in vector space.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import TYPE_CHECKING
 
@@ -66,6 +67,7 @@ async def expand_from_results(
     max_hops: int = 2,
     max_expanded: int = 10,
     as_of: float | None = None,
+    max_seeds: int = 10,
 ) -> list[dict]:
     """BFS graph traversal starting from entities found in vector results.
 
@@ -79,6 +81,8 @@ async def expand_from_results(
         max_hops: Maximum BFS depth (default 2).
         max_expanded: Maximum number of expanded triples to return.
         as_of: Point-in-time for temporal filtering.
+        max_seeds: Maximum number of seed entities to expand (default 10).
+            ``max_seeds <= 0`` disables expansion and returns [].
 
     Returns:
         List of {subject, predicate, object, score, hop} dicts.
@@ -101,10 +105,78 @@ async def expand_from_results(
     if not unique_entities:
         return []
 
+    if max_seeds <= 0:
+        return []
+
+    # Rank candidate seed entities by relevance before the cap.
+    # Relevance of an entity is the highest score of any input result whose
+    # text contains it.  The score is taken from result["score"] first,
+    # falling back to result["source_score"].  Only real numbers (int/float,
+    # not bool, not NaN) count as scored; everything else is treated as None.
+    # Tie-break 1: number of distinct input results mentioning the entity
+    # (more first).  Tie-break 2: encounter order (current behaviour).
+    # When no input result carries a numeric score the sort is a stable no-op
+    # so the encounter order is preserved byte-for-byte.
+
+    def _result_score(result: dict):
+        if "score" in result and result["score"] is not None:
+            raw = result["score"]
+        elif "source_score" in result and result["source_score"] is not None:
+            raw = result["source_score"]
+        else:
+            return None
+        if isinstance(raw, bool):
+            return None
+        if not isinstance(raw, (int, float)):
+            return None
+        if isinstance(raw, float) and math.isnan(raw):
+            return None
+        return raw
+
+    scored = False
+    for result in vector_results:
+        if _result_score(result) is not None:
+            scored = True
+            break
+
+    if scored:
+        # Build (entity, best_score, mention_count) for ranking.
+        entity_scores: dict[str, float | None] = {}
+        entity_mentions: dict[str, int] = {}
+        for idx, e in enumerate(unique_entities):
+            entity_scores[e] = None
+            entity_mentions[e] = 0
+
+        for result in vector_results:
+            score = _result_score(result)
+            if score is None:
+                continue
+            text = result.get("text", "")
+            for e in unique_entities:
+                if e in text:
+                    if entity_scores[e] is None or score > entity_scores[e]:
+                        entity_scores[e] = score
+                    entity_mentions[e] += 1
+
+        # Stable sort: best score first, then most mentions first, then
+        # encounter order first.
+        ranked = sorted(
+            range(len(unique_entities)),
+            key=lambda i: (
+                entity_scores[unique_entities[i]] if entity_scores[unique_entities[i]] is not None else float("-inf"),
+                entity_mentions[unique_entities[i]],
+                -i,
+            ),
+            reverse=True,
+        )
+        frontier_entities = [unique_entities[i] for i in ranked[:max_seeds]]
+    else:
+        frontier_entities = unique_entities[:max_seeds]
+
     # BFS expansion
     expanded: list[dict] = []
     visited_triples: set[str] = set()
-    frontier = [(e, 0) for e in unique_entities[:10]]  # Cap seed entities
+    frontier = [(e, 0) for e in frontier_entities]
 
     while frontier and len(expanded) < max_expanded:
         entity, hop = frontier.pop(0)
