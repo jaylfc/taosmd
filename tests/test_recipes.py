@@ -2,6 +2,10 @@ from __future__ import annotations
 from pathlib import Path
 from taosmd import recipes
 
+# Capture the original _fetch_reranker_onnx at module import for tests that
+# need the real implementation (conftest patches it to no-op otherwise).
+_ORIGINAL_FETCH_RERANKER_ONNX = recipes._fetch_reranker_onnx
+
 
 def test_recipe_dataclass_roundtrips_to_dict():
     r = recipes.Recipe(
@@ -249,3 +253,80 @@ def test_public_surface_exported():
     for name in ("recipe_schema", "list_recipes", "get_recipe",
                  "recommend", "resolve_recipe", "apply_recipe"):
         assert hasattr(taosmd, name), name
+
+
+def test_ensure_reranker_model_real_fetch_returns_error_on_empty_dir(tmp_path, monkeypatch):
+    """Real _fetch_reranker_onnx raises with export instruction; block=True returns 'error'."""
+    events = []
+    # Block huggingface_hub.snapshot_download to ensure no network call
+    import huggingface_hub
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network blocked")))
+
+    # Restore the real _fetch_reranker_onnx (conftest patches it to no-op)
+    monkeypatch.setattr(recipes, "_fetch_reranker_onnx", _ORIGINAL_FETCH_RERANKER_ONNX)
+
+    state = recipes.ensure_reranker_model(
+        onnx_path=str(tmp_path), on_progress=events.append, block=True)
+
+    assert state == "error"
+    assert any(e.get("phase") == "error" for e in events)
+    error_msg = next(e["error"] for e in events if e.get("phase") == "error")
+    assert "export_reranker_onnx.sh" in error_msg
+    assert str(tmp_path) in error_msg
+
+
+def test_ensure_reranker_model_fake_fetch_no_model_returns_error(tmp_path, monkeypatch):
+    """Fake fetch that returns without creating model.onnx -> block=True returns 'error'."""
+    events = []
+
+    def fake_fetch_no_model(dest, on_progress):
+        on_progress({"phase": "start", "pct": 0})
+        on_progress({"phase": "done", "pct": 100})
+        # Intentionally does NOT create model.onnx
+        return dest
+
+    monkeypatch.setattr(recipes, "_fetch_reranker_onnx", fake_fetch_no_model)
+
+    state = recipes.ensure_reranker_model(
+        onnx_path=str(tmp_path), on_progress=events.append, block=True)
+
+    assert state == "error"
+    assert any(e.get("phase") == "error" for e in events)
+    error_msg = next(e["error"] for e in events if e.get("phase") == "error")
+    assert "export_reranker_onnx.sh" in error_msg
+
+
+def test_validate_bge_reranker_path_missing_model_onnx_raises_with_export_hint(tmp_path):
+    """Directory with config.json but no model.onnx raises FileNotFoundError with export hint."""
+    from benchmarks.locomo_runner import _validate_bge_reranker_path
+
+    # Create a fake model directory with config.json but no model.onnx
+    bge_path = tmp_path / "bge-reranker-v2-m3-onnx"
+    bge_path.mkdir()
+    (bge_path / "config.json").write_text('{"model_type": "xlm-roberta"}')
+
+    try:
+        _validate_bge_reranker_path(str(bge_path))
+        assert False, "Expected FileNotFoundError"
+    except FileNotFoundError as e:
+        assert "export_reranker_onnx.sh" in str(e)
+        assert str(bge_path) in str(e)
+        assert "model.onnx missing" in str(e)
+
+
+def test_reranker_present_checks_both_locations(tmp_path):
+    """_reranker_present checks both model.onnx and onnx/model.onnx."""
+    from taosmd.recipes import _reranker_present
+
+    # Neither exists
+    assert _reranker_present(str(tmp_path / "missing")) is False
+
+    # model.onnx at root
+    (tmp_path / "model.onnx").write_bytes(b"x")
+    assert _reranker_present(str(tmp_path)) is True
+
+    # Clean up and test onnx/model.onnx
+    (tmp_path / "model.onnx").unlink()
+    (tmp_path / "onnx").mkdir()
+    (tmp_path / "onnx" / "model.onnx").write_bytes(b"x")
+    assert _reranker_present(str(tmp_path)) is True
