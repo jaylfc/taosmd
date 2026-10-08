@@ -158,6 +158,65 @@ def _onnx_pooling_mode(onnx_path) -> str:
     return "mean"
 
 
+# ONNX scalar type -> numpy dtype string, for empty-filling declared graph
+# inputs we cannot populate (media inputs an encoder exports but a text
+# embedder has no values for). Anything outside this map is left unfed so the
+# load-time probe can surface it as a driver mismatch instead of being
+# silently dropped.
+_ONNX_TYPE_TO_NUMPY = {
+    "tensor(float)": "float32",
+    "tensor(int64)": "int64",
+}
+
+
+def _onnx_feed(session, inputs: dict) -> dict:
+    """Build an ONNX Runtime feed dict from tokenizer outputs.
+
+    Feeds ``input_ids`` and ``attention_mask`` as int64, plus
+    ``token_type_ids`` when the graph declares it (some legacy exports
+    require it). Any other declared input is empty-filled when it looks like a
+    media input an encoder exports but a text embedder has no values for: a
+    leading symbolic dimension (a ``str`` or ``None``) with every trailing
+    dimension a concrete ``int``, at a supported scalar type. The empty array
+    keeps the graph runnable (dim 0 along the batch axis) so models such as
+    EmbeddingGemma-2, whose ONNX export declares ``image_features``,
+    ``video_features`` and ``audio_features`` alongside the text inputs, do
+    not raise on a missing feed key and silently return empty vectors.
+
+    Inputs that cannot be empty-filled -- a symbolic trailing dimension, or an
+    unsupported element type -- are intentionally left unfed. The load-time
+    probe in :meth:`VectorMemory.init` reports those as a driver mismatch.
+    """
+    import numpy as np
+
+    feed: dict = {
+        "input_ids": inputs["input_ids"].astype(np.int64),
+        "attention_mask": inputs["attention_mask"].astype(np.int64),
+    }
+    declared = session.get_inputs()
+    if any(inp.name == "token_type_ids" for inp in declared):
+        feed["token_type_ids"] = np.zeros_like(inputs["input_ids"], dtype=np.int64)
+
+    for inp in declared:
+        name = inp.name
+        if name in feed or name == "token_type_ids":
+            continue
+        shape = inp.shape
+        if not shape:
+            continue
+        leading = shape[0]
+        if not (isinstance(leading, str) or leading is None):
+            continue
+        rest = shape[1:]
+        if not rest or any(isinstance(d, str) or d is None for d in rest):
+            continue
+        np_dtype = _ONNX_TYPE_TO_NUMPY.get(inp.type)
+        if np_dtype is None:
+            continue
+        feed[name] = np.zeros((0, *rest), dtype=np.dtype(np_dtype))
+    return feed
+
+
 class VectorMemory:
     """SQLite-backed vector store with pluggable embeddings.
 
@@ -325,6 +384,30 @@ class VectorMemory:
                     providers=["CPUExecutionProvider"],
                 )
                 self._onnx_tokenizer = AutoTokenizer.from_pretrained(model_dir)
+                # Load-time probe: drive the graph once with an empty media
+                # input. A model we cannot drive (e.g. one whose graph has a
+                # declared input this embedder cannot populate) must fail loud
+                # here and fall back to QMD via the handler below, rather than
+                # silently returning [] for every embed afterwards.
+                probe_vec = self._embed_onnx("taosmd embedder probe", "search_document")
+                if not probe_vec:
+                    probe_inputs = self._onnx_tokenizer(
+                        "taosmd embedder probe",
+                        return_tensors="np",
+                        padding=True,
+                        truncation=True,
+                    )
+                    probe_feed = _onnx_feed(self._onnx_session, probe_inputs)
+                    fed_names = set(probe_feed)
+                    unfed = [
+                        inp.name
+                        for inp in self._onnx_session.get_inputs()
+                        if inp.name not in fed_names
+                    ]
+                    raise RuntimeError(
+                        f"ONNX embedder {model_file} cannot be driven; "
+                        f"unfed graph inputs: {unfed}"
+                    )
                 logger.info("Loaded ONNX embedding model from %s", model_file)
             except Exception as e:
                 # Loud and actionable: a silent embedder swap corrupts retrieval.
@@ -470,13 +553,7 @@ class VectorMemory:
             embed_text = _onnx_apply_prefix(self._onnx_path, text[:512], task)
 
             inputs = self._onnx_tokenizer(embed_text, return_tensors="np", padding=True, truncation=True)
-            feed = {
-                "input_ids": inputs["input_ids"].astype(np.int64),
-                "attention_mask": inputs["attention_mask"].astype(np.int64),
-            }
-            # Add token_type_ids if the model expects it
-            if any(inp.name == "token_type_ids" for inp in self._onnx_session.get_inputs()):
-                feed["token_type_ids"] = np.zeros_like(inputs["input_ids"], dtype=np.int64)
+            feed = _onnx_feed(self._onnx_session, inputs)
 
             outputs = self._onnx_session.run(None, feed)
 
@@ -504,7 +581,10 @@ class VectorMemory:
                 emb = emb / norm
             return emb.tolist()
         except Exception as e:
-            logger.debug("ONNX embedding failed: %s", e)
+            logger.warning(
+                "ONNX embedding failed for %s: %s",
+                self._onnx_path or "<onnx>", e,
+            )
             return []
 
     async def embed_tokens(self, text: str, task: str = "search_document") -> list[list[float]]:
@@ -547,12 +627,7 @@ class VectorMemory:
             embed_text = f"{task}: {embed_text}"
 
         inputs = self._onnx_tokenizer(embed_text, return_tensors="np", padding=True, truncation=True)
-        feed = {
-            "input_ids": inputs["input_ids"].astype(np.int64),
-            "attention_mask": inputs["attention_mask"].astype(np.int64),
-        }
-        if any(inp.name == "token_type_ids" for inp in self._onnx_session.get_inputs()):
-            feed["token_type_ids"] = np.zeros_like(inputs["input_ids"], dtype=np.int64)
+        feed = _onnx_feed(self._onnx_session, inputs)
 
         outputs = self._onnx_session.run(None, feed)
 
