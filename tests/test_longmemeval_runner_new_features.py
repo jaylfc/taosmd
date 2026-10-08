@@ -113,6 +113,8 @@ class _RecordingAssembler:
 
 @pytest.fixture()
 def runner(monkeypatch):
+    monkeypatch.delenv("TAOSMD_LME_GEN_TEMP", raising=False)
+    monkeypatch.delenv("TAOSMD_LME_NO_INLINE_JUDGE", raising=False)
     mod = _load_runner()
     monkeypatch.setattr(mod, "ContextAssembler", _RecordingAssembler)
     return mod
@@ -158,7 +160,7 @@ def test_substring_mode_completes_and_writes_rows(runner, monkeypatch, tmp_path)
 
     result = asyncio.run(runner.run_benchmark(args=_args(limit=1, llm=False, out=out_path)))
 
-    assert result is not None
+    assert isinstance(result, float)
     assert os.path.exists(out_path)
     doc = json.loads(Path(out_path).read_text())
     assert doc["metrics"]["n"] == 1
@@ -204,51 +206,62 @@ def test_no_inline_judge_no_fake_score(monkeypatch, tmp_path, capsys):
 # MUST 3: _parse_gen_temp warns on bad values, silent on valid/unset
 # ---------------------------------------------------------------------------
 
-class _GenTempProbe:
-    """Reload the runner and capture the parsed GEN_TEMP + any warning."""
-
-    def __init__(self, monkeypatch, value=None):
-        if value is not None:
-            monkeypatch.setenv("TAOSMD_LME_GEN_TEMP", value)
-        else:
-            monkeypatch.delenv("TAOSMD_LME_GEN_TEMP", raising=False)
-        mod = _load_runner()
-        self.value = mod.GEN_TEMP
-        self.warned = False
-
+# ---------------------------------------------------------------------------
+# MUST 3: _parse_gen_temp warns on bad values, silent on valid/unset
+# ---------------------------------------------------------------------------
 
 def test_parse_gen_temp_empty_warns(monkeypatch, capsys):
-    _GenTempProbe(monkeypatch, value="")
+    monkeypatch.delenv("TAOSMD_LME_GEN_TEMP", raising=False)
+    mod = _load_runner()
+    result = mod._parse_gen_temp("")
+    assert result == 0.0
     assert "TAOSMD_LME_GEN_TEMP" in capsys.readouterr().err
 
 
 def test_parse_gen_temp_non_numeric_warns(monkeypatch, capsys):
-    _GenTempProbe(monkeypatch, value="abc")
+    monkeypatch.delenv("TAOSMD_LME_GEN_TEMP", raising=False)
+    mod = _load_runner()
+    result = mod._parse_gen_temp("abc")
+    assert result == 0.0
     assert "TAOSMD_LME_GEN_TEMP" in capsys.readouterr().err
 
 
 def test_parse_gen_temp_negative_warns(monkeypatch, capsys):
-    _GenTempProbe(monkeypatch, value="-1")
+    monkeypatch.delenv("TAOSMD_LME_GEN_TEMP", raising=False)
+    mod = _load_runner()
+    result = mod._parse_gen_temp("-1")
+    assert result == 0.0
     assert "TAOSMD_LME_GEN_TEMP" in capsys.readouterr().err
 
 
 def test_parse_gen_temp_nan_warns(monkeypatch, capsys):
-    _GenTempProbe(monkeypatch, value="nan")
+    monkeypatch.delenv("TAOSMD_LME_GEN_TEMP", raising=False)
+    mod = _load_runner()
+    result = mod._parse_gen_temp("nan")
+    assert result == 0.0
     assert "TAOSMD_LME_GEN_TEMP" in capsys.readouterr().err
 
 
 def test_parse_gen_temp_inf_warns(monkeypatch, capsys):
-    _GenTempProbe(monkeypatch, value="inf")
+    monkeypatch.delenv("TAOSMD_LME_GEN_TEMP", raising=False)
+    mod = _load_runner()
+    result = mod._parse_gen_temp("inf")
+    assert result == 0.0
     assert "TAOSMD_LME_GEN_TEMP" in capsys.readouterr().err
 
 
 def test_parse_gen_temp_valid_no_warn(monkeypatch, capsys):
-    _GenTempProbe(monkeypatch, value="0.7")
+    monkeypatch.delenv("TAOSMD_LME_GEN_TEMP", raising=False)
+    mod = _load_runner()
+    result = mod._parse_gen_temp("0.7")
+    assert result == 0.7
     assert "TAOSMD_LME_GEN_TEMP" not in capsys.readouterr().err
 
 
 def test_parse_gen_temp_unset_no_warn(monkeypatch, capsys):
-    _GenTempProbe(monkeypatch)
+    monkeypatch.delenv("TAOSMD_LME_GEN_TEMP", raising=False)
+    mod = _load_runner()
+    assert mod.GEN_TEMP == 0.0
     assert "TAOSMD_LME_GEN_TEMP" not in capsys.readouterr().err
 
 
