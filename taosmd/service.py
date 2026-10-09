@@ -634,15 +634,27 @@ async def a2a_feed(
     thread: str | None = None,
     since: float | None = None,
     limit: int = 50,
+    after_id: int | None = None,
+    before_id: int | None = None,
     data_dir=None,
 ) -> list[dict]:
     """Return messages from the agent-to-agent bus, oldest-first.
 
     Filters by ``thread`` (when given) and by ``since`` (Unix timestamp,
-    exclusive lower bound). ``limit`` caps the number of rows fetched from
-    the archive (applied before reversing, so it limits the most-recent N
-    messages when ``since`` is None). Returns chronological order (oldest
-    first) suitable for chat-style display.
+    exclusive lower bound) and by ``after_id`` / ``before_id`` message cursors.
+    ``limit`` caps the number of rows fetched from the archive (applied before
+    reversing, so it limits the most-recent N messages when ``since`` is None).
+    Returns chronological order (oldest first) suitable for chat-style display.
+
+    ``after_id`` = rows with id > after_id, oldest-first, first ``limit`` of them
+    (forward paging).
+
+    ``before_id`` = rows with id < before_id, the ``limit`` most recent of them,
+    returned oldest-first (backward paging, chat-style scroll-up).
+
+    Both ``after_id`` and ``before_id`` may be given with ``since``; they are
+    ANDed together.  Supplying both ``after_id`` and ``before_id`` together at the
+    HTTP layer returns 400; at the service level they are intersected.
 
     Each item has shape ``{"id", "ts", "from", "body", "thread",
     "reply_to"}`` plus ``refs`` and/or ``blocks`` when those were
@@ -685,14 +697,39 @@ async def a2a_feed(
         ]
         rows = rows[:limit]
     else:
-        rows = await archive.query(
-            event_type=EVENT_A2A,
-            app_id=thread,
-            since=since,
-            limit=limit,
-        )
+        if after_id is not None or before_id is not None:
+            rows = await archive.query(
+                event_type=EVENT_A2A,
+                app_id=thread,
+                since=since,
+                limit=limit * 10,
+            )
+        else:
+            rows = await archive.query(
+                event_type=EVENT_A2A,
+                app_id=thread,
+                since=since,
+                limit=limit,
+            )
     # archive.query returns newest-first; A2A feed is displayed oldest-first.
     rows = list(reversed(rows))
+
+    # Apply message-id cursors (after_id = forward paging, before_id = backward paging).
+    # ``since`` from the query already ANDs with these; the cursors further filter
+    # the oldest-first result set.
+    if after_id is not None and before_id is not None:
+        rows = [r for r in rows if r["id"] > after_id and r["id"] < before_id]
+        rows = rows[:limit]
+    elif after_id is not None:
+        rows = [r for r in rows if r["id"] > after_id]
+        rows = rows[:limit]
+    elif before_id is not None:
+        candidates = [r for r in rows if r["id"] < before_id]
+        # Take the `limit` most recent (at the oldest-first tail), returned oldest-first.
+        if len(candidates) > limit:
+            candidates = candidates[-limit:]
+        rows = candidates
+
     result = []
     for row in rows:
         try:

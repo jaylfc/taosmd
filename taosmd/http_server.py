@@ -105,7 +105,7 @@ Endpoints
 ``POST /a2a/send``         ``{"from", "body", "thread"?, "reply_to"?, "refs"?, "blocks"?}`` -> send receipt
                             ``refs``: optional list (<=8) of ``{"kind": doc|report|spec|log, "title", "uri", "sha256"?, "doc_id"?, "version"?, "for"?, "summary"?}``
                             ``blocks``: optional list of arbitrary objects (no schema validation); when present, ``body`` must be non-empty
-``GET  /a2a/messages``     ``?thread=&since=&limit=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400)
+``GET  /a2a/messages``     ``?thread=&since=&limit=&after_id=&before_id=&fields=&format=``  -> ``{"messages": [...]}`` (``fields=id,sender,body`` projects keys; ``format=ndjson`` emits one message per line; ``since`` is an epoch timestamp in seconds, not a message id; values below 1e9 return 400; ``after_id`` is a message id cursor for forward paging (rows with id > after_id, oldest-first); ``before_id`` is a message id cursor for backward paging (the limit most recent rows with id < before_id, returned oldest-first, chat-style scroll-up); ``after_id`` and ``before_id`` are mutually exclusive)
 ``GET  /a2a/mentions``    ``?since=&limit=&reader=``                  -> ``{"messages": [...]}`` (requires registry auth; ``reader`` is derived from the verified token ``sub``, or supplied as a query parameter when no verifier is configured)
 ``GET  /a2a/inbox``       ``?consumer=&limit=&include_kinds=&exclude_acked_by=``         -> ``{"messages": [...]}`` (``consumer`` is derived from the verified token ``sub`` when registry auth is configured; otherwise required as a query parameter; ``exclude_acked_by`` omits messages whose ``acked_by`` list contains the named principal)
 ``POST /a2a/inbox/advance`` ``{"to_id": int}``                           -> ``{"ok": true}`` (principal derived from the verified token ``sub``)
@@ -1965,7 +1965,31 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, result)
 
         def _handle_a2a_messages(self, qs: dict) -> None:
-            _validate_a2a_params(qs, frozenset({"thread", "since", "limit", "fields", "format"}), self._raw_qs)
+            after_id_raw = qs.get("after_id")
+            before_id_raw = qs.get("before_id")
+            if after_id_raw is not None:
+                after_id_raw = (after_id_raw or [None])[0]
+                try:
+                    after_id_i = int(after_id_raw)
+                except (TypeError, ValueError) as exc:
+                    raise _BadRequest("'after_id' must be a non-negative integer") from exc
+                if after_id_i < 0:
+                    raise _BadRequest("'after_id' must not be negative")
+            else:
+                after_id_i = None
+            if before_id_raw is not None:
+                before_id_raw = (before_id_raw or [None])[0]
+                try:
+                    before_id_i = int(before_id_raw)
+                except (TypeError, ValueError) as exc:
+                    raise _BadRequest("'before_id' must be a non-negative integer") from exc
+                if before_id_i < 0:
+                    raise _BadRequest("'before_id' must not be negative")
+            else:
+                before_id_i = None
+            if after_id_i is not None and before_id_i is not None:
+                raise _BadRequest("'after_id' and 'before_id' are mutually exclusive")
+            _validate_a2a_params(qs, frozenset({"thread", "since", "limit", "fields", "format", "after_id", "before_id"}), self._raw_qs)
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]
@@ -1981,7 +2005,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
             messages = runner.run(
-                service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
+                service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir, after_id=after_id_i, before_id=before_id_i)
             )
             # Compact mode: ?fields=id,sender,body projects each message down
             # to the named keys so token-frugal consumers (LLM agents) skip

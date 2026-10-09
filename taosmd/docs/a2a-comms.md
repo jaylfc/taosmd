@@ -634,7 +634,7 @@ parameter is a 400, never a silent no-op. The accepted set is:
 
 | Endpoint | Accepted query parameters |
 |----------|--------------------------|
-| `GET /a2a/messages` | `thread`, `since`, `limit`, `fields`, `format` |
+| `GET /a2a/messages` | `thread`, `since`, `limit`, `fields`, `format`, `after_id`, `before_id` |
 | `GET /a2a/mentions` | `since`, `limit`, `reader` |
 | `GET /a2a/stream` | `thread`, `since` |
 | `GET /a2a/threads` | `principal` |

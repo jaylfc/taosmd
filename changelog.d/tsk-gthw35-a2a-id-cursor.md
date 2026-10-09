@@ -1,0 +1,2 @@
+### Added
+- `after_id` and `before_id` message-id cursor parameters on `GET /a2a/messages`. `after_id` enables forward paging (rows with id > after_id, oldest-first); `before_id` enables backward paging (the limit most recent rows with id < before_id, returned oldest-first, chat-style scroll-up). The two parameters are mutually exclusive at the HTTP layer; `since` can be combined with either.
