@@ -155,7 +155,7 @@ ANSWER_PROMPT = """Based on the following context from past conversations, answe
 If the answer is not in the context, say "I don't know."
 Answer concisely in 1-2 sentences. /no_think
 
-Context:
+{date_line}Context:
 {context}
 
 Question: {question}
@@ -227,13 +227,10 @@ def score_answer(predicted: str, gold: str) -> bool:
 async def llm_answer(client, context: str, question: str, question_date: str | None = None) -> str:
     """Use remote LLM to generate answer from recalled context."""
     try:
-        prompt_parts = []
+        date_line_value = ""
         if DATE_FRAME in ("question", "both") and question_date:
-            prompt_parts.append(f"Today is {question_date}.")
-        prompt_parts.append(
-            ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)
-        )
-        prompt = "\n\n".join(prompt_parts)
+            date_line_value = f"Today is {question_date}.\n"
+        prompt = ANSWER_PROMPT.format(date_line=date_line_value, context=context[:CONTEXT_CHARS], question=question)
         resp = await client.post(
             f"{REMOTE_LLM_URL}/api/chat",
             json={
@@ -509,6 +506,9 @@ async def retrieve_context(
                     archive_text += " " + r.get("data_json", "") + " " + r.get("summary", "")
             except Exception:
                 pass
+    vector_results = await retrieve_vector_results(
+        question, kg, vmem, llm_client=llm_client, graph_expansion=graph_expansion, retrieval_path=retrieval_path
+    )
 
     if DATE_FRAME in ("sessions", "both"):
         # Order by session index (ascending)
@@ -712,32 +712,32 @@ async def run_benchmark(
                         content, agent_name="assistant" if role == "assistant" else None,
                         kg=kg, archive=archive, source="longmemeval",
                     )
-                     # Archive raw content
-                     content_to_archive = f"[Session date: {session_date}]\n{content}" if session_date else content
-                     await archive.record(
-                         "conversation",
-                         {"role": role, "content": content_to_archive},
-                         summary=content_to_archive[:80],
-                     )
+                    # Archive raw content
+                    content_to_archive = f"[Session date: {session_date}]\n{content}" if session_date else content
+                    await archive.record(
+                        "conversation",
+                        {"role": role, "content": content_to_archive},
+                        summary=content_to_archive[:80],
+                    )
                     session_text += f"\n[{role}]: {content}"
 
-             # Embed the full session as one block (better for multi-turn recall)
-             if session_text:
-                 # Split into ~500 char chunks with overlap for embedding
-                 chunks = []
-                 words = session_text.split()
-                 chunk_size = 100  # words per chunk
-                 overlap = 20
-                 for start in range(0, len(words), chunk_size - overlap):
-                     chunk = " ".join(words[start:start + chunk_size])
-                     if chunk.strip():
-                         chunks.append(chunk)
-                 for chunk in chunks:
-                     chunk_text = f"[Session date: {session_date}]\n{chunk}" if session_date else chunk
-                     metadata = {"session": si}
-                     if session_date:
-                         metadata["session_date"] = session_date
-                     await vmem.add(chunk_text, metadata=metadata)
+            # Embed the full session as one block (better for multi-turn recall)
+            if session_text:
+                # Split into ~500 char chunks with overlap for embedding
+                chunks = []
+                words = session_text.split()
+                chunk_size = 100  # words per chunk
+                overlap = 20
+                for start in range(0, len(words), chunk_size - overlap):
+                    chunk = " ".join(words[start:start + chunk_size])
+                    if chunk.strip():
+                        chunks.append(chunk)
+                for chunk in chunks:
+                    chunk_text = f"[Session date: {session_date}]\n{chunk}" if session_date else chunk
+                    metadata = {"session": si}
+                    if session_date:
+                        metadata["session_date"] = session_date
+                    await vmem.add(chunk_text, metadata=metadata)
 
         ingest_time = time.time() - t0
 
