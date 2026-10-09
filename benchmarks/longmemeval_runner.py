@@ -75,6 +75,7 @@ SAMPLE_SEED = os.environ.get("TAOSMD_SAMPLE_SEED")
 # context is roughly 4500-5000 tokens, so Ollama's 4096 default already
 # truncates some prompts; raising this changes what is measured, which is why it
 # is opt-in rather than silently bumped here.
+
 def _num_ctx_from_env(raw: str | None) -> int:
     """Parse TAOSMD_LME_NUM_CTX, falling back to the default on a bad value.
 
@@ -162,9 +163,36 @@ def _parse_verdict(content: str) -> bool:
     return "CORRECT" in j
 
 
-async def score_answer_llm(client, predicted: str, gold: str, question: str) -> bool:
-    """Score using LLM-as-judge (official LongMemEval approach)."""
-    prompt = f"""You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
+async def score_answer_llm(client, predicted: str, gold: str, question: str, context: str | None = None) -> bool:
+    """Score using LLM-as-judge (official LongMemEval approach).
+
+    In evidence mode (TAOSMD_JUDGE_MODE=evidence), the prompt includes the
+    retrieved context so the judge can distinguish grounded paraphrases from
+    unsupported guesses.
+    """
+    judge_mode = os.environ.get("TAOSMD_JUDGE_MODE", "reference")
+    if judge_mode == "evidence" and context is not None:
+        prompt = f"""You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
+
+Rules:
+- "I don't know" or similar non-answers are ALWAYS incorrect
+- The predicted answer must contain the key facts from the reference answer
+- Paraphrasing is fine, but the core information must match
+- If the predicted answer is vague or generic while the reference is specific, that is INCORRECT
+- Judge against the reference answer; the context is there so you can tell a grounded paraphrase from an unsupported guess, it never overrides the reference
+
+Reply with exactly one word: CORRECT or INCORRECT
+
+Retrieved context the answer was generated from:
+{context}
+
+Question: {question}
+Reference answer: {gold}
+Predicted answer: {predicted}
+
+Verdict: /no_think"""
+    else:
+        prompt = f"""You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
 
 Rules:
 - "I don't know" or similar non-answers are ALWAYS incorrect
@@ -736,7 +764,7 @@ async def run_benchmark(
                 answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
             if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
-                correct = await score_answer_llm(llm_client, answer, gold_answer, question)
+                correct = await score_answer_llm(llm_client, answer, gold_answer, question, full_context)
             else:
                 correct = False
             llm_time = time.time() - t_llm
@@ -758,14 +786,18 @@ async def run_benchmark(
 
         elapsed = ingest_time + query_time
         total_time += elapsed
-        all_results.append({
+        save_context = os.environ.get("TAOSMD_LME_SAVE_CONTEXT", "0") == "1"
+        row = {
             "idx": i,
             "question_type": qtype,
             "question": question,
             "correct": bool(correct),
             "retrieved_chars": len(full_context),
             "retrieval_delta": delta,
-        })
+        }
+        if save_context:
+            row["context"] = full_context
+        all_results.append(row)
 
         status = "✓" if correct else "✗"
         print(f"  [{i+1:3d}/{len(dataset)}] {status} {qtype:25s} | ingest:{ingest_time:.1f}s query:{query_time:.3f}s | {question[:50]}")
@@ -815,11 +847,13 @@ async def run_benchmark(
             out_dir = _default_out_dir()
             os.makedirs(out_dir, exist_ok=True)
             out_path = os.path.join(out_dir, f"longmemeval_{int(time.time())}.json")
+        judge_mode = os.environ.get("TAOSMD_JUDGE_MODE", "reference")
         result_doc = {
             "question_type": question_type,
             "limit": limit,
             "generator": REMOTE_LLM_MODEL,
             "judge": JUDGE_MODEL,
+            "judge_mode": judge_mode,
             "rerank": RERANK,
             "decompose": DECOMPOSE,
             "self_verify": SELF_VERIFY,
