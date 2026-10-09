@@ -2,27 +2,27 @@
 """LongMemEval Recall@5 — Enhanced retrieval experiments.
 
 Tests retrieval improvements targeting the 17 misses from hybrid baseline (96.6%):
-   - 8 misses in temporal-reasoning (94.0%)
-   - 3 misses in single-session-preference (90.0%)
-   - 2 misses in single-session-assistant (96.4%)
-   - 2 misses in multi-session (98.5%)
-   - 2 misses in single-session-user (97.1%)
+  - 8 misses in temporal-reasoning (94.0%)
+  - 3 misses in single-session-preference (90.0%)
+  - 2 misses in single-session-assistant (96.4%)
+  - 2 misses in multi-session (98.5%)
+  - 2 misses in single-session-user (97.1%)
 
 Configs:
-   A) hybrid_baseline — reproduce 96.6% baseline
-   B) query_expand    — add entity keywords from query expansion
-   C) temporal_boost  — rerank results with temporal awareness
-   D) combined_v2     — query expansion + temporal boost + hybrid
-   E) wider_retrieval — top-10 retrieve, rerank to top-5
+  A) hybrid_baseline — reproduce 96.6% baseline
+  B) query_expand    — add entity keywords from query expansion
+  C) temporal_boost  — rerank results with temporal awareness
+  D) combined_v2     — query expansion + temporal boost + hybrid
+  E) wider_retrieval — top-10 retrieve, rerank to top-5
 """
 
 import asyncio
 import json
+import math
 import os
 import sys
 import tempfile
 import time
-import math
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -37,21 +37,21 @@ ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 def arm_config_from_env(env: dict) -> dict:
     """Read arm configuration from environment variables.
-    
+
     Returns dict with keys: onnx_path, binary_quant, mrl_dim, rescore_oversample.
     """
     # Default onnx path is the existing hard-coded one
     default_onnx_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
-        "models", 
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "models",
         "minilm-onnx"
     )
     onnx_path_str = env.get("TAOSMD_BENCH_ONNX_PATH")
     onnx_path = onnx_path_str if onnx_path_str is not None and onnx_path_str != '' else default_onnx_path
-    
+
     binary_quant_str = env.get("TAOSMD_BENCH_BINARY_QUANT")
     binary_quant = binary_quant_str is not None and binary_quant_str != '' and binary_quant_str == "1"
-    
+
     mrl_dim_str = env.get("TAOSMD_BENCH_MRL_DIM")
     mrl_dim = None
     if mrl_dim_str is not None and mrl_dim_str != '':
@@ -61,7 +61,7 @@ def arm_config_from_env(env: dict) -> dict:
                 raise ValueError("MRL_DIM must be positive")
         except ValueError as e:
             raise ValueError(f"TAOSMD_BENCH_MRL_DIM must be a positive integer: {mrl_dim_str}") from e
-    
+
     rescore_oversample_str = env.get("TAOSMD_BENCH_RESCORE_OVERSAMPLE")
     rescore_oversample = None
     if rescore_oversample_str is not None and rescore_oversample_str != '':
@@ -71,11 +71,11 @@ def arm_config_from_env(env: dict) -> dict:
                 raise ValueError("RESCORE_OVERSAMPLE must be >= 2")
         except ValueError as e:
             raise ValueError(f"TAOSMD_BENCH_RESCORE_OVERSAMPLE must be an integer >= 2: {rescore_oversample_str}") from e
-    
+
     # If rescore_oversample is set, binary_quant must be True
     if rescore_oversample is not None and not binary_quant:
         raise ValueError("TAOSMD_BENCH_RESCORE_OVERSAMPLE requires TAOSMD_BENCH_BINARY_QUANT=1")
-    
+
     return {
         "onnx_path": onnx_path,
         "binary_quant": binary_quant,
@@ -86,7 +86,7 @@ def arm_config_from_env(env: dict) -> dict:
 
 def mrl_truncate(vec: list[float], dim: int) -> list[float]:
     """Truncate vector to first dim components and L2-renormalize.
-    
+
     If the norm is zero, return the vector as-is (all zeros).
     """
     if dim <= 0:
@@ -116,6 +116,10 @@ def make_embed_wrapper(original_embed, mrl_dim, floats_by_text):
         vec = await original_embed(text, task)
         # Apply MRL truncation if mrl_dim is set
         if mrl_dim is not None:
+            if mrl_dim > len(vec):
+                raise ValueError(
+                    f"TAOSMD_BENCH_MRL_DIM={mrl_dim} exceeds the model dimension {len(vec)}"
+                )
             vec = mrl_truncate(vec, mrl_dim)
         # Record the float vector (after truncation) for re-scoring if needed
         if floats_by_text is not None:
@@ -126,13 +130,13 @@ def make_embed_wrapper(original_embed, mrl_dim, floats_by_text):
 
 def rescore(query_vec: list[float], candidates: list[dict], floats_by_text: dict, k: int) -> list[dict]:
     """Re-rank candidates by float cosine similarity to query_vec.
-    
+
     Args:
         query_vec: float vector of the query (after MRL truncation).
         candidates: list of result dicts from vmem.search, each with a 'text' key.
         floats_by_text: dictionary mapping text to its float vector (after MRL truncation).
         k: number of top candidates to return after re-scoring.
-    
+
     Returns:
         List of candidate dicts re-ranked by float cosine similarity (descending), truncated to k.
     """
@@ -141,7 +145,7 @@ def rescore(query_vec: list[float], candidates: list[dict], floats_by_text: dict
     if query_norm == 0.0:
         # If query vector is zero, all similarities are zero; return original order
         return candidates[:k]
-    
+
     scored = []
     for cand in candidates:
         text = cand['text']
@@ -158,14 +162,14 @@ def rescore(query_vec: list[float], candidates: list[dict], floats_by_text: dict
             else:
                 score = dot / (query_norm * doc_norm)
         scored.append((score, cand))
-    
+
     # Sort by score descending
     scored.sort(key=lambda x: x[0], reverse=True)
     # Extract the cand dicts in new order, keeping only top k
     return [cand for score, cand in scored[:k]]
 
 
-async def run_question(item, top_k, config):
+async def run_question(item, top_k, config_name, config):
     question = item["question"]
     answer_session_ids = item.get("answer_session_ids", [])
     sessions = item.get("haystack_sessions", [])
@@ -208,7 +212,7 @@ async def run_question(item, top_k, config):
     search_query = question
     retrieve_k = top_k
 
-    if config in ("query_expand", "combined_v2"):
+    if config_name in ("query_expand", "combined_v2"):
         expanded = expand_query_fast(question)
         # Add extracted entities to query for better keyword matching
         entities = expanded["entities"][:3]
@@ -221,7 +225,7 @@ async def run_question(item, top_k, config):
             pref_terms = [p["signal"][:30] for p in prefs[:2]]
             search_query = f"{search_query} {' '.join(pref_terms)}"
 
-    if config == "wider_retrieval":
+    if config_name == "wider_retrieval":
         retrieve_k = top_k * 2  # Retrieve 10, rerank to 5
 
     # Apply rescore_oversample: if set, we multiply the retrieve_k by the oversample factor
@@ -232,7 +236,7 @@ async def run_question(item, top_k, config):
     results = await vmem.search(search_query, limit=retrieve_k, hybrid=True)
 
     # Temporal reranking for temporal queries
-    if config in ("temporal_boost", "combined_v2", "wider_retrieval"):
+    if config_name in ("temporal_boost", "combined_v2", "wider_retrieval"):
         tclass = classify_temporal_query(question)
         if tclass["is_temporal"]:
             results = temporal_rerank(results, question, boost_factor=0.25)
@@ -273,10 +277,15 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     # Read arm configuration from environment
     cfg = arm_config_from_env(os.environ)
     onnx_path_base = os.path.basename(cfg['onnx_path'])
-    
+
     print("=" * 74)
     print(f"LongMemEval-S Enhanced Retrieval Experiments — Recall@{top_k}")
-    print(f"Model: {onnx_path_base} (ONNX) — same as MemPalace | Arm: onnx_path={onnx_path_base}, binary_quant={cfg['binary_quant']}, mrl_dim={cfg['mrl_dim']}, rescore_oversample={cfg['rescore_oversample']}")
+    if cfg['onnx_path'] == ONNX_PATH:
+        print("Model: all-MiniLM-L6-v2 (ONNX), same as MemPalace")
+    else:
+        print(f"Model: {onnx_path_base} (ONNX), overridden via TAOSMD_BENCH_ONNX_PATH")
+    print(f"Arm: onnx_path={onnx_path_base}, binary_quant={cfg['binary_quant']}, "
+          f"mrl_dim={cfg['mrl_dim']}, rescore_oversample={cfg['rescore_oversample']}")
     print(f"Target: beat 96.6% (MemPalace) on {limit} questions")
     print("=" * 74)
 
@@ -306,7 +315,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
 
         for i, item in enumerate(dataset):
             qtype = item["question_type"]
-            recall_hit = await run_question(item, top_k, cfg)
+            recall_hit = await run_question(item, top_k, config_name, cfg)
 
             total_questions += 1
             if recall_hit:
@@ -360,8 +369,8 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as f:
         json.dump({
-            "benchmark": "enhanced", 
-            "top_k": top_k, 
+            "benchmark": "enhanced",
+            "top_k": top_k,
             "results": all_results,
             "arm_config": cfg,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
