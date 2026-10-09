@@ -96,7 +96,27 @@ def _num_ctx_from_env(raw: str | None) -> int:
         return 0
 
 
+def _date_frame_from_env(raw: str | None) -> str:
+    """Parse TAOSMD_LME_DATE_FRAME, falling back to 'off' on a bad value.
+
+    Valid values: off (default), question, sessions, both.
+    A malformed value results in a warning and falls back to off.
+    """
+    if not raw:
+        return "off"
+    raw = raw.strip().lower()
+    if raw in ("off", "question", "sessions", "both"):
+        return raw
+    print(
+        f"  WARNING: TAOSMD_LME_DATE_FRAME={raw!r} is not a valid value (off|question|sessions|both); "
+        "falling back to 'off'.",
+        file=sys.stderr,
+    )
+    return "off"
+
+
 NUM_CTX = _num_ctx_from_env(os.environ.get("TAOSMD_LME_NUM_CTX"))
+DATE_FRAME = _date_frame_from_env(os.environ.get("TAOSMD_LME_DATE_FRAME"))
 _reranker = None
 
 
@@ -204,14 +224,21 @@ def score_answer(predicted: str, gold: str) -> bool:
     return score_answer_substring(predicted, gold)
 
 
-async def llm_answer(client, context: str, question: str) -> str:
+async def llm_answer(client, context: str, question: str, question_date: str | None = None) -> str:
     """Use remote LLM to generate answer from recalled context."""
     try:
+        prompt_parts = []
+        if DATE_FRAME in ("question", "both") and question_date:
+            prompt_parts.append(f"Today is {question_date}.")
+        prompt_parts.append(
+            ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)
+        )
+        prompt = "\n\n".join(prompt_parts)
         resp = await client.post(
             f"{REMOTE_LLM_URL}/api/chat",
             json={
                 "model": REMOTE_LLM_MODEL,
-                "messages": [{"role": "user", "content": ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)}],
+                "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "think": False,
                 "options": _gen_options(temperature=0, num_predict=100),
@@ -483,13 +510,13 @@ async def retrieve_context(
             except Exception:
                 pass
 
-    vector_results = await retrieve_vector_results(
-        question, kg, vmem,
-        llm_client=llm_client,
-        graph_expansion=graph_expansion,
-        retrieval_path=retrieval_path,
-    )
-    vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+    if DATE_FRAME in ("sessions", "both"):
+        # Order by session index (ascending)
+        vector_results = sorted(vector_results, key=lambda r: r.get("metadata", {}).get("session", 0))
+        # Prepend the chronological line
+        vector_text = "Memories below are in chronological order.\n" + " ".join(r["text"] for r in vector_results if r.get("text"))
+    else:
+        vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
 
     return ctx["context"] + " " + archive_text + " " + vector_text
 
@@ -639,6 +666,17 @@ async def run_benchmark(
         question = item["question"]
         gold_answer = item["answer"]
         sessions = item.get("haystack_sessions", [])
+        haystack_dates = item.get("haystack_dates", [])
+        question_date = item.get("question_date")
+        if DATE_FRAME != "off":
+            if not question_date:
+                print(f"  ERROR: missing question_date for question_id {item.get('question_id', 'unknown')}", file=sys.stderr)
+                sys.exit(1)
+            if len(haystack_dates) != len(sessions):
+                print(f"  ERROR: length mismatch: haystack_dates ({len(haystack_dates)}) != haystack_sessions ({len(sessions)}) for question_id {item.get('question_id', 'unknown')}", file=sys.stderr)
+                sys.exit(1)
+
+        # Create fresh KG + archive + vector memory per question (isolated test)
 
         # Create fresh KG + archive + vector memory per question (isolated test)
         tmp = tempfile.mkdtemp()
@@ -662,6 +700,7 @@ async def run_benchmark(
         # Ingest conversation sessions
         t0 = time.time()
         for si, session in enumerate(sessions):
+            session_date = haystack_dates[si] if DATE_FRAME in ("sessions", "both") else None
             # Build session-level text blocks for embedding
             session_text = ""
             for turn in session:
@@ -673,27 +712,32 @@ async def run_benchmark(
                         content, agent_name="assistant" if role == "assistant" else None,
                         kg=kg, archive=archive, source="longmemeval",
                     )
-                    # Archive raw content
-                    await archive.record(
-                        "conversation",
-                        {"role": role, "content": content},
-                        summary=content[:80],
-                    )
+                     # Archive raw content
+                     content_to_archive = f"[Session date: {session_date}]\n{content}" if session_date else content
+                     await archive.record(
+                         "conversation",
+                         {"role": role, "content": content_to_archive},
+                         summary=content_to_archive[:80],
+                     )
                     session_text += f"\n[{role}]: {content}"
 
-            # Embed the full session as one block (better for multi-turn recall)
-            if session_text:
-                # Split into ~500 char chunks with overlap for embedding
-                chunks = []
-                words = session_text.split()
-                chunk_size = 100  # words per chunk
-                overlap = 20
-                for start in range(0, len(words), chunk_size - overlap):
-                    chunk = " ".join(words[start:start + chunk_size])
-                    if chunk.strip():
-                        chunks.append(chunk)
-                for chunk in chunks:
-                    await vmem.add(chunk, metadata={"session": si})
+             # Embed the full session as one block (better for multi-turn recall)
+             if session_text:
+                 # Split into ~500 char chunks with overlap for embedding
+                 chunks = []
+                 words = session_text.split()
+                 chunk_size = 100  # words per chunk
+                 overlap = 20
+                 for start in range(0, len(words), chunk_size - overlap):
+                     chunk = " ".join(words[start:start + chunk_size])
+                     if chunk.strip():
+                         chunks.append(chunk)
+                 for chunk in chunks:
+                     chunk_text = f"[Session date: {session_date}]\n{chunk}" if session_date else chunk
+                     metadata = {"session": si}
+                     if session_date:
+                         metadata["session_date"] = session_date
+                     await vmem.add(chunk_text, metadata=metadata)
 
         ingest_time = time.time() - t0
 
@@ -731,7 +775,7 @@ async def run_benchmark(
         if use_llm and llm_client is not None:
             t_llm = time.time()
             # Step 1: LLM generates answer from recalled context
-            answer = await llm_answer(llm_client, full_context, question)
+            answer = await llm_answer(llm_client, full_context, question, question_date=item.get("question_date"))
             if SELF_VERIFY:
                 answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
@@ -828,9 +872,10 @@ async def run_benchmark(
             "fts_limit": FTS_LIMIT,
             "context_chars": CONTEXT_CHARS,
             "num_ctx": NUM_CTX,
-            "retrieval_path": retrieval_path,
-            "graph_expansion": graph_expansion,
-            "retrieval_delta": delta_summary,
+             "retrieval_path": retrieval_path,
+             "graph_expansion": graph_expansion,
+             "date_frame": DATE_FRAME,
+             "retrieval_delta": delta_summary,
             "metrics": {
                 "n": total_questions,
                 "correct": total_correct,
