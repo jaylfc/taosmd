@@ -19,11 +19,18 @@ from taosmd.vector_memory import VectorMemory
 
 
 def _fake_embedder(vmem: VectorMemory) -> None:
-    """Patch embed() with a deterministic 16-dim hash vector (no ONNX/QMD)."""
+    """Patch embed() with a deterministic 16-dim bag-of-words hash vector (no ONNX/QMD)."""
 
     async def _embed(text: str, task: str = "search_document") -> list[float]:
-        h = hash(text) & 0xFFFFFFFFFFFFFFFF
-        return [((h >> (i * 3)) & 0xFF) / 255.0 - 0.5 for i in range(16)]
+        # Simple bag-of-words hash: split by whitespace and hash each token
+        tokens = text.lower().split()
+        # Combine token hashes with XOR to get a single hash
+        combined_hash = 0
+        for token in tokens:
+            combined_hash ^= hash(token)
+        # Ensure we have a 64-bit value
+        combined_hash &= 0xFFFFFFFFFFFFFFFF
+        return [((combined_hash >> (i * 3)) & 0xFF) / 255.0 - 0.5 for i in range(16)]
 
     vmem.embed = _embed  # type: ignore[assignment]
 
@@ -52,8 +59,7 @@ def test_scoping_leakage_pooled_vs_scoped(tmp_path):
     try:
         # Create 20 near-duplicate sentence pairs: one for Alice, one for Bob.
         base_sentences = [f"This is test sentence number {i}." for i in range(20)]
-        # We'll make the near-duplicates by changing one word: "test" -> "exam" for Alice?
-        # Actually, we want them to be very similar. Let's instead append the agent name.
+        # Make near-duplicates by appending agent name to create token difference
         alice_texts = [s + " alice" for s in base_sentences]
         bob_texts   = [s + " bob" for s in base_sentences]
 
@@ -80,7 +86,7 @@ def test_scoping_leakage_pooled_vs_scoped(tmp_path):
                 if hit["metadata"].get("agent") != "alice":
                     pooled_cross_agent_hits += 1
                     break  # Count at most one cross-agent hit per query (we just need to see leakage)
-            pooled_rate = pooled_cross_agent_hits / pooled_queries if pooled_queries else 0
+        pooled_rate = pooled_cross_agent_hits / pooled_queries if pooled_queries else 0
         print(f"Pooled cross-agent rate: {pooled_rate:.2f}")
         # Positive control: we must be able to see leakage at all.
         assert pooled_rate > 0, f"Pooled search should show leakage (rate={pooled_rate}) but got zero"
@@ -124,7 +130,6 @@ def test_scoping_leakage_pooled_vs_scoped(tmp_path):
                 project=None,
                 search_agents=None,
                 sources=sources,
-                strategy="thorough",
                 fusion="none",
             ))
             pooled_queries_retrieve += 1
@@ -133,7 +138,7 @@ def test_scoping_leakage_pooled_vs_scoped(tmp_path):
                 if hit.get("metadata", {}).get("metadata", {}).get("agent") != "alice":
                     pooled_cross_agent_hits_retrieve += 1
                     break
-            pooled_rate_retrieve = pooled_cross_agent_hits_retrieve / pooled_queries_retrieve if pooled_queries_retrieve else 0
+        pooled_rate_retrieve = pooled_cross_agent_hits_retrieve / pooled_queries_retrieve if pooled_queries_retrieve else 0
         print(f"Pooled cross-agent rate (retrieve): {pooled_rate_retrieve:.2f}")
         assert pooled_rate_retrieve > 0, f"Pooled retrieve should show leakage (rate={pooled_rate_retrieve}) but got zero"
 
@@ -149,7 +154,6 @@ def test_scoping_leakage_pooled_vs_scoped(tmp_path):
                 project=None,
                 search_agents=["alice"],
                 sources=sources,
-                strategy="thorough",
                 fusion="none",
             ))
             scoped_queries_retrieve += 1
@@ -159,7 +163,7 @@ def test_scoping_leakage_pooled_vs_scoped(tmp_path):
                     scoped_cross_agent_hits_retrieve += 1
                     break
             # Check if Alice's own row (alice_ids[i]) is in the top 10.
-            hit_ids = {hit["metadata"]["id"] for hit in hits}
+            hit_ids = {hit.get("metadata", {}).get("id") for hit in hits}
             if alice_ids[i] in hit_ids:
                 scoped_alice_hits_retrieve += 1
         scoped_rate_retrieve = scoped_cross_agent_hits_retrieve / scoped_queries_retrieve if scoped_queries_retrieve else 0
@@ -173,14 +177,10 @@ def test_scoping_leakage_pooled_vs_scoped(tmp_path):
         # Let's add 10 rows for project p1 (agent alice) and 10 for project p2 (agent alice).
         p1_texts = [f"Project p1 sentence {i}." for i in range(10)]
         p2_texts = [f"Project p2 sentence {i}." for i in range(10)]
-        p1_ids = []
         for text in p1_texts:
-            rid = asyncio.run(vmem.add(text, metadata={"agent": "alice", "project": "p1"}))
-            p1_ids.append(rid)
-        p2_ids = []
+            asyncio.run(vmem.add(text, metadata={"agent": "alice", "project": "p1"}))
         for text in p2_texts:
-            rid = asyncio.run(vmem.add(text, metadata={"agent": "alice", "project": "p2"}))
-            p2_ids.append(rid)
+            asyncio.run(vmem.add(text, metadata={"agent": "alice", "project": "p2"}))
 
         # Search with project=p1 should return zero p2 rows.
         project_cross_hits = 0
@@ -192,12 +192,13 @@ def test_scoping_leakage_pooled_vs_scoped(tmp_path):
                     break
         assert project_cross_hits == 0, f"Project scoping leaked: found {project_cross_hits} p2 rows when querying p1"
 
-        # Expired rows: set valid_to in the past? Actually, we use forget_after for TTL.
-        # We'll test that expired rows (via forget_after) are never returned under either scope.
+        # Expired rows: set valid_to to a past timestamp
+        # We'll test that expired rows (via valid_to) are never returned under either scope.
         past = time.time() - 3600
-        future = time.time() + 86400
-        expired_id = asyncio.run(vmem.add("Expired row", metadata={"agent": "alice", "forget_after": past}))
-        active_id  = asyncio.run(vmem.add("Active row",  metadata={"agent": "alice", "forget_after": future}))
+        expired_id = asyncio.run(vmem.add("Expired row", metadata={"agent": "alice"}))
+        active_id  = asyncio.run(vmem.add("Active row",  metadata={"agent": "alice"}))
+        # Make the expired row expired by setting valid_to to past
+        asyncio.run(vmem.supersede(expired_id, ended_at=past))
 
         # Search for "Expired row" should not return it, even without scoping.
         hits = asyncio.run(vmem.search("Expired row", limit=10, hybrid=False, fusion="none"))
