@@ -16,14 +16,13 @@ before trusting a published number.
   `fusion_shootout.py`, `longmemeval_matrix.py`, `variations_sweep.py`.
   It is the source of the published 97.0% Recall@5 headline
   (see `benchmarks/REPRODUCE-longmemeval.md`).
-- Byte size: 277383467 bytes (about 265 MiB) -- NOT YET PINNED, no verified
-  copy located on this machine; retained from prior documentation. Run
-  `stat -c %s benchmarks/data/longmemeval_s_full.json` to confirm.
+- Byte size: 277383467 bytes (about 265 MiB), measured with `stat -c %s` on the
+  bench host copy on 2026-10-09.
 - Question count: 500.
 - sha256: `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
-  -- NOT YET PINNED, no copy has been hashed on this machine; obtain the
-  file from the upstream LongMemEval project and run
-  `shasum -a 256 benchmarks/data/longmemeval_s_full.json` to verify.
+  (64 hex, valid), hashed with `sha256sum` on the bench host copy on
+  2026-10-09; it matches the value previously carried here unverified.
+  Verify with: `shasum -a 256 benchmarks/data/longmemeval_s_full.json`
 
 To verify a copy when available:
 
@@ -31,9 +30,10 @@ To verify a copy when available:
 shasum -a 256 benchmarks/data/longmemeval_s_full.json
 ```
 
-*(Note: this file does not currently exist on this machine. No copy has been
-located to confirm the size or checksum above. Obtain from the upstream LongMemEval
-project and confirm the checksum before use.)*
+*(Note: the file is gitignored and absent from most checkouts. The canonical
+pinned copy lives on the project bench host under the repo's `benchmarks/data/`
+directory and was hash-verified there on 2026-10-09. Obtain from the upstream
+LongMemEval project and confirm the checksum before use.)*
 
 ### How to obtain it
 
@@ -68,9 +68,10 @@ To verify a copy when available:
 shasum -a 256 benchmarks/data/longmemeval_oracle.json
 ```
 
-*(Note: this file does not currently exist in this repository; three verified
-copies exist in sibling repositories with the measurements above. Obtain from the
-upstream LongMemEval project and confirm the checksum before use.)*
+*(Note: the file is gitignored. A copy fetched from the upstream LongMemEval
+dataset (`longmemeval_oracle`) was placed on the project bench host under the
+repo's `benchmarks/data/` directory on 2026-10-09 and matched the size and
+sha256 above exactly. Confirm the checksum before use.)*
 
 ## longmemeval_s_cleaned.json
 
