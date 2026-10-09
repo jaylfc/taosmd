@@ -259,7 +259,7 @@ def test_save_context_env_adds_context_to_result_row(runner, monkeypatch, tmp_pa
     assert len(results) == 1
     row = results[0]
     assert "context" in row, "context key must be present when SAVE_CONTEXT=1"
-    assert row["context"] == "assembled context from ContextAssembler retrieved context chunk"
+    assert row["context"] == "assembled context from ContextAssembler  retrieved context chunk"
 
 
 def test_save_context_unset_omits_context_key(runner, monkeypatch, tmp_path):

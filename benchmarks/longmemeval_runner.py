@@ -519,12 +519,7 @@ async def retrieve_context(
     )
     vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
 
-    parts = [ctx["context"]]
-    if archive_text:
-        parts.append(archive_text)
-    if vector_text:
-        parts.append(vector_text)
-    return " ".join(parts)
+    return ctx["context"] + " " + archive_text + " " + vector_text
 
 
 def summarize_retrieval_delta(results: list[dict]) -> dict | None:
