@@ -1965,6 +1965,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, result)
 
         def _handle_a2a_messages(self, qs: dict) -> None:
+            _validate_a2a_params(qs, frozenset({"thread", "since", "limit", "fields", "format", "after_id", "before_id"}), self._raw_qs)
             after_id_raw = qs.get("after_id")
             before_id_raw = qs.get("before_id")
             if after_id_raw is not None:
@@ -1974,7 +1975,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 except (TypeError, ValueError) as exc:
                     raise _BadRequest("'after_id' must be a non-negative integer") from exc
                 if after_id_i < 0:
-                    raise _BadRequest("'after_id' must not be negative")
+                    raise _BadRequest("'after_id' must be a non-negative integer") from exc
             else:
                 after_id_i = None
             if before_id_raw is not None:
@@ -1984,12 +1985,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 except (TypeError, ValueError) as exc:
                     raise _BadRequest("'before_id' must be a non-negative integer") from exc
                 if before_id_i < 0:
-                    raise _BadRequest("'before_id' must not be negative")
+                    raise _BadRequest("'before_id' must be a non-negative integer") from exc
             else:
                 before_id_i = None
             if after_id_i is not None and before_id_i is not None:
                 raise _BadRequest("'after_id' and 'before_id' are mutually exclusive")
-            _validate_a2a_params(qs, frozenset({"thread", "since", "limit", "fields", "format", "after_id", "before_id"}), self._raw_qs)
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
             limit_raw = (qs.get("limit") or [50])[0]

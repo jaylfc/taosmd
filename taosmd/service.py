@@ -698,6 +698,10 @@ async def a2a_feed(
         rows = rows[:limit]
     else:
         if after_id is not None or before_id is not None:
+            # Fetch enough rows to cover the cursor range; use a large
+            # limit so that the subsequent cursor filtering and slice to
+            # `limit` operates on the full matching result set rather than
+            # a biased subset determined by the fetch limit.
             rows = await archive.query(
                 event_type=EVENT_A2A,
                 app_id=thread,
