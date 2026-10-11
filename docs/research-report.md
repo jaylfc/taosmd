@@ -37,6 +37,7 @@
   - [6.x E-035: EmbeddingGemma-2 re-test at scale: 1-bit storage and a gaming-PC host](#6x-e-035-embeddinggemma-2-re-test-at-scale-1-bit-storage-and-a-gaming-pc-host)
   - [6.x Queue of October 2026 (E-036 to E-047)](#6x-queue-of-october-2026-e-036-to-e-047-what-is-runnable-now-what-waits-on-a-harness-card-what-waits-on-hardware)
   - [6.x E-048: EmbeddingGemma-2 multimodal memory search (photos, audio and video found by a text query)](#6x-e-048-embeddinggemma-2-multimodal-memory-search-photos-audio-and-video-found-by-a-text-query)
+  - [6.x E-049: Every lever on three machines (Orange Pi 5 Plus, RTX 3060, Mac mini), one change per arm](#6x-e-049-every-lever-on-three-machines-orange-pi-5-plus-rtx-3060-mac-mini-one-change-per-arm)
 - [7. Revision Log](#7-revision-log)
 
 ### Finding Index
@@ -140,6 +141,7 @@ Every row is stable. IDs are never reused. E-ids carry over when an experiment m
 | E-046 | Queued, id reserved, hardware-blocked: official RKNNAI RK3588 rkllm builds (Qwen3-4B-Instruct-2507 16k w8a8 reader, Qwen3.5-2B pass-2) on the Pi NPU, speed and small sample only; waits on the rkllm 1.3.1 check | [6](#6x-queue-of-october-2026-e-036-to-e-047-what-is-runnable-now-what-waits-on-a-harness-card-what-waits-on-hardware) | PRE-REGISTERED 2026-10-09, not run; defaults unchanged until it resolves | none yet (results will land under benchmarks/results/) |
 | E-047 | Queued, id reserved, hardware-blocked: Ternary-Bonsai-2-27B ConstantKV on the M4 Mac mini against the F-020 llama-server control; waits on the Mac worker | [6](#6x-queue-of-october-2026-e-036-to-e-047-what-is-runnable-now-what-waits-on-a-harness-card-what-waits-on-hardware) | PRE-REGISTERED 2026-10-09, not run; defaults unchanged until it resolves | none yet (results will land under benchmarks/results/) |
 | E-048 | EmbeddingGemma-2 multimodal memory search on the 3060 and the M4 Mac mini, in the first hardware slot after the current showcase runs: text-to-image (MS-COCO 5k, OpenCLIP ViT-B/32 control), text-to-audio (Clotho v2 evaluation, LAION-CLAP control) and text-to-video (MSR-VTT 1k-A, CLIP frame-mean control) Recall@K, a mixed image store inside every LongMemEval-S haystack, and embed speed per modality. Kill: EG2 R@5 >= its control in each modality (reported per modality), mixed-store LongMemEval-S R@5 within 2/500 of the E-035 EG2 float arm, Mac image embed p50 <= 150 ms and query p50 <= 30 ms. Harness-gated (taOSmd stores text only today) | [6](#6x-e-048-embeddinggemma-2-multimodal-memory-search-photos-audio-and-video-found-by-a-text-query) | PRE-REGISTERED 2026-10-11, not run; defaults unchanged until it resolves | none yet (results will land under benchmarks/results/) |
+| E-049 | Cross-machine characterisation of every taOSmd lever, one change per arm against the lite base (MiniLM ONNX + BM25, RRF, no reranker, no Librarian, float, top_k 5/10): 12 judge-free retrieval arms (embedder, binary_quant, fusion, MaxSim, three rerankers, adjacency, top_k, Librarian) on LongMemEval-S R@5 and LoCoMo subset-200 R@5/R@10 on the RTX 3060; generator per tier end to end (4/8/12 GB on the 3060, 24 GB on the Mac mini); speed and RSS on the Orange Pi 5 Plus plus NPU reranker and NPU Librarian accuracy against their CPU controls. Kill: a retrieval arm is an adoption candidate only at +5/500 LongMemEval-S R@5 with no more than 0.02 LoCoMo R@5 loss and no more than 1.5x Pi query p50; an NPU arm is equivalent only within 0.02 LoCoMo R@5 of its CPU control | [6](#6x-e-049-every-lever-on-three-machines-orange-pi-5-plus-rtx-3060-mac-mini-one-change-per-arm) | PRE-REGISTERED 2026-10-11, not run; defaults unchanged until it resolves | none yet (results will land under benchmarks/results/) |
 
 ---
 
@@ -1279,12 +1281,61 @@ KILL CRITERION, fixed before any arm runs (verbatim): "E-048 PASSES for a modali
 
 E-035 has not run, so its EG2 float arm may not exist when arm 4 runs. In that case arm 4 also runs the text-only EG2 float store on the same host in the same slot, and that run is the comparison for (b). If it passes, the decision goes to Jay as a product choice (which modalities become an opt-in memory feature, which host does the embedding, and whether the text default changes at all); no default changes on this experiment alone. Recall@K is judge-free, so no judge caveat applies. Hardware: the Mac mini and the 3060 belong to another seat for model work, so every arm on them runs in a window that seat grants (requested on the bus 2026-10-11 with model sizes, runtime, duration and unload), and a result taken while another model was resident is labelled contended.
 
+### 6.x E-049: Every lever on three machines (Orange Pi 5 Plus, RTX 3060, Mac mini), one change per arm
+
+Pre-registered 2026-10-11, before any arm runs. Jay asked for taOSmd to be tested with all of its features and levers on all three lab machines: the Orange Pi 5 Plus, the RTX 3060 desktop (12 GB, 77 GB RAM) and the M4 Mac mini (24 GB). The results feed one news post per hardware tier and one comparison post, and those posts will quote only the tables this experiment produces. The machine owners reviewed the design before this entry was written, and their changes are folded in below.
+
+Design rules.
+
+1. One change per arm against a fixed base, never a full grid. A full grid of these levers is roughly 1,700 cells; this is 23 arms.
+2. Retrieval accuracy does not depend on the machine when the same ONNX or GGUF bytes run, so it is measured once, on the 3060. The Pi and the Mac mini measure speed and resident memory on the same arms. The exception is any arm whose model bytes differ by machine (the Pi NPU .rkllm reranker and query-expansion models, the Mac generator): those get an accuracy run on that machine, on the smallest set that answers the question. Full accuracy runs never go on the Pi.
+3. Retrieval arms are judge-free (Recall@K). End-to-end judged runs are only for the generator rows, on the best retrieval config from block R. Judges are a different model family from the generator, named with their ollama digest, and the same-family flag is printed next to every accuracy number.
+4. Validity gates. The 3060 base arm R0 must reproduce LongMemEval-S query_expand R@5 485/500 before any other arm is read; if it does not, the harness is suspect and every block stops. Pi gate: a 20-question LoCoMo spot check on P-a must match R0 exactly before P-c or P-d are read.
+5. Pi confounds. Every Pi results file records the cpufreq governor per policy and the SoC temperature at the start and end of each arm. An arm starts only below 70C (60C is not reachable on this board: 64.7C after a 75 s cool-down at full fan). Each arm carries a THROTTLED flag, set when the minimum A76 frequency falls under 2352 MHz or the peak temperature passes 85C during the arm, from 1 s frequency, temperature and NPU-load samples. A throttled arm reports its latency flagged and never feeds the decision below.
+6. Timed arms run with no other model traffic on the machine. On the Pi that means the production rkllama service is stopped for every timed Pi arm, not only the NPU ones.
+7. Every results file records the config hash, machine, model digests and git commit. A file without them is void.
+
+Base: MiniLM ONNX dense plus BM25, RRF fusion, reranker off, Librarian off, float vectors, top_k 5 on LongMemEval-S and 10 on LoCoMo, adjacent_neighbors 0.
+
+Block R, retrieval arms on the 3060 (LongMemEval-S query_expand R@5 at n=500, LoCoMo subset-200 R@5 and R@10):
+
+| Arm | Change from base |
+|---|---|
+| R0 | none (validity gate) |
+| R1 | embedder snowflake-arctic-embed-s (the shipped default; N-031 recorded 478/500) |
+| R2 | embedder EmbeddingGemma-2 slim text ONNX, fp32 |
+| R3 | embedder EmbeddingGemma-2 slim text ONNX, q4 |
+| R4 | binary_quant on |
+| R5 | fusion mem0_additive |
+| R6 | late_interaction (MaxSim) |
+| R7 | reranker ms-marco-MiniLM ONNX on CPU |
+| R8 | reranker bge-reranker-v2-m3 |
+| R9 | adjacent_neighbors 2 |
+| R10 | top_k 10 on LongMemEval-S, 20 on LoCoMo |
+| R11 | Librarian on (qmd-query-expansion-1.7B, GGUF); the CPU control for P-d |
+| R12 | reranker Qwen3-Reranker-0.6B (GGUF); the CPU control for P-c |
+
+R2 and R3 overlap E-040. If E-040 has run in the same harness at the same master commit, its files are reused rather than re-run. A component the shipped loader cannot drive without a code change is recorded as not runnable, with a card filed, never scored on a local patch (the N-031 lesson).
+
+Block G, generator per tier, end to end on the best block R config: G1 qwen3:4b (4 GB), G2 granite4.2:8b and llama3.1:8b (8 GB), G3 gemma4:12b (12 GB), all on the 3060 on LoCoMo subset-200 and LongMemEval-S n=500; G4 a 24 GB-class model on the Mac mini (Qwen3.6-27B Q4 or the best fit at run time, named before it runs) on LoCoMo subset-200 only. Block G starts only after block R has been read.
+
+Block P, the Orange Pi 5 Plus: P-a lite-pi with no reranker; P-b plus the CPU ONNX reranker; P-c plus Qwen3-Reranker-0.6B on the NPU through rkllama; P-d plus the Librarian (qmd-query-expansion-1.7B) on the NPU; P-e the R1 embedder with binary_quant. Each reports query latency p50 and p95 over 50 queries, ingest rate and resident memory. P-c and P-d also report LoCoMo subset-200 R@5, because their model bytes differ from R12 and R11.
+
+Run-time estimate, a floor from recorded runs: about 7 hours for block R and 14 to 18 hours for block G on the 3060, split over nights and booked with the machine owner; about 4 to 5 hours on the Mac mini; about 6.5 hours on the Pi in two windows with a cool-down between.
+
+Preconditions: the harness must select and record each arm (card tsk-dqj25w, PR #546), and the runner must save the assembled context per question so every generator miss can be put in a retrieval or reader bucket (card tsk-ith53o, PR #550). Both are open at the time of writing.
+
+KILL CRITERION, fixed before any arm runs (verbatim): "E-049 is a characterisation, not a default change. (1) If R0 does not reproduce 485/500, every block stops. Pi results are read only if the P-a 20-question spot check matches R0 exactly. (2) A retrieval arm R1-R12 is an adoption CANDIDATE only if it beats R0 by at least 5/500 on LongMemEval-S R@5, AND loses no more than 0.02 LoCoMo subset-200 R@5, AND (where measured) its Pi query p50 is no more than 1.5x P-a's. Every other arm is recorded as no change. (3) An NPU arm is EQUIVALENT to its CPU control only if its LoCoMo subset-200 R@5 is within 0.02 of it (P-c vs R12, P-d vs R11); otherwise the rkllm conversion is recorded as damaging retrieval. (4) Generator rows are reported, not gated. (5) A THROTTLED Pi arm never feeds (2) or (3)."
+
+A candidate does not change any default by itself. It goes to Jay as a separate pull request that updates the recipes, the hardware-tier table and the README together, after a full-scale confirm.
+
 ## 7. Revision Log
 
 This log is append-only. History is never rewritten.
 
 | Date | Edition | Changes |
 |---|---|---|
+| 2026-10-11 | 1.73 | Pre-registered E-049, a cross-machine characterisation of every taOSmd lever on the Orange Pi 5 Plus, the RTX 3060 and the Mac mini, one change per arm against the lite base: 12 judge-free retrieval arms on LongMemEval-S and LoCoMo subset-200, generator rows per hardware tier, Pi speed and memory, and NPU reranker and NPU Librarian accuracy against new CPU controls. Validity gates, Pi throttle and temperature rules and the kill criterion were written before any run, after the machine owners reviewed the design. No arm run, no number recorded, defaults unchanged, Abstract unchanged. TOC entry, one index row and the section 6 block added in the same edit. |
 | 2026-10-11 | 1.72 | Pre-registered E-048, EmbeddingGemma-2 multimodal memory search on the 3060 and the M4 Mac mini: text-to-image (COCO-5k, OpenCLIP control), text-to-audio (Clotho v2, LAION-CLAP control) and text-to-video (MSR-VTT 1k-A, CLIP frame-mean control) Recall@K, a mixed image and text LongMemEval-S store, and per-modality embed speed, with a kill criterion written before any run. Added arm C to E-035 (text embed speed on the Mac mini), before any E-035 arm ran; the E-035 arm A and B criterion is unchanged. Jay asked for both after seeing EmbeddingGemma-2 used locally on Macs for photo search, and placed them in the first hardware slot after the current showcase runs rather than after E-035. No arm run, no number recorded, defaults unchanged, Abstract unchanged. TOC entry, one new index row and an amended E-035 row added in the same edit. |
 | 2026-10-09 | 1.71 | Pre-registered the October 2026 experiment queue, E-036 to E-043 with full designs and kill criteria (date framing on LongMemEval-S; evidence-seeing judge re-score; granite4.2:8b settings sweep; qwen3.5:9b digest change plus Mellum2.1 MoE screen; slim EmbeddingGemma-2 and two new rerankers; Wald-4B screening judge; raw context width; per-agent scoping leakage) and reserved E-044 to E-047 with one-paragraph designs. Recorded the three measured facts behind the ordering: the LongMemEval runner never reads question_date or haystack_dates although every oracle record carries them, LoCoMo cannot measure a temporal lever (E-005, N-021), and the upstream qwen3.5:9b tag was re-pushed with a new digest while the host holds the pinned control. Harness cards tsk-mkcjxd, tsk-ith53o, tsk-xl5chj and tsk-4soxce were filed before this text cited them. Noted that an unregistered 2026-09-30 carry list once pencilled E-036 for a bitnet embedder comparison, now superseded by E-040. No arm run, no number recorded, defaults unchanged, Abstract unchanged. TOC entry, twelve index rows and the section 6 block added in the same edit. |
 | 2026-10-08 | 1.70 | Pre-registered E-035, an EmbeddingGemma-2 re-test for large stores and gaming-PC hosts: 1-bit, Matryoshka and rescored storage arms on LongMemEval-S Recall@5 against MiniLM float and binary, then, only if the storage arm passes, x86 CPU and RTX 3060 embed latency with a Pi to PC round trip. Kill criterion written before any run. Scopes Jay's 2026-10-07 stop recorded in N-031; defaults unchanged. |
