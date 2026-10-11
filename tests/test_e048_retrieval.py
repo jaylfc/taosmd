@@ -17,6 +17,9 @@ from benchmarks.e048.retrieval import load_manifest, recall_at_k, write_results
 # Fixtures
 # ---------------------------------------------------------------------------
 
+# Use json module
+import json
+
 @pytest.fixture
 def dummy_manifest(tmp_path):
     """Write a 5-item manifest with dummy files."""
@@ -30,9 +33,6 @@ def dummy_manifest(tmp_path):
     content = '\n'.join(json.dumps(it) for it in items) + '\n'
     manifest.write_text(content)
     return manifest, items
-
-# Use json module
-import json
 
 # ---------------------------------------------------------------------------
 # Fake embedder for tests
@@ -371,12 +371,20 @@ def test_cli_end_to_end(tmp_path, monkeypatch):
     # Import sys at the top of the function
     import sys as _sys
     
-    # Create a temporary manifest
+    # Create a temporary manifest (outside the loop)
     manifest = tmp_path / "manifest.jsonl"
     for i in range(3):
         dummy = tmp_path / f"item{i}.txt"
         dummy.write_text(f"content {i}")
-        manifest.write_text(f'{{"id": "item{i}", "path": "{str(dummy)}", "captions": ["Caption {i}"]}}\n')
+    
+    # Write manifest with all items
+    items = []
+    for i in range(3):
+        dummy = tmp_path / f"item{i}.txt"
+        items.append({"id": f"item{i}", "path": str(dummy), "captions": [f"Caption {i}"]})
+    
+    manifest_content = '\n'.join(json.dumps(item) for item in items) + '\n'
+    manifest.write_text(manifest_content)
     
     # Save the fake embedder factory to a temporary module
     test_module = tmp_path / "test_fake_embedder.py"
@@ -474,3 +482,4 @@ def make_fake(**kwargs):
 def make_fake(**kwargs):
     """Factory for fake embedder (module-level as required by tests)."""
     return FakeEmbedder()
+

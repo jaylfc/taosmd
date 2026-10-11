@@ -103,8 +103,8 @@ def load_manifest(path) -> list[dict]:
                 raise ValueError("duplicate id")
             seen_ids.add(entry["id"])
             
-            # Resolve path to absolute
-            entry["path"] = str(Path(entry["path"]).resolve())
+            # Resolve path to absolute relative to manifest file's directory
+            entry["path"] = str((path.parent / entry["path"]).resolve())
             entries.append(entry)
     
     return entries
@@ -162,11 +162,11 @@ def run(manifest_path, embedder) -> dict:
     captions = []
     query_item_indices = []
     
-    for entry in entries:
+    for idx, entry in enumerate(entries):  # Use enumerate to get index directly
         # Each caption of each item is one query
         for caption in entry["captions"]:
             captions.append(caption)
-            query_item_indices.append(entries.index(entry))  # Use first occurrence
+            query_item_indices.append(idx)  # Use the index from enumerate
     
     query_item_index = np.array(query_item_indices, dtype=np.int64)
     
@@ -273,7 +273,9 @@ def write_results(out_path, payload: dict) -> None:
         if not provenance[key]:
             raise ValueError(f"provenance[{key!r}] is empty")
     
-    # Check model_files values are 64-char lowercase hex
+    # Check model_files is a non-empty dict (specific validation)
+    if not isinstance(provenance["model_files"], dict) or not provenance["model_files"]:
+        raise ValueError("provenance.model_files must be a non-empty dict")
     if not isinstance(provenance["model_files"], dict):
         raise ValueError("provenance.model_files must be a dict")
     
