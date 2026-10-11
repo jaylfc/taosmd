@@ -100,6 +100,33 @@ def test_fallback_id_for_missing_uuid():
     assert items is None
 
 
+def test_fallback_id_identical_lines_different_offsets():
+    """Two identical lines at different byte offsets get different ids."""
+    # Create two identical user entries without uuid
+    identical_line = '{"type":"user","message":{"role":"user","content":"test"},"sessionId":"s1","timestamp":"2026-10-07T22:53:25.123Z"}'
+    
+    # Parse at byte offset 0
+    items1, id1 = parse_entry(0, identical_line, "s1")
+    assert items1 is not None
+    assert len(items1) == 1
+    assert id1 == items1[0]["id"]
+    
+    # Parse at byte offset 50 (different offset)
+    items2, id2 = parse_entry(50, identical_line, "s1")
+    assert items2 is not None
+    assert len(items2) == 1
+    assert id2 == items2[0]["id"]
+    
+    # The IDs should be different because byte offsets differ
+    assert id1 != id2
+    
+    # The ID should equal sha256 of offset+raw_line
+    import hashlib
+    key = f"50{identical_line}".encode("utf-8")
+    expected_id = hashlib.sha256(key).hexdigest()
+    assert id2 == expected_id
+
+
 def test_byte_capping():
     """Fields longer than 8 KB are capped and truncated flag set."""
     # Create a fixture line with >8KB of emoji text
@@ -132,29 +159,6 @@ def test_byte_capping():
     # Check truncated flag
     assert item["metadata"]["truncated"], \
         "Truncated should be True for oversized field"
-
-
-def test_cap_field_mutant_fails():
-    """Mutant test: change _cap_field to slice characters (should FAIL)."""
-    from taosmd.hooks.parser import _cap_field
-
-    # Test with emoji text (each emoji is 4 bytes)
-    emoji_text = "😀" * 3000  # 12KB
-
-    # Current implementation: checks UTF-8 bytes, slices at byte boundary
-    text, truncated = _cap_field(emoji_text)
-
-    # With current implementation, truncated should be True
-    assert truncated, "Text should be truncated"
-
-    # With the mutant implementation (character slicing), the result would be different
-    # This test ensures we're using byte-based capping, not character slicing
-    # If someone changes to character slicing, this test would expose the problem
-    encoded_capped = text.encode("utf-8")
-
-    # Byte-based capping: encoded length <= 8192
-    assert len(encoded_capped) <= 8192, \
-        f"Byte-based capping failed, encoded length: {len(encoded_capped)}"
 
 
 def test_noise_filtering():
@@ -429,17 +433,7 @@ def test_user_no_content():
 def test_tool_result_no_content():
     """tool_result with no content is filtered out."""
     tool_result_line = '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1"}]},"uuid":"u1","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}'
-
+    
     items, _ = parse_entry(0, tool_result_line, "s1")
     # tool_result with empty content should be filtered out
-    # (depending on implementation, it might return None or have empty text)
-
-
-@pytest.mark.skipif(True, reason="Future mutation: override source in metadata")
-def test_source_override():
-    """Future: allow hook config to override source in metadata."""
-    pass
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    assert items is None

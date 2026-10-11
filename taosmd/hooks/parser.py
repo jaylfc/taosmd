@@ -76,7 +76,7 @@ def parse_entry(
     if uuid:
         base_id = f"claude-code:{session_id_from}:{uuid}"
     else:
-        base_id = _fallback_id(byte_offset, stripped)
+        base_id = _fallback_id(byte_offset, raw_line)
 
     items: list[dict[str, Any]] = []
 
@@ -114,22 +114,25 @@ def parse_entry(
                         tr_text = str(tr_content)
                     tr_text, truncated = _cap_field(tr_text)
                     item_id = f"{base_id}:tool_result:{idx}"
-                    items.append(
-                        {
-                            "id": item_id,
-                            "text": tr_text,
-                            "metadata": {
-                                "source": "hook:claude-code",
-                                "session_id": session_id_from,
-                                "role": "user",
-                                "kind": "tool_result",
-                                "timestamp": ts_epoch,
-                                "transcript_path": "",
-                                "truncated": truncated,
-                            },
-                        }
-                    )
-                return items, base_id
+                    # Filter out empty tool_result content
+                    if tr_text:
+                        items.append(
+                            {
+                                "id": item_id,
+                                "text": tr_text,
+                                "metadata": {
+                                    "source": "hook:claude-code",
+                                    "session_id": session_id_from,
+                                    "role": "user",
+                                    "kind": "tool_result",
+                                    "timestamp": ts_epoch,
+                                    "transcript_path": "",
+                                    "truncated": truncated,
+                                },
+                            }
+                        )
+                # Return None if no items were added (all content was filtered out)
+                return items if items else None, base_id
 
             if text_parts:
                 text = "\n".join(text_parts)
