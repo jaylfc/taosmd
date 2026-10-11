@@ -1,0 +1,8 @@
+open_clip_torch
+torch
+torchaudio
+transformers
+soundfile
+pillow
+numpy
+huggingface_hub
