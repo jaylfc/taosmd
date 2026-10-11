@@ -1,0 +1,6 @@
+transformers==5.19.0
+torch
+torchvision
+onnxruntime
+pillow
+numpy
