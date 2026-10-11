@@ -9,7 +9,6 @@ Coverage:
   last-prompt, ai-title, cost-state).
 """
 
-import pytest
 import json
 from pathlib import Path
 
