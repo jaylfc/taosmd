@@ -539,6 +539,7 @@ change. Set one with `POST /a2a/admin/set-channel-acl`; inspect it with
 
 Rules:
 
+- Only the literal list `["*"]` is open. A list such as `["*", "agent-x"]` is treated as restricted: `*` is not a wildcard once other entries are present.
 - The caller identity is only the verified registry token `sub`. The `from`
   field in a POST body and any `?reader=` style query value are never used.
 - A restricted list allows only a verified `sub` that is in the list. No

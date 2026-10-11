@@ -3136,17 +3136,24 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             clear = body.get("clear", False)
             if not isinstance(clear, bool):
                 raise _BadRequest("'clear' must be a boolean")
-            try:
-                _config.set_acl(
-                    channel, read=body.get("read"), post=body.get("post"),
-                    clear=clear, data_dir=data_dir,
-                )
-            except ValueError as exc:
-                raise _BadRequest(str(exc)) from exc
-            self._send_json(200, {
-                "channel": channel,
-                "acl": self._resolve_channel_acl(channel),
-            })
+            # Route the read-modify-write through the single service loop so it
+            # serialises with every other config.json writer (ensure_agent,
+            # set_control), closing the lost-update race that would silently
+            # drop an ACL entry and reopen a restricted channel (audit M3).
+            async def _apply_acl():
+                try:
+                    _config.set_acl(
+                        channel, read=body.get("read"), post=body.get("post"),
+                        clear=clear, data_dir=data_dir,
+                    )
+                except ValueError as exc:
+                    return str(exc), None
+                return None, self._resolve_channel_acl(channel)
+
+            err, acl = runner.run(_apply_acl())
+            if err is not None:
+                raise _BadRequest(err)
+            self._send_json(200, {"channel": channel, "acl": acl})
 
         def _handle_admin_a2a_get_channel_acl(self, qs: dict) -> None:
             """GET /a2a/admin/channel-acl?channel= -- the resolved ACL."""

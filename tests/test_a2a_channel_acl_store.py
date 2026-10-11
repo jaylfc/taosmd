@@ -390,3 +390,19 @@ def test_renamed_channel_keeps_its_acl(srv):
         assert status == 403, name
     assert CANARY not in srv.archive_dump()
     assert srv.send("alice", "vault", body="ok", token=_token("alice"))[0] == 200
+
+
+def test_set_acl_runs_on_the_service_loop(srv, monkeypatch):
+    """The config.json read-modify-write must serialise on the service loop,
+    not on the per-request thread (lost-update race, audit M3)."""
+    seen = []
+    real = cfg.set_acl
+
+    def spy(*args, **kwargs):
+        seen.append(threading.current_thread().name)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cfg, "set_acl", spy)
+    status, raw = srv.admin_set({"channel": "secret", "read": ["alice"]})
+    assert status == 200, raw
+    assert seen == ["taosmd-service-loop"], seen
