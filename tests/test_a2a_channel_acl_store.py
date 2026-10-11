@@ -406,3 +406,36 @@ def test_set_acl_runs_on_the_service_loop(srv, monkeypatch):
     status, raw = srv.admin_set({"channel": "secret", "read": ["alice"]})
     assert status == 200, raw
     assert seen == ["taosmd-service-loop"], seen
+
+
+def test_concurrent_admin_writes_do_not_lose_updates(srv, monkeypatch):
+    """Two concurrent set-channel-acl calls for different channels must both
+    survive. A widened read-modify-write window makes a lost update
+    deterministic when the write is not serialised on the service loop."""
+    import time
+
+    real_read = cfg._read
+
+    def slow_read(data_dir=None):
+        data = real_read(data_dir)
+        time.sleep(0.3)
+        return data
+
+    monkeypatch.setattr(cfg, "_read", slow_read)
+    results = {}
+
+    def fire(channel, who):
+        results[channel] = srv.admin_set({"channel": channel, "post": [who]})
+
+    threads = [
+        threading.Thread(target=fire, args=("alpha", "a")),
+        threading.Thread(target=fire, args=("beta", "b")),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert results["alpha"][0] == 200 and results["beta"][0] == 200
+    monkeypatch.setattr(cfg, "_read", real_read)
+    assert _j(srv.admin_get("alpha")[1])["acl"]["post"] == ["a"]
+    assert _j(srv.admin_get("beta")[1])["acl"]["post"] == ["b"]
