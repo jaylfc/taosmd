@@ -98,15 +98,23 @@ class EG2Embedder:
 
     def model_files(self) -> dict[str, str]:
         files = {}
-        onnx_dir = self.model_dir / "onnx"
-        for f in onnx_dir.glob("*.onnx*"):
-            if f.name.startswith(f"model{self.variant}") or f.name.startswith(f"vision_encoder{self.variant}"):
-                rel = f.relative_to(self.model_dir)
+        expected = [
+            f"onnx/model{self.variant}.onnx",
+            f"onnx/model{self.variant}.onnx_data",
+        ]
+        if self.load_vision:
+            expected += [
+                f"onnx/vision_encoder{self.variant}.onnx",
+                f"onnx/vision_encoder{self.variant}.onnx_data",
+            ]
+        for rel_path in expected:
+            f = self.model_dir / rel_path
+            if f.exists():
                 h = hashlib.sha256()
                 with f.open("rb") as fh:
                     for chunk in iter(lambda: fh.read(1024 * 1024), b""):
                         h.update(chunk)
-                files[str(rel)] = h.hexdigest()
+                files[rel_path] = h.hexdigest()
         return files
 
 
@@ -120,7 +128,6 @@ class MediaEmbedder(Protocol):
 
 
 class EG2ImageEmbedder:
-    name = "eg2-fp32-image"
     modality = "image"
 
     def __init__(
@@ -130,6 +137,11 @@ class EG2ImageEmbedder:
         providers: list[str] | None = None,
     ):
         self.embedder = EG2Embedder(model_dir, variant=variant, providers=providers, load_vision=True)
+
+    @property
+    def name(self) -> str:
+        variant_suffix = self.embedder.variant.lstrip("_") or "fp32"
+        return f"eg2-{variant_suffix}-image"
 
     def embed_queries(self, texts: list[str]) -> np.ndarray:
         return self.embedder.embed_texts(texts, kind="query")
@@ -142,13 +154,7 @@ class EG2ImageEmbedder:
     def provenance(self) -> dict:
         import onnxruntime
         exec_provider = self.embedder.text_session.get_providers()[0]
-        dtype_map = {
-            "": "fp32",
-            "_fp16": "fp16",
-            "_quantized": "int8",
-            "_q4": "int4",
-            "_q4f16": "int4fp16",
-        }
+        dtype = "fp32" if self.embedder.variant == "" else self.embedder.variant.lstrip("_")
         return {
             "model_id": MODEL_ID,
             "revision": REVISION,
@@ -156,5 +162,5 @@ class EG2ImageEmbedder:
             "runtime": "onnxruntime",
             "runtime_version": onnxruntime.__version__,
             "execution_provider": exec_provider,
-            "dtype": dtype_map.get(self.embedder.variant, "fp32"),
+            "dtype": dtype,
         }

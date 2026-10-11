@@ -50,6 +50,7 @@ def test_image_features_routed():
     feeds = build_text_model_feeds(proc_out, fake_vision)
 
     assert feeds["image_features"].shape == (2, 512)
+    assert np.array_equal(feeds["image_features"], fake_vision.return_value)
     assert "pixel_position_ids" in fake_vision.last_feeds
     assert "image_position_ids" not in fake_vision.last_feeds
     assert fake_vision.last_feeds["pixel_position_ids"].shape == (1, 18, 2)
@@ -92,7 +93,8 @@ def test_pixel_values_without_vision_session_raises():
 )
 def test_golden_readme_image():
     import os
-    import requests
+    import urllib.request
+    from io import BytesIO
     from PIL import Image
     from benchmarks.e048.eg2_embedder import EG2Embedder
 
@@ -100,9 +102,8 @@ def test_golden_readme_image():
     embedder = EG2Embedder(model_dir)
 
     url = "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/cats.jpg"
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    img = Image.open(__import__("io").BytesIO(resp.content)).convert("RGB")
+    with urllib.request.urlopen(url, timeout=30) as resp:
+        img = Image.open(BytesIO(resp.read())).convert("RGB")
 
     image_emb = embedder.embed_images([img])[0]
 
@@ -117,10 +118,10 @@ def test_golden_readme_image():
     assert np.argmax(scores) == 0
 
     docs = [
-        "Venus, the second planet from the Sun, is the hottest planet in our solar system.",
+        "Venus is often called Earth's twin because of its similar size and proximity.",
         "Mars, known for its reddish appearance, is often referred to as the Red Planet.",
-        "Jupiter, the largest planet in our solar system, has a prominent Great Red Spot.",
-        "Saturn, famous for its extensive ring system, has over 80 confirmed moons.",
+        "Jupiter, the largest planet in our solar system, has a prominent red spot.",
+        "Saturn, famous for its rings, is sometimes mistaken for the Red Planet.",
     ]
     doc_embs = embedder.embed_texts(docs, kind="document")
     query_emb = embedder.embed_texts(["Which planet is known as the Red Planet?"], kind="query")[0]
