@@ -526,6 +526,33 @@ because SQLite treats `LIMIT -1` as unbounded, so a cap written as
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
+| `POST` | `/a2a/admin/set-channel-acl` | body JSON `{"channel": str, "read"?: [str], "post"?: [str], "clear"?: bool}` | `{"channel", "acl": {"read": [...], "post": [...]}}`; admin, same token rule; supplied dimensions merge into the existing entry; `clear` must be a real boolean (400 otherwise) |
+| `GET`  | `/a2a/admin/channel-acl` | `?channel=<name>` | `{"channel", "acl": {"read": [...], "post": [...]}}`; the resolved ACL; admin, same token rule |
+
+### Channel ACL (post gate)
+
+A channel can carry an access-control list with two dimensions, `read` and
+`post`, each a list of agent ids. A missing entry or dimension is `["*"]`,
+which is open to everyone (verified or not), so existing deployments do not
+change. Set one with `POST /a2a/admin/set-channel-acl`; inspect it with
+`GET /a2a/admin/channel-acl?channel=`.
+
+Rules:
+
+- The caller identity is only the verified registry token `sub`. The `from`
+  field in a POST body and any `?reader=` style query value are never used.
+- A restricted list allows only a verified `sub` that is in the list. No
+  verified identity (no verifier configured, no token, bad token) is denied
+  with `403`, and this check runs before registry auth, so an unauthenticated
+  post to a restricted channel is `403` even in enforce mode.
+- A malformed entry in `config.json` (a list, string or number instead of an
+  object, or a dimension that is not a list of strings) denies both read and
+  post.
+- The ACL of a renamed channel follows the rename: the entries of the old and
+  new name are both consulted and the more restrictive one wins.
+- This release gates `POST /a2a/send` and `POST /a2a/import` (an import batch
+  is denied whole if any envelope targets a channel the caller may not post
+  to). The read routes are gated in follow-up slices.
 
 #### Thread path-segment encoding
 
