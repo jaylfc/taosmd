@@ -840,8 +840,119 @@ def set_collections_allowed_roots(roots, *, clear: bool = False, data_dir=None) 
     data[_COLLECTIONS_SECTION_KEY] = section
     _write(data, data_dir)
 
+# ---------------------------------------------------------------------------
+# Per-channel A2A ACL (fail-closed)
+# ---------------------------------------------------------------------------
+
+_CHANNEL_ACL_SECTION_KEY = "channel_acl"
+_ACL_DIMS = ("read", "post")
+_OPEN = ["*"]
+
+# R-ONCE: memoize the parsed ACL section on (path, mtime_ns, size) so a hot
+# loop never re-reads config.json per message.
+_ACL_SECTION_CACHE: dict[str, tuple[int, int, object]] = {}
+
+
+def _acl_section(data_dir=None):
+    """Return the raw ``channel_acl`` section, memoized on file stat."""
+    path = _config_path(data_dir)
+    key = os.fspath(path)
+    try:
+        st = path.stat()
+    except OSError:
+        _ACL_SECTION_CACHE.pop(key, None)
+        return {}
+    sig = (st.st_mtime_ns, st.st_size)
+    hit = _ACL_SECTION_CACHE.get(key)
+    if hit is not None and (hit[0], hit[1]) == sig:
+        return hit[2]
+    section = _read(data_dir).get(_CHANNEL_ACL_SECTION_KEY)
+    if section is None:
+        section = {}
+    _ACL_SECTION_CACHE[key] = (sig[0], sig[1], section)
+    return section
+
+
+def _is_str_list(val) -> bool:
+    return isinstance(val, list) and all(isinstance(x, str) and x.strip() for x in val)
+
+
+def _normalize_acl(entry):
+    """Normalize one raw per-channel entry. Fails CLOSED on anything malformed.
+
+    ``None`` (no entry) or a missing dimension is open (``["*"]``). Any entry
+    that is not a dict, or a dimension that is not a list of non-empty
+    strings, closes BOTH dimensions.
+    """
+    closed = {"read": [], "post": []}
+    if entry is None:
+        return {"read": list(_OPEN), "post": list(_OPEN)}
+    if not isinstance(entry, dict):
+        return closed
+    result = {}
+    for dim in _ACL_DIMS:
+        if dim not in entry:
+            result[dim] = list(_OPEN)
+        elif _is_str_list(entry[dim]):
+            result[dim] = list(entry[dim])
+        else:
+            return closed
+    return result
+
+
+def get_acl(channel: str, data_dir=None) -> dict:
+    """Return ``{"read": [...], "post": [...]}`` for ``channel``.
+
+    A missing entry or dimension is ``["*"]`` (open). A malformed entry is
+    ``{"read": [], "post": []}`` (closed).
+    """
+    section = _acl_section(data_dir)
+    if not isinstance(section, dict):
+        return {"read": [], "post": []}
+    return _normalize_acl(section.get(channel))
+
+
+def set_acl(channel: str, read=None, post=None, clear: bool = False, data_dir=None) -> None:
+    """Persist a per-channel ACL, MERGING supplied dimensions into the entry.
+
+    Setting ``post`` alone keeps an existing ``read`` list (and vice versa).
+    ``clear=True`` removes the channel entry.
+
+    Raises:
+        ValueError: ``clear`` is not a real bool, a list is not a list of
+            non-empty strings, or nothing was supplied and ``clear`` is False.
+    """
+    if not isinstance(clear, bool):
+        raise ValueError("clear must be a boolean")
+    if not isinstance(channel, str) or not channel:
+        raise ValueError("channel must be a non-empty string")
+    data = _read(data_dir)
+    section = data.get(_CHANNEL_ACL_SECTION_KEY)
+    if not isinstance(section, dict):
+        section = {}
+    if clear:
+        section.pop(channel, None)
+    else:
+        if read is None and post is None:
+            raise ValueError("read or post is required when clear is False")
+        for name, val in (("read", read), ("post", post)):
+            if val is not None and not _is_str_list(val):
+                raise ValueError(f"{name} must be a list of non-empty strings")
+        existing = section.get(channel)
+        entry = dict(existing) if isinstance(existing, dict) else {}
+        if read is not None:
+            entry["read"] = list(read)
+        if post is not None:
+            entry["post"] = list(post)
+        section[channel] = entry
+    data[_CHANNEL_ACL_SECTION_KEY] = section
+    _write(data, data_dir)
+    _ACL_SECTION_CACHE.pop(os.fspath(_config_path(data_dir)), None)
+
 
 __all__ = [
+    "get_acl",
+    "set_acl",
     "get_memory_model",
     "set_memory_model",
     "resolve_memory_model",

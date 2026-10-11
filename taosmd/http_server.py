@@ -916,6 +916,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 # stays on the data plane.
                 rest = path[len("/collections/"):]
                 return bool(rest) and "/" not in rest
+            if method == "GET" and path == "/a2a/admin/channel-acl":
+                return True
             if method != "POST":
                 return False
             if path == "/shelves" or path.startswith("/shelves/"):
@@ -929,7 +931,100 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 "/a2a/admin/rename-channel",
                 "/a2a/admin/supersede-message",
                 "/a2a/admin/prune-receipts",
+                "/a2a/admin/set-channel-acl",
             )
+
+        def _channel_aliases(self) -> dict:
+            """Admin channel aliases (old -> new), read once per request."""
+            if data_dir is None:
+                return {}
+            from .admin import A2AAdminState  # noqa: PLC0415
+            return A2AAdminState(data_dir).channel_aliases()
+
+        def _resolve_channel_acl(self, channel: str, aliases: dict | None = None) -> dict:
+            """Resolve the effective ACL for ``channel`` (R-ALIAS, fail closed).
+
+            A renamed channel keeps its ACL: the ACL entries of the channel
+            itself, of its canonical name and of every name aliased into that
+            canonical name are all consulted, and the MOST restrictive one
+            wins (a restricted list intersects with any other restricted
+            list; an open ``["*"]`` yields to a restricted one).
+            """
+            from . import config as _cfg  # noqa: PLC0415
+            if aliases is None:
+                aliases = self._channel_aliases()
+            canonical = channel
+            seen: set[str] = set()
+            while canonical in aliases and canonical not in seen:
+                seen.add(canonical)
+                canonical = aliases[canonical]
+            names = {channel, canonical}
+            names.update(k for k in aliases if self._alias_target(k, aliases) == canonical)
+            merged: dict = {}
+            for dim in ("read", "post"):
+                allowed: list | None = None  # None == open
+                for name in sorted(names):
+                    lst = _cfg.get_acl(name, data_dir=data_dir).get(dim)
+                    if not isinstance(lst, list):
+                        lst = []
+                    if lst == ["*"]:
+                        continue
+                    allowed = list(lst) if allowed is None else [x for x in allowed if x in lst]
+                merged[dim] = ["*"] if allowed is None else allowed
+            return merged
+
+        @staticmethod
+        def _alias_target(name: str, aliases: dict) -> str:
+            seen: set[str] = set()
+            while name in aliases and name not in seen:
+                seen.add(name)
+                name = aliases[name]
+            return name
+
+        def _acl_allows(self, acl: dict, action: str) -> bool:
+            """R-ID / R-CLOSED: decide from the verified token ``sub`` only."""
+            allowlist = acl.get(action)
+            if not isinstance(allowlist, list):
+                return False
+            if allowlist == ["*"]:
+                return True
+            caller = self._get_authenticated_agent_id()
+            if caller is None:
+                return False
+            return caller in allowlist
+
+        def _can_read_channel(self, channel: str, acl_map: dict | None = None) -> bool:
+            """True when the verified caller may read ``channel``.
+
+            ``acl_map`` is an optional ``{channel: resolved_acl}`` map resolved
+            once per request by the caller (R-ONCE); missing entries are
+            resolved on demand and stored back into the map.
+            """
+            if acl_map is None:
+                acl = self._resolve_channel_acl(channel)
+            else:
+                acl = acl_map.get(channel)
+                if acl is None:
+                    acl = acl_map[channel] = self._resolve_channel_acl(channel)
+            return self._acl_allows(acl, "read")
+
+        def _enforce_channel_acl(self, channel: str, action: str, acl_map: dict | None = None) -> bool:
+            """Enforce the channel ACL for ``action`` (``read`` or ``post``).
+
+            Returns True when allowed. Returns False AND writes the 403, so
+            the caller must return at once. Identity is the verified token
+            ``sub`` only; no token on a restricted channel is a DENY.
+            """
+            if acl_map is None:
+                acl = self._resolve_channel_acl(channel)
+            else:
+                acl = acl_map.get(channel)
+                if acl is None:
+                    acl = acl_map[channel] = self._resolve_channel_acl(channel)
+            if self._acl_allows(acl, action):
+                return True
+            self._send_json(403, {"error": f"channel ACL: {action} denied"})
+            return False
 
         def _check_admin_token(self) -> bool:
             """Return True when the request carries the correct admin token.
@@ -1305,6 +1400,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_admin_a2a_rename_channel()
                 elif method == "POST" and path == "/a2a/admin/supersede-message":
                     self._handle_admin_a2a_supersede_message()
+                elif method == "POST" and path == "/a2a/admin/set-channel-acl":
+                    self._handle_admin_a2a_set_channel_acl()
+                elif method == "GET" and path == "/a2a/admin/channel-acl":
+                    self._handle_admin_a2a_get_channel_acl(query)
                 elif method == "GET" and _serve_dashboard and self._try_serve_static(parts.path):
                     return  # static asset served
                 elif method == "GET" and _serve_dashboard:
@@ -1734,6 +1833,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     raise _BadRequest(
                         "'body' (non-empty string) is required when 'blocks' is present"
                     )
+            # Channel ACL (R-ID): the verified token sub decides, never ``from``.
+            # Runs before registry auth and before any side effect.
+            if not self._enforce_channel_acl(thread if isinstance(thread, str) else str(thread), "post"):
+                return
             # Registry auth (opt-in): when a verifier is configured, run the
             # identity + grant checks. Two failure classes:
             #   1. Missing Bearer token -> the only tolerated class in
@@ -1887,6 +1990,17 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 )
                 if len(serialized.encode("utf-8")) > _A2A_MAX_MESSAGE_BYTES:
                     raise _BadRequest("envelope exceeds 64KB limit")
+            # Channel ACL (R-ID, R-ONCE): resolve each distinct channel once and
+            # deny the whole batch if any envelope targets a channel the verified
+            # caller may not post to. Runs before registry auth and any write.
+            _acl_map: dict = {}
+            _aliases = self._channel_aliases()
+            for env in envelopes:
+                _chan = env.get("thread", "general") or "general"
+                if _chan not in _acl_map:
+                    _acl_map[_chan] = self._resolve_channel_acl(_chan, _aliases)
+                if not self._enforce_channel_acl(_chan, "post", _acl_map):
+                    return
             if _registry_verifier is not None:
                 from . import registry_auth  # noqa: PLC0415
                 auth = self.headers.get("Authorization", "")
@@ -3005,6 +3119,54 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             except ValueError as exc:
                 raise _BadRequest(str(exc)) from exc
             self._send_json(200, result)
+
+        def _handle_admin_a2a_set_channel_acl(self) -> None:
+            """POST /a2a/admin/set-channel-acl -- merge a per-channel ACL.
+
+            Body: ``{"channel": str, "read"?: [str], "post"?: [str],
+            "clear"?: bool}``. ``clear`` must be a real boolean. Supplied
+            dimensions are merged into the existing entry.
+            """
+            if not self._check_admin_token():
+                return
+            body = self._read_json_body()
+            channel = body.get("channel")
+            if not isinstance(channel, str) or not channel:
+                raise _BadRequest("'channel' (non-empty string) is required")
+            clear = body.get("clear", False)
+            if not isinstance(clear, bool):
+                raise _BadRequest("'clear' must be a boolean")
+            # Route the read-modify-write through the single service loop so it
+            # serialises with every other config.json writer (ensure_agent,
+            # set_control), closing the lost-update race that would silently
+            # drop an ACL entry and reopen a restricted channel (audit M3).
+            async def _apply_acl():
+                try:
+                    _config.set_acl(
+                        channel, read=body.get("read"), post=body.get("post"),
+                        clear=clear, data_dir=data_dir,
+                    )
+                except ValueError as exc:
+                    return str(exc), None
+                return None, self._resolve_channel_acl(channel)
+
+            err, acl = runner.run(_apply_acl())
+            if err is not None:
+                raise _BadRequest(err)
+            self._send_json(200, {"channel": channel, "acl": acl})
+
+        def _handle_admin_a2a_get_channel_acl(self, qs: dict) -> None:
+            """GET /a2a/admin/channel-acl?channel= -- the resolved ACL."""
+            if not self._check_admin_token():
+                return
+            _validate_a2a_params(qs, frozenset({"channel"}), self._raw_qs)
+            channel = (qs.get("channel") or [None])[0]
+            if not channel:
+                raise _BadRequest("'channel' query parameter is required")
+            self._send_json(200, {
+                "channel": channel,
+                "acl": self._resolve_channel_acl(channel),
+            })
 
         def _handle_admin_a2a_supersede_message(self) -> None:
             if not self._check_admin_token():
