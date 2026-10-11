@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -439,7 +438,6 @@ def make_fake(**kwargs):
     spec.loader.exec_module(test_fake)
     
     # Patch the import in the retrieval module
-    import benchmarks.e048.retrieval as retrieval_module
     original_import = __import__
     
     def mock_import(name, *args, **kwargs):

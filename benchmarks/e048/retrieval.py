@@ -9,16 +9,9 @@ from __future__ import annotations
 import json
 import sys
 import time
-import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
-
-if TYPE_CHECKING:
-    # Import heavy libraries lazily to avoid startup overhead when not needed
-    import onnxruntime
-    import torch
 
 # ---------------------------------------------------------------------------
 # MediaEmbedder Protocol (fixed by the lead, implement EXACTLY these names)
