@@ -68,7 +68,7 @@ class OpenClipImageEmbedder:
 
         try:
             weight_path = open_clip.pretrained.download_pretrained(
-                "https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K/resolve/main/open_clip_pytorch_model.bin"
+                "ViT-B-32", pretrained="laion2b_s34b_b79k"
             )
             self._weight_path = weight_path
         except Exception:
@@ -162,12 +162,13 @@ class ClapAudioEmbedder:
             return
 
         import torch
+        import transformers
         from transformers import ClapModel, ClapProcessor
         import inspect
         import huggingface_hub
 
         self._torch = torch
-        self._transformers = __import__("transformers")
+        self._transformers = transformers
 
         self._model = ClapModel.from_pretrained(self._model_id)
         self._processor = ClapProcessor.from_pretrained(self._model_id)
@@ -231,21 +232,7 @@ class ClapAudioEmbedder:
             if waveform.shape[0] > 1:
                 waveform = waveform.mean(axis=0, keepdims=True)
             if sr != 48000:
-                if hasattr(self._torch, "from_numpy"):
-                    tensor = self._torch.from_numpy(waveform)
-                    if hasattr(tensor, "unsqueeze"):
-                        tensor = tensor.unsqueeze(0)
-                    else:
-                        tensor = tensor[np.newaxis, ...]
-                    resampled = F.resample(tensor, orig_freq=sr, new_freq=48000)
-                    if hasattr(resampled, "squeeze"):
-                        resampled = resampled.squeeze(0)
-                    if hasattr(resampled, "numpy"):
-                        waveform = resampled.numpy()
-                    else:
-                        waveform = resampled
-                else:
-                    waveform = F.resample(waveform, orig_freq=sr, new_freq=48000)
+                waveform = F.resample(waveform, orig_freq=sr, new_freq=48000)
             audios.append(waveform.squeeze(0))
 
         processor_kwargs = {
