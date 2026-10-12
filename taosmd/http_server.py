@@ -2115,6 +2115,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 scan_cap = limit_i * 5 if limit_i > 0 else 0
                 messages = []
                 scanned = 0
+                cursor_since = since
 
                 while len(messages) < limit_i and (scan_cap == 0 or scanned < scan_cap):
                     # Each fetch respects the remaining scan budget
@@ -2122,7 +2123,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     fetch_limit = min(max(remaining, 1), 50)  # Cap at 50 per fetch
                     batch = runner.run(
                         service.a2a_feed(
-                            thread=thread, since=since, limit=fetch_limit, data_dir=data_dir
+                            thread=thread, since=cursor_since, limit=fetch_limit, data_dir=data_dir
                         )
                     )
                     if not batch:
@@ -2134,6 +2135,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                             messages.append(msg)
                             if len(messages) >= limit_i:
                                 break
+                    # Advance cursor to the last message's timestamp so the next
+                    # fetch continues from where we left off (R-ONCE bounded scan).
+                    cursor_since = batch[-1]["ts"]
                     if len(batch) < fetch_limit:
                         break  # No more messages
 
