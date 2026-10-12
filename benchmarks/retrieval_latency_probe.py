@@ -40,6 +40,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from benchmarks.bench_provenance import collect
+
 import httpx
 
 _BENCH_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -323,6 +325,8 @@ async def run(args: argparse.Namespace) -> int:
         "git_sha": _git_sha(),
         "timestamp": datetime.utcnow().strftime("%Y%m%d_%H%M%S"),
     }
+    prov = collect(dict(config), args.onnx_path if args.embed_mode == "onnx" else None, args.dataset)
+    config["provenance"] = prov
     summary = _summarize(results, errors, ingest_stats)
 
     if args.out:
