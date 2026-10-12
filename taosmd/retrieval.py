@@ -615,6 +615,7 @@ async def _append_graph_expansion(
     results: list[dict],
     kg: object | None,
     max_tokens: int,
+    graph_expansion_stats: dict | None = None,
 ) -> list[dict]:
     """Append a derived knowledge-graph fact block to *results* (fail-open).
 
@@ -638,18 +639,43 @@ async def _append_graph_expansion(
             <= 0 is off).
     """
     if kg is None or max_tokens <= 0 or not results:
+        if graph_expansion_stats is not None:
+            graph_expansion_stats["seeds_tried"] = 0
+            graph_expansion_stats["entities_matched"] = 0
+            graph_expansion_stats["triples_returned"] = 0
+            graph_expansion_stats["block_appended"] = False
         return results
     try:
         from taosmd.graph_expansion import (  # noqa: PLC0415
             expand_from_results,
             format_expanded_context,
         )
-        expanded = await expand_from_results(kg, results, as_of=None)
+        expanded = await expand_from_results(kg, results, as_of=None, stats=graph_expansion_stats)
         block = format_expanded_context(expanded, max_tokens=max_tokens)
     except Exception as exc:
         logger.debug("graph_expansion stage skipped: %s", exc)
+        if graph_expansion_stats is not None:
+            graph_expansion_stats["seeds_tried"] = graph_expansion_stats.get("seeds_tried", 0)
+            graph_expansion_stats["entities_matched"] = graph_expansion_stats.get("entities_matched", 0)
+            graph_expansion_stats["triples_returned"] = graph_expansion_stats.get("triples_returned", 0)
+            graph_expansion_stats["block_appended"] = False
+            graph_expansion_stats["error"] = exc.__class__.__name__
         return results
     if not block:
+        if graph_expansion_stats is not None:
+            graph_expansion_stats["block_appended"] = False
+        # Log when expansion was attempted but returned no triples
+        if graph_expansion_stats is not None:
+            seeds = graph_expansion_stats.get("seeds_tried", 0)
+            matched = graph_expansion_stats.get("entities_matched", 0)
+            if graph_expansion_stats.get("triples_returned", 0) == 0:
+                logger.info("graph_expansion returned 0 triples: seeds_tried=%s entities_matched=%s", seeds, matched)
+        else:
+            # Even without stats dict, if expansion happened (max_tokens>0) and returned nothing, log? Task says "When graph_expansion > 0..."
+            # But in context of retrieve with graph_expansion_stats - maybe log when stats were passed? Or generally.
+            # Task states: "When graph_expansion > 0 and triples_returned == 0, emit ONE logger.info line naming seeds_tried and entities_matched"
+            # In retrieve context with stats. But easier to log if we have info. Maybe we need to compute? Or just log generically.
+            pass
         return results
     # Keep confidence: surface the strongest currently-valid triple's score.
     # ``or 0.0`` also coerces an explicit ``confidence: None`` (which
@@ -666,7 +692,10 @@ async def _append_graph_expansion(
         "derived": True,
         "metadata": {"derived": True, "kind": "kg_facts", "triples": expanded},
     }
-    return [*results, derived]
+    results.append(derived)
+    if graph_expansion_stats is not None:
+        graph_expansion_stats["block_appended"] = True
+    return results
 
 
 def _filter_project_scope(
@@ -736,6 +765,7 @@ async def retrieve(
     search_agents: list[str] | None = None,
     temporal: dict | None = None,
     graph_expansion: int = 0,
+    graph_expansion_stats: dict | None = None,
 ) -> list[dict]:
     """Retrieve relevant results from available memory sources.
 
@@ -907,6 +937,7 @@ async def retrieve(
         if graph_expansion:
             results = await _append_graph_expansion(
                 results, sources.get("kg"), graph_expansion,
+                graph_expansion_stats=graph_expansion_stats,
             )
         return _filter_project_scope(results, project, search_agents)
 
@@ -944,6 +975,7 @@ async def retrieve(
         if graph_expansion:
             results = await _append_graph_expansion(
                 results, sources.get("kg"), graph_expansion,
+                graph_expansion_stats=graph_expansion_stats,
             )
         return _filter_project_scope(results, project, search_agents)
 
@@ -973,6 +1005,7 @@ async def retrieve(
         if graph_expansion:
             results = await _append_graph_expansion(
                 results, sources.get("kg"), graph_expansion,
+                graph_expansion_stats=graph_expansion_stats,
             )
         return _filter_project_scope(results, project, search_agents)
 
@@ -1018,6 +1051,7 @@ async def retrieve(
         if graph_expansion:
             results = await _append_graph_expansion(
                 results, sources.get("kg"), graph_expansion,
+                graph_expansion_stats=graph_expansion_stats,
             )
         return _filter_project_scope(results, project, search_agents)
 

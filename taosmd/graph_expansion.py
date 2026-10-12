@@ -86,6 +86,7 @@ async def expand_from_results(
     max_expanded: int = 10,
     as_of: float | None = None,
     max_seeds: int = 10,
+    stats: dict | None = None,
 ) -> list[dict]:
     """BFS graph traversal starting from entities found in vector results.
 
@@ -162,8 +163,15 @@ async def expand_from_results(
     visited_triples: set[str] = set()
     if max_seeds <= 0:
         frontier = []
+        seeds_tried_list = []
     else:
-        frontier = [(e, 0) for e in unique_entities[:max_seeds]]
+        seeds_tried_list = unique_entities[:max_seeds]
+        frontier = [(e, 0) for e in seeds_tried_list]
+
+    if stats is not None:
+        stats["seeds_tried"] = len(seeds_tried_list)
+        stats["entities_matched"] = 0
+        stats["triples_returned"] = 0
 
     while frontier and len(expanded) < max_expanded:
         entity, hop = frontier.pop(0)
@@ -174,6 +182,8 @@ async def expand_from_results(
             triples = await kg.query_entity(
                 entity, as_of=as_of, track_access=False
             )
+            if stats is not None and triples:
+                stats["entities_matched"] += 1
         except Exception:
             continue
 
@@ -213,7 +223,10 @@ async def expand_from_results(
 
     # Sort by score descending
     expanded.sort(key=lambda x: x["score"], reverse=True)
-    return expanded[:max_expanded]
+    result = expanded[:max_expanded]
+    if stats is not None:
+        stats["triples_returned"] = len(result)
+    return result
 
 
 def format_expanded_context(expanded: list[dict], max_tokens: int = 200) -> str:
