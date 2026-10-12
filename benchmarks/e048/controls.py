@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
-from pathlib import Path
 
 import numpy as np
 
@@ -49,8 +47,13 @@ class OpenClipImageEmbedder(MediaEmbedder):
         self._open_clip = open_clip
         self._torch = torch
 
+        cache_dir = os.environ.get("OPEN_CLIP_CACHE_DIR")
+        cfg = open_clip.get_pretrained_cfg("ViT-B-32", "laion2b_s34b_b79k")
+        weight_path = open_clip.pretrained.download_pretrained(cfg, cache_dir=cache_dir)
+        self._weight_path = weight_path
+
         model, _, preprocess = open_clip.create_model_and_transforms(
-            "ViT-B-32", pretrained="laion2b_s34b_b79k"
+            "ViT-B-32", pretrained=weight_path
         )
         tokenizer = open_clip.get_tokenizer("ViT-B-32")
         model.eval()
@@ -65,11 +68,6 @@ class OpenClipImageEmbedder(MediaEmbedder):
         self._preprocess = preprocess
         self._tokenizer = tokenizer
         self._device = device
-
-        cache_dir = os.environ.get("OPEN_CLIP_CACHE_DIR")
-        cfg = open_clip.get_pretrained_cfg("ViT-B-32", "laion2b_s34b_b79k")
-        weight_path = open_clip.pretrained.download_pretrained(cfg, cache_dir=cache_dir)
-        self._weight_path = weight_path
 
         self._revision = f"open_clip {open_clip.__version__}"
 
@@ -112,7 +110,6 @@ class OpenClipImageEmbedder(MediaEmbedder):
     def provenance(self) -> dict:
         self._lazy_init()
         import hashlib
-        import os
 
         model_files = {}
         if self._weight_path and os.path.exists(self._weight_path):
@@ -120,7 +117,7 @@ class OpenClipImageEmbedder(MediaEmbedder):
             with open(self._weight_path, "rb") as f:
                 for chunk in iter(lambda: f.read(1024 * 1024), b""):
                     h.update(chunk)
-            model_files["open_clip_pytorch_model.bin"] = h.hexdigest()
+            model_files[os.path.basename(self._weight_path)] = h.hexdigest()
         else:
             raise RuntimeError(f"OpenCLIP weight file not found at {self._weight_path}")
 
@@ -179,7 +176,23 @@ class ClapAudioEmbedder(MediaEmbedder):
         if hasattr(self._model.config, "_commit_hash") and self._model.config._commit_hash:
             self._revision = self._model.config._commit_hash
         else:
-            self._revision = "unknown-revision"
+            self._snapshot_path = huggingface_hub.snapshot_download(self._model_id)
+            import os
+            for root, _, files in os.walk(self._snapshot_path):
+                for f in files:
+                    if f.endswith(".safetensors") or f.endswith(".bin"):
+                        import hashlib
+                        h = hashlib.sha256()
+                        path = os.path.join(root, f)
+                        with open(path, "rb") as fh:
+                            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                                h.update(chunk)
+                        self._revision = h.hexdigest()[:12]
+                        break
+                if self._revision:
+                    break
+            if not self._revision:
+                raise RuntimeError("Could not resolve CLAP snapshot revision")
 
         if self._device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -189,21 +202,22 @@ class ClapAudioEmbedder(MediaEmbedder):
         self._model = self._model.to(device)
         self._device = device
 
-        self._snapshot_path = huggingface_hub.snapshot_download(self._model_id)
+        if not self._snapshot_path:
+            self._snapshot_path = huggingface_hub.snapshot_download(self._model_id)
 
     def _load_audio(self, path: str) -> np.ndarray:
         import soundfile as sf
+        import torch
 
         waveform, sr = sf.read(path, dtype="float32", always_2d=True)
-        if waveform.shape[1] > 1:
-            waveform = waveform.mean(axis=1)
+        waveform = waveform.mean(axis=1)
         if sr != 48000:
             try:
                 import torchaudio.functional as F
             except ImportError as e:
                 raise ImportError("torchaudio is required for resampling audio to 48kHz") from e
             waveform = F.resample(
-                self._torch.from_numpy(waveform), orig_freq=sr, new_freq=48000
+                torch.from_numpy(waveform), orig_freq=sr, new_freq=48000
             ).numpy()
         return waveform
 
@@ -247,7 +261,6 @@ class ClapAudioEmbedder(MediaEmbedder):
         self._lazy_init()
         import hashlib
         from pathlib import Path
-        import os
 
         model_files = {}
         if self._snapshot_path and os.path.exists(self._snapshot_path):
