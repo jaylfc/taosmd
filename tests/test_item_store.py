@@ -115,3 +115,18 @@ def test_reopen_idempotent(tmp_path):
     cur.execute('SELECT count(*) FROM derivations')
     assert cur.fetchone()[0] == 1
     store2.close()
+
+
+def test_put_derivation_idempotent_fts_no_duplicates(tmp_path):
+    store = ItemStore(tmp_path / 'test.db')
+    iid = store.put_item('ev1', {'x': 1}, 'text', 123.0)
+    text = 'bicycle repair manual'
+    store.put_derivation(iid, 'caption', 'p1', text, 124.0)
+    store.put_derivation(iid, 'caption', 'p1', text, 125.0)
+    store.put_derivation(iid, 'caption', 'p1', text, 126.0)
+    cur = store.conn.cursor()
+    cur.execute("SELECT count(*) FROM derivations_fts WHERE derivations_fts MATCH 'bicycle'")
+    assert cur.fetchone()[0] == 1
+    cur.execute('SELECT count(*) FROM derivations')
+    assert cur.fetchone()[0] == 1
+    store.close()

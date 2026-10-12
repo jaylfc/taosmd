@@ -166,10 +166,11 @@ class ItemStore:
             'VALUES (?, ?, ?, ?, ?, ?)',
             (did, item_id, kind, producer_id, text, created_at),
         )
-        cur.execute(
-            'INSERT OR IGNORE INTO derivations_fts (deriv_id, text) VALUES (?, ?)',
-            (did, text),
-        )
+        if cur.rowcount == 1:
+            cur.execute(
+                'INSERT OR IGNORE INTO derivations_fts (deriv_id, text) VALUES (?, ?)',
+                (did, text),
+            )
         self.conn.commit()
         return did
 
