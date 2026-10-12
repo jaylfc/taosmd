@@ -62,14 +62,18 @@ def parse_entry(
         return None, None
 
     entry_type = obj.get("type")
-    if entry_type is None:
+    if not isinstance(entry_type, str):
         return None, None
 
     if entry_type in _NOISE_TYPES:
         return None, None
 
     session_id_from = obj.get("sessionId") or session_id
+    if not isinstance(session_id_from, str):
+        session_id_from = session_id
     uuid = obj.get("uuid", "") or ""
+    if not isinstance(uuid, str):
+        uuid = ""
     timestamp_str = obj.get("timestamp", "") or ""
     ts_epoch = _iso_to_epoch(str(timestamp_str))
 
@@ -95,18 +99,41 @@ def parse_entry(
                     continue
                 btype = block.get("type")
                 if btype == "text":
-                    text_parts.append(block.get("text", "") or "")
+                    text_value = block.get("text", "") or ""
+                    if isinstance(text_value, str):
+                        text_parts.append(text_value)
                 elif btype == "tool_result":
                     tr_blocks.append(block)
 
             if tr_blocks:
+                if text_parts:
+                    text = "\n".join(text_parts)
+                    if text:
+                        text, truncated = _cap_field(text)
+                        items.append(
+                            {
+                                "id": base_id,
+                                "text": text,
+                                "metadata": {
+                                    "source": "hook:claude-code",
+                                    "session_id": session_id_from,
+                                    "role": "user",
+                                    "kind": "message",
+                                    "timestamp": ts_epoch,
+                                    "transcript_path": "",
+                                    "truncated": truncated,
+                                },
+                            }
+                        )
                 for idx, tr_block in enumerate(tr_blocks):
                     tr_content = tr_block.get("content", "") or ""
                     if isinstance(tr_content, list):
                         text_parts_tr: list[str] = []
                         for sub in tr_content:
                             if isinstance(sub, dict) and sub.get("type") == "text":
-                                text_parts_tr.append(sub.get("text", "") or "")
+                                sub_value = sub.get("text", "") or ""
+                                if isinstance(sub_value, str):
+                                    text_parts_tr.append(sub_value)
                         tr_text = "\n".join(text_parts_tr)
                     elif isinstance(tr_content, str):
                         tr_text = tr_content
@@ -196,7 +223,9 @@ def parse_entry(
                 continue
             btype = block.get("type")
             if btype == "text":
-                text_parts.append(block.get("text", "") or "")
+                text_value = block.get("text", "") or ""
+                if isinstance(text_value, str):
+                    text_parts.append(text_value)
             elif btype == "thinking":
                 continue
             elif btype == "tool_use":

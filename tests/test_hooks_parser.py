@@ -12,6 +12,8 @@ Coverage:
 import json
 from pathlib import Path
 
+import pytest
+
 from taosmd.hooks.parser import parse_entry
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "claude_code_transcript.jsonl"
@@ -436,3 +438,141 @@ def test_tool_result_no_content():
     items, _ = parse_entry(0, tool_result_line, "s1")
     # tool_result with empty content should be filtered out
     assert items is None
+
+
+@pytest.mark.parametrize(
+    "label,line",
+    [
+        ("type_as_list", '{"type": ["x"],"timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}'),
+        ("type_as_dict", '{"type": {"a": 1},"timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}'),
+        ("type_as_int", '{"type": 5,"timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}'),
+        ("user_text_int", '{"type":"user","message":{"role":"user","content":[{"type":"text","text":5}]},"uuid":"u1","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}'),
+        ("assistant_text_int", '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":5}]},"uuid":"a1","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}'),
+        ("tool_result_text_int", '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":[{"type":"text","text":7}]}]},"uuid":"u1","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}'),
+        ("uuid_as_dict", '{"type":"user","message":{"role":"user","content":"hi"},"uuid":{"a":1},"timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}'),
+        ("sessionId_as_list", '{"type":"user","message":{"role":"user","content":"hi"},"uuid":"u1","timestamp":"2026-10-07T22:53:25.123Z","sessionId":["s1"]}'),
+    ],
+    ids=[
+        "type-list",
+        "type-dict",
+        "type-int",
+        "user-text-int",
+        "assistant-text-int",
+        "tool-result-text-int",
+        "uuid-dict",
+        "sessionid-list",
+    ],
+)
+def test_malformed_field_types_never_raise(label, line):
+    """parse_entry must never raise on JSON whose field types are unexpected."""
+    session_id = "s1"
+    try:
+        items, base_id = parse_entry(0, line, session_id)
+    except Exception as exc:
+        pytest.fail(f"{label}: parse_entry raised {type(exc).__name__}: {exc}")
+
+    if label.startswith("type_as_"):
+        assert (items, base_id) == (None, None), (
+            f"{label}: expected (None, None), got ({items!r}, {base_id!r})"
+        )
+    elif label == "uuid_as_dict":
+        assert not base_id.startswith("claude-code:"), (
+            f"uuid-as-dict: expected fallback id without 'claude-code:' prefix, got {base_id!r}"
+        )
+    elif label == "sessionId_as_list":
+        assert items is not None and len(items) == 1, (
+            f"sessionId-as-list: expected 1 item, got {items!r}"
+        )
+        assert items[0]["metadata"]["session_id"] == session_id, (
+            f"sessionId-as-list: expected session_id {session_id!r}, "
+            f"got {items[0]['metadata']['session_id']!r}"
+        )
+
+
+def test_user_text_and_tool_result_both_kept():
+    """A user entry with both text and tool_result blocks keeps both items."""
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "USER TEXT"},
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "content": [{"type": "text", "text": "out"}],
+                    },
+                ],
+            },
+            "uuid": "u1",
+            "timestamp": "2026-10-07T22:53:25.123Z",
+            "sessionId": "s1",
+        }
+    )
+    items, base_id = parse_entry(0, line, "s1")
+    assert items is not None, "expected items, got None"
+    assert len(items) == 2, f"expected 2 items, got {len(items)}"
+
+    kinds = [item["metadata"]["kind"] for item in items]
+    assert kinds == ["message", "tool_result"], f"expected [message, tool_result], got {kinds}"
+
+    ids = [item["id"] for item in items]
+    assert ids == [base_id, f"{base_id}:tool_result:0"], f"ids mismatch: {ids}"
+
+    texts = [item["text"] for item in items]
+    assert texts == ["USER TEXT", "out"], f"texts mismatch: {texts}"
+
+
+def test_multiple_tool_use_ids_distinct():
+    """Two tool_use blocks in one assistant entry get :tool_use:0 and :tool_use:1 ids."""
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}},
+                    {"type": "tool_use", "id": "toolu_2", "name": "Bash", "input": {"command": "pwd"}},
+                ],
+            },
+            "uuid": "a1",
+            "timestamp": "2026-10-07T22:53:25.123Z",
+            "sessionId": "s1",
+        }
+    )
+    items, base_id = parse_entry(0, line, "s1")
+    assert items is not None, "expected items, got None"
+    assert len(items) == 2, f"expected 2 items, got {len(items)}"
+
+    ids = [item["id"] for item in items]
+    assert ids[0].endswith(":tool_use:0"), f"first id should end with :tool_use:0, got {ids[0]}"
+    assert ids[1].endswith(":tool_use:1"), f"second id should end with :tool_use:1, got {ids[1]}"
+    assert len(set(ids)) == 2, f"ids must be unique, got {ids}"
+
+
+def test_multiple_tool_result_ids_distinct():
+    """Two tool_result blocks in one user entry get :tool_result:0 and :tool_result:1 ids."""
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "out1"},
+                    {"type": "tool_result", "tool_use_id": "toolu_2", "content": "out2"},
+                ],
+            },
+            "uuid": "u1",
+            "timestamp": "2026-10-07T22:53:25.123Z",
+            "sessionId": "s1",
+        }
+    )
+    items, base_id = parse_entry(0, line, "s1")
+    assert items is not None, "expected items, got None"
+    assert len(items) == 2, f"expected 2 items, got {len(items)}"
+
+    ids = [item["id"] for item in items]
+    assert ids[0].endswith(":tool_result:0"), f"first id should end with :tool_result:0, got {ids[0]}"
+    assert ids[1].endswith(":tool_result:1"), f"second id should end with :tool_result:1, got {ids[1]}"
+    assert len(set(ids)) == 2, f"ids must be unique, got {ids}"
