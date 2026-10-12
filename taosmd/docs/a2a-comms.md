@@ -500,7 +500,7 @@ gating read endpoints on membership are tracked separately.
 |--------|------|------------|----------|
 | `POST` | `/a2a/send` | body JSON `{"from", "body", "thread"?, "reply_to"?}` | `{"id", "from", "thread", "reply_to"}` |
 | `POST` | `/a2a/import` | body JSON `{"envelopes": [{"from", "body", "thread"?, "kind"?, "reply_to"?}]}` | `{"imported", "deduped", "total"}`; idempotent batch import with dedup; each envelope's `from` must match the verified registry token `sub`; grant check mirrors `/a2a/send` |
-| `GET`  | `/a2a/messages` | `?thread=&since=&limit=&fields=&format=` | `{"messages": [...]}`; `fields=id,sender,body` projects each message down to those keys; `format=ndjson` emits one message per line (`application/x-ndjson`) |
+| `GET`  | `/a2a/messages` | `?thread=&since=&limit=&fields=&format=` | `{"messages": [...]}`; `fields=id,sender,body` projects each message down to those keys; `format=ndjson` emits one message per line (`application/x-ndjson`); read ACL filtering applies: only messages from channels the verified caller may read are returned; bounded scan (limit*5 rows) |
 
 `limit` on `GET /a2a/messages` is bounded below as well as parsed. A negative
 value is rejected with `400 'limit' must not be negative`, and a non-integer
@@ -509,7 +509,7 @@ messages. Omitting the parameter, including passing it empty, falls through to
 the default page size rather than to an unbounded read. The floor matters
 because SQLite treats `LIMIT -1` as unbounded, so a cap written as
 `min(limit, N)` clamps only above and `?limit=-1` would return the whole feed.
-| `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`) |
+| `GET`  | `/a2a/stream` | `?thread=&since=` | SSE stream (`text/event-stream`); read ACL filtering applies: only messages from channels the verified caller may read are sent; poll cursor advances past denied rows |
 | `GET`  | `/a2a/channels` | — | `{"channels": [...]}` |
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
 | `GET`  | `/a2a/inbox` | `?consumer=&limit=&include_kinds=&exclude_acked_by=` | `{"messages": [...]}`; `exclude_acked_by` omits messages already acked by the named principal so the caller's result set is limited to messages that still need attention |
@@ -553,7 +553,12 @@ Rules:
   new name are both consulted and the more restrictive one wins.
 - This release gates `POST /a2a/send` and `POST /a2a/import` (an import batch
   is denied whole if any envelope targets a channel the caller may not post
-  to). The read routes are gated in follow-up slices.
+  to). The read routes `GET /a2a/messages` and `GET /a2a/stream` are also gated:
+  a verified caller only receives messages from channels whose read ACL includes
+  their `sub`. Open channels (read `["*"]`) remain accessible to everyone.
+  `GET /a2a/messages` uses a bounded scan (limit*5 rows) to avoid unbounded
+  feed reads; `GET /a2a/stream` advances its poll cursor past denied rows so
+  they are not re-fetched on subsequent polls.
 
 #### Thread path-segment encoding
 

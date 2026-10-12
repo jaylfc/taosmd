@@ -1,0 +1,2 @@
+### Added
+- Channel ACL read filtering on GET /a2a/messages and GET /a2a/stream endpoints. Verified callers (by registry token sub) only receive messages from channels they have read access to. Open channels (read: ["*"]) remain accessible to all. Bounded scan (limit*5) on /a2a/messages; stream cursor advances past denied rows to avoid re-polling overhead.

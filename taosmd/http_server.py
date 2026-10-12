@@ -2094,9 +2094,49 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'limit' must not be negative")
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
-            messages = runner.run(
-                service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
-            )
+
+            # R-ID: caller identity is the verified token sub only (used via _acl_allows)
+
+            # R-ONCE: resolve ACL map once per request
+            acl_map: dict = {}
+            aliases = self._channel_aliases()
+
+            def can_read(channel: str) -> bool:
+                if channel not in acl_map:
+                    acl_map[channel] = self._resolve_channel_acl(channel, aliases)
+                return self._acl_allows(acl_map[channel], "read")
+
+            # If a specific thread is requested, check access upfront
+            if thread is not None and not can_read(thread):
+                messages = []
+            else:
+                # Bounded scan: page the feed until we have limit_i readable rows
+                # or hit the cap of limit_i * 5 rows scanned (R-ONCE)
+                scan_cap = limit_i * 5 if limit_i > 0 else 0
+                messages = []
+                scanned = 0
+
+                while len(messages) < limit_i and (scan_cap == 0 or scanned < scan_cap):
+                    # Each fetch respects the remaining scan budget
+                    remaining = scan_cap - scanned if scan_cap > 0 else 50
+                    fetch_limit = min(max(remaining, 1), 50)  # Cap at 50 per fetch
+                    batch = runner.run(
+                        service.a2a_feed(
+                            thread=thread, since=since, limit=fetch_limit, data_dir=data_dir
+                        )
+                    )
+                    if not batch:
+                        break
+                    scanned += len(batch)
+                    for msg in batch:
+                        msg_thread = msg.get("thread", "general")
+                        if can_read(msg_thread):
+                            messages.append(msg)
+                            if len(messages) >= limit_i:
+                                break
+                    if len(batch) < fetch_limit:
+                        break  # No more messages
+
             # Compact mode: ?fields=id,sender,body projects each message down
             # to the named keys so token-frugal consumers (LLM agents) skip
             # framing they never read. Unknown names are ignored, never a 400,
@@ -2314,6 +2354,11 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             receipt is written after each frame lands on the wire. Raw-bus
             subscribers that carry no identifying token produce no delivered
             mark.
+
+            Channel ACL filtering (R-ID, R-CLOSED, R-ONCE): messages from
+            channels the verified caller cannot read are filtered out, and
+            the poll cursor (``last_ts``) advances past them so they are not
+            re-fetched on subsequent polls.
             """
             _validate_a2a_params(qs, frozenset({"thread", "since"}), self._raw_qs)
             thread = (qs.get("thread") or [None])[0]
@@ -2324,6 +2369,19 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
             subscriber_agent = self._get_authenticated_agent_id()
 
+            # R-ONCE: resolve ACL map once per request
+            acl_map: dict = {}
+            aliases = self._channel_aliases()
+
+            def can_read(channel: str) -> bool:
+                if channel not in acl_map:
+                    acl_map[channel] = self._resolve_channel_acl(channel, aliases)
+                return self._acl_allows(acl_map[channel], "read")
+
+            # If a specific thread is requested and caller cannot read it,
+            # the stream will yield nothing (only keepalives).
+            thread_allowed = thread is None or can_read(thread)
+
             # Send SSE response headers before entering the poll loop.
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -2333,6 +2391,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
             try:
                 while True:
+                    # Poll with a reasonable limit; stream internally uses 200
                     msgs = runner.run(
                         service.a2a_feed(
                             thread=thread, since=last_ts, limit=200, data_dir=data_dir,
@@ -2343,18 +2402,23 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     new_msgs = [m for m in msgs if m["ts"] > last_ts]
                     if new_msgs:
                         for msg in new_msgs:
-                            frame = f"data: {json.dumps(msg)}\n\n"
-                            self.wfile.write(frame.encode("utf-8"))
-                            last_ts = msg["ts"]
-                            if subscriber_agent is not None:
-                                runner.run(
-                                    service.a2a_record_delivered(
-                                        msg["id"],
-                                        subscriber_agent,
-                                        ts=time.time(),
-                                        data_dir=data_dir,
+                            # R-ID / R-CLOSED: filter by channel read ACL
+                            msg_thread = msg.get("thread", "general")
+                            if thread_allowed and can_read(msg_thread):
+                                frame = f"data: {json.dumps(msg)}\n\n"
+                                self.wfile.write(frame.encode("utf-8"))
+                                if subscriber_agent is not None:
+                                    runner.run(
+                                        service.a2a_record_delivered(
+                                            msg["id"],
+                                            subscriber_agent,
+                                            ts=time.time(),
+                                            data_dir=data_dir,
+                                        )
                                     )
-                                )
+                            # R-ONCE: always advance cursor past this message
+                            # (even if filtered) so we don't re-poll denied rows
+                            last_ts = msg["ts"]
                         self.wfile.flush()
                     else:
                         self.wfile.write(b": keepalive\n\n")
