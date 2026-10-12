@@ -9,6 +9,7 @@ plus an agreement block.
 
 import argparse
 import asyncio
+import httpx
 import importlib.util
 import json
 import os

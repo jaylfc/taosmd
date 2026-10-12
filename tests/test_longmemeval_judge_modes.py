@@ -5,15 +5,9 @@ Tests the requirements for LongMemEval save-context + evidence judge + re-judge.
 """
 
 import pytest
-import asyncio
-import os
-import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
-from benchmarks.longmemeval_runner import (
-    build_row,
-    NON_ANSWER_PHRASES,
-)
+from benchmarks.longmemeval_runner import build_row
 from benchmarks.longmemeval_rejudge import (
     _score_with_mode,
     set_runner_mod_for_testing,
@@ -134,7 +128,8 @@ async def test_rejudge_with_stub_judge():
     
     # Call _score_with_mode
     result = await _score_with_mode(mock_runner_mod, mock_client, row, "reference")
-    
+    assert result is True
+
     # Verify judge was called and prompt contains expected content
     assert judge_called is True
     assert judge_prompt is not None
