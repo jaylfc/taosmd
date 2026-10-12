@@ -1,9 +1,6 @@
 """Tests for teamops eval builder."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from eval.teamops import build_eval_set
 
 
