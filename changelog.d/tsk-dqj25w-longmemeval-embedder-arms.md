@@ -1,0 +1,2 @@
+### Added
+- Add embedder arm selection via environment variables (ONNX path, binary quantization, Matryoshka dimension, oversampled float rescoring) to longmemeval_enhanced.py, with corresponding unit tests.
