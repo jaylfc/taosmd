@@ -716,6 +716,10 @@ def test_assistant_is_meta_true_with_text_returns_item():
             "uuid",
             r'{"type":"user","message":{"role":"user","content":"plain"},"uuid":"\ud800","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
         ),
+        (
+            "session_id",
+            r'{"type":"user","message":{"role":"user","content":"plain"},"uuid":"u6","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"\ud800"}',
+        ),
     ],
     ids=[
         "surrogate-user-string-content",
@@ -723,6 +727,7 @@ def test_assistant_is_meta_true_with_text_returns_item():
         "surrogate-tool-result-string-content",
         "surrogate-assistant-text-block",
         "surrogate-uuid",
+        "surrogate-session-id",
     ],
 )
 def test_lone_surrogate_does_not_raise(label, line):
