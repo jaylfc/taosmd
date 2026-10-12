@@ -29,6 +29,10 @@ def _cap_field(value: str) -> tuple[str, bool]:
     return value, False
 
 
+def _sanitize_text(value: str) -> str:
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
 def _iso_to_epoch(ts_str: str) -> float:
     ts_str = ts_str.strip()
     if not ts_str:
@@ -80,6 +84,9 @@ def parse_entry(
     timestamp_str = obj.get("timestamp", "") or ""
     ts_epoch = _iso_to_epoch(str(timestamp_str))
 
+    session_id_from = _sanitize_text(session_id_from)
+    uuid = _sanitize_text(uuid)
+
     if uuid:
         base_id = f"claude-code:{session_id_from}:{uuid}"
     else:
@@ -112,7 +119,7 @@ def parse_entry(
                 if text_parts:
                     text = "\n".join(text_parts)
                     if text:
-                        text, truncated = _cap_field(text)
+                        text, truncated = _cap_field(_sanitize_text(text))
                         items.append(
                             {
                                 "id": base_id,
@@ -142,7 +149,7 @@ def parse_entry(
                         tr_text = tr_content
                     else:
                         tr_text = str(tr_content)
-                    tr_text, truncated = _cap_field(tr_text)
+                    tr_text, truncated = _cap_field(_sanitize_text(tr_text))
                     item_id = f"{base_id}:tool_result:{idx}"
                     # Filter out empty tool_result content
                     if tr_text:
@@ -167,7 +174,7 @@ def parse_entry(
             if text_parts:
                 text = "\n".join(text_parts)
                 if text:
-                    text, truncated = _cap_field(text)
+                    text, truncated = _cap_field(_sanitize_text(text))
                     items.append(
                         {
                             "id": base_id,
@@ -187,7 +194,7 @@ def parse_entry(
             return None, None
 
         if isinstance(content, str):
-            text, truncated = _cap_field(content)
+            text, truncated = _cap_field(_sanitize_text(content))
             if text:
                 items.append(
                     {
@@ -237,7 +244,7 @@ def parse_entry(
         if text_parts:
             text = "\n".join(text_parts)
             if text:
-                text, truncated = _cap_field(text)
+                text, truncated = _cap_field(_sanitize_text(text))
                 items.append(
                     {
                         "id": base_id,
@@ -260,7 +267,7 @@ def parse_entry(
                 tub_text = json.dumps(tub_input, separators=(",", ":"))
             else:
                 tub_text = str(tub_input)
-            tub_text, truncated = _cap_field(tub_text)
+            tub_text, truncated = _cap_field(_sanitize_text(tub_text))
             item_id = f"{base_id}:tool_use:{idx}"
             items.append(
                 {
