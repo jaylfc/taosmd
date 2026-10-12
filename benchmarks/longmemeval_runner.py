@@ -279,10 +279,7 @@ def build_row(
     }
     
     # Always store 'predicted' and 'answer' keys
-    if predicted is not None:
-        row["predicted"] = predicted
-    else:
-        row["predicted"] = "" if not save_context else ""
+    row["predicted"] = predicted if predicted is not None else ""
     
     row["answer"] = gold_answer
     

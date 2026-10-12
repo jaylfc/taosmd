@@ -15,11 +15,11 @@ import os
 import sys
 from pathlib import Path
 
-import httpx
-
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER_PATH = REPO_ROOT / "benchmarks" / "longmemeval_runner.py"
+
+# Import NON_ANSWER_PHRASES from the runner module for non-answer checking
+from benchmarks.longmemeval_runner import NON_ANSWER_PHRASES
 
 # Allow injection of a pre-loaded runner module for testing
 _runner_mod_override = None
@@ -55,13 +55,19 @@ async def _score_with_mode(runner_mod, client, row, mode: str) -> bool:
     """Score a single row using the specified judge mode.
     
     If the row has a missing or empty 'predicted' or 'answer' key,
-    it is never sent to the judge and is never counted correct.
+    or if the predicted answer is a non-answer phrase, it is never sent
+    to the judge and is never counted correct.
     """
     # Check if the row is unusable (missing or empty predicted or answer)
     predicted = row.get("predicted", "")
     answer = row.get("answer", "")
     
     if not predicted or not answer:
+        # Mark this row as not correct without calling the judge
+        return False
+    
+    # Check if the predicted answer is a non-answer phrase (e.g., "I don't know")
+    if any(idk in predicted.lower() for idk in NON_ANSWER_PHRASES):
         # Mark this row as not correct without calling the judge
         return False
     
@@ -150,7 +156,7 @@ async def main_async(args):
 
     # Create HTTP client for judge
     ollama_url = args.ollama_url or getattr(runner_mod, "REMOTE_LLM_URL", "http://localhost:11434")
-    judge_model = args.judge_model or getattr(runner_mod, "JUDGE_MODEL", "qwen2.5:3b")
+    judge_model = args.judge_model
     runner_mod.REMOTE_LLM_URL = ollama_url
     runner_mod.JUDGE_MODEL = judge_model
 
@@ -172,6 +178,14 @@ async def main_async(args):
                 answer = row.get("answer", "")
                 
                 if not predicted or not answer:
+                    # Mark this row as not correct without calling the judge
+                    # and count it as unusable
+                    unusable_rows += 1
+                    mode_correct.append(False)
+                    continue
+                
+                # Check if the predicted answer is a non-answer phrase (e.g., "I don't know")
+                if any(idk in predicted.lower() for idk in NON_ANSWER_PHRASES):
                     # Mark this row as not correct without calling the judge
                     # and count it as unusable
                     unusable_rows += 1
@@ -223,19 +237,9 @@ async def main_async(args):
         # Print table
         _print_table(modes_data)
 
-        # Check if every row was unusable
-        total_unusable = 0
-        for mode in modes:
-            # Count unusable rows for this mode
-            for row in results:
-                predicted = row.get("predicted", "")
-                answer = row.get("answer", "")
-                if not predicted or not answer:
-                    total_unusable += 1
-        
-        # If every row is unusable, exit with error code
-        if total_unusable == len(results):
-            print(f"\nERROR: All {total_unusable} rows are unusable (missing/empty predicted or answer)", file=sys.stderr)
+        # Check if every row was unusable (use unusable_rows from the first mode)
+        if unusable_rows and unusable_rows >= len(results):
+            print(f"\nERROR: All {unusable_rows} rows are unusable (missing/empty predicted or answer)", file=sys.stderr)
             sys.exit(3)
             
         # Write output
