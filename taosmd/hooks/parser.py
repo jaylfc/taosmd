@@ -68,6 +68,9 @@ def parse_entry(
     if entry_type in _NOISE_TYPES:
         return None, None
 
+    if entry_type == "user" and obj.get("isMeta") is True:
+        return None, None
+
     session_id_from = obj.get("sessionId") or session_id
     if not isinstance(session_id_from, str):
         session_id_from = session_id

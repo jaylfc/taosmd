@@ -576,3 +576,98 @@ def test_multiple_tool_result_ids_distinct():
     assert ids[0].endswith(":tool_result:0"), f"first id should end with :tool_result:0, got {ids[0]}"
     assert ids[1].endswith(":tool_result:1"), f"second id should end with :tool_result:1, got {ids[1]}"
     assert len(set(ids)) == 2, f"ids must be unique, got {ids}"
+
+
+def test_user_is_meta_true_with_string_content_skipped():
+    """User record with isMeta true and string content returns (None, None)."""
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "harness injection"},
+            "uuid": "meta1",
+            "isMeta": True,
+            "timestamp": "2026-10-07T22:53:25.123Z",
+            "sessionId": "s1",
+        }
+    )
+    items, base_id = parse_entry(0, line, "s1")
+    assert items is None
+    assert base_id is None
+
+
+def test_user_is_meta_true_with_list_content_skipped():
+    """User record with isMeta true and list content returns (None, None)."""
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "skill body or caveat"},
+                ],
+            },
+            "uuid": "meta2",
+            "isMeta": True,
+            "timestamp": "2026-10-07T22:53:25.123Z",
+            "sessionId": "s1",
+        }
+    )
+    items, base_id = parse_entry(0, line, "s1")
+    assert items is None
+    assert base_id is None
+
+
+def test_user_is_meta_false_returns_item():
+    """Control: isMeta false returns one message item."""
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "real user text"},
+            "uuid": "meta3",
+            "isMeta": False,
+            "timestamp": "2026-10-07T22:53:25.123Z",
+            "sessionId": "s1",
+        }
+    )
+    items, base_id = parse_entry(0, line, "s1")
+    assert items is not None
+    assert len(items) == 1
+    assert items[0]["metadata"]["kind"] == "message"
+    assert items[0]["metadata"]["role"] == "user"
+
+
+def test_user_is_meta_absent_returns_item():
+    """Control: isMeta absent returns one message item."""
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "real user text"},
+            "uuid": "meta4",
+            "timestamp": "2026-10-07T22:53:25.123Z",
+            "sessionId": "s1",
+        }
+    )
+    items, base_id = parse_entry(0, line, "s1")
+    assert items is not None
+    assert len(items) == 1
+    assert items[0]["metadata"]["kind"] == "message"
+    assert items[0]["metadata"]["role"] == "user"
+
+
+def test_user_is_meta_string_still_returns_item():
+    """isMeta as string 'true' is not the literal boolean True."""
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "real user text"},
+            "uuid": "meta5",
+            "isMeta": "true",
+            "timestamp": "2026-10-07T22:53:25.123Z",
+            "sessionId": "s1",
+        }
+    )
+    items, base_id = parse_entry(0, line, "s1")
+    assert items is not None
+    assert len(items) == 1
+    assert items[0]["metadata"]["kind"] == "message"
+    assert items[0]["metadata"]["role"] == "user"
