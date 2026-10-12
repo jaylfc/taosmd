@@ -1,3 +1,1 @@
-### Fixed
-
-- Graph expansion now records seeds tried, entities matched, and triples returned via optional stats dicts, and logs once when an expansion attempt yields zero triples so inert runs are visible. (tsk-obooq2)
+- Add optional stats tracking to graph expansion and log inert runs. expand_from_results accepts stats dict with seeds_tried/entities_matched/triples_returned. _append_graph_expansion/retrieve thread graph_expansion_stats (with block_appended and error on exceptions) and log once when graph_expansion>0 yields 0 triples.

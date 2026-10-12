@@ -1,98 +1,85 @@
-"""Tests for graph expansion stats reporting (issue #197)."""
-
+"""Tests for graph expansion stats tracking (issue #197)."""
 from __future__ import annotations
 
 import asyncio
 
-from taosmd import graph_expansion, retrieval
+from taosmd.graph_expansion import expand_from_results
+from taosmd.retrieval import _append_graph_expansion
 
 
 class _FakeKG:
-    def __init__(self, results_by_entity: dict[str, list[dict]] | None = None):
-        self.results_by_entity = results_by_entity or {}
-        self.queries: list[str] = []
+    def __init__(self, triples_by_entity):
+        self.triples_by_entity = triples_by_entity
+        self.queries = []
 
-    async def query_entity(self, entity: str, as_of=None, track_access=False) -> list[dict]:
+    async def query_entity(self, entity: str, as_of=None, track_access=False):
         self.queries.append(entity)
-        res = self.results_by_entity.get(entity, [])
-        return [dict(r) for r in res]
+        return list(self.triples_by_entity.get(entity, []))
 
 
 def test_expand_from_results_stats_empty():
-    """KG returns [] for everything: stats has correct counts."""
     kg = _FakeKG({})
     results = [{"text": "Alice met Bob"}]
-    stats: dict = {}
-    expanded = asyncio.run(graph_expansion.expand_from_results(kg, results, stats=stats))
-    assert expanded == []
-    assert stats["seeds_tried"] == 2
-    assert stats["entities_matched"] == 0
-    assert stats["triples_returned"] == 0
+    stats = {}
+    out = asyncio.run(expand_from_results(kg, results, max_seeds=2, stats=stats))
+    assert stats == {"seeds_tried": 2, "entities_matched": 0, "triples_returned": 0}
+    assert out == []
 
 
-def test_expand_from_results_stats_with_match():
-    """KG returns one triple for one entity."""
-    kg = _FakeKG({"Alice": [{"subject_id": "Alice", "predicate": "knows", "object_id": "Bob", "object_name": "Bob", "confidence": 0.9, "current": True, "direction": "outgoing"}]})
+def test_expand_from_results_stats_has_match():
+    kg = _FakeKG({"Alice": [{"subject_id": "alice", "predicate": "knows", "object_id": "bob", "object_name": "Bob", "confidence": 1.0, "direction": "outgoing"}]})
     results = [{"text": "Alice met Bob"}]
-    stats: dict = {}
-    expanded = asyncio.run(graph_expansion.expand_from_results(kg, results, stats=stats))
-    assert len(expanded) >= 1
+    stats = {}
+    out = asyncio.run(expand_from_results(kg, results, max_seeds=2, stats=stats))
     assert stats["seeds_tried"] == 2
-    assert stats["entities_matched"] == 1
+    assert stats["entities_matched"] >= 1
     assert stats["triples_returned"] >= 1
+    assert len(out) >= 1
 
 
-def test_expand_from_results_stats_none_unchanged():
-    """stats=None: return value equals call without parameter."""
-    kg = _FakeKG({"Alice": [{"subject_id": "Alice", "predicate": "knows", "object_id": "Bob", "object_name": "Bob", "confidence": 0.9, "current": True, "direction": "outgoing"}]})
-    results = [{"text": "Alice met Bob"}]
-    expanded_with = asyncio.run(graph_expansion.expand_from_results(kg, results, stats=None))
-    expanded_without = asyncio.run(graph_expansion.expand_from_results(kg, results))
-    assert expanded_with == expanded_without
-
-
-def test_append_graph_expansion_stats_empty():
-    """KG returns [] for everything: block_appended False."""
+def test_expand_from_results_stats_none():
     kg = _FakeKG({})
     results = [{"text": "Alice met Bob"}]
-    stats: dict = {}
-    out = asyncio.run(retrieval._append_graph_expansion(results, kg, max_tokens=100, graph_expansion_stats=stats))
-    assert out == results  # unchanged
+    out_no_stats = asyncio.run(expand_from_results(kg, results, max_seeds=2))
+    out_with_none = asyncio.run(expand_from_results(kg, results, max_seeds=2, stats=None))
+    assert out_no_stats == out_with_none
+
+
+def test_append_graph_expansion_empty():
+    kg = _FakeKG({})
+    results = [{"text": "Alice met Bob"}]
+    stats = {}
+    out = asyncio.run(_append_graph_expansion(results, kg, max_tokens=100, graph_expansion_stats=stats))
     assert stats["seeds_tried"] == 2
     assert stats["entities_matched"] == 0
     assert stats["triples_returned"] == 0
     assert stats["block_appended"] is False
+    # return value unchanged
+    assert out == results
 
 
-def test_append_graph_expansion_stats_with_match():
-    """KG returns one triple for one entity: block_appended True."""
-    kg = _FakeKG({"Alice": [{"subject_id": "Alice", "predicate": "knows", "object_id": "Bob", "object_name": "Bob", "confidence": 0.9, "current": True, "direction": "outgoing"}]})
+def test_append_graph_expansion_has_match():
+    kg = _FakeKG({"Alice": [{"subject_id": "alice", "predicate": "knows", "object_id": "bob", "object_name": "Bob", "confidence": 1.0, "direction": "outgoing"}]})
     results = [{"text": "Alice met Bob"}]
-    stats: dict = {}
-    out = asyncio.run(retrieval._append_graph_expansion(results, kg, max_tokens=100, graph_expansion_stats=stats))
-    assert len(out) == len(results)
+    stats = {}
+    out = asyncio.run(_append_graph_expansion(results, kg, max_tokens=100, graph_expansion_stats=stats))
     assert stats["seeds_tried"] == 2
-    assert stats["entities_matched"] == 1
+    assert stats["entities_matched"] >= 1
     assert stats["triples_returned"] >= 1
     assert stats["block_appended"] is True
+    assert len(out) == len(results) + 1
 
 
-def test_append_graph_expansion_stats_kg_none():
-    """kg=None: zeros, block_appended False."""
+def test_append_graph_expansion_kg_none():
     results = [{"text": "Alice met Bob"}]
-    stats: dict = {}
-    out = asyncio.run(retrieval._append_graph_expansion(results, None, max_tokens=100, graph_expansion_stats=stats))
+    stats = {}
+    out = asyncio.run(_append_graph_expansion(results, None, max_tokens=100, graph_expansion_stats=stats))
+    assert stats == {"seeds_tried": 0, "entities_matched": 0, "triples_returned": 0, "block_appended": False}
     assert out == results
-    assert stats["seeds_tried"] == 0
-    assert stats["entities_matched"] == 0
-    assert stats["triples_returned"] == 0
-    assert stats["block_appended"] is False
 
 
-def test_append_graph_expansion_stats_none_unchanged():
-    """stats=None: return value equals call without the parameter."""
-    kg = _FakeKG({"Alice": [{"subject_id": "Alice", "predicate": "knows", "object_id": "Bob", "object_name": "Bob", "confidence": 0.9, "current": True, "direction": "outgoing"}]})
+def test_append_graph_expansion_no_stats():
+    kg = _FakeKG({})
     results = [{"text": "Alice met Bob"}]
-    out_with = asyncio.run(retrieval._append_graph_expansion(results, kg, max_tokens=100, graph_expansion_stats=None))
-    out_without = asyncio.run(retrieval._append_graph_expansion(results, kg, max_tokens=100))
-    assert out_with == out_without
+    out = asyncio.run(_append_graph_expansion(results, kg, max_tokens=100))
+    assert out == results

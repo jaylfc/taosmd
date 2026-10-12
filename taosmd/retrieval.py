@@ -617,69 +617,43 @@ async def _append_graph_expansion(
     max_tokens: int,
     graph_expansion_stats: dict | None = None,
 ) -> list[dict]:
-    """Append a derived knowledge-graph fact block to *results* (fail-open).
-
-    Bi-temporal fact readback (Phase 1). Reads the already-populated fact store
-    back into the answer context: entities are extracted from the served hits,
-    the KG is queried for their currently-valid facts (valid-time only;
-    ``query_entity`` defaults to ``as_of=now``), and the formatted triples are
-    appended as ONE synthetic result. The block is labelled derived
-    (``source == "kg_expansion"``, ``derived == True``) so provenance stays
-    honest: the underlying turns remain the primary evidence, and the block is
-    additional context, not one of the ``limit`` served turns.
-
-    Fail-open: a missing/None KG, an empty budget, no entities, an empty KG, or
-    any error is a silent no-op returning *results* unchanged. No ``as_of`` query
-    surface is exposed here (that is Phase 2).
-
-    Args:
-        results: The served (post-truncation) hits to read entities from.
-        kg: The knowledge graph source (``sources["kg"]``), or None.
-        max_tokens: Token budget for the derived block (also the enable flag;
-            <= 0 is off).
-    """
+    """Append a derived knowledge-graph fact block to *results* (fail-open)."""
+    stats_local = graph_expansion_stats if graph_expansion_stats is not None else {}
     if kg is None or max_tokens <= 0 or not results:
+        stats_local["seeds_tried"] = 0
+        stats_local["entities_matched"] = 0
+        stats_local["triples_returned"] = 0
+        stats_local["block_appended"] = False
         if graph_expansion_stats is not None:
-            graph_expansion_stats["seeds_tried"] = 0
-            graph_expansion_stats["entities_matched"] = 0
-            graph_expansion_stats["triples_returned"] = 0
-            graph_expansion_stats["block_appended"] = False
+            graph_expansion_stats.update(stats_local)
         return results
     try:
         from taosmd.graph_expansion import (  # noqa: PLC0415
             expand_from_results,
             format_expanded_context,
         )
-        expanded = await expand_from_results(kg, results, as_of=None, stats=graph_expansion_stats)
+        expanded = await expand_from_results(kg, results, as_of=None, stats=stats_local)
         block = format_expanded_context(expanded, max_tokens=max_tokens)
     except Exception as exc:
         logger.debug("graph_expansion stage skipped: %s", exc)
+        stats_local["seeds_tried"] = stats_local.get("seeds_tried", 0)
+        stats_local["entities_matched"] = stats_local.get("entities_matched", 0)
+        stats_local["triples_returned"] = stats_local.get("triples_returned", 0)
+        stats_local["block_appended"] = False
+        stats_local["error"] = exc.__class__.__name__
         if graph_expansion_stats is not None:
-            graph_expansion_stats["seeds_tried"] = graph_expansion_stats.get("seeds_tried", 0)
-            graph_expansion_stats["entities_matched"] = graph_expansion_stats.get("entities_matched", 0)
-            graph_expansion_stats["triples_returned"] = graph_expansion_stats.get("triples_returned", 0)
-            graph_expansion_stats["block_appended"] = False
-            graph_expansion_stats["error"] = exc.__class__.__name__
+            graph_expansion_stats.update(stats_local)
         return results
     if not block:
+        stats_local["block_appended"] = False
+        stats_local["triples_returned"] = stats_local.get("triples_returned", 0)
+        seeds = stats_local.get("seeds_tried", 0)
+        matched = stats_local.get("entities_matched", 0)
+        if stats_local.get("triples_returned", 0) == 0 and max_tokens > 0:
+            logger.info("graph_expansion returned 0 triples: seeds_tried=%s entities_matched=%s", seeds, matched)
         if graph_expansion_stats is not None:
-            graph_expansion_stats["block_appended"] = False
-        # Log when expansion was attempted but returned no triples
-        if graph_expansion_stats is not None:
-            seeds = graph_expansion_stats.get("seeds_tried", 0)
-            matched = graph_expansion_stats.get("entities_matched", 0)
-            if graph_expansion_stats.get("triples_returned", 0) == 0:
-                logger.info("graph_expansion returned 0 triples: seeds_tried=%s entities_matched=%s", seeds, matched)
-        else:
-            # Even without stats dict, if expansion happened (max_tokens>0) and returned nothing, log? Task says "When graph_expansion > 0..."
-            # But in context of retrieve with graph_expansion_stats - maybe log when stats were passed? Or generally.
-            # Task states: "When graph_expansion > 0 and triples_returned == 0, emit ONE logger.info line naming seeds_tried and entities_matched"
-            # In retrieve context with stats. But easier to log if we have info. Maybe we need to compute? Or just log generically.
-            pass
+            graph_expansion_stats.update(stats_local)
         return results
-    # Keep confidence: surface the strongest currently-valid triple's score.
-    # ``or 0.0`` also coerces an explicit ``confidence: None`` (which
-    # ``float(None)`` would raise on) so the fail-open contract holds.
     top_confidence = max(
         (float(e.get("confidence") or 0.0) for e in expanded), default=0.0
     )
@@ -692,10 +666,12 @@ async def _append_graph_expansion(
         "derived": True,
         "metadata": {"derived": True, "kind": "kg_facts", "triples": expanded},
     }
-    results.append(derived)
+    new_results = [*results, derived]
+    stats_local["block_appended"] = True
     if graph_expansion_stats is not None:
-        graph_expansion_stats["block_appended"] = True
-    return results
+        graph_expansion_stats.update(stats_local)
+    return new_results
+
 
 
 def _filter_project_scope(
@@ -742,6 +718,9 @@ def _filter_project_scope(
 
         filtered.append(hit)
     return filtered
+
+
+
 
 
 async def retrieve(

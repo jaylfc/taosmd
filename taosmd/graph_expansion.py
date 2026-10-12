@@ -118,6 +118,10 @@ async def expand_from_results(
         all_entities.extend(entities)
 
     if not all_entities:
+        if stats is not None:
+            stats["seeds_tried"] = 0
+            stats["entities_matched"] = 0
+            stats["triples_returned"] = 0
         return []
 
     # Rank seed entities by relevance before capping.
@@ -169,22 +173,33 @@ async def expand_from_results(
         frontier = [(e, 0) for e in seeds_tried_list]
 
     if stats is not None:
-        stats["seeds_tried"] = len(seeds_tried_list)
+        stats["seeds_tried"] = 0
         stats["entities_matched"] = 0
         stats["triples_returned"] = 0
+
+    seed_set_lower = {s.lower() for s in seeds_tried_list}
+    seeds_queried = set()
 
     while frontier and len(expanded) < max_expanded:
         entity, hop = frontier.pop(0)
         if hop >= max_hops:
             continue
 
+        entity_key = entity.lower()
+        is_seed = entity_key in seed_set_lower
         try:
             triples = await kg.query_entity(
                 entity, as_of=as_of, track_access=False
             )
-            if stats is not None and triples:
-                stats["entities_matched"] += 1
+            if stats is not None and is_seed and entity_key not in seeds_queried:
+                seeds_queried.add(entity_key)
+                stats["seeds_tried"] = stats.get("seeds_tried", 0) + 1
+                if triples:
+                    stats["entities_matched"] = stats.get("entities_matched", 0) + 1
         except Exception:
+            if stats is not None and is_seed and entity_key not in seeds_queried:
+                seeds_queried.add(entity_key)
+                stats["seeds_tried"] = stats.get("seeds_tried", 0) + 1
             continue
 
         for triple in triples:
