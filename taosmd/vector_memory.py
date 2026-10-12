@@ -298,6 +298,29 @@ class VectorMemory:
         # before any query, so a legacy table has gained `valid_to` (and its
         # index) by the time the first SELECT touches it.
         migrations.migrate(self._conn, "vector_memory")
+        
+        # For qmd mode, fetch the embed model from the health endpoint before
+        # _check_store_mode runs, so the embedder identity includes it.
+        self._qmd_embed_model = None
+        if self._embed_mode == "qmd" and http_client is not None:
+            try:
+                resp = await http_client.get(f"{self._qmd_url}/health", timeout=5)
+                if resp.status_code == 200:
+                    data = await resp.json()
+                    model = data.get("models", {}).get("embed")
+                    if model:
+                        self._qmd_embed_model = model
+                    else:
+                        logger.warning(
+                            "QMD health endpoint returned 200 but no models.embed field"
+                        )
+                else:
+                    logger.warning(
+                        "QMD health endpoint returned status %d", resp.status_code
+                    )
+            except Exception as e:
+                logger.warning("QMD health check failed: %s", e)
+        
         self._check_store_mode()
         self._conn.commit()
         self._http = http_client
@@ -456,6 +479,8 @@ class VectorMemory:
             return Path(self._onnx_path).name
         if self._embed_mode == "local":
             return self._local_model_name
+        if self._qmd_embed_model:
+            return f"qmd:{self._qmd_embed_model}"
         return f"qmd:{self._embed_mode}"
 
     @staticmethod
@@ -488,15 +513,53 @@ class VectorMemory:
 
         if recorded is not None:
             rec = self._parse_mode(recorded)
+            
             conflict = {k: v for k, v in rec.items() if cur.get(k) != v}
             if conflict:
-                raise StoreModeMismatch(
-                    f"vector store at {self._db_path} was built with {recorded} "
-                    f"but is being opened with {current} (conflict on {conflict}). "
-                    f"The storage format or embedding space is incompatible. "
-                    f"Re-embed from the archive in the new mode (the archive is "
-                    f"zero-loss) rather than mixing them."
-                )
+                # Special handling for qmd embedder identities
+                # Case (a): recorded "qmd:qmd" with a current specific "qmd:<model>" is compatible
+                if (
+                    conflict.get("embedder") == "qmd:qmd" and
+                    cur.get("embedder", "").startswith("qmd:")
+                ):
+                    logger.warning(
+                        "QMD embedder marker was written as 'qmd:qmd' but the current "
+                        "embedder is '%s'. The marker is compatible and will be upgraded.",
+                        cur.get("embedder")
+                    )
+                # Case (b): recorded specific "qmd:<model>" with current "qmd:qmd" (health unreachable)
+                elif (
+                    rec.get("embedder", "").startswith("qmd:") and
+                    conflict.get("embedder") == "qmd:qmd"
+                ):
+                    logger.warning(
+                        "QMD health check unavailable; using the previously recorded "
+                        "embedder '%s' from the store metadata.",
+                        rec.get("embedder")
+                    )
+                    # Don't overwrite the existing marker
+                    return
+                # Case (c): two different specific qmd models raise StoreModeMismatch
+                elif (
+                    rec.get("embedder", "").startswith("qmd:") and
+                    cur.get("embedder", "").startswith("qmd:") and
+                    conflict.get("embedder", "") != ""
+                ):
+                    raise StoreModeMismatch(
+                        f"vector store at {self._db_path} was built with {recorded} "
+                        f"but is being opened with {current} (different QMD models). "
+                        f"The embedding spaces are incompatible. "
+                        f"Re-embed from the archive in the new mode (the archive is "
+                        f"zero-loss) rather than mixing them."
+                    )
+                else:
+                    raise StoreModeMismatch(
+                        f"vector store at {self._db_path} was built with {recorded} "
+                        f"but is being opened with {current} (conflict on {conflict}). "
+                        f"The storage format or embedding space is incompatible. "
+                        f"Re-embed from the archive in the new mode (the archive is "
+                        f"zero-loss) rather than mixing them."
+                    )
             if recorded != current:  # compatible but stale (e.g. legacy marker), upgrade
                 self._conn.execute(
                     "INSERT OR REPLACE INTO store_meta (key, value) VALUES ('mode', ?)",
