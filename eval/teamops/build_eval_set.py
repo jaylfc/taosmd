@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+def sha256_file(path: str | Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        h.update(f.read())
+    return h.hexdigest()
+
+
 def parse_rulings(md_text: str) -> List[Dict[str, Any]]:
     items = []
     for line in md_text.splitlines():
@@ -48,20 +55,25 @@ def parse_ledger(tsv_text: str) -> List[Dict[str, Any]]:
     lines = tsv_text.splitlines()
     if not lines:
         return items
+    # header = lines[0]
     for line in lines[1:]:
         line = line.strip()
         if not line:
             continue
-        parts = line.split()
+        # Try tab split first as per spec
+        if '\t' in line:
+            parts = line.split('\t')
+        else:
+            parts = line.split()
         if len(parts) < 7:
             continue
-        utc = parts[0]
-        seat = parts[1]
-        owner = parts[2]
-        target = parts[3]
-        action = parts[4]
-        why = parts[5] if len(parts) > 5 else ""
-        undo = parts[6] if len(parts) > 6 else ""
+        utc = parts[0].strip()
+        seat = parts[1].strip()
+        owner = parts[2].strip()
+        target = parts[3].strip()
+        action = parts[4].strip()
+        why = ' '.join(parts[5:-1]) if len(parts) > 6 else (parts[5].strip() if len(parts) > 5 else "")
+        undo = parts[-1].strip() if len(parts) >= 7 else ""
         source_id = f"ledger:{utc}:{owner}:{target}"
         items.append({
             "utc": utc,
@@ -99,6 +111,7 @@ def parse_prs(json_text: str) -> List[Dict[str, Any]]:
         })
     return items
 
+
 def _same_core_subject(t1: str, t2: str) -> bool:
     words1 = set(w for w in t1.lower().split() if len(w) > 3)
     words2 = set(w for w in t2.lower().split() if len(w) > 3)
@@ -108,6 +121,7 @@ def _same_core_subject(t1: str, t2: str) -> bool:
 
 def _are_subject_related(t1: str, t2: str) -> bool:
     return _same_core_subject(t1, t2)
+
 
 def make_items(
     rulings: List[Dict[str, Any]],
@@ -211,6 +225,7 @@ def make_items(
 
     return items
 
+
 def split(items: List[Dict[str, Any]], holdout: float = 0.30) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
     sorted_items = sorted(items, key=lambda x: (x["date"], x["id"]))
     n = len(sorted_items)
@@ -252,16 +267,13 @@ def split(items: List[Dict[str, Any]], holdout: float = 0.30) -> Tuple[List[Dict
 
     for i, sup_item in enumerate(superseded_pairs):
         as_of_id = f"a-{len(items) + unanswerable_count + i:05d}"
+        earlier_source = sup_item.get("supersedes")
         earlier_date = sup_item["date"]
-        date_parts = sup_item["date"].split("-")
-        if len(date_parts) == 3:
-            try:
-                y = int(date_parts[0])
-                m = int(date_parts[1])
-                d = int(date_parts[2])
-                earlier_date = f"{y}-{m:02d}-{max(1, d-1):02d}"
-            except Exception:
-                earlier_date = sup_item["date"]
+        for it in items:
+            sources = it.get("gold_sources", [])
+            if earlier_source in sources:
+                earlier_date = it["date"]
+                break
         question = f"what was the rule on {earlier_date}?"
         gold_answer = f"rule as of {earlier_date} (referenced by {sup_item.get('supersedes')})"
         item = {
@@ -287,3 +299,85 @@ def split(items: List[Dict[str, Any]], holdout: float = 0.30) -> Tuple[List[Dict
     }
 
     return result_train, result_holdout, manifest
+
+
+def load_text(path: str | Path) -> str:
+    p = Path(path)
+    with open(p, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def write_jsonl(path: str | Path, items: List[Dict[str, Any]]) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        for item in items:
+            f.write(json.dumps(item) + "\n")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build team-ops eval set")
+    parser.add_argument("--rulings", required=True, help="Path to rulings markdown file")
+    parser.add_argument("--ledger", required=True, help="Path to ledger TSV file")
+    parser.add_argument("--prs", required=True, help="Path to PRs JSON file")
+    parser.add_argument("--output-dir", required=True, help="Directory to write output files")
+    parser.add_argument("--holdout", type=float, default=0.30, help="Holdout ratio")
+    parser.add_argument("--session-map", default=None, help="Path to session map JSONL file")
+    args = parser.parse_args()
+
+    rulings_text = load_text(args.rulings)
+    ledger_text = load_text(args.ledger)
+    prs_text = load_text(args.prs)
+
+    rulings = parse_rulings(rulings_text)
+    ledger = parse_ledger(ledger_text)
+    prs = parse_prs(prs_text)
+
+    session_map = []
+    if args.session_map and os.path.exists(args.session_map):
+        session_map_text = load_text(args.session_map)
+        for line in session_map_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                session_map.append(json.loads(line))
+            except Exception:
+                continue
+
+    items = make_items(rulings, ledger, prs, session_map)
+
+    train, holdout, manifest = split(items, holdout=args.holdout)
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    write_jsonl(out_dir / "items.jsonl", train)
+    write_jsonl(out_dir / "holdout.jsonl", holdout)
+
+    manifest["inputs"] = {
+        "rulings": {
+            "path": str(Path(args.rulings).resolve()),
+            "sha256": sha256_file(args.rulings),
+        },
+        "ledger": {
+            "path": str(Path(args.ledger).resolve()),
+            "sha256": sha256_file(args.ledger),
+        },
+        "prs": {
+            "path": str(Path(args.prs).resolve()),
+            "sha256": sha256_file(args.prs),
+        },
+    }
+    if args.session_map and os.path.exists(args.session_map):
+        manifest["inputs"]["session_map"] = {
+            "path": str(Path(args.session_map).resolve()),
+            "sha256": sha256_file(args.session_map),
+        }
+
+    with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+
+if __name__ == "__main__":
+    main()
