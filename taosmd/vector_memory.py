@@ -516,7 +516,27 @@ class VectorMemory:
             
             conflict = {k: v for k, v in rec.items() if cur.get(k) != v}
             if conflict:
-                # Special handling for qmd embedder identities
+                # Special handling for qmd embedder identities - only applies when
+                # the ONLY conflict is on the embedder component
+                if set(conflict) != {"embedder"}:
+                    raise StoreModeMismatch(
+                        f"vector store at {self._db_path} was built with {recorded} "
+                        f"but is being opened with {current} (conflict on {conflict}). "
+                        f"The storage format or embedding space is incompatible. "
+                        f"Re-embed from the archive in the new mode (the archive is "
+                        f"zero-loss) rather than mixing them."
+                    )
+                
+                # Only qmd models get special handling
+                if not rec.get("embedder", "").startswith("qmd:"):
+                    raise StoreModeMismatch(
+                        f"vector store at {self._db_path} was built with {recorded} "
+                        f"but is being opened with {current} (conflict on {conflict}). "
+                        f"The storage format or embedding space is incompatible. "
+                        f"Re-embed from the archive in the new mode (the archive is "
+                        f"zero-loss) rather than mixing them."
+                    )
+                
                 # Case (a): recorded "qmd:qmd" with a current specific "qmd:<model>" is compatible
                 if (
                     conflict.get("embedder") == "qmd:qmd" and
@@ -530,7 +550,7 @@ class VectorMemory:
                 # Case (b): recorded specific "qmd:<model>" with current "qmd:qmd" (health unreachable)
                 elif (
                     rec.get("embedder", "").startswith("qmd:") and
-                    conflict.get("embedder") == "qmd:qmd"
+                    cur.get("embedder", "") == "qmd:qmd"
                 ):
                     logger.warning(
                         "QMD health check unavailable; using the previously recorded "
