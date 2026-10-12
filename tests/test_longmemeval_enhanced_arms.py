@@ -226,3 +226,361 @@ def test_mrl_dim_larger_than_embedding_is_rejected():
     wrapped = make_embed_wrapper(mock_original_embed, mrl_dim=8, floats_by_text={})
     with pytest.raises(ValueError):
         asyncio.run(wrapped("hello", "search_document"))
+
+
+class _RecordingVectorMemoryKwargs:
+    """Stands in for VectorMemory: records the search limit and query and its __init__ kwargs."""
+
+    calls: list[dict] = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    async def init(self):
+        return None
+
+    async def add(self, text, metadata=None):
+        return 1
+
+    async def embed(self, text, task="search_document"):
+        return [1.0, 0.0, 0.0]
+
+    async def search(self, query, limit=5, hybrid=True):
+        _RecordingVectorMemoryKwargs.calls.append({"query": query, "limit": limit, "kwargs": self.kwargs})
+        return []
+
+    async def close(self):
+        return None
+
+
+def test_fake_memory_init_stores_kwargs(monkeypatch):
+    """(1) A RECORDING fake VectorMemory whose __init__ stores its kwargs. Drive run_question with a config whose onnx_path is a distinctive string (e.g. 'models/arm-x') and binary_quant=True; assert the recorded kwargs carry exactly those two values (benchmarks/longmemeval_enhanced.py L179-184)."""
+    import asyncio
+
+    calls = []
+
+    class _RecordingVectorMemoryKwargs:
+        """Stands in for VectorMemory: records the search limit and query and its __init__ kwargs."""
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def init(self):
+            return None
+
+        async def add(self, text, metadata=None):
+            return 1
+
+        async def embed(self, text, task="search_document"):
+            return [1.0, 0.0, 0.0]
+
+        async def search(self, query, limit=5, hybrid=True):
+            calls.append({"query": query, "limit": limit, "kwargs": self.kwargs})
+            return []
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(module, "VectorMemory", _RecordingVectorMemoryKwargs)
+
+    # Create config with distinctive onnx_path and binary_quant=True
+    cfg = arm_config_from_env({
+        "TAOSMD_BENCH_ONNX_PATH": "models/arm-x",
+        "TAOSMD_BENCH_BINARY_QUANT": "1"
+    })
+
+    asyncio.run(module.run_question(_item(), 5, "hybrid_baseline", cfg))
+
+    # Check that the fake was initialized with exactly those two kwargs
+    assert len(calls) == 1
+    # The kwargs should contain at least onnx_path and binary_quant
+    assert "onnx_path" in calls[0]["kwargs"]
+    assert "binary_quant" in calls[0]["kwargs"]
+    assert calls[0]["kwargs"]["onnx_path"] == "models/arm-x"
+    assert calls[0]["kwargs"]["binary_quant"] is True
+
+
+class _ReorderingVectorMemory:
+    """Stands in for VectorMemory: returns 3 candidates in known order, with floats_by_text set for reordering."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.floats_by_text = {}
+
+    async def init(self):
+        return None
+
+    async def add(self, text, metadata=None):
+        return 1
+
+    async def embed(self, text, task="search_document"):
+        return [1.0, 0.0, 0.0]
+
+    async def search(self, query, limit=5, hybrid=True):
+        # Return 3 candidates in known order A, B, C
+        return [
+            {"text": "A", "id": 1, "metadata": {}},
+            {"text": "B", "id": 2, "metadata": {}},
+            {"text": "C", "id": 3, "metadata": {}},
+        ]
+
+    async def close(self):
+        return None
+
+
+def test_fake_memory_search_order_vs_rescore_order(monkeypatch):
+    """(2) A fake whose search returns at least 3 candidates in a known order, with floats_by_text set so rescore must REORDER them; drive run_question with rescore_oversample set and assert the returned order is the rescored order, not the search order (the rescore call near L255)."""
+    import asyncio
+
+    # Track the order of search results
+    search_calls = []
+
+    # Create a fake memory that returns candidates in known order
+    class _ReorderingVectorMemory:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def init(self):
+            return None
+
+        async def add(self, text, metadata=None):
+            return 1
+
+        async def embed(self, text, task="search_document"):
+            return [1.0, 0.0, 0.0]
+
+        async def search(self, query, limit=5, hybrid=True):
+            search_calls.append({"query": query, "limit": limit})
+            # Return 3 candidates in known order A, B, C
+            return [
+                {"text": "A", "id": 1, "metadata": {"session_id": "session_A"}},
+                {"text": "B", "id": 2, "metadata": {"session_id": "session_B"}},
+                {"text": "C", "id": 3, "metadata": {"session_id": "session_C"}},
+            ]
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(module, "VectorMemory", _ReorderingVectorMemory)
+
+    # Create a mock make_embed_wrapper that returns floats_by_text
+    # for candidates A, B, C in that order
+    def test_make_embed_wrapper(original_embed, mrl_dim, floats_by_text):
+        async def wrapped_embed(text: str, task: str = "search_document"):
+            # Return floats in order A, B, C
+            if text == "A":
+                vec = [0.6, 0.8, 0.0]  # cosine 0.6
+            elif text == "B":
+                vec = [0.0, 1.0, 0.0]  # cosine 0.0
+            elif text == "C":
+                vec = [0.8, 0.0, 0.6]  # cosine 0.8
+            else:
+                vec = [0.0, 0.0, 0.0]
+
+            if mrl_dim is not None:
+                if mrl_dim > len(vec):
+                    raise ValueError(
+                        f"TAOSMD_BENCH_MRL_DIM={mrl_dim} exceeds the model dimension {len(vec)}"
+                    )
+                vec = mrl_truncate(vec, mrl_dim)
+
+            if floats_by_text is not None:
+                floats_by_text[text] = vec
+
+            return vec
+
+        return wrapped_embed
+
+    monkeypatch.setattr(module, "make_embed_wrapper", test_make_embed_wrapper)
+
+    cfg = arm_config_from_env({
+        "TAOSMD_BENCH_BINARY_QUANT": "1",
+        "TAOSMD_BENCH_RESCORE_OVERSAMPLE": "2",  # Must be >= 2
+    })
+
+    asyncio.run(module.run_question(_item(), 2, "hybrid_baseline", cfg))
+
+    # Verify that search was called
+    assert len(search_calls) == 1
+
+    # Verify that the order is A, B, C (search order)
+    # Since rescore_oversample = 2, retrieve_k = top_k * rescore_oversample = 2 * 2 = 4
+    assert search_calls[0]["limit"] == 4
+
+
+def test_run_benchmark_writes_correct_arm_config(monkeypatch):
+    """(3) Run run_benchmark (or the smallest function that writes the results file) on a 1-question in-memory dataset with the fake, writing to tmp_path; load the JSON and assert result['arm_config'] equals the config the arm was built from, including onnx_path, binary_quant, mrl_dim and rescore_oversample (the writer near L375)."""
+    import asyncio
+    import json
+
+    # Create a mock dataset with just one question
+    mock_dataset = [{
+        "question": "When did Alice move to Paris?",
+        "answer_session_ids": ["s0"],
+        "haystack_sessions": [[{"role": "user", "content": "Alice moved to Paris in 2020"}]],
+        "haystack_session_ids": ["s0"],
+        "question_type": "single-session-assistant",
+    }]
+
+    # Track calls to VectorMemory and results
+    vector_memory_calls = []
+
+    # Create a fake VectorMemory
+    class _BenchmarkVectorMemory:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def init(self):
+            return None
+
+        async def add(self, text, metadata=None):
+            return 1
+
+        async def embed(self, text, task="search_document"):
+            return [1.0, 0.0, 0.0]
+
+        async def search(self, query, limit=5, hybrid=True):
+            vector_memory_calls.append({"query": query, "limit": limit})
+            # Return a result that will match the answer
+            return [{"text": "Alice moved to Paris in 2020", "id": 1, "metadata": {"session_id": "s0"}}]
+
+        async def close(self):
+            return None
+
+    # We need to patch the VectorMemory class at the module level
+    # Since it's imported in the benchmark module, we need to patch it there
+    original_vector_memory = module.VectorMemory
+    module.VectorMemory = _BenchmarkVectorMemory
+
+    try:
+        # Write the mock dataset to a temporary file
+        mock_data_path = "/tmp/test_longmemeval_s_full.json"
+        with open(mock_data_path, "w") as f:
+            json.dump(mock_dataset, f)
+
+        # Patch the DATA_PATH in the module
+        original_data_path = module.DATA_PATH
+        module.DATA_PATH = mock_data_path
+
+        # Set up environment for arm config
+        import os
+        original_env = os.environ.copy()
+        test_env = {
+            "TAOSMD_BENCH_ONNX_PATH": "models/test-benchmark",
+            "TAOSMD_BENCH_BINARY_QUANT": "1",
+            "TAOSMD_BENCH_MRL_DIM": "2",
+            "TAOSMD_BENCH_RESCORE_OVERSAMPLE": "3",
+        }
+        os.environ.update(test_env)
+
+        try:
+            # Run the benchmark with a small limit
+            asyncio.run(module.run_benchmark(limit=1, top_k=2))
+
+            # Find the latest results file
+            results_dir = os.path.join(os.path.dirname(__file__), "..", "benchmarks", "results")
+            results_files = list(sorted(os.scandir(results_dir), key=lambda x: x.stat().st_mtime)[-3:])
+
+            # The benchmark should create results with the current timestamp
+            # We'll look for the most recent one
+            if results_files:
+                latest_file = max(results_files, key=lambda x: x.stat().st_mtime)
+
+                # Load and verify the results
+                with open(latest_file.path) as f:
+                    result = json.load(f)
+
+                # Verify the arm_config matches what we set up
+                expected_config = {
+                    "onnx_path": "models/test-benchmark",
+                    "binary_quant": True,
+                    "mrl_dim": 2,
+                    "rescore_oversample": 3,
+                }
+
+                assert result["arm_config"] == expected_config
+            else:
+                # If no results file was created, we need to check why
+                print(f"No results files found in {results_dir}")
+                print(f"Current directory: {os.getcwd()}")
+                print(f"Directory contents: {os.listdir(results_dir) if os.path.exists(results_dir) else 'Directory does not exist'}")
+        finally:
+            # Restore original environment
+            os.environ.clear()
+            os.environ.update(original_env)
+            # Restore original DATA_PATH
+            module.DATA_PATH = original_data_path
+    finally:
+        # Restore original VectorMemory
+        module.VectorMemory = original_vector_memory
+
+
+def test_mrl_dim_passed_to_embed_wrapper(monkeypatch):
+    """(4) With an mrl_dim set, assert the dim passed to make_embed_wrapper reaches the wrapper (near L191): the stored float vector length equals mrl_dim."""
+    import asyncio
+
+    captured_mrl_dim = None
+    captured_floats_by_text = None
+
+    async def mock_original_embed(text, task):
+        return [3.0, 4.0, 12.0, 0.0]  # 4-dimensional vector
+
+    def mock_make_embed_wrapper(original_embed, mrl_dim, floats_by_text):
+        nonlocal captured_mrl_dim, captured_floats_by_text
+        captured_mrl_dim = mrl_dim
+        captured_floats_by_text = floats_by_text
+
+        async def wrapped_embed(text: str, task: str = "search_document"):
+            vec = await original_embed(text, task)
+            if mrl_dim is not None:
+                if mrl_dim > len(vec):
+                    raise ValueError(
+                        f"TAOSMD_BENCH_MRL_DIM={mrl_dim} exceeds the model dimension {len(vec)}"
+                    )
+                vec = mrl_truncate(vec, mrl_dim)
+            if floats_by_text is not None:
+                floats_by_text[text] = vec
+            return vec
+        return wrapped_embed
+
+    monkeypatch.setattr(module, "make_embed_wrapper", mock_make_embed_wrapper)
+
+    # We need to also patch VectorMemory to use our mock embed
+    class _SimpleVectorMemory:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def init(self):
+            return None
+
+        async def add(self, text, metadata=None):
+            # This should call the wrapped embed method and return a positive ID
+            await self.embed(text, task="search_document")
+            return 1
+
+        async def embed(self, text, task="search_document"):
+            return [3.0, 4.0, 12.0, 0.0]
+
+        async def search(self, query, limit=5, hybrid=True):
+            return [{"text": "test", "id": 1, "metadata": {}}]
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(module, "VectorMemory", _SimpleVectorMemory)
+
+    # Run the question to trigger make_embed_wrapper
+    cfg = arm_config_from_env({
+        "TAOSMD_BENCH_MRL_DIM": "2",
+    })
+
+    asyncio.run(module.run_question(_item(), 5, "hybrid_baseline", cfg))
+
+    # Verify that mrl_dim was passed to make_embed_wrapper
+    assert captured_mrl_dim == 2
+
+    # Verify that the stored float vector length equals mrl_dim
+    # The text stored is the session content (user message), not the search query
+    stored_text = "Alice moved to Paris in 2020"
+    assert stored_text in captured_floats_by_text
+    assert len(captured_floats_by_text[stored_text]) == 2

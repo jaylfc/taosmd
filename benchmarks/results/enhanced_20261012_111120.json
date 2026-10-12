@@ -1,0 +1,73 @@
+{
+  "benchmark": "enhanced",
+  "top_k": 2,
+  "results": {
+    "hybrid_baseline": {
+      "overall": 100.0,
+      "total": 1,
+      "questions": 1,
+      "time": 7.224082946777344e-05,
+      "by_type": {
+        "single-session-assistant": {
+          "hits": 1,
+          "total": 1
+        }
+      }
+    },
+    "query_expand": {
+      "overall": 100.0,
+      "total": 1,
+      "questions": 1,
+      "time": 0.00014448165893554688,
+      "by_type": {
+        "single-session-assistant": {
+          "hits": 1,
+          "total": 1
+        }
+      }
+    },
+    "temporal_boost": {
+      "overall": 100.0,
+      "total": 1,
+      "questions": 1,
+      "time": 0.0008242130279541016,
+      "by_type": {
+        "single-session-assistant": {
+          "hits": 1,
+          "total": 1
+        }
+      }
+    },
+    "combined_v2": {
+      "overall": 100.0,
+      "total": 1,
+      "questions": 1,
+      "time": 0.0001671314239501953,
+      "by_type": {
+        "single-session-assistant": {
+          "hits": 1,
+          "total": 1
+        }
+      }
+    },
+    "wider_retrieval": {
+      "overall": 100.0,
+      "total": 1,
+      "questions": 1,
+      "time": 8.416175842285156e-05,
+      "by_type": {
+        "single-session-assistant": {
+          "hits": 1,
+          "total": 1
+        }
+      }
+    }
+  },
+  "arm_config": {
+    "onnx_path": "models/test-benchmark",
+    "binary_quant": true,
+    "mrl_dim": 2,
+    "rescore_oversample": 3
+  },
+  "timestamp": "2026-10-12 11:11:20"
+}
