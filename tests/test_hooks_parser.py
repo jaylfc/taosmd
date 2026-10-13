@@ -671,3 +671,23 @@ def test_user_is_meta_string_still_returns_item():
     assert len(items) == 1
     assert items[0]["metadata"]["kind"] == "message"
     assert items[0]["metadata"]["role"] == "user"
+
+
+def test_assistant_is_meta_true_with_text_returns_item():
+    """Assistant record with isMeta true and text content is not skipped (only user records are)."""
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "assistant response"}]},
+            "uuid": "meta1",
+            "isMeta": True,
+            "timestamp": "2026-10-07T22:53:25.123Z",
+            "sessionId": "s1",
+        }
+    )
+    items, base_id = parse_entry(0, line, "s1")
+    assert items is not None, "Assistant with isMeta true and text should not be skipped"
+    assert len(items) == 1, f"Expected 1 item, got {len(items)}"
+    assert items[0]["metadata"]["kind"] == "message", f"Expected kind 'message', got {items[0]['metadata']['kind']}"
+    assert items[0]["metadata"]["role"] == "assistant", f"Expected role 'assistant', got {items[0]['metadata']['role']}"
+    assert items[0]["text"] == "assistant response", f"Expected text 'assistant response', got {items[0]['text']}"
