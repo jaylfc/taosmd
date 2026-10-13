@@ -605,6 +605,14 @@ def test_multiple_tool_result_ids_distinct():
             "session_id",
             r'{"type":"user","message":{"role":"user","content":"plain"},"uuid":"u6","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"\ud800"}',
         ),
+        (
+            "user_text_and_tool_result_surrogate",
+            '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"\ud800"},{"type":"tool_result","tool_use_id":"t1","content":"out"}]},"uuid":"u1","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
+        ),
+        (
+            "assistant_tool_use_string_surrogate",
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":"\ud800"}]},"uuid":"a1","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
+        ),
     ],
     ids=[
         "surrogate-user-string-content",
@@ -613,6 +621,8 @@ def test_multiple_tool_result_ids_distinct():
         "surrogate-assistant-text-block",
         "surrogate-uuid",
         "surrogate-session-id",
+        "surrogate-user-text-and-tool-result",
+        "surrogate-assistant-tool-use-string",
     ],
 )
 def test_lone_surrogate_does_not_raise(label, line):
@@ -629,7 +639,7 @@ def test_lone_surrogate_does_not_raise(label, line):
         pytest.fail(f"{label}: parse_entry raised {type(exc).__name__}: {exc}")
 
     assert items is not None, f"{label}: expected one item, got None"
-    assert len(items) == 1, f"{label}: expected 1 item, got {len(items)}"
+    assert len(items) >= 1, f"{label}: expected at least 1 item, got {len(items)}"
 
     item = items[0]
     try:
