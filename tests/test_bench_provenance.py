@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -73,3 +74,23 @@ def test_collect_returns_all_keys_and_format(tmp_path):
     assert set(prov.keys()) == expected
     assert re.match(r"^[0-9a-f]{40}$", prov["git_commit"] or "") is not None
     assert prov["config_hash"] == bench_provenance.config_hash(cfg)
+
+
+def test_probe_runs_as_script():
+    repo_root = Path(__file__).resolve().parent.parent
+    for script in (
+        "benchmarks/retrieval_latency_probe.py",
+        "benchmarks/longmemeval_enhanced.py",
+    ):
+        result = subprocess.run(
+            [sys.executable, script, "--help"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"{script} --help exited {result.returncode}: {result.stderr}"
+        )
+        assert "ModuleNotFoundError" not in result.stderr, (
+            f"{script} --help produced ModuleNotFoundError: {result.stderr}"
+        )
