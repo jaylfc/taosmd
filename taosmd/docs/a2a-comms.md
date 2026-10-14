@@ -559,7 +559,19 @@ Rules:
   the feed until `limit` readable rows are found and scans at most `limit * 5`
   rows, so a long run of unreadable rows can return fewer than `limit`
   messages. The stream resolves the ACL on every poll and moves its cursor
-  past rows it skipped. The other read routes are gated in follow-up slices.
+  past rows it skipped.
+- `GET /a2a/channels` and `GET /a2a/census` leave out restricted channels the
+  caller may not read: the channel row (name, members, counts, timestamps) is
+  absent, and the census drops that channel's per-sender counts, recomputes
+  each sender's `total` from what remains and omits senders left with nothing.
+  `GET /a2a/members?channel=<name>` returns `403` (no channel metadata in the
+  body) for a channel the caller may not read.
+- `GET /a2a/mentions`, `GET /a2a/inbox` and `GET /a2a/inbox/unhandled` drop
+  rows from channels the caller may not read. The `reader` / `consumer` query
+  value only selects whose inbox is read; the ACL decision uses the verified
+  token `sub` alone. The filter runs after the service applies `limit`, so a
+  page can hold fewer than `limit` rows. The remaining read routes are gated
+  in the final slice.
 
 #### Thread path-segment encoding
 
