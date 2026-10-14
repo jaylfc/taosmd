@@ -570,8 +570,23 @@ Rules:
   rows from channels the caller may not read. The `reader` / `consumer` query
   value only selects whose inbox is read; the ACL decision uses the verified
   token `sub` alone. The filter runs after the service applies `limit`, so a
-  page can hold fewer than `limit` rows. The remaining read routes are gated
-  in the final slice.
+  page can hold fewer than `limit` rows.
+- A thread is a channel (`kind` is `"channel"`): its `thread` name is the
+  channel name the ACL is keyed on. `GET /a2a/threads` leaves out threads of
+  channels the caller may not read. `GET /a2a/threads/{thread}/messages` (and
+  the bare `GET /a2a/threads/{thread}` form) and
+  `GET /a2a/threads/{thread}/members` return `403` with no channel metadata in
+  the body.
+- `GET /a2a/messages/{id}/receipts` and `GET /a2a/receipts?message_id=` decide
+  on the channel of the message (its `thread`) and return `403` when the
+  caller may not read it, before any receipt is looked up. These two routes
+  already answer `401` to an unverified caller when a registry verifier is
+  configured, so that `401` comes first; with no verifier the ACL answers
+  `403`. An unknown message id has no channel and keeps its existing answer
+  (`200` with empty lists, or `404 receipt not found`). The write routes
+  `POST /a2a/threads`, `POST` and `DELETE` on `/a2a/threads/{t}/members`,
+  `POST /a2a/receipts` and `PATCH /a2a/receipts` are not read routes and are
+  not channel-ACL gated.
 
 #### Thread path-segment encoding
 

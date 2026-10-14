@@ -2437,6 +2437,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             threads = runner.run(
                 service.a2a_threads(principal=principal, data_dir=data_dir)
             )
+            # Channel ACL read filter: a thread is a channel, so each row is
+            # judged on its ``thread`` name (ACL map resolved once, R-ONCE).
+            threads = self._filter_readable(threads, {}, self._channel_aliases())
             self._send_json(200, {"threads": threads})
 
         def _handle_a2a_thread_messages(self, thread: str, qs: dict) -> None:
@@ -2450,6 +2453,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if not self._enforce_channel_acl(thread, "read"):
+                return
             result = runner.run(
                 service.a2a_thread_messages(
                     thread=thread, before=before, after=after,
@@ -2484,6 +2489,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             """GET /a2a/threads/{thread}/members: list active members."""
             thread = unquote(thread)
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
+            if not self._enforce_channel_acl(thread, "read"):
+                return
             members = runner.run(
                 service.a2a_list_members(thread=thread, data_dir=data_dir)
             )
@@ -2540,6 +2547,31 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return event.get("data", {}).get("from")
 
             return _coro()
+
+        def _get_message_channel(self, message_id: int) -> asyncio.coroutine:
+            """Return the channel of an archived message, or ``None`` if unknown."""
+
+            async def _coro():
+                stores = await _api._ensure_stores(data_dir)
+                event = await stores["archive"].get_event(message_id)
+                if event is None:
+                    return None
+                return (event.get("data", {}).get("thread")
+                        or event.get("app_id") or "general")
+
+            return _coro()
+
+        def _enforce_message_channel_read(self, message_id: int) -> bool:
+            """Channel ACL read gate for a receipt read keyed by message id.
+
+            The decision is on the message's CHANNEL. An unknown id has no
+            channel and keeps the route's existing behaviour. Returns False
+            AND writes the 403 when the channel is denied.
+            """
+            channel = runner.run(self._get_message_channel(message_id))
+            if channel is None:
+                return True
+            return self._enforce_channel_acl(channel, "read")
 
         # ----- A2A receipt handlers -----------------------------------------
 
@@ -2614,6 +2646,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 message_id = int(msg_id_str)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("message id must be an integer") from exc
+            if not self._enforce_message_channel_read(message_id):
+                return
             result = runner.run(
                 service.a2a_get_receipts(message_id, data_dir=data_dir)
             )
@@ -2655,6 +2689,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 message_id = int(message_id_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'message_id' must be an integer") from exc
+            if not self._enforce_message_channel_read(message_id):
+                return
             if _registry_verifier is not None and caller_id is not None and caller_id != requested_agent:
                 message_sender = runner.run(self._get_message_sender(message_id))
                 if message_sender is None or message_sender != caller_id:
