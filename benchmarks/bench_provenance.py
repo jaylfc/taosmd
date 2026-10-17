@@ -17,9 +17,13 @@ from pathlib import Path
 from typing import Optional
 
 
+_VOLATILE_KEYS = frozenset({"timestamp", "git_sha", "run_id", "failed_qa"})  # mirrors bench_checkpoint.py _HASH_SKIP
+
+
 def config_hash(config: dict) -> str:
+    filtered = {k: v for k, v in config.items() if k not in _VOLATILE_KEYS}
     return hashlib.sha256(
-        json.dumps(config, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8')
+        json.dumps(filtered, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8')
     ).hexdigest()
 
 
