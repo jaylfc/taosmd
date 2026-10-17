@@ -1775,18 +1775,42 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_a2a_channels(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
             channels = runner.run(service.a2a_channels(data_dir=data_dir))
+            # Channel ACL read filter: restricted channels the verified caller
+            # may not read are omitted whole (name, members, counts, times).
+            acl_map: dict = {}
+            channels = [
+                c for c in channels
+                if isinstance(c.get("channel"), str)
+                and c["channel"]
+                and self._can_read_channel(c["channel"], acl_map)
+            ]
             self._send_json(200, {"channels": channels})
 
         def _handle_a2a_census(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
             census = runner.run(service.a2a_sender_census(data_dir=data_dir))
-            self._send_json(200, {"census": census})
+            # Channel ACL read filter: drop the per-channel counts of every
+            # channel the verified caller may not read, recompute each total
+            # from what is left, and omit senders with nothing left.
+            acl_map: dict = {}
+            visible: dict = {}
+            for sender, entry in census.items():
+                per_channel = {
+                    chan: n for chan, n in (entry.get("channels") or {}).items()
+                    if isinstance(chan, str) and chan
+                    and self._can_read_channel(chan, acl_map)
+                }
+                if per_channel:
+                    visible[sender] = {"total": sum(per_channel.values()), "channels": per_channel}
+            self._send_json(200, {"census": visible})
 
         def _handle_a2a_members(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset({"channel"}), self._raw_qs)
             channel = (qs.get("channel") or [None])[0]
             if not channel:
                 raise _BadRequest("'channel' query parameter is required")
+            if not self._enforce_channel_acl(channel, "read"):
+                return
             members = runner.run(service.a2a_members(channel=channel, data_dir=data_dir))
             self._send_json(200, {"members": members})
 
@@ -2205,6 +2229,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_mentions_feed(reader, since=since, limit=limit_i, data_dir=data_dir)
             )
+            messages = self._filter_readable(messages, {}, self._channel_aliases())
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_inbox(self, qs: dict) -> None:
@@ -2247,6 +2272,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_inbox(consumer, limit=limit_i, include_kinds=include_kinds, exclude_acked_by=exclude_acked_by, data_dir=data_dir)
             )
+            messages = self._filter_readable(messages, {}, self._channel_aliases())
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_inbox_advance(self) -> None:
@@ -2328,6 +2354,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_inbox_unhandled(consumer, limit=limit_i, data_dir=data_dir)
             )
+            messages = self._filter_readable(messages, {}, self._channel_aliases())
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_stream(self, qs: dict) -> None:
