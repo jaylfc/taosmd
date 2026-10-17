@@ -1,4 +1,7 @@
-"""Qwen3-VL-Embedding-2B image embedder for E-048."""
+"""Qwen3-VL-Embedding-2B image embedder for E-048.
+
+Needs transformers>=4.57.0 at run time (not a repo dependency; mention it in the module docstring only).
+"""
 
 from __future__ import annotations
 
@@ -45,7 +48,7 @@ class Qwen3VLImageEmbedder(MediaEmbedder):
         device = "cuda" if torch.cuda.is_available() else "cpu" if self._device == "auto" else self._device
 
         model = sentence_transformers.SentenceTransformer(
-            self.MODEL_ID, revision=self._REVISION, device=device
+            self.MODEL_ID, revision=self.REVISION, device=device
         )
         model.eval()
         self._model = model
@@ -73,7 +76,7 @@ class Qwen3VLImageEmbedder(MediaEmbedder):
 
         model_files = {}
         snapshot_dir = self._huggingface_hub.snapshot_download(
-            self.MODEL_ID, revision=self._REVISION
+            self.MODEL_ID, revision=self.REVISION
         )
         # Collect all *.safetensors files, filenames relative to snapshot dir, sorted
         safetensors_files = []
@@ -96,7 +99,7 @@ class Qwen3VLImageEmbedder(MediaEmbedder):
 
         return {
             "model_id": self.MODEL_ID,
-            "revision": self._REVISION,
+            "revision": self.REVISION,
             "model_files": model_files,
             "runtime": "sentence-transformers",
             "runtime_version": self._sentence_transformers.__version__,
