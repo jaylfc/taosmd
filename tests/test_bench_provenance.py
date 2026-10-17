@@ -19,7 +19,7 @@ def test_config_hash_order_insensitive(tmp_path):
     assert bench_provenance.config_hash(a) != bench_provenance.config_hash({"a": 1, "b": 3})
 
 
-def test_config_hash_ignores_volatile_keys(tmp_path):
+def test_config_hash_ignores_volatile_keys():
     assert bench_provenance.config_hash({"top_k": 5, "timestamp": "a", "git_sha": "x"}) == \
            bench_provenance.config_hash({"top_k": 5, "timestamp": "b", "git_sha": "y"})
     assert bench_provenance.config_hash({"top_k": 5}) != bench_provenance.config_hash({"top_k": 6})

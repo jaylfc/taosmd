@@ -1,2 +1,1 @@
-### Fixed
-- `benchmarks/bench_provenance.py`: added `_VOLATILE_KEYS = frozenset({"timestamp", "git_sha", "run_id", "failed_qa"})` to match `bench_checkpoint.py` and ignore volatile keys in `config_hash` calculations
+### Fixed - `benchmarks/bench_provenance.py`: added `_VOLATILE_KEYS = frozenset({"timestamp", "git_sha", "run_id", "failed_qa"})` to match `bench_checkpoint.py` and ignore volatile keys in `config_hash` calculations
