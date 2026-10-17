@@ -32,7 +32,7 @@ def file_sha256(path: Optional[str | Path]) -> str | None:
         return None
     p = Path(path) if not isinstance(path, Path) else path
     if not p.exists():
-        return None
+        raise FileNotFoundError(path)
     h = hashlib.sha256()
     with p.open('rb') as f:
         while True:
@@ -47,8 +47,10 @@ def model_dir_digests(onnx_dir: Optional[str | Path]) -> dict[str, str]:
     if onnx_dir is None:
         return {}
     p = Path(onnx_dir) if not isinstance(onnx_dir, Path) else onnx_dir
-    if not p.exists() or not p.is_dir():
-        return {}
+    if not p.exists():
+        raise ValueError(f"onnx_dir does not exist: {p}")
+    if not p.is_dir():
+        raise ValueError(f"onnx_dir is not a directory: {p}")
     patterns = ('*.onnx', '*.onnx_data', 'tokenizer.json')
     files: list[Path] = []
     for pat in patterns:
@@ -74,7 +76,7 @@ def collect(config: dict, onnx_dir: Optional[str | Path], dataset_path: Optional
             text=True,
         ).stdout.strip()
     except Exception:
-        git_commit = None
+        git_commit = "unknown"
     try:
         git_dirty = bool(
             subprocess.run(
@@ -87,7 +89,7 @@ def collect(config: dict, onnx_dir: Optional[str | Path], dataset_path: Optional
             ).stdout.strip()
         )
     except Exception:
-        git_dirty = False
+        git_dirty = None
 
     onnxruntime_version = None
     try:
