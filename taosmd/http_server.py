@@ -988,7 +988,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return False
             if allowlist == ["*"]:
                 return True
-            caller = self._get_authenticated_agent_id()
+            caller = self._caller_id_cache
+            if caller is None:
+                caller = self._get_authenticated_agent_id()
+                self._caller_id_cache = caller
             if caller is None:
                 return False
             return caller in allowlist
@@ -1184,6 +1187,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             path = parts.path.rstrip("/") or "/"
             query = parse_qs(parts.query)
             self._raw_qs = parts.query
+            # Cache for verified caller ID to avoid repeated resolution per request
+            self._caller_id_cache = None
             # Token gate: check before routing so even unknown paths are
             # protected (prevents enumeration without a token). Admin write
             # routes are exempt here (#154): they enforce their own, stricter
