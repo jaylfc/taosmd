@@ -30,6 +30,7 @@ from taosmd import VectorMemory
 from taosmd.query_expansion import expand_query_fast
 from taosmd.temporal_boost import temporal_rerank, classify_temporal_query
 from taosmd.preference_extractor import extract_preferences
+from benchmarks.bench_provenance import collect
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_full.json")
 ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx")
@@ -277,6 +278,9 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     # Read arm configuration from environment
     cfg = arm_config_from_env(os.environ)
     onnx_path_base = os.path.basename(cfg['onnx_path'])
+    cfg_dict = dict(cfg)
+    cfg_dict['top_k'] = top_k
+    prov = collect(cfg_dict, cfg['onnx_path'] if cfg.get('onnx_path') else ONNX_PATH, DATA_PATH)
 
     print("=" * 74)
     print(f"LongMemEval-S Enhanced Retrieval Experiments — Recall@{top_k}")
@@ -373,6 +377,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
             "top_k": top_k,
             "results": all_results,
             "arm_config": cfg,
+            "provenance": prov,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }, f, indent=2)
     print(f"\nResults saved to: {output_path}")

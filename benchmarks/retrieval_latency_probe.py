@@ -47,6 +47,8 @@ _REPO_ROOT = os.path.dirname(_BENCH_DIR)
 sys.path.insert(0, _REPO_ROOT)
 sys.path.insert(0, _BENCH_DIR)
 
+from benchmarks.bench_provenance import collect
+
 from taosmd.vector_memory import VectorMemory  # noqa: E402
 
 from locomo_runner import (  # noqa: E402
@@ -323,6 +325,8 @@ async def run(args: argparse.Namespace) -> int:
         "git_sha": _git_sha(),
         "timestamp": datetime.utcnow().strftime("%Y%m%d_%H%M%S"),
     }
+    prov = collect(dict(config), args.onnx_path if args.embed_mode == "onnx" else None, args.dataset)
+    config["provenance"] = prov
     summary = _summarize(results, errors, ingest_stats)
 
     if args.out:
