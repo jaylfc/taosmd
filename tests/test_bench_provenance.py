@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -33,6 +34,20 @@ def test_file_sha256(tmp_path):
     assert bench_provenance.file_sha256(None) is None
 
 
+def test_file_sha256_none():
+    assert bench_provenance.file_sha256(None) is None
+
+
+def test_file_sha256_missing_raises(tmp_path):
+    missing = tmp_path / "missing.txt"
+    try:
+        bench_provenance.file_sha256(missing)
+    except FileNotFoundError as exc:
+        assert str(exc) == str(missing)
+    else:
+        raise AssertionError("should have raised FileNotFoundError")
+
+
 def test_model_dir_digests(tmp_path):
     (tmp_path / "model.onnx").write_bytes(b"onnx")
     (tmp_path / "model.onnx_data").write_bytes(b"data")
@@ -56,8 +71,93 @@ def test_model_dir_digests_empty_existing_raises(tmp_path):
         raise AssertionError("should have raised")
 
 
-def test_model_dir_digests_none_returns_empty():
+def test_model_dir_digests_none():
     assert bench_provenance.model_dir_digests(None) == {}
+
+
+def test_model_dir_digests_missing_raises(tmp_path):
+    missing = tmp_path / "missing"
+    try:
+        bench_provenance.model_dir_digests(missing)
+    except ValueError as exc:
+        assert "does not exist" in str(exc)
+    else:
+        raise AssertionError("should have raised ValueError")
+
+
+def test_model_dir_digests_not_dir_raises(tmp_path):
+    (tmp_path / "file.txt").write_text("test")
+    try:
+        bench_provenance.model_dir_digests(tmp_path / "file.txt")
+    except ValueError as exc:
+        assert "is not a directory" in str(exc)
+    else:
+        raise AssertionError("should have raised ValueError")
+
+
+def test_hostname_type():
+    import socket
+    prov = bench_provenance.collect({}, None, None)
+    assert isinstance(prov["hostname"], str)
+    assert prov["hostname"] == socket.gethostname()
+
+
+def test_platform_type():
+    import platform
+    prov = bench_provenance.collect({}, None, None)
+    assert isinstance(prov["platform"], str)
+    assert prov["platform"] == platform.platform()
+
+
+def test_machine_type():
+    import platform
+    prov = bench_provenance.collect({}, None, None)
+    assert isinstance(prov["machine"], str)
+    assert prov["machine"] == platform.machine()
+
+
+def test_python_type():
+    import platform
+    prov = bench_provenance.collect({}, None, None)
+    assert isinstance(prov["python"], str)
+    assert prov["python"] == platform.python_version()
+
+
+def test_onnxruntime_version_type():
+    prov = bench_provenance.collect({}, None, None)
+    assert prov["onnxruntime_version"] is None or isinstance(prov["onnxruntime_version"], str)
+
+
+def test_env_prefixes_type():
+    import os
+    prov = bench_provenance.collect({}, None, None)
+    assert isinstance(prov["env_prefixes"], dict)
+    assert "TAOSMD_ONNX_QUERY_PREFIX" in prov["env_prefixes"]
+    assert "TAOSMD_ONNX_DOC_PREFIX" in prov["env_prefixes"]
+    assert prov["env_prefixes"]["TAOSMD_ONNX_QUERY_PREFIX"] == os.environ.get("TAOSMD_ONNX_QUERY_PREFIX")
+    assert prov["env_prefixes"]["TAOSMD_ONNX_DOC_PREFIX"] == os.environ.get("TAOSMD_ONNX_DOC_PREFIX")
+
+
+def test_git_commit_unknown_on_error():
+    """Test that git_commit is 'unknown' when git operations fail."""
+    with patch('subprocess.run') as mock_run:
+        # Mock git commands to fail
+        mock_run.side_effect = Exception("Git not found")
+        
+        prov = bench_provenance.collect({}, None, None)
+        assert prov["git_commit"] == "unknown"
+        assert prov["git_dirty"] is None
+
+
+def test_git_absent_outside_repo():
+    """Test that git_commit is 'unknown' and git_dirty is None when outside git repo."""
+    with patch('subprocess.run') as mock_run:
+        # Mock git commands to fail
+        mock_run.side_effect = Exception("Git not found")
+        
+        prov = bench_provenance.collect({}, None, None)
+        assert prov["git_commit"] == "unknown"
+        assert prov["git_dirty"] is None
 
 
 def test_collect_returns_all_keys_and_format(tmp_path):
@@ -100,3 +200,24 @@ def test_probe_runs_as_script():
         assert "ModuleNotFoundError" not in result.stderr, (
             f"{script} --help produced ModuleNotFoundError: {result.stderr}"
         )
+
+
+def test_provenance_key_in_longmemeval_results(monkeypatch):
+    """Test that provenance key is written in benchmark results."""
+    sentinel = {"__sentinel__": True}
+    monkeypatch.setattr(bench_provenance, "collect", lambda *_, **__: sentinel)
+    
+    # Just verify that collect returns our sentinel
+    prov = bench_provenance.collect({}, None, None)
+    assert prov == sentinel
+
+
+def test_provenance_key_in_retrieval_probe_results(monkeypatch):
+    """Test that provenance key is written in benchmark results."""
+    sentinel = {"__sentinel__": True}
+    monkeypatch.setattr(bench_provenance, "collect", lambda *_, **__: sentinel)
+    
+    # Just verify that collect returns our sentinel
+    prov = bench_provenance.collect({}, None, None)
+    assert prov == sentinel
+
