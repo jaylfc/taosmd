@@ -39,6 +39,17 @@ REMOTE_LLM_MODEL = os.environ.get("TAOSMD_OLLAMA_MODEL", "qwen2.5:3b")
 # CORRECT, which zeroed the qwen3.5:9b run). Defaults to the generator for
 # back-compat; set TAOSMD_JUDGE_MODEL to a different, non-thinking model.
 JUDGE_MODEL = os.environ.get("TAOSMD_JUDGE_MODEL", REMOTE_LLM_MODEL)
+
+# Non-answer phrases that indicate a non-answer (used to skip judge calls)
+NON_ANSWER_PHRASES = (
+    "i don't know",
+    "i do not know", 
+    "i'm sorry",
+    "not in the context",
+    "does not contain",
+    "no information",
+)
+
 # Evidence pipeline depth. E-012 diagnosis: the generator was STARVED of
 # evidence (assembler capped at 2000 tok, 5 vector chunks, 3 FTS hits), which
 # craters multi-session/temporal questions that need several sessions in view.
@@ -162,9 +173,38 @@ def _parse_verdict(content: str) -> bool:
     return "CORRECT" in j
 
 
-async def score_answer_llm(client, predicted: str, gold: str, question: str) -> bool:
-    """Score using LLM-as-judge (official LongMemEval approach)."""
-    prompt = f"""You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
+async def score_answer_llm(client, predicted: str, gold: str, question: str, context: str | None = None) -> bool:
+    """Score using LLM-as-judge (official LongMemEval approach).
+
+    In evidence mode (TAOSMD_JUDGE_MODE=evidence), the prompt includes the
+    retrieved context so the judge can distinguish grounded paraphrases from
+    unsupported guesses.
+    """
+    judge_mode = os.environ.get("TAOSMD_JUDGE_MODE", "reference")
+    if judge_mode == "evidence" and context is None:
+        raise ValueError("Evidence mode requires context but none was provided")
+    elif judge_mode == "evidence":
+        prompt = f"""You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
+
+Rules:
+- "I don't know" or similar non-answers are ALWAYS incorrect
+- The predicted answer must contain the key facts from the reference answer
+- Paraphrasing is fine, but the core information must match
+- If the predicted answer is vague or generic while the reference is specific, that is INCORRECT
+- Judge against the reference answer; the context is there so you can tell a grounded paraphrase from an unsupported guess, it never overrides the reference
+
+Reply with exactly one word: CORRECT or INCORRECT
+
+Retrieved context the answer was generated from:
+{context}
+
+Question: {question}
+Reference answer: {gold}
+Predicted answer: {predicted}
+
+Verdict: /no_think"""
+    else:
+        prompt = f"""You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
 
 Rules:
 - "I don't know" or similar non-answers are ALWAYS incorrect
@@ -199,9 +239,55 @@ Verdict: /no_think"""
     return False
 
 
-def score_answer(predicted: str, gold: str) -> bool:
-    """Fast substring check (used when LLM judge not available)."""
-    return score_answer_substring(predicted, gold)
+def build_row(
+    idx: int,
+    question_type: str,
+    question: str,
+    gold_answer: str,
+    full_context: str,
+    correct: bool,
+    retrieved_chars: int,
+    retrieval_delta: dict | None,
+    save_context: bool,
+    predicted: str | None = None,
+) -> dict:
+    """Create a result row for LongMemEval.
+    
+    Args:
+        idx: Question index
+        question_type: Type of question
+        question: The question text
+        gold_answer: The reference/gold answer
+        full_context: Full context retrieved for this question
+        correct: Whether the answer was correct
+        retrieved_chars: Length of the retrieved context in characters
+        retrieval_delta: Delta information for retrieval comparison
+        save_context: Whether to save the context in the row
+        predicted: The predicted answer (from LLM). If None and save_context
+            is False (retrieval-only mode), an empty string is used.
+    
+    Returns:
+        A dictionary representing the result row with all required keys.
+    """
+    row = {
+        "idx": idx,
+        "question_type": question_type,
+        "question": question,
+        "correct": bool(correct),
+        "retrieved_chars": retrieved_chars,
+        "retrieval_delta": retrieval_delta,
+    }
+    
+    # Always store 'predicted' and 'answer' keys
+    row["predicted"] = predicted if predicted is not None else ""
+    
+    row["answer"] = gold_answer
+    
+    # Save 'context' as exactly what the generator saw: full_context[:CONTEXT_CHARS]
+    if save_context:
+        row["context"] = full_context[:CONTEXT_CHARS]
+    
+    return row
 
 
 async def llm_answer(client, context: str, question: str) -> str:
@@ -612,6 +698,9 @@ async def run_benchmark(
     # point every question had been answered and the results were unrecoverable.
     _prepare_out_dir(out_path)
 
+    # Save context flag
+    save_context = os.environ.get("TAOSMD_LME_SAVE_CONTEXT", "0") == "1"
+
     # Load dataset
     dataset = load_dataset()
 
@@ -735,8 +824,8 @@ async def run_benchmark(
             if SELF_VERIFY:
                 answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
-            if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
-                correct = await score_answer_llm(llm_client, answer, gold_answer, question)
+            if answer and not any(idk in answer.lower() for idk in NON_ANSWER_PHRASES):
+                correct = await score_answer_llm(llm_client, answer, gold_answer, question, full_context[:CONTEXT_CHARS])
             else:
                 correct = False
             llm_time = time.time() - t_llm
@@ -758,14 +847,24 @@ async def run_benchmark(
 
         elapsed = ingest_time + query_time
         total_time += elapsed
-        all_results.append({
-            "idx": i,
-            "question_type": qtype,
-            "question": question,
-            "correct": bool(correct),
-            "retrieved_chars": len(full_context),
-            "retrieval_delta": delta,
-        })
+
+        # Save context flag
+        save_context = os.environ.get("TAOSMD_LME_SAVE_CONTEXT", "0") == "1"
+
+        all_results.append(
+            build_row(
+                idx=i,
+                question_type=qtype,
+                question=question,
+                gold_answer=gold_answer,
+                full_context=full_context,
+                correct=correct,
+                retrieved_chars=len(full_context),
+                retrieval_delta=delta,
+                save_context=save_context,
+                predicted=answer,
+            )
+        )
 
         status = "✓" if correct else "✗"
         print(f"  [{i+1:3d}/{len(dataset)}] {status} {qtype:25s} | ingest:{ingest_time:.1f}s query:{query_time:.3f}s | {question[:50]}")
@@ -820,6 +919,7 @@ async def run_benchmark(
             "limit": limit,
             "generator": REMOTE_LLM_MODEL,
             "judge": JUDGE_MODEL,
+            "judge_mode": os.environ.get("TAOSMD_JUDGE_MODE", "reference"),
             "rerank": RERANK,
             "decompose": DECOMPOSE,
             "self_verify": SELF_VERIFY,
