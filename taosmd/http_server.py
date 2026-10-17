@@ -1026,6 +1026,25 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(403, {"error": f"channel ACL: {action} denied"})
             return False
 
+        def _filter_readable(self, msgs: list, acl_map: dict, aliases: dict) -> list:
+            """Keep the rows whose channel the verified caller may read.
+
+            ``acl_map`` and ``aliases`` are resolved once per request/poll and
+            shared across every row (R-ONCE). The channel of a row is its
+            ``thread``; a missing or non-string thread has no channel to match
+            and is dropped (fail closed).
+            """
+            kept = []
+            for m in msgs:
+                channel = m.get("thread")
+                if not isinstance(channel, str) or not channel:
+                    continue
+                if channel not in acl_map:
+                    acl_map[channel] = self._resolve_channel_acl(channel, aliases)
+                if self._can_read_channel(channel, acl_map):
+                    kept.append(m)
+            return kept
+
         def _check_admin_token(self) -> bool:
             """Return True when the request carries the correct admin token.
 
@@ -2094,9 +2113,21 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'limit' must not be negative")
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
-            messages = runner.run(
-                service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
-            )
+            # Channel ACL read filter: page the feed until ``limit`` readable
+            # rows are found, scanning at most ``limit * 5`` rows in total.
+            aliases = self._channel_aliases()
+            acl_map: dict = {}
+            scan_cap = limit_i * 5
+            scan = limit_i
+            while True:
+                rows = runner.run(
+                    service.a2a_feed(thread=thread, since=since, limit=scan, data_dir=data_dir)
+                )
+                messages = self._filter_readable(rows, acl_map, aliases)
+                if len(messages) >= limit_i or len(rows) < scan or scan >= scan_cap:
+                    break
+                scan = min(scan * 2, scan_cap)
+            messages = messages[-limit_i:] if limit_i else []
             # Compact mode: ?fields=id,sender,body projects each message down
             # to the named keys so token-frugal consumers (LLM agents) skip
             # framing they never read. Unknown names are ignored, never a 400,
@@ -2342,10 +2373,17 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     # re-sending the boundary row on subsequent polls.
                     new_msgs = [m for m in msgs if m["ts"] > last_ts]
                     if new_msgs:
-                        for msg in new_msgs:
+                        # Channel ACL read filter: the ACL map is resolved
+                        # once per poll, so a changed ACL takes effect on the
+                        # next poll. The cursor moves past DENIED rows too, so
+                        # they are never re-polled.
+                        readable = self._filter_readable(
+                            new_msgs, {}, self._channel_aliases(),
+                        )
+                        last_ts = max(m["ts"] for m in new_msgs)
+                        for msg in readable:
                             frame = f"data: {json.dumps(msg)}\n\n"
                             self.wfile.write(frame.encode("utf-8"))
-                            last_ts = msg["ts"]
                             if subscriber_agent is not None:
                                 runner.run(
                                     service.a2a_record_delivered(
@@ -2355,6 +2393,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                                         data_dir=data_dir,
                                     )
                                 )
+                        if not readable:
+                            self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
                     else:
                         self.wfile.write(b": keepalive\n\n")

@@ -551,9 +551,15 @@ Rules:
   post.
 - The ACL of a renamed channel follows the rename: the entries of the old and
   new name are both consulted and the more restrictive one wins.
-- This release gates `POST /a2a/send` and `POST /a2a/import` (an import batch
-  is denied whole if any envelope targets a channel the caller may not post
-  to). The read routes are gated in follow-up slices.
+- `POST /a2a/send` and `POST /a2a/import` are gated (an import batch is denied
+  whole if any envelope targets a channel the caller may not post to).
+- `GET /a2a/messages` (json and ndjson, with or without `?thread=`) and
+  `GET /a2a/stream` leave out messages from channels the caller may not read;
+  the response is still `200`, with those rows absent. `/a2a/messages` pages
+  the feed until `limit` readable rows are found and scans at most `limit * 5`
+  rows, so a long run of unreadable rows can return fewer than `limit`
+  messages. The stream resolves the ACL on every poll and moves its cursor
+  past rows it skipped. The other read routes are gated in follow-up slices.
 
 #### Thread path-segment encoding
 
