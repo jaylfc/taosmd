@@ -77,11 +77,22 @@ def arm_config_from_env(env: dict) -> dict:
     if rescore_oversample is not None and not binary_quant:
         raise ValueError("TAOSMD_BENCH_RESCORE_OVERSAMPLE requires TAOSMD_BENCH_BINARY_QUANT=1")
 
+    # Reranker selection (env-only, no CLI flag)
+    reranker_str = env.get("TAOSMD_BENCH_RERANKER")
+    if reranker_str is None or reranker_str == "":
+        reranker = "off"
+    else:
+        allowed = {"off", "ms-marco", "bge-v2-m3"}
+        if reranker_str not in allowed:
+            raise ValueError("TAOSMD_BENCH_RERANKER")
+        reranker = reranker_str
+
     return {
         "onnx_path": onnx_path,
         "binary_quant": binary_quant,
         "mrl_dim": mrl_dim,
         "rescore_oversample": rescore_oversample,
+        "reranker": reranker,
     }
 
 
@@ -170,7 +181,7 @@ def rescore(query_vec: list[float], candidates: list[dict], floats_by_text: dict
     return [cand for score, cand in scored[:k]]
 
 
-async def run_question(item, top_k, config_name, config):
+async def run_question(item, top_k, config_name, config, reranker=None):
     question = item["question"]
     answer_session_ids = item.get("answer_session_ids", [])
     sessions = item.get("haystack_sessions", [])
@@ -234,7 +245,14 @@ async def run_question(item, top_k, config_name, config):
         retrieve_k = retrieve_k * config['rescore_oversample']
 
     # Retrieve
-    results = await vmem.search(search_query, limit=retrieve_k, hybrid=True)
+    pool_k = retrieve_k
+    if reranker is not None:
+        pool_k = max(retrieve_k, 20)
+    results = await vmem.search(search_query, limit=pool_k, hybrid=True)
+
+    # Apply cross-encoder reranker if provided
+    if reranker is not None:
+        results = reranker.rerank(search_query, results, top_k)
 
     # Temporal reranking for temporal queries
     if config_name in ("temporal_boost", "combined_v2", "wider_retrieval"):
@@ -282,6 +300,27 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     cfg_dict['top_k'] = top_k
     prov = collect(cfg_dict, cfg['onnx_path'] if cfg.get('onnx_path') else ONNX_PATH, DATA_PATH)
 
+    # Load reranker if requested
+    reranker = None
+    if cfg.get('reranker') and cfg['reranker'] != 'off':
+        try:
+            import sys
+            import os as _os
+            _BENCH_DIR = _os.path.dirname(_os.path.abspath(__file__))
+            _REPO_ROOT = _os.path.dirname(_BENCH_DIR)
+            sys.path.insert(0, _REPO_ROOT)
+            sys.path.insert(0, _BENCH_DIR)
+            from locomo_runner import _load_reranker
+            reranker = _load_reranker(cfg['reranker'])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+        if reranker is None or not getattr(reranker, 'available', False):
+            print(f"ERROR: reranker {cfg['reranker']} requested but the model is "
+                  f"not loadable (model.onnx missing?). Pass TAOSMD_BENCH_RERANKER=off to "
+                  f"run without reranking.", file=sys.stderr)
+            sys.exit(2)
+
     print("=" * 74)
     print(f"LongMemEval-S Enhanced Retrieval Experiments — Recall@{top_k}")
     if cfg['onnx_path'] == ONNX_PATH:
@@ -289,7 +328,8 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     else:
         print(f"Model: {onnx_path_base} (ONNX), overridden via TAOSMD_BENCH_ONNX_PATH")
     print(f"Arm: onnx_path={onnx_path_base}, binary_quant={cfg['binary_quant']}, "
-          f"mrl_dim={cfg['mrl_dim']}, rescore_oversample={cfg['rescore_oversample']}")
+          f"mrl_dim={cfg['mrl_dim']}, rescore_oversample={cfg['rescore_oversample']}, "
+          f"reranker={cfg.get('reranker', 'off')}")
     print(f"Target: beat 96.6% (MemPalace) on {limit} questions")
     print("=" * 74)
 
@@ -319,7 +359,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
 
         for i, item in enumerate(dataset):
             qtype = item["question_type"]
-            recall_hit = await run_question(item, top_k, config_name, cfg)
+            recall_hit = await run_question(item, top_k, config_name, cfg, reranker=reranker)
 
             total_questions += 1
             if recall_hit:
