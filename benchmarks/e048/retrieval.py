@@ -65,7 +65,7 @@ def load_manifest(path) -> list[dict]:
         list of manifest entries, paths resolved to absolute paths
         
     Raises:
-        ValueError: duplicate id, empty captions list, missing key
+        ValueError: duplicate id, empty captions list, missing key, distractor not bool, distractor with captions
     """
     path = Path(path).resolve()
     entries = []
@@ -83,13 +83,26 @@ def load_manifest(path) -> list[dict]:
                 raise ValueError(f"Invalid JSON at line {line_num}: {e}")
             
             # Validate required keys
-            required_keys = {"id", "path", "captions"}
+            required_keys = {"id", "path"}
             if not required_keys.issubset(entry.keys()):
                 raise ValueError("missing key")
             
-            # Validate captions is a non-empty list
-            if not isinstance(entry["captions"], list) or not entry["captions"]:
-                raise ValueError("empty captions list")
+            # Validate distractor field if present
+            if "distractor" in entry and not isinstance(entry["distractor"], bool):
+                raise ValueError("distractor must be a bool")
+
+            is_distractor = entry.get("distractor", False)
+
+            if is_distractor:
+                # Distractor entries carry no captions
+                if "captions" in entry and entry["captions"]:
+                    raise ValueError("distractor entries carry no captions")
+            else:
+                # Validate captions is a non-empty list
+                if "captions" not in entry:
+                    raise ValueError("missing key")
+                if not isinstance(entry["captions"], list) or not entry["captions"]:
+                    raise ValueError("empty captions list")
             
             # Check for duplicate IDs
             if entry["id"] in seen_ids:
@@ -145,7 +158,7 @@ def run(manifest_path, embedder) -> dict:
         embedder: MediaEmbedder instance
         
     Returns:
-        dict with metrics and timing information
+        dict with metrics, n_items, n_queries, n_distractors and timing information
     """
     # Load manifest
     entries = load_manifest(manifest_path)
@@ -154,8 +167,13 @@ def run(manifest_path, embedder) -> dict:
     item_paths = [entry["path"] for entry in entries]
     captions = []
     query_item_indices = []
+    n_distractors = 0
     
     for idx, entry in enumerate(entries):  # Use enumerate to get index directly
+        # Distractors are ranked as items but add no queries
+        if entry.get("distractor", False):
+            n_distractors += 1
+            continue
         # Each caption of each item is one query
         for caption in entry["captions"]:
             captions.append(caption)
@@ -213,6 +231,7 @@ def run(manifest_path, embedder) -> dict:
         "metrics": metrics,
         "n_items": len(item_paths),
         "n_queries": len(captions),
+        "n_distractors": n_distractors,
         "embed_items_seconds": embed_items_seconds,
         "embed_queries_seconds": embed_queries_seconds,
     }
