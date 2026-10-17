@@ -2316,6 +2316,16 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             if by is None:
                 self._send_json(401, {"error": "registry auth: Bearer token with sub claim required"})
                 return
+            # Gate: check the message's channel read ACL.
+            channel = runner.run(self._get_message_channel(message_id))
+            if channel is None:
+                # Message not found: treat as denied to avoid leaking information
+                # about whether the message exists.
+                self._send_json(403, {"error": "channel ACL: read denied"})
+                return
+            if not self._enforce_channel_acl(channel, "read"):
+                # _enforce_channel_acl already sent the 403 response.
+                return
             result = runner.run(
                 service.a2a_ack(message_id, by, data_dir=data_dir)
             )
@@ -2730,6 +2740,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
 
         def _handle_a2a_alarms_clear(self, key: str) -> None:
             """POST /a2a/alarms/{key}/clear -- re-arm the alarm dedup for key."""
+            if not self._check_admin_token():
+                return
             import urllib.parse as _up
             key = _up.unquote(key)
             if not key:

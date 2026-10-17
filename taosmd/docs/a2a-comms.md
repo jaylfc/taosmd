@@ -514,7 +514,7 @@ because SQLite treats `LIMIT -1` as unbounded, so a cap written as
 | `GET`  | `/a2a/members` | `?channel=<name>` | `{"members": [...]}` |
 | `GET`  | `/a2a/inbox` | `?consumer=&limit=&include_kinds=&exclude_acked_by=` | `{"messages": [...]}`; `exclude_acked_by` omits messages already acked by the named principal so the caller's result set is limited to messages that still need attention |
 | `POST` | `/a2a/inbox/advance` | body JSON `{"to_id": int}` | `{"ok": true}` (principal derived from the verified registry token `sub`; no standalone `?consumer=` fallback) |
-| `POST` | `/a2a/ack` | body JSON `{"message_id": int}` | `{"id", "acked_by", "ok"}` (principal derived from the verified registry token `sub`; no standalone `?consumer=` fallback) |
+| `POST` | `/a2a/ack` | body JSON `{"message_id": int}` | `{"id", "acked_by", "ok"}` (principal derived from the verified registry token `sub`; must have read access to the message's channel; no standalone `?consumer=` fallback) |
 | `GET`  | `/a2a/inbox/unhandled` | `?consumer=&limit=` | `{"messages": [...]}` |
 | `POST` | `/a2a/threads` | body JSON `{"thread", "participants", "agent"}` | `{"thread", "created", "active_members"}`; create a thread (caller becomes owner, participants become members; ownership is self-asserted from the `agent` body field, see notes) |
 | `GET`  | `/a2a/threads` | `?principal=` | `{"threads": [...]}`; sender-derived filter: returns only threads this principal has sent to |
@@ -522,7 +522,7 @@ because SQLite treats `LIMIT -1` as unbounded, so a cap written as
 | `GET`  | `/a2a/threads/{thread}/members` | n/a | `{"members": [...]}`; active members (owners + members), empty for open/legacy threads with no membership rows |
 | `POST` | `/a2a/threads/{thread}/members` | body JSON `{"principal_id", "agent"}` | `{"thread", "principal_id", "added"}`; add a member (caller must be owner; returns `{"added": false, "already_member": true}` if already present; 403 if caller is not an owner) |
 | `DELETE` | `/a2a/threads/{thread}/members/{principal}` | body JSON `{"agent"}` | `{"thread", "principal_id", "removed", "archived": true}`; remove a member (caller must be owner; last owner cannot be removed; 403 if caller is not an owner) |
-| `POST` | `/a2a/alarms/{key}/clear` | path-encoded alarm key | `{"cleared": true, "key": str}` |
+| `POST` | `/a2a/alarms/{key}/clear` | path-encoded alarm key | `{"cleared": true, "key": str}` (requires admin token) |
 | `POST` | `/a2a/admin/delete-channel` | body JSON `{"channel": str}` | `{"deleted": true, "channel": str}`; admin, requires the admin token (403 if no admin or server token is set) |
 | `POST` | `/a2a/admin/rename-channel` | body JSON `{"from": str, "to": str}` | `{"renamed": true, "from": str, "to": str}`; admin, same token rule |
 | `POST` | `/a2a/admin/supersede-message` | body JSON `{"id": int}` | `{"superseded": true, "id": int}`; admin, same token rule |
@@ -643,10 +643,10 @@ Each message in `/a2a/messages` and the SSE stream has shape:
 `{"id", "ts", "from", "body", "thread", "reply_to"}`
 
 Alarm dedup: `POST /a2a/send` with `kind="alarm"`, `alarm_key`, and optional
-`alarm_fingerprint` suppresses duplicate alarms within the module-level min
-interval, returning `{"deduped": true, "kind": "alarm"}`. The dedup state is
-stored in `a2a_alarm_state` and survives restarts. Use
-`POST /a2a/alarms/{key}/clear` to re-arm a key.
+  `alarm_fingerprint` suppresses duplicate alarms within the module-level min
+  interval, returning `{"deduped": true, "kind": "alarm"}`. The dedup state is
+  stored in `a2a_alarm_state` and survives restarts. Use
+  `POST /a2a/alarms/{key}/clear` (requires admin token) to re-arm a key.
 
 Each channel in `/a2a/channels` has shape:
 `{"channel", "members", "message_count", "created_ts", "last_ts"}`

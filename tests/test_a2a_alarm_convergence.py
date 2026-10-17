@@ -27,7 +27,7 @@ import urllib.parse
 import pytest
 
 from taosmd import api as taosmd_api
-from taosmd import http_server, service
+from taosmd import config as cfg, http_server, service
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +75,9 @@ def live_server(tmp_path, monkeypatch):
     data_dir = tmp_path / "taosmd-a2a-alarm-http"
     data_dir.mkdir()
     monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+    # Set an admin token so that the /a2a/alarms/{key}/clear endpoint is accessible.
+    admin_token = "test-admin-token"
+    cfg.set_admin_token(admin_token, data_dir=str(data_dir))
 
     httpd = http_server.make_server("127.0.0.1", 0, data_dir=str(data_dir))
     stores = httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
@@ -84,7 +87,7 @@ def live_server(tmp_path, monkeypatch):
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     try:
-        yield f"http://{host}:{port}"
+        yield f"http://{host}:{port}", admin_token
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -103,16 +106,23 @@ def live_server(tmp_path, monkeypatch):
         httpd.service_loop.close()
 
 
-def _post(url: str, payload) -> tuple[int, dict]:
+def _post(url: str, payload, token=None) -> tuple[int, dict]:
     data = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST",
+        url, data=data, headers=headers, method="POST",
     )
     return _send(req)
 
 
-def _get(url: str) -> tuple[int, dict]:
-    return _send(urllib.request.Request(url, method="GET"))
+def _get(url: str, token=None) -> tuple[int, dict]:
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    return _send(req)
 
 
 def _send(req) -> tuple[int, dict]:
@@ -247,6 +257,7 @@ def test_dedup_state_survives_store_reopen(isolated_data_dir):
 # ---------------------------------------------------------------------------
 
 def test_clear_refire_via_http_endpoint(live_server):
+    live_server_url, admin_token = live_server
     payload = {
         "from": "watcher",
         "body": _BODY,
@@ -255,26 +266,26 @@ def test_clear_refire_via_http_endpoint(live_server):
         "alarm_key": _KEY,
         "alarm_fingerprint": _FP,
     }
-    status, body = _post(f"{live_server}/a2a/send", payload)
+    status, body = _post(f"{live_server_url}/a2a/send", payload, token=admin_token)
     assert status == 200, body
     assert "deduped" not in body
 
-    status, body = _post(f"{live_server}/a2a/send", payload)
+    status, body = _post(f"{live_server_url}/a2a/send", payload, token=admin_token)
     assert status == 200, body
     assert body.get("deduped") is True
 
-    status, body = _post(f"{live_server}/a2a/alarms/{urllib.parse.quote(_KEY)}/clear", {})
+    status, body = _post(f"{live_server_url}/a2a/alarms/{urllib.parse.quote(_KEY)}/clear", {}, token=admin_token)
     assert status == 200, body
 
-    status, body = _post(f"{live_server}/a2a/send", payload)
+    status, body = _post(f"{live_server_url}/a2a/send", payload, token=admin_token)
     assert status == 200, body
     assert "deduped" not in body, "clear must re-arm so the identical alarm stores"
 
-    status, body = _post(f"{live_server}/a2a/send", payload)
+    status, body = _post(f"{live_server_url}/a2a/send", payload, token=admin_token)
     assert status == 200, body
     assert body.get("deduped") is True, "cooldown must re-apply after the refire"
 
-    status, msgs = _get(f"{live_server}/a2a/messages?thread=ops")
+    status, msgs = _get(f"{live_server_url}/a2a/messages?thread=ops", token=admin_token)
     assert status == 200, msgs
     assert len(msgs["messages"]) == 2, f"expected 2 messages, got {len(msgs['messages'])}"
 
@@ -384,6 +395,9 @@ def test_http_alarms_clear_unquotes_key(tmp_path, monkeypatch):
     data_dir = tmp_path / "taosmd-quote-test"
     data_dir.mkdir()
     monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+    # Set an admin token for the clear endpoint.
+    admin_token = "test-admin-token"
+    cfg.set_admin_token(admin_token, data_dir=str(data_dir))
 
     httpd = hs.make_server("127.0.0.1", 0, data_dir=str(data_dir))
     stores = httpd.service_loop.run(taosmd_api._ensure_stores(str(data_dir)))
@@ -397,6 +411,7 @@ def test_http_alarms_clear_unquotes_key(tmp_path, monkeypatch):
         status, body = _post(
             f"http://{host}:{port}/a2a/alarms/{urllib.parse.quote(key, safe='')}/clear",
             {},
+            token=admin_token,
         )
         assert status == 200, body
         assert body["cleared"] is True
