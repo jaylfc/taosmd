@@ -10,7 +10,7 @@ import pytest
 # Make the benchmark module importable from the project root
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks.e048.retrieval import load_manifest, recall_at_k, write_results
+from benchmarks.e048.retrieval import load_manifest, recall_at_k, run, write_results
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -169,6 +169,72 @@ def test_load_manifest_rejects_missing_key(tmp_path):
     
     with pytest.raises(ValueError, match="missing key"):
         load_manifest(manifest)
+
+# ---------------------------------------------------------------------------
+# Tests for load_manifest: distractor entries
+# ---------------------------------------------------------------------------
+
+def test_load_manifest_distractor_without_captions_key(tmp_path):
+    """A distractor entry may omit the captions key and is accepted."""
+    manifest = tmp_path / "manifest.jsonl"
+    dummy = tmp_path / "d0.txt"
+    dummy.write_text("content")
+
+    items = [
+        {"id": "d0", "path": str(dummy), "distractor": True},
+    ]
+    manifest.write_text("\n".join(json.dumps(it) for it in items) + "\n")
+
+    loaded = load_manifest(manifest)
+    assert len(loaded) == 1
+    assert loaded[0]["distractor"] is True
+
+
+def test_load_manifest_distractor_with_empty_captions(tmp_path):
+    """A distractor entry with an empty captions list is accepted."""
+    manifest = tmp_path / "manifest.jsonl"
+    dummy = tmp_path / "d0.txt"
+    dummy.write_text("content")
+
+    items = [
+        {"id": "d0", "path": str(dummy), "distractor": True, "captions": []},
+    ]
+    manifest.write_text("\n".join(json.dumps(it) for it in items) + "\n")
+
+    loaded = load_manifest(manifest)
+    assert len(loaded) == 1
+    assert loaded[0]["captions"] == []
+
+
+def test_load_manifest_distractor_with_captions_raises(tmp_path):
+    """A distractor entry carrying non-empty captions is refused."""
+    manifest = tmp_path / "manifest.jsonl"
+    dummy = tmp_path / "d0.txt"
+    dummy.write_text("content")
+
+    items = [
+        {"id": "d0", "path": str(dummy), "distractor": True, "captions": ["x"]},
+    ]
+    manifest.write_text("\n".join(json.dumps(it) for it in items) + "\n")
+
+    with pytest.raises(ValueError, match="distractor entries carry no captions"):
+        load_manifest(manifest)
+
+
+def test_load_manifest_distractor_non_bool_raises(tmp_path):
+    """A distractor value that is not a bool is refused."""
+    manifest = tmp_path / "manifest.jsonl"
+    dummy = tmp_path / "d0.txt"
+    dummy.write_text("content")
+
+    items = [
+        {"id": "d0", "path": str(dummy), "distractor": "yes"},
+    ]
+    manifest.write_text("\n".join(json.dumps(it) for it in items) + "\n")
+
+    with pytest.raises(ValueError, match="distractor must be a bool"):
+        load_manifest(manifest)
+
 
 # ---------------------------------------------------------------------------
 # Tests for recall_at_k
@@ -480,4 +546,93 @@ def make_fake(**kwargs):
 def make_fake(**kwargs):
     """Factory for fake embedder (module-level as required by tests)."""
     return FakeEmbedder()
+
+
+# ---------------------------------------------------------------------------
+# Fake embedder with fixed lookup vectors for the distractor run test (no ML
+# dependencies: works even when torch/transformers/sentence_transformers/
+# open_clip are unimportable)
+# ---------------------------------------------------------------------------
+
+class DistractorRunEmbedder:
+    """Deterministic embedder mapping path-stems and query texts to fixed
+    vectors so the distractor-outranks proof is exact."""
+
+    def __init__(self):
+        self.dim = 3
+        self.name = "distractor-test-embedder"
+        self.modality = "image"
+        # stem -> vector
+        self._item_vecs = {
+            "item0": [0.9, 0.1, 0.0],
+            "item1": [0.1, 0.9, 0.0],
+            "d0": [1.0, 0.0, 0.0],
+            "d1": [1.0, 0.0, 0.0],
+            "d2": [1.0, 0.0, 0.0],
+        }
+        # query text -> vector
+        self._query_vecs = {
+            "q_item0": [1.0, 0.0, 0.0],
+            "q_item1": [0.0, 1.0, 0.0],
+        }
+
+    def embed_items(self, paths):
+        vecs = [self._item_vecs[Path(p).stem] for p in paths]
+        return np.array(vecs, dtype=np.float32)
+
+    def embed_queries(self, texts):
+        vecs = [self._query_vecs[t] for t in texts]
+        return np.array(vecs, dtype=np.float32)
+
+    def provenance(self):
+        return {
+            "model_id": "fake-model",
+            "revision": "1.0",
+            "model_files": {"fake.onnx": "a" * 64},
+            "runtime": "onnxruntime",
+            "runtime_version": "1.16.0",
+            "execution_provider": "CPUExecutionProvider",
+            "dtype": "float32",
+        }
+
+
+# ---------------------------------------------------------------------------
+# Tests for run
+# ---------------------------------------------------------------------------
+
+def test_run_distractors_compete(tmp_path):
+    """2 captioned items + 3 distractors.
+
+    Distractors are embedded as items (n_items counts them, they stay in
+    item_paths and compete in ranking) but contribute no queries. A distractor
+    whose vector equals a query's vector outranks that query's true item.
+    """
+    tmp_path.joinpath("item0.txt").write_text("x")
+    tmp_path.joinpath("item1.txt").write_text("x")
+    tmp_path.joinpath("d0.txt").write_text("x")
+    tmp_path.joinpath("d1.txt").write_text("x")
+    tmp_path.joinpath("d2.txt").write_text("x")
+
+    items = [
+        {"id": "item0", "path": str(tmp_path / "item0.txt"), "captions": ["q_item0"]},
+        {"id": "item1", "path": str(tmp_path / "item1.txt"), "captions": ["q_item1"]},
+        {"id": "d0", "path": str(tmp_path / "d0.txt"), "distractor": True},
+        {"id": "d1", "path": str(tmp_path / "d1.txt"), "distractor": True},
+        {"id": "d2", "path": str(tmp_path / "d2.txt"), "distractor": True},
+    ]
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("\n".join(json.dumps(it) for it in items) + "\n")
+
+    caption_count = sum(len(it["captions"]) for it in items if not it.get("distractor"))
+
+    result = run(manifest, DistractorRunEmbedder())
+
+    assert result["n_items"] == 5
+    assert result["n_queries"] == caption_count
+    assert result["n_distractors"] == 3
+    # d0/d1/d2 share q_item0's vector and outrank the true item0, so Recall@1
+    # drops to 0.5 (it would be 1.0 if distractors did not compete in ranking).
+    assert result["metrics"]["R@1"] == pytest.approx(0.5)
+    assert result["metrics"]["R@5"] == 1.0
+    assert result["metrics"]["R@10"] == 1.0
 
