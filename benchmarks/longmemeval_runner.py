@@ -63,6 +63,38 @@ DECOMPOSE_MODEL = os.environ.get("TAOSMD_DECOMPOSE_MODEL", "gemma4:e2b")
 # one extra generator pass keeps the draft if it is fully supported by the
 # context, else rewrites it from the context. Default off.
 SELF_VERIFY = os.environ.get("TAOSMD_SELF_VERIFY", "0") == "1"
+
+NON_ANSWER_PHRASES = ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")
+
+
+def is_non_answer(text):
+    if text is None:
+        return True
+    if isinstance(text, str):
+        if not text.strip():
+            return True
+        t = text.lower()
+        for p in NON_ANSWER_PHRASES:
+            if p in t:
+                return True
+    return False
+
+def build_row(idx, question_type, question, correct, full_context, delta, predicted, gold_answer, save_context):
+    row = {
+        "idx": idx,
+        "question_type": question_type,
+        "question": question,
+        "correct": bool(correct),
+        "retrieved_chars": len(full_context),
+        "retrieval_delta": delta,
+        "predicted": predicted,
+        "answer": gold_answer,
+    }
+    if save_context:
+        row["context"] = full_context[:CONTEXT_CHARS]
+    return row
+
+
 # Representative sampling. The oracle set is ordered by question type, so a head
 # slice dataset[:limit] is single-type (the first ~133 questions are all
 # temporal). Set TAOSMD_SAMPLE_SEED to shuffle deterministically before slicing
@@ -622,6 +654,14 @@ async def run_benchmark(
     dataset = sample_dataset(dataset, limit, SAMPLE_SEED)
     print(f"Running {len(dataset)} questions" + (f" (sampled, seed={SAMPLE_SEED})" if SAMPLE_SEED else ""))
 
+    lme_save_ctx = os.environ.get("TAOSMD_LME_SAVE_CONTEXT")
+    if lme_save_ctx is None or lme_save_ctx == "0":
+        save_context = False
+    elif lme_save_ctx == "1":
+        save_context = True
+    else:
+        raise ValueError("TAOSMD_LME_SAVE_CONTEXT must be '0' or '1' (unset also treated as '0')")
+
     results_by_type = {}
     all_results: list[dict] = []
     total_correct = 0
@@ -728,6 +768,7 @@ async def run_benchmark(
                 f"wired={delta['wired_chars']} identical={delta['identical']}"
             )
 
+        answer = None
         if use_llm and llm_client is not None:
             t_llm = time.time()
             # Step 1: LLM generates answer from recalled context
@@ -735,7 +776,7 @@ async def run_benchmark(
             if SELF_VERIFY:
                 answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
-            if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
+            if not is_non_answer(answer):
                 correct = await score_answer_llm(llm_client, answer, gold_answer, question)
             else:
                 correct = False
@@ -758,14 +799,9 @@ async def run_benchmark(
 
         elapsed = ingest_time + query_time
         total_time += elapsed
-        all_results.append({
-            "idx": i,
-            "question_type": qtype,
-            "question": question,
-            "correct": bool(correct),
-            "retrieved_chars": len(full_context),
-            "retrieval_delta": delta,
-        })
+        all_results.append(build_row(
+            i, qtype, question, correct, full_context, delta, answer, gold_answer, save_context
+        ))
 
         status = "✓" if correct else "✗"
         print(f"  [{i+1:3d}/{len(dataset)}] {status} {qtype:25s} | ingest:{ingest_time:.1f}s query:{query_time:.3f}s | {question[:50]}")
