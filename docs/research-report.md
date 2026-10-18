@@ -1433,7 +1433,7 @@ Run log. LongMemEval-S arms ran from 01:55Z to about 07:01Z, with an rclone Driv
 | R5 mem0_additive | no row (clause 8) | 0.4343 | 0.5455 | 0.6414 | 114 |
 | R6 late_interaction (MiniLM MaxSim) | no row (clause 8) | 0.6010 | 0.6465 | 0.7677 | 147 |
 | R8 bge-v2-m3 reranker, pool 20 | no row (clause 8) | 0.6818 | 0.7121 | n/a | 9670 (K=10), 9333 (K=5) |
-| R10 top_k 10 | 493/500 (R@10), 603 s | n/a | n/a | 0.7121 | 115 |
+| R10 top_k 10 | 493/500 (R@10), 603 s | n/a | n/a | 0.7121 | 115 (K=20) |
 
 The LongMemEval-S row is the `query_expand` strategy, the key N-031 and the 485 gate use. R1's query prefix applied: the shipped ONNX path adds the arctic query prefix whenever the model path contains "arctic", and this one does, so the 478 is not a missing-prefix artefact. It matches N-031's 478/500 for the same model exactly. R10 on LoCoMo equals R0's R@20 by construction, since `--top-k` does not narrow without a reranker. R8's R@10 equals R0's R@20 because the reranker's top 10 kept an evidence hit for every one of the 141 questions where R0's 20 hits had one (150 of R0's 151 evidence hits survive). So it is a real result, not a dropped flag.
 
