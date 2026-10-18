@@ -70,6 +70,8 @@ def _bm25_python_rank(query: str, texts: list[str]) -> list[tuple[int, float]]:
     Fallback for :meth:`VectorMemory.search_bm25` when bm25s is not
     installed. Matches the bm25s defaults the fusion paths were benchmarked
     with: k1=1.5, b=0.75, Lucene IDF, lowercase + non-word-split tokens.
+    Tie-breaking for equal scores uses descending index order to match
+    bm25s behaviour (which returns zero-score docs in reverse index order).
     """
     import math
     import re
@@ -98,7 +100,9 @@ def _bm25_python_rank(query: str, texts: list[str]) -> list[tuple[int, float]]:
             idf = math.log(1.0 + (n - df[term] + 0.5) / (df[term] + 0.5))
             score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * len(d) / avgdl))
         scored.append((i, score))
-    scored.sort(key=lambda pair: -pair[1])
+    # Sort by score descending, then by index descending to match bm25s
+    # tie-breaking (which returns zero-score docs in reverse index order).
+    scored.sort(key=lambda pair: (-pair[1], -pair[0]))
     return scored
 
 
@@ -1139,7 +1143,9 @@ class VectorMemory:
                     # on non-word characters; we skip stemming because spaCy
                     # lemmatisation (when fusion in {bm25_lemma_rrf,
                     # mem0_additive}) does the same job better.
-                    import bm25s
+                    # Set up texts/query first; lemmatization import may raise
+                    # ImportError which should propagate (not be caught by the
+                    # bm25s fallback).
                     if fusion in ("bm25_lemma_rrf", "mem0_additive"):
                         from taosmd.utils.lemmatization import lemmatize_for_bm25
                         bm25_texts = [lemmatize_for_bm25(t) for t in texts]
@@ -1147,31 +1153,47 @@ class VectorMemory:
                     else:
                         bm25_texts = texts
                         bm25_query = query
-                    # Build / reuse cached BM25 index for this fusion mode.
-                    # The cache is keyed by fusion mode and valid while the
-                    # active corpus is unchanged (_bm25_dirty is False).
-                    # Each entry is (retriever, bm25_texts_used) so a
-                    # corpus change (add / supersede) forces a full rebuild.
-                    cache_key = fusion
-                    cached = self._bm25_cache.get(cache_key)
-                    if self._bm25_dirty or cached is None or cached[1] != bm25_texts:
-                        corpus_tokens = bm25s.tokenize(bm25_texts, stopwords=None, stemmer=None)
-                        retriever = bm25s.BM25(k1=1.5, b=0.75)
-                        retriever.index(corpus_tokens)
-                        self._bm25_cache[cache_key] = (retriever, bm25_texts)
-                        self._bm25_dirty = False
+                    # Now try bm25s; on ImportError fall back to pure-Python BM25.
+                    try:
+                        import bm25s
+                    except ImportError:
+                        logger.warning(
+                            "bm25s not installed; using pure-Python BM25 fallback "
+                            "(pip install bm25s for the fast path)"
+                        )
+                        ranked = _bm25_python_rank(bm25_query, bm25_texts)
+                        keyword_ranks = np.empty(n, dtype=np.int64)
+                        for rank, (idx, _) in enumerate(ranked):
+                            keyword_ranks[idx] = rank
+                        bm25_raw_per_idx = np.zeros(n, dtype=np.float32)
+                        for idx, score in ranked:
+                            bm25_raw_per_idx[idx] = float(score)
                     else:
-                        retriever = cached[0]
-                    query_tokens = bm25s.tokenize([bm25_query], stopwords=None, stemmer=None)
-                    bm25_indices, bm25_raw = retriever.retrieve(query_tokens, k=n)
-                    # ranks for RRF
-                    keyword_ranks = np.empty(n, dtype=np.int64)
-                    for rank, idx in enumerate(bm25_indices[0]):
-                        keyword_ranks[idx] = rank
-                    # raw bm25 score per index, for additive scoring
-                    bm25_raw_per_idx = np.zeros(n, dtype=np.float32)
-                    for rank, idx in enumerate(bm25_indices[0]):
-                        bm25_raw_per_idx[idx] = float(bm25_raw[0, rank])
+                        # Build / reuse cached BM25 index for this fusion mode.
+                        # The cache is keyed by fusion mode and valid while the
+                        # active corpus is unchanged (_bm25_dirty is False).
+                        # Each entry is (retriever, bm25_texts_used) so a
+                        # corpus change (add / supersede) forces a full rebuild.
+                        cache_key = fusion
+                        cached = self._bm25_cache.get(cache_key)
+                        if self._bm25_dirty or cached is None or cached[1] != bm25_texts:
+                            corpus_tokens = bm25s.tokenize(bm25_texts, stopwords=None, stemmer=None)
+                            retriever = bm25s.BM25(k1=1.5, b=0.75)
+                            retriever.index(corpus_tokens)
+                            self._bm25_cache[cache_key] = (retriever, bm25_texts)
+                            self._bm25_dirty = False
+                        else:
+                            retriever = cached[0]
+                        query_tokens = bm25s.tokenize([bm25_query], stopwords=None, stemmer=None)
+                        bm25_indices, bm25_raw = retriever.retrieve(query_tokens, k=n)
+                        # ranks for RRF
+                        keyword_ranks = np.empty(n, dtype=np.int64)
+                        for rank, idx in enumerate(bm25_indices[0]):
+                            keyword_ranks[idx] = rank
+                        # raw bm25 score per index, for additive scoring
+                        bm25_raw_per_idx = np.zeros(n, dtype=np.float32)
+                        for rank, idx in enumerate(bm25_indices[0]):
+                            bm25_raw_per_idx[idx] = float(bm25_raw[0, rank])
                 else:
                     # Legacy substring-presence heuristic (fusion == "rrf").
                     keyword_scores = np.zeros(n, dtype=np.float32)
@@ -1247,6 +1269,14 @@ class VectorMemory:
             # Fallback to Python loop if numpy not available. Binary-quant needs
             # numpy (packbits/popcount) and stores non-JSON bit blobs, so it has
             # no meaningful pure-Python path.
+            # Check if the ImportError is actually about numpy (not bm25s or
+            # lemmatization). If numpy is importable, re-raise the original error.
+            try:
+                import numpy  # noqa: F401
+            except ImportError:
+                pass
+            else:
+                raise
             if self.binary_quant:
                 raise RuntimeError("binary_quant=True requires numpy for packed-bit search")
             if self.late_interaction:
