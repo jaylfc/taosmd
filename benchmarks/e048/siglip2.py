@@ -26,20 +26,16 @@ def _normalize_rows(arr: np.ndarray) -> np.ndarray:
 def _extract_embedding(output) -> np.ndarray:
     """Extract pooled embedding from transformers model output.
 
-    Handles both tensor outputs and BaseModelOutputWithPooling objects.
+    Handles BaseModelOutputWithPooling objects (the real return type from
+    Siglip2Model.get_text_features / get_image_features in transformers 5.20.1).
     """
+    # Real transformers output is BaseModelOutputWithPooling with pooler_output
     if hasattr(output, "pooler_output"):
         pooled = output.pooler_output
         if hasattr(pooled, "detach"):
             return pooled.detach().cpu().numpy()
         return np.asarray(pooled)
-    if hasattr(output, "last_hidden_state"):
-        # Fallback: mean pool last hidden state
-        last_hidden = output.last_hidden_state
-        if hasattr(last_hidden, "detach"):
-            return last_hidden.detach().cpu().numpy().mean(axis=1)
-        return np.asarray(last_hidden).mean(axis=1)
-    # Already a tensor
+    # Fallback for tensor-like objects (not expected in real usage)
     if hasattr(output, "detach"):
         return output.detach().cpu().numpy()
     return np.asarray(output)
@@ -49,13 +45,19 @@ class Siglip2ImageEmbedder(MediaEmbedder):
     modality = "image"
 
     def __init__(self, device: str = "auto"):
-        self._device = device
+        self._device_setting = device
         self._model = None
         self._processor = None
         self._torch = None
         self._transformers = None
         self._huggingface_hub = None
         self._snapshot_path = None
+        self._device = None  # Resolved device after lazy init
+
+    @property
+    def device(self) -> str:
+        """Resolved device (cuda or cpu). Available after _lazy_init()."""
+        return self._device
 
     @property
     def name(self) -> str:
@@ -74,10 +76,10 @@ class Siglip2ImageEmbedder(MediaEmbedder):
         self._transformers = transformers
         self._huggingface_hub = huggingface_hub
 
-        if self._device == "auto":
+        if self._device_setting == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
-            device = self._device
+            device = self._device_setting
 
         self._snapshot_path = huggingface_hub.snapshot_download(
             MODEL_ID, revision=REVISION
@@ -96,7 +98,8 @@ class Siglip2ImageEmbedder(MediaEmbedder):
         self._lazy_init()
         if not texts:
             # Empty input: return empty array with correct embedding dimension
-            hidden_size = self._model.config.hidden_size
+            # For text queries, use text_config.hidden_size
+            hidden_size = self._model.config.text_config.hidden_size
             return np.zeros((0, hidden_size), dtype=np.float32)
 
         all_embeddings = []
@@ -123,7 +126,9 @@ class Siglip2ImageEmbedder(MediaEmbedder):
     def embed_items(self, paths: list[str]) -> np.ndarray:
         self._lazy_init()
         if not paths:
-            hidden_size = self._model.config.hidden_size
+            # Empty input: return empty array with correct embedding dimension
+            # For image items, use vision_config.hidden_size
+            hidden_size = self._model.config.vision_config.hidden_size
             return np.zeros((0, hidden_size), dtype=np.float32)
 
         all_embeddings = []

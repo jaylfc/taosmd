@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
+
+from transformers.utils import ModelOutput
+from dataclasses import dataclass
 
 
 class FakeTensor:
@@ -52,12 +56,18 @@ def _make_fake_tensor(arr):
     return FakeTensor(arr)
 
 
-class FakeModelOutput:
-    """Fake BaseModelOutputWithPooling-shaped object with pooler_output."""
+@dataclass
+class FakeModelOutput(ModelOutput):
+    """Fake BaseModelOutputWithPooling-shaped object inheriting from ModelOutput.
 
-    def __init__(self, pooler_output, last_hidden_state=None):
-        self.pooler_output = pooler_output
-        self.last_hidden_state = last_hidden_state
+    This mimics the real transformers output type so that removing the pooler
+    branch in _extract_embedding is caught by tests.
+    """
+
+    pooler_output: FakeTensor | None = None
+    last_hidden_state: FakeTensor | None = None
+    hidden_states: tuple | None = None
+    attentions: tuple | None = None
 
 
 def _install_fake_torch(monkeypatch):
@@ -117,7 +127,12 @@ def _install_fake_transformers(monkeypatch, tmp_path):
 
     class FakeSiglipModel:
         config = MagicMock()
-        config.hidden_size = 768
+        # For image embedder, vision_config.hidden_size is used
+        config.vision_config = MagicMock()
+        config.vision_config.hidden_size = 768
+        # For text queries, text_config.hidden_size is used
+        config.text_config = MagicMock()
+        config.text_config.hidden_size = 768
 
         @classmethod
         def from_pretrained(cls, model_id, **kwargs):
@@ -309,6 +324,17 @@ def test_provenance_keys_and_revision_and_exact_digests(tmp_path, monkeypatch):
     _install_all_fakes(monkeypatch, tmp_path)
     from benchmarks.e048 import siglip2
 
+    # Force os.walk to return files in non-alphabetical/nested order
+    # to pin the sort in provenance()
+    original_walk = os.walk
+
+    def unsorted_walk(top, topdown=True, onerror=None, followlinks=False):
+        for root, dirs, files in original_walk(top, topdown, onerror, followlinks):
+            # Reverse files and dirs to force non-alphabetical order
+            yield root, list(reversed(dirs)), list(reversed(files))
+
+    monkeypatch.setattr(os, "walk", unsorted_walk)
+
     emb = siglip2.Siglip2ImageEmbedder()
     prov = emb.provenance()
 
@@ -327,7 +353,7 @@ def test_provenance_keys_and_revision_and_exact_digests(tmp_path, monkeypatch):
     assert prov["model_files"]["model-00001-of-00002.safetensors"] == expected_hash1
     assert prov["model_files"]["model-00002-of-00002.safetensors"] == expected_hash2
 
-    # Sorted order of keys
+    # Sorted order of keys (provenance() must sort regardless of os.walk order)
     model_files_keys = list(prov["model_files"].keys())
     assert model_files_keys == sorted(model_files_keys)
 
@@ -474,3 +500,43 @@ def test_grep_guard():
     text = siglip2_path.read_text()
     assert "dummy_hash" not in text
     assert "hexdigest()[:12]" not in text
+
+
+def test_extract_embedding_requires_pooler_output(tmp_path, monkeypatch):
+    """Test that _extract_embedding correctly extracts from pooler_output.
+
+    The FakeModelOutput inherits from ModelOutput and mimics the real
+    BaseModelOutputWithPooling interface. This test verifies that the
+    pooler_output path is used and produces correct output.
+    """
+    from benchmarks.e048.siglip2 import _extract_embedding
+
+    # Create a FakeModelOutput with pooler_output (real usage)
+    output_with_pooler = FakeModelOutput(
+        pooler_output=_make_fake_tensor(np.ones((2, 768), dtype=np.float32))
+    )
+    result = _extract_embedding(output_with_pooler)
+    assert result.shape == (2, 768)
+    assert result.dtype == np.float32
+
+    # Verify that pooler_output is the source (not last_hidden_state)
+    # by checking the values match pooler_output, not mean of last_hidden_state
+    expected = np.ones((2, 768), dtype=np.float32)
+    assert np.allclose(result, expected)
+
+    # Test that an object without pooler_output attribute falls back to tensor path
+    # (This simulates what would happen if the model returned a raw tensor)
+    class FakeTensorOnly:
+        def __init__(self, arr):
+            self._arr = np.asarray(arr)
+        def detach(self):
+            return self
+        def cpu(self):
+            return self
+        def numpy(self):
+            return self._arr
+
+    tensor_output = FakeTensorOnly(np.ones((2, 768), dtype=np.float32) * 2)
+    result2 = _extract_embedding(tensor_output)
+    assert result2.shape == (2, 768)
+    assert np.allclose(result2, np.ones((2, 768), dtype=np.float32) * 2)
