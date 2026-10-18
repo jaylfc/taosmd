@@ -25,9 +25,11 @@ def test_arm_config_from_env_defaults():
     result = arm_config_from_env({})
     assert result["onnx_path"] == expected_onnx_path
     assert result["binary_quant"] is False
+    
     assert result["mrl_dim"] is None
     assert result["rescore_oversample"] is None
-
+    assert result["fusion"] == "boost"
+    assert result["late_interaction"] is False
 def test_arm_config_from_env_parsing():
     """(b) env parsing: dim '512' -> 512; dim '0', '-1', 'x' -> ValueError; oversample without binary -> ValueError."""
     # Test dim parsing
@@ -142,8 +144,8 @@ class _RecordingVectorMemory:
     async def embed(self, text, task="search_document"):
         return [1.0, 0.0, 0.0]
 
-    async def search(self, query, limit=5, hybrid=True):
-        _RecordingVectorMemory.calls.append({"query": query, "limit": limit})
+    async def search(self, query, limit=5, hybrid=True, fusion="boost"):
+        _RecordingVectorMemory.calls.append({"query": query, "limit": limit, "fusion": fusion})
         return []
 
     async def close(self):
@@ -213,6 +215,44 @@ def test_rescore_oversample_multiplies_limit(monkeypatch):
     cfg = arm_config_from_env({"TAOSMD_BENCH_BINARY_QUANT": "1", "TAOSMD_BENCH_RESCORE_OVERSAMPLE": "3"})
     asyncio.run(module.run_question(_item(), 5, "wider_retrieval", cfg))
     assert _RecordingVectorMemory.calls[0]["limit"] == 30
+
+
+def test_arm_config_from_env_fusion():
+    """fusion: unset -> 'boost'; TAOSMD_BENCH_FUSION=bm25_rrf -> 'bm25_rrf'; bogus -> ValueError."""
+    result = arm_config_from_env({})
+    assert result["fusion"] == "boost"
+
+    result = arm_config_from_env({"TAOSMD_BENCH_FUSION": "bm25_rrf"})
+    assert result["fusion"] == "bm25_rrf"
+
+    for val in ["bogus", "unknown", "cosine"]:
+        try:
+            arm_config_from_env({"TAOSMD_BENCH_FUSION": val})
+            assert False, f"Expected ValueError for FUSION={val}"
+        except ValueError:
+            pass
+
+
+def test_arm_config_from_env_late_interaction():
+    """late_interaction: unset -> False; '1' -> True; '0' -> False."""
+    result = arm_config_from_env({})
+    assert result["late_interaction"] is False
+
+    result = arm_config_from_env({"TAOSMD_BENCH_LATE_INTERACTION": "1"})
+    assert result["late_interaction"] is True
+
+    result = arm_config_from_env({"TAOSMD_BENCH_LATE_INTERACTION": "0"})
+    assert result["late_interaction"] is False
+
+
+def test_named_arm_passes_fusion_to_search(monkeypatch):
+    """The fusion arm value is forwarded to vmem.search via the env arm dict."""
+    import asyncio
+    monkeypatch.setattr(module, "VectorMemory", _RecordingVectorMemory)
+    _RecordingVectorMemory.calls = []
+    cfg = arm_config_from_env({"TAOSMD_BENCH_FUSION": "rrf"})
+    asyncio.run(module.run_question(_item(), 5, "hybrid_baseline", cfg))
+    assert _RecordingVectorMemory.calls[0]["fusion"] == "rrf"
 
 
 def test_mrl_dim_larger_than_embedding_is_rejected():

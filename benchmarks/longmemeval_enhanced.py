@@ -39,7 +39,8 @@ ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 def arm_config_from_env(env: dict) -> dict:
     """Read arm configuration from environment variables.
 
-    Returns dict with keys: onnx_path, binary_quant, mrl_dim, rescore_oversample.
+    Returns dict with keys: onnx_path, binary_quant, mrl_dim, rescore_oversample,
+    fusion, late_interaction.
     """
     # Default onnx path is the existing hard-coded one
     default_onnx_path = os.path.join(
@@ -87,11 +88,26 @@ def arm_config_from_env(env: dict) -> dict:
             raise ValueError("TAOSMD_BENCH_RERANKER")
         reranker = reranker_str
 
+    fusion_str = env.get("TAOSMD_BENCH_FUSION")
+    if fusion_str is None or fusion_str == '':
+        fusion = "boost"
+    else:
+        allowed_fusions = ["boost", "rrf", "bm25_rrf", "bm25_lemma_rrf",
+                           "mem0_additive", "none"]
+        if fusion_str not in allowed_fusions:
+            raise ValueError(f"TAOSMD_BENCH_FUSION must be one of {allowed_fusions}: {fusion_str}")
+        fusion = fusion_str
+
+    late_interaction_str = env.get("TAOSMD_BENCH_LATE_INTERACTION")
+    late_interaction = late_interaction_str is not None and late_interaction_str != '' and late_interaction_str == "1"
+
     return {
         "onnx_path": onnx_path,
         "binary_quant": binary_quant,
         "mrl_dim": mrl_dim,
         "rescore_oversample": rescore_oversample,
+        "fusion": fusion,
+        "late_interaction": late_interaction,
         "reranker": reranker,
     }
 
@@ -193,6 +209,7 @@ async def run_question(item, top_k, config_name, config, reranker=None):
         embed_mode="onnx",
         onnx_path=config['onnx_path'],
         binary_quant=config['binary_quant'],
+        late_interaction=config['late_interaction'],
     )
     await vmem.init()
 
@@ -248,7 +265,7 @@ async def run_question(item, top_k, config_name, config, reranker=None):
     pool_k = retrieve_k
     if reranker is not None:
         pool_k = max(retrieve_k, 20)
-    results = await vmem.search(search_query, limit=pool_k, hybrid=True)
+    results = await vmem.search(search_query, limit=pool_k, hybrid=True, fusion=config['fusion'])
 
     # Apply cross-encoder reranker if provided
     if reranker is not None:
@@ -329,6 +346,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
         print(f"Model: {onnx_path_base} (ONNX), overridden via TAOSMD_BENCH_ONNX_PATH")
     print(f"Arm: onnx_path={onnx_path_base}, binary_quant={cfg['binary_quant']}, "
           f"mrl_dim={cfg['mrl_dim']}, rescore_oversample={cfg['rescore_oversample']}, "
+          f"fusion={cfg['fusion']}, late_interaction={cfg['late_interaction']}, "
           f"reranker={cfg.get('reranker', 'off')}")
     print(f"Target: beat 96.6% (MemPalace) on {limit} questions")
     print("=" * 74)
