@@ -125,11 +125,8 @@ def test_bm25_lemma_rrf_raises_import_error_when_lemmatization_missing_and_bm25s
         asyncio.run(vmem.search("zebra stripes", limit=1, fusion="bm25_lemma_rrf"))
 
 
-@pytest.mark.skipif(
-    __import__("importlib").util.find_spec("bm25s") is None,
-    reason="bm25s not installed",
-)
 def test_bm25_rrf_with_bm25s_returns_zebra_first(tmp_path):
+    pytest.importorskip("bm25s")
     """Control: with bm25s installed, bm25_rrf returns zebra doc first."""
     vmem = VectorMemory(db_path=str(tmp_path / "vec.db"), embed_mode="onnx")
     asyncio.run(vmem.init())
