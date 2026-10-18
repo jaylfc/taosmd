@@ -32,7 +32,7 @@ def file_sha256(path: Optional[str | Path]) -> str | None:
         return None
     p = Path(path) if not isinstance(path, Path) else path
     if not p.exists():
-        return None
+        raise FileNotFoundError(path)
     h = hashlib.sha256()
     with p.open('rb') as f:
         while True:
@@ -47,8 +47,10 @@ def model_dir_digests(onnx_dir: Optional[str | Path]) -> dict[str, str]:
     if onnx_dir is None:
         return {}
     p = Path(onnx_dir) if not isinstance(onnx_dir, Path) else onnx_dir
-    if not p.exists() or not p.is_dir():
-        return {}
+    if not p.exists():
+        raise ValueError(f"onnx_dir does not exist: {p}")
+    if not p.is_dir():
+        raise ValueError(f"onnx_dir is not a directory: {p}")
     patterns = ('*.onnx', '*.onnx_data', 'tokenizer.json')
     files: list[Path] = []
     for pat in patterns:
@@ -64,30 +66,40 @@ def model_dir_digests(onnx_dir: Optional[str | Path]) -> dict[str, str]:
 
 def collect(config: dict, onnx_dir: Optional[str | Path], dataset_path: Optional[str | Path]) -> dict:
     repo_root = Path(__file__).resolve().parent.parent
+    git_commit = "unknown"
+    git_dirty = None
     try:
-        git_commit = subprocess.run(
+        result = subprocess.run(
             ['git', 'rev-parse', 'HEAD'],
             cwd=repo_root,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
             text=True,
-        ).stdout.strip()
-    except Exception:
-        git_commit = None
-    try:
-        git_dirty = bool(
-            subprocess.run(
-                ['git', 'status', '--porcelain'],
-                cwd=repo_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                text=True,
-            ).stdout.strip()
         )
+        if result.returncode != 0 or not result.stdout.strip():
+            git_commit = "unknown"
+            git_dirty = None
+        else:
+            git_commit = result.stdout.strip()
+            try:
+                dirty_res = subprocess.run(
+                    ['git', 'status', '--porcelain'],
+                    cwd=repo_root,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    text=True,
+                )
+                if dirty_res.returncode != 0:
+                    git_dirty = None
+                else:
+                    git_dirty = bool(dirty_res.stdout.strip())
+            except Exception:
+                git_dirty = None
     except Exception:
-        git_dirty = False
+        git_commit = "unknown"
+        git_dirty = None
 
     onnxruntime_version = None
     try:
@@ -114,6 +126,7 @@ def collect(config: dict, onnx_dir: Optional[str | Path], dataset_path: Optional
         'dataset_sha256': file_sha256(dataset_path),
         'config_hash': config_hash(config),
     }
+
 
 __all__ = [
     'config_hash',
