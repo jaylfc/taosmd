@@ -1,0 +1,192 @@
+{
+  "benchmark": "enhanced",
+  "top_k": 5,
+  "results": {
+    "hybrid_baseline": {
+      "overall": 95.19999999999999,
+      "total": 476,
+      "questions": 500,
+      "time": 600.3706061840057,
+      "by_type": {
+        "single-session-user": {
+          "hits": 63,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 131,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 26,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 127,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 77,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 52,
+          "total": 56
+        }
+      }
+    },
+    "query_expand": {
+      "overall": 95.19999999999999,
+      "total": 476,
+      "questions": 500,
+      "time": 598.8554215431213,
+      "by_type": {
+        "single-session-user": {
+          "hits": 63,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 131,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 26,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 127,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 77,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 52,
+          "total": 56
+        }
+      }
+    },
+    "temporal_boost": {
+      "overall": 95.19999999999999,
+      "total": 476,
+      "questions": 500,
+      "time": 596.9678630828857,
+      "by_type": {
+        "single-session-user": {
+          "hits": 63,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 131,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 26,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 127,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 77,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 52,
+          "total": 56
+        }
+      }
+    },
+    "combined_v2": {
+      "overall": 95.19999999999999,
+      "total": 476,
+      "questions": 500,
+      "time": 595.2419855594635,
+      "by_type": {
+        "single-session-user": {
+          "hits": 63,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 131,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 26,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 127,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 77,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 52,
+          "total": 56
+        }
+      }
+    },
+    "wider_retrieval": {
+      "overall": 94.6,
+      "total": 473,
+      "questions": 500,
+      "time": 601.1709237098694,
+      "by_type": {
+        "single-session-user": {
+          "hits": 63,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 131,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 26,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 125,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 77,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 51,
+          "total": 56
+        }
+      }
+    }
+  },
+  "arm_config": {
+    "onnx_path": "/home/jay/taosmd/models/minilm-onnx",
+    "binary_quant": true,
+    "mrl_dim": null,
+    "rescore_oversample": null
+  },
+  "provenance": {
+    "git_commit": "496f3301b75f82a64f17a987050261ca77bf361e",
+    "git_dirty": true,
+    "hostname": "omarchy",
+    "platform": "Linux-7.2.5-3-omarchy-x86_64-with-glibc2.44",
+    "machine": "x86_64",
+    "python": "3.13.15",
+    "onnxruntime_version": "1.30.0",
+    "env_prefixes": {
+      "TAOSMD_ONNX_QUERY_PREFIX": null,
+      "TAOSMD_ONNX_DOC_PREFIX": null
+    },
+    "model_files": {
+      "model.onnx": "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452",
+      "tokenizer.json": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0"
+    },
+    "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "config_hash": "79624b341d0c5b1f7b9d98430e08973158b628fb930c16f76d6759ff63be1488"
+  },
+  "timestamp": "2026-10-18 06:09:05"
+}
