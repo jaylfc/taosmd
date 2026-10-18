@@ -1,0 +1,192 @@
+{
+  "benchmark": "enhanced",
+  "top_k": 5,
+  "results": {
+    "hybrid_baseline": {
+      "overall": 96.0,
+      "total": 480,
+      "questions": 500,
+      "time": 1107.9453411102295,
+      "by_type": {
+        "single-session-user": {
+          "hits": 64,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 130,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 28,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 125,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 78,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 55,
+          "total": 56
+        }
+      }
+    },
+    "query_expand": {
+      "overall": 95.6,
+      "total": 478,
+      "questions": 500,
+      "time": 1079.2104206085205,
+      "by_type": {
+        "single-session-user": {
+          "hits": 64,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 130,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 28,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 124,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 78,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 54,
+          "total": 56
+        }
+      }
+    },
+    "temporal_boost": {
+      "overall": 96.0,
+      "total": 480,
+      "questions": 500,
+      "time": 1083.425931930542,
+      "by_type": {
+        "single-session-user": {
+          "hits": 64,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 130,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 28,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 125,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 78,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 55,
+          "total": 56
+        }
+      }
+    },
+    "combined_v2": {
+      "overall": 95.6,
+      "total": 478,
+      "questions": 500,
+      "time": 1166.653388261795,
+      "by_type": {
+        "single-session-user": {
+          "hits": 64,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 130,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 28,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 124,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 78,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 54,
+          "total": 56
+        }
+      }
+    },
+    "wider_retrieval": {
+      "overall": 95.39999999999999,
+      "total": 477,
+      "questions": 500,
+      "time": 1090.8674154281616,
+      "by_type": {
+        "single-session-user": {
+          "hits": 65,
+          "total": 70
+        },
+        "multi-session": {
+          "hits": 130,
+          "total": 133
+        },
+        "single-session-preference": {
+          "hits": 28,
+          "total": 30
+        },
+        "temporal-reasoning": {
+          "hits": 123,
+          "total": 133
+        },
+        "knowledge-update": {
+          "hits": 77,
+          "total": 78
+        },
+        "single-session-assistant": {
+          "hits": 54,
+          "total": 56
+        }
+      }
+    }
+  },
+  "arm_config": {
+    "onnx_path": "/home/jay/models/snowflake-arctic-embed-s",
+    "binary_quant": false,
+    "mrl_dim": null,
+    "rescore_oversample": null
+  },
+  "provenance": {
+    "git_commit": "496f3301b75f82a64f17a987050261ca77bf361e",
+    "git_dirty": true,
+    "hostname": "omarchy",
+    "platform": "Linux-7.2.5-3-omarchy-x86_64-with-glibc2.44",
+    "machine": "x86_64",
+    "python": "3.13.15",
+    "onnxruntime_version": "1.30.0",
+    "env_prefixes": {
+      "TAOSMD_ONNX_QUERY_PREFIX": null,
+      "TAOSMD_ONNX_DOC_PREFIX": null
+    },
+    "model_files": {
+      "onnx/model.onnx": "579c1f1778a0993eb0d2a1403340ffb491c769247fb46acc4f5cf8ac5b89c1e1",
+      "tokenizer.json": "91f1def9b9391fdabe028cd3f3fcc4efd34e5d1f08c3bf2de513ebb5911a1854"
+    },
+    "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "config_hash": "189be33f36744e4992b889ffe0eb886610d82608d35dfcc7491a201cc7206d6d"
+  },
+  "timestamp": "2026-10-18 05:19:04"
+}
