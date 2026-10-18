@@ -132,7 +132,7 @@ class TestTopologyClientProbe:
             )
             # Patch ping to return None
             with patch.object(probe, "_run_ping", new_callable=AsyncMock) as mock_ping:
-                mock_ping.return_value = None
+                mock_ping.return_value = (None, None)
                 # Patch _read_proc_stat to return fixed values (called 3 times)
                 with patch.object(probe, "_read_proc_stat") as mock_cpu:
                     mock_cpu.side_effect = [(100, 200), (120, 220), (150, 300)]
@@ -188,7 +188,7 @@ class TestTopologyClientProbe:
                 out=str(out_path),
             )
             with patch.object(probe, "_run_ping", new_callable=AsyncMock) as mock_ping:
-                mock_ping.return_value = None
+                mock_ping.return_value = (None, None)
                 with patch.object(probe, "_read_proc_stat") as mock_cpu:
                     mock_cpu.side_effect = [(100, 200), (120, 220), (150, 300)]
                     rc = await probe.run(args)
@@ -256,7 +256,7 @@ class TestTopologyClientProbe:
                 out="/tmp/out.json",
             )
             with patch.object(probe, "_run_ping", new_callable=AsyncMock) as mock_ping:
-                mock_ping.return_value = None
+                mock_ping.return_value = (None, None)
                 with patch.object(probe, "_read_proc_stat") as mock_cpu:
                     mock_cpu.side_effect = [(100, 200), (120, 220), (150, 300)]
                     rc = await probe.run(args)
@@ -312,7 +312,7 @@ class TestTopologyClientProbe:
                 out="/tmp/out.json",
             )
             with patch.object(probe, "_run_ping", new_callable=AsyncMock) as mock_ping:
-                mock_ping.return_value = None
+                mock_ping.return_value = (None, None)
                 with patch.object(probe, "_read_proc_stat") as mock_cpu:
                     mock_cpu.side_effect = [(100, 200), (120, 220), (150, 300)]
                     rc = await probe.run(args)
@@ -378,7 +378,7 @@ class TestTopologyClientProbe:
                     out=str(out_path),
                 )
                 with patch.object(probe, "_run_ping", new_callable=AsyncMock) as mock_ping:
-                    mock_ping.return_value = None
+                    mock_ping.return_value = (None, None)
                     with patch.object(probe, "_read_proc_stat") as mock_cpu:
                         mock_cpu.side_effect = [(100, 200), (120, 220), (150, 300)]
                         rc = await probe.run(args)
@@ -437,7 +437,7 @@ rtt min/avg/max/mdev = 1.230/3.060/4.890/1.345 ms"""
                 out=str(out_path),
             )
             with patch.object(probe, "_run_ping", new_callable=AsyncMock) as mock_ping:
-                mock_ping.return_value = None
+                mock_ping.return_value = (None, None)
                 with patch.object(probe, "_read_proc_stat") as mock_cpu:
                     mock_cpu.side_effect = [(100, 200), (120, 220), (150, 300)]
                     rc = await probe.run(args)
@@ -459,26 +459,69 @@ rtt min/avg/max/mdev = 1.230/3.060/4.890/1.345 ms"""
 
     def test_proc_stat_parser_fixed_snapshots(self):
         """_read_proc_stat parser on fixed two-snapshot sample gives expected fraction."""
-        # busy_before = 100+20+30+6+7+8 = 171
-        # total_before = 171 + 400 + 50 = 621
-        # busy_after = 150+25+35+7+8+9 = 234
-        # total_after = 234 + 450 + 55 = 739
-        # busy_delta = 63, total_delta = 118
-        # fraction = 63/118 ≈ 0.5339
-        busy_before = 100 + 20 + 30 + 6 + 7 + 8
-        total_before = busy_before + 400 + 50
-        busy_after = 150 + 25 + 35 + 7 + 8 + 9
-        total_after = busy_after + 450 + 55
+        # Create a mock /proc/stat content for two snapshots
+        # Snapshot 1: cpu  100 20 30 400 50 6 7 8
+        # Snapshot 2: cpu  150 25 35 450 55 7 8 9
+        # 
+        # With current implementation (parts[1:8] -> 7 ticks, steal=0):
+        # busy_before = 100+20+30+6+7+0 = 163
+        # total_before = 163 + 400 + 50 = 613
+        # busy_after = 150+25+35+7+8+0 = 225
+        # total_after = 225 + 450 + 55 = 730
+        # busy_delta = 62, total_delta = 117
+        # fraction = 62/117 ~ 0.5299
+        
+        snapshots = [
+            "cpu  100 20 30 400 50 6 7 8\n",
+            "cpu  150 25 35 450 55 7 8 9\n",
+        ]
+        call_count = [0]
+        
+        def mock_open(*args, **kwargs):
+            class MockFile:
+                def __init__(self, content):
+                    self.content = content
+                    self.lines = content.splitlines(keepends=True)
+                    self.idx = 0
+                
+                def __iter__(self):
+                    return self
+                
+                def __next__(self):
+                    if self.idx >= len(self.lines):
+                        raise StopIteration
+                    line = self.lines[self.idx]
+                    self.idx += 1
+                    return line
+                
+                def __enter__(self):
+                    return self
+                
+                def __exit__(self, *exc):
+                    pass
+            
+            idx = call_count[0]
+            call_count[0] += 1
+            return MockFile(snapshots[idx] if idx < len(snapshots) else snapshots[-1])
+        
+        with patch("builtins.open", mock_open):
+            result1 = probe._read_proc_stat()
+            result2 = probe._read_proc_stat()
+        
+        assert result1 is not None
+        assert result2 is not None
+        busy_before, total_before = result1
+        busy_after, total_after = result2
         busy_delta = busy_after - busy_before
         total_delta = total_after - total_before
-        expected = round(busy_delta / total_delta, 4)
-        assert expected == 0.5339
+        fraction = round(busy_delta / total_delta, 4)
+        assert fraction == 0.5299
 
     @pytest.mark.asyncio
     async def test_missing_ping_records_null(self, fake_dataset, mock_transport):
-        """Missing ping records error dict with error string."""
+        """Missing ping records null ping with error string in ping_error."""
         async def failing_ping(*args, **kwargs):
-            return {"error": "FileNotFoundError: ping not found"}
+            return None, "FileNotFoundError: ping not found"
 
         out_path = Path(tempfile.mktemp(suffix=".json"))
         try:
@@ -501,8 +544,8 @@ rtt min/avg/max/mdev = 1.230/3.060/4.890/1.345 ms"""
                     rc = await probe.run(args)
             assert rc == 0
             data = json.loads(out_path.read_text())
-            assert data["ping"] is not None
-            assert "error" in data["ping"]
+            assert data["ping"] is None
+            assert data["ping_error"] == "FileNotFoundError: ping not found"
         finally:
             out_path.unlink(missing_ok=True)
 

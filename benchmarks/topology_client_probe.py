@@ -99,8 +99,11 @@ async def _make_client(base_url: str, token: str | None) -> httpx.AsyncClient:
     return httpx.AsyncClient(base_url=base_url, headers=headers, timeout=120.0)
 
 
-async def _run_ping(host: str, pings: int) -> dict | None:
-    """Run system ping and return parsed result dict, or error dict, or None on exception."""
+async def _run_ping(host: str, pings: int) -> tuple[dict | None, str | None]:
+    """Run system ping and return (result_dict, error_string).
+    On success: ({"p50_ms": ..., "p95_ms": ..., "raw_ms": ...}, None)
+    On failure: (None, "error description")
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             "ping", "-c", str(pings), host,
@@ -111,15 +114,18 @@ async def _run_ping(host: str, pings: int) -> dict | None:
         if proc.returncode == 0:
             times = _parse_ping_output(stdout.decode())
             if times is not None:
-                return {
-                    "p50_ms": round(_pctl(times, 0.50), 2),
-                    "p95_ms": round(_pctl(times, 0.95), 2),
-                    "raw_ms": times,
-                }
-            return {"error": "failed to parse ping output"}
-        return {"error": f"ping exited {proc.returncode}: {stderr.decode().strip()}"}
+                return (
+                    {
+                        "p50_ms": round(_pctl(times, 0.50), 2),
+                        "p95_ms": round(_pctl(times, 0.95), 2),
+                        "raw_ms": times,
+                    },
+                    None,
+                )
+            return None, "failed to parse ping output"
+        return None, f"ping exited {proc.returncode}: {stderr.decode().strip()}"
     except (asyncio.TimeoutError, FileNotFoundError, OSError) as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -151,7 +157,7 @@ async def run(args: argparse.Namespace) -> int:
         await client.aclose()
 
     # b. Ping
-    ping_result = await _run_ping(host, args.pings)
+    ping_result, ping_error = await _run_ping(host, args.pings)
 
     # c. Ingest
     dataset_path = Path(args.dataset).expanduser()
@@ -215,11 +221,6 @@ async def run(args: argparse.Namespace) -> int:
         }
     finally:
         await client.aclose()
-
-    # Read CPU after queries (we'll read after step d)
-    # Actually, spec says read before step c and after step d
-    # So we need to read cpu_after after queries complete
-    cpu_after = _read_proc_stat()
 
     # d. Queries
     qas = conv.get("qa", []) or []
@@ -320,6 +321,7 @@ async def run(args: argparse.Namespace) -> int:
         "base_url": args.base_url,
         "version": version_json,
         "ping": ping_result,
+        "ping_error": ping_error,
         "ingest": ingest_result,
         "queries": query_summary,
         "client_cpu_busy_fraction": client_cpu_busy_fraction,
