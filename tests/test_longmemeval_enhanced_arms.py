@@ -266,3 +266,46 @@ def test_mrl_dim_larger_than_embedding_is_rejected():
     wrapped = make_embed_wrapper(mock_original_embed, mrl_dim=8, floats_by_text={})
     with pytest.raises(ValueError):
         asyncio.run(wrapped("hello", "search_document"))
+
+
+def test_arm_config_from_env_reranker_default():
+    """Default env -> reranker off."""
+    result = arm_config_from_env({})
+    assert result["reranker"] == "off"
+
+
+def test_arm_config_from_env_reranker_bge():
+    """TAOSMD_BENCH_RERANKER=bge-v2-m3 -> bge-v2-m3."""
+    result = arm_config_from_env({"TAOSMD_BENCH_RERANKER": "bge-v2-m3"})
+    assert result["reranker"] == "bge-v2-m3"
+
+
+def test_arm_config_from_env_reranker_bogus():
+    """TAOSMD_BENCH_RERANKER=bogus raises ValueError."""
+    try:
+        arm_config_from_env({"TAOSMD_BENCH_RERANKER": "bogus"})
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_reranker_unavailable_refuses(monkeypatch):
+    """Fake reranker with available False makes run_benchmark refuse."""
+    import asyncio
+
+    class Dummy:
+        available = False
+
+    # Monkeypatch _load_reranker
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "benchmarks"))
+    import locomo_runner
+
+    monkeypatch.setattr(locomo_runner, "_load_reranker", lambda choice: Dummy())
+    monkeypatch.setenv("TAOSMD_BENCH_RERANKER", "ms-marco")
+
+    try:
+        asyncio.run(module.run_benchmark(limit=1, top_k=5))
+        assert False, "Expected SystemExit"
+    except SystemExit as e:
+        assert e.code != 0
