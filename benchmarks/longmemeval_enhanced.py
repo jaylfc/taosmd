@@ -315,7 +315,6 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     onnx_path_base = os.path.basename(cfg['onnx_path'])
     cfg_dict = dict(cfg)
     cfg_dict['top_k'] = top_k
-    prov = collect(cfg_dict, cfg['onnx_path'] if cfg.get('onnx_path') else ONNX_PATH, DATA_PATH)
 
     # Load reranker if requested
     reranker = None
@@ -337,6 +336,9 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
                   f"not loadable (model.onnx missing?). Pass TAOSMD_BENCH_RERANKER=off to "
                   f"run without reranking.", file=sys.stderr)
             sys.exit(2)
+
+    # After the reranker preflight, so a refusal does not need the dataset.
+    prov = collect(cfg_dict, cfg['onnx_path'] if cfg.get('onnx_path') else ONNX_PATH, DATA_PATH)
 
     print("=" * 74)
     print(f"LongMemEval-S Enhanced Retrieval Experiments — Recall@{top_k}")
