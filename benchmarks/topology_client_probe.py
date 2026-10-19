@@ -38,6 +38,11 @@ from locomo_runner import _DEFAULT_DATASET, _session_keys  # noqa: E402
 _now = time.perf_counter
 
 
+def _create_client(**kwargs) -> httpx.AsyncClient:
+    """Module-level client factory for test injection of MockTransport."""
+    return httpx.AsyncClient(**kwargs)
+
+
 def _pctl(values: list[float], q: float) -> float:
     """Nearest-rank percentile. q in [0, 1]."""
     if not values:
@@ -170,9 +175,8 @@ async def _search(
         json={"query": query, "agent": agent, "limit": limit},
         headers=headers,
     )
-    # INTENTIONAL BUG FOR RED-FIRST: read "results" instead of "hits"
     data = resp.json()
-    hits = data.get("results", [])
+    hits = data.get("hits", [])
     return hits, resp.status_code
 
 
@@ -206,7 +210,7 @@ async def run(args: argparse.Namespace) -> int:
     host = parsed.hostname or "localhost"
 
     # a. GET /version
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with _create_client(timeout=30.0) as client:
         try:
             version = await _get_version(client, args.base_url)
         except RuntimeError as exc:
