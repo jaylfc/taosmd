@@ -195,15 +195,26 @@ def test_meta_path_blocks_real_imports(tmp_path, monkeypatch):
     assert prov["revision"] == _PINNED_REVISION
 
 
-def test_device_precedence_explicit_cpu(monkeypatch, tmp_path):
-    _, fake_st, _ = _install_fakes(monkeypatch, tmp_path, cuda_available=True)
+@pytest.mark.parametrize(
+    ("device", "cuda_available", "expected"),
+    [
+        ("auto", True, "cuda"),
+        ("auto", False, "cpu"),
+        ("cpu", True, "cpu"),
+        ("cuda", False, "cuda"),
+    ],
+)
+def test_device_precedence(monkeypatch, tmp_path, device, cuda_available, expected):
+    _, fake_st, _ = _install_fakes(monkeypatch, tmp_path, cuda_available=cuda_available)
     from benchmarks.e048.qwen3vl import Qwen3VLImageEmbedder
 
-    emb = Qwen3VLImageEmbedder(device="cpu")
+    (tmp_path / "model.safetensors").write_bytes(b"model")
+    emb = Qwen3VLImageEmbedder(device=device)
     emb.embed_queries(["hello"])
 
     fake_instance = fake_st._last_instance[0]
-    assert fake_instance.init_kwargs["device"] == "cpu"
+    assert fake_instance.init_kwargs["device"] == expected
+    assert emb.provenance()["execution_provider"] == expected
 
 
 def test_provenance_raises_when_no_safetensors(monkeypatch, tmp_path):
@@ -213,3 +224,21 @@ def test_provenance_raises_when_no_safetensors(monkeypatch, tmp_path):
     emb = Qwen3VLImageEmbedder()
     with pytest.raises(RuntimeError, match="safetensors"):
         emb.provenance()
+
+
+def test_provenance_model_files_sorted_regardless_of_walk_order(monkeypatch, tmp_path):
+    _install_fakes(monkeypatch, tmp_path)
+    from benchmarks.e048.qwen3vl import Qwen3VLImageEmbedder
+    import benchmarks.e048.qwen3vl as qwen3vl
+
+    (tmp_path / "a.safetensors").write_bytes(b"a")
+    (tmp_path / "z.safetensors").write_bytes(b"z")
+
+    def fake_walk(path):
+        return [(str(tmp_path), [], ["z.safetensors", "a.safetensors"])]
+
+    monkeypatch.setattr(qwen3vl.os, "walk", fake_walk)
+
+    emb = Qwen3VLImageEmbedder()
+    prov = emb.provenance()
+    assert list(prov["model_files"].keys()) == ["a.safetensors", "z.safetensors"]
