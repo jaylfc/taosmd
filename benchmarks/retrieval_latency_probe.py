@@ -86,6 +86,47 @@ def _latency_stats(values: list[float]) -> dict:
     }
 
 
+def _first_evidence_rank(hits: list[dict], evidence: list[str]) -> int | None:
+    """1-based position of the first hit whose dia_id is in evidence.
+
+    Mirrors the dia_id extraction rule of _evidence_hits in locomo_runner:
+    (h.get("metadata", {}) or {}).get("dia_id"). Returns None if evidence
+    is empty or no hit matches.
+    """
+    if not evidence:
+        return None
+    evidence_set = set(evidence)
+    for i, h in enumerate(hits):
+        dia_id = (h.get("metadata", {}) or {}).get("dia_id")
+        if dia_id in evidence_set:
+            return i + 1
+    return None
+
+
+def _recall_at_ks(rows: list[dict], ks: tuple[int, ...] = (1, 3, 5, 10, 20)) -> dict[str, float]:
+    """Recall@K for each K in ks, over rows with evidence_total > 0.
+
+    A row counts as recalled at K if first_evidence_rank is not None and <= K.
+    Only K values <= max n_hits seen in rows are included in the result.
+    """
+    ev_rows = [r for r in rows if r.get("evidence_total", 0) > 0]
+    if not ev_rows:
+        return {}
+    max_n_hits = max(r.get("n_hits", 0) for r in ev_rows)
+    result: dict[str, float] = {}
+    denom = len(ev_rows)
+    for k in ks:
+        if k > max_n_hits:
+            continue
+        recalled = sum(
+            1
+            for r in ev_rows
+            if r.get("first_evidence_rank") is not None and r["first_evidence_rank"] <= k
+        )
+        result[str(k)] = recalled / denom
+    return result
+
+
 def _recall_at_k(rows: list[dict]) -> tuple[float, int]:
     """(R@K, n_with_evidence) over rows. runner convention: only QAs that
     carry evidence annotations count toward the denominator."""
@@ -99,6 +140,7 @@ def _recall_at_k(rows: list[dict]) -> tuple[float, int]:
 def _summarize(rows: list[dict], errors: list[dict],
                ingest_stats: list[dict]) -> dict:
     recall, n_ev = _recall_at_k(rows)
+    r_at = _recall_at_ks(rows)
     by_cat: dict[str, dict] = {}
     cats: dict[int, list[dict]] = {}
     for r in rows:
@@ -111,6 +153,7 @@ def _summarize(rows: list[dict], errors: list[dict],
             "count": len(c_rows),
             "n_with_evidence": c_nev,
             "r_at_k": round(c_recall, 4),
+            "r_at": _recall_at_ks(c_rows),
             **_latency_stats([r["retrieval_ms"] for r in c_rows]),
         }
     return {
@@ -118,6 +161,7 @@ def _summarize(rows: list[dict], errors: list[dict],
         "n_errors": len(errors),
         "n_with_evidence": n_ev,
         "r_at_k": round(recall, 4),
+        "r_at": r_at,
         "retrieval_latency": _latency_stats([r["retrieval_ms"] for r in rows]),
         "by_category": by_cat,
         "ingest": {
@@ -259,6 +303,7 @@ async def run(args: argparse.Namespace) -> int:
                         "n_adjacent": sum(len(v) for v in adj_map.values()),
                         "evidence_hits": _evidence_hits(hits, evidence),
                         "evidence_total": len(evidence),
+                        "first_evidence_rank": _first_evidence_rank(hits, evidence),
                         "retrieval_ms": round(retrieval_ms, 2),
                         "adjacency_ms": round(adjacency_ms, 2),
                     })
