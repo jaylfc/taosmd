@@ -370,9 +370,18 @@ async def run(args: argparse.Namespace) -> int:
         "git_sha": _git_sha(),
         "timestamp": datetime.utcnow().strftime("%Y%m%d_%H%M%S"),
     }
+    summary = _summarize(results, errors, ingest_stats)
+    out_path = _write_results(args, config, results, errors, summary)
+
+    _print_summary(config, summary)
+    print(f"\nwrote {out_path}")
+    return 0
+
+
+def _write_results(args: argparse.Namespace, config: dict, results: list[dict],
+                   errors: list[dict], summary: dict) -> Path:
     prov = collect(dict(config), args.onnx_path if args.embed_mode == "onnx" else None, args.dataset)
     config["provenance"] = prov
-    summary = _summarize(results, errors, ingest_stats)
 
     if args.out:
         out_path = Path(args.out)
@@ -385,10 +394,7 @@ async def run(args: argparse.Namespace) -> int:
          "summary": summary},
         indent=2,
     ))
-
-    _print_summary(config, summary)
-    print(f"\nwrote {out_path}")
-    return 0
+    return out_path
 
 
 def _parse_args() -> argparse.Namespace:

@@ -428,6 +428,11 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
 
     output_path = os.path.join(os.path.dirname(__file__), "results",
                                 f"enhanced_{time.strftime('%Y%m%d_%H%M%S')}.json")
+    _write_results(output_path, top_k, all_results, cfg, prov)
+    print(f"\nResults saved to: {output_path}")
+
+
+def _write_results(output_path: str, top_k: int, all_results: dict, cfg: dict, prov: dict) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as f:
         json.dump({
@@ -438,7 +443,6 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
             "provenance": prov,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }, f, indent=2)
-    print(f"\nResults saved to: {output_path}")
 
 
 if __name__ == "__main__":
