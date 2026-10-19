@@ -125,6 +125,37 @@ def test_bm25_lemma_rrf_raises_import_error_when_lemmatization_missing_and_bm25s
         asyncio.run(vmem.search("zebra stripes", limit=1, fusion="bm25_lemma_rrf"))
 
 
+def test_mem0_additive_fallback_returns_zebra_first(tmp_path, monkeypatch, caplog):
+    """search with fusion=mem0_additive returns zebra doc first when bm25s missing."""
+    monkeypatch.setitem(sys.modules, "bm25s", None)
+    # Identity lemmatization so the test is deterministic without spaCy
+    monkeypatch.setattr(
+        "taosmd.utils.lemmatization.lemmatize_for_bm25", lambda text: text
+    )
+    vmem = VectorMemory(db_path=str(tmp_path / "vec.db"), embed_mode="onnx")
+    asyncio.run(vmem.init())
+
+    # Non-constant embedder: non-zebra docs match the query vector (sim=1.0),
+    # zebra doc is slightly off (sim=0.95). Without BM25 the zebra doc loses;
+    # with real BM25 scores it wins, proving the fallback feeds scores into
+    # mem0_additive rather than zeroing them out.
+    async def _embed(text: str, task: str = "search_document") -> list[float]:
+        if task == "search_query":
+            return [1.0] + [0.0] * 7
+        if "zebra" in text:
+            return [0.95, 0.3122, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        return [1.0] + [0.0] * 7
+
+    vmem.embed = _embed  # type: ignore[assignment]
+    asyncio.run(_add_three_docs(vmem))
+
+    results = asyncio.run(vmem.search("zebra stripes", limit=1, fusion="mem0_additive"))
+
+    assert len(results) == 1
+    assert "zebra" in results[0]["text"]
+    assert any("bm25s not installed" in record.message for record in caplog.records)
+
+
 def test_bm25_rrf_with_bm25s_returns_zebra_first(tmp_path):
     pytest.importorskip("bm25s")
     """Control: with bm25s installed, bm25_rrf returns zebra doc first."""
