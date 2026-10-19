@@ -1,2 +1,1 @@
-### Fixed
-- Add tests for retrieval_latency_probe run() wiring of first_evidence_rank and by_category r_at values
+Add tests for _summarize by_category r_at exact values and run() first_evidence_rank wiring

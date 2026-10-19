@@ -93,6 +93,9 @@ class TestSummarizeByCategoryRAt:
         ingest_stats = []
         summary = _summarize(rows, errors, ingest_stats)
 
+        # by_category keys are strings (coerced from int in _summarize)
+        assert all(isinstance(k, str) for k in summary["by_category"].keys())
+
         # Category 1: 3 rows with evidence, ranks 1, 3, 5
         # R@1: 1/3, R@3: 2/3, R@5: 3/3, R@10: 3/3
         cat1_r_at = summary["by_category"]["1"]["r_at"]
