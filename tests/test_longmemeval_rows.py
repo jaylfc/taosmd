@@ -119,7 +119,6 @@ def test_is_non_answer():
     # Empty/None -> True
     assert mod.is_non_answer(None) == True
     assert mod.is_non_answer("") == True
-    assert mod.is_non_answer("") == True
 
     # Each phrase in various cases -> True
     for phrase in mod.NON_ANSWER_PHRASES:
@@ -326,6 +325,22 @@ async def test_env_invalid_raises_before_questions(fake_runner, monkeypatch, _ar
 
     # Also verify load_dataset wasn't called on the original fake_runner
     assert not hasattr(fake_runner.load_dataset, 'call_count')
+
+
+def test_read_save_context_with_dict(mod):
+    """Test read_save_context with dict inputs as required by revision requirement (a)."""
+    # Test {} -> False (unset or empty)
+    assert mod.read_save_context({}) == False
+
+    # Test {"TAOSMD_LME_SAVE_CONTEXT": "0"} -> False
+    assert mod.read_save_context({"TAOSMD_LME_SAVE_CONTEXT": "0"}) == False
+
+    # Test {"TAOSMD_LME_SAVE_CONTEXT": "1"} -> True
+    assert mod.read_save_context({"TAOSMD_LME_SAVE_CONTEXT": "1"}) == True
+
+    # Test {"TAOSMD_LME_SAVE_CONTEXT": "yes"} -> ValueError with message naming valid values
+    with pytest.raises(ValueError, match="TAOSMD_LME_SAVE_CONTEXT must be"):
+        mod.read_save_context({"TAOSMD_LME_SAVE_CONTEXT": "yes"})
 
 
 if __name__ == "__main__":

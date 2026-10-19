@@ -29,6 +29,14 @@ from taosmd.retrieval import retrieve as _retrieve
 from taosmd.vector_memory import VectorMemory
 
 # Non-answer phrases for filtering
+NON_ANSWER_PHRASES = (
+    "i don't know",
+    "i do not know", 
+    "i'm sorry",
+    "not in the context",
+    "does not contain",
+    "no information"
+)
 def is_non_answer(text: str | None) -> bool:
     """Return True if text is a non-answer phrase (i.don't know, etc.)."""
     if text is None or text == "":
@@ -38,15 +46,6 @@ def is_non_answer(text: str | None) -> bool:
         if phrase in lowered:
             return True
     return False
-
-NON_ANSWER_PHRASES = (
-    "i don't know",
-    "i do not know", 
-    "i'm sorry",
-    "not in the context",
-    "does not contain",
-    "no information"
-)
 
 
 def read_save_context(environ) -> bool:

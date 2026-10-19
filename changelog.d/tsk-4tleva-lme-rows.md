@@ -1,7 +1,6 @@
-### Added
-
-- LongMemEval row-building functions: `NON_ANSWER_PHRASES`, `is_non_answer()`, `build_row()`, and `read_save_context()`.
-- Environment variable parsing for `TAOSMD_LME_SAVE_CONTEXT` with proper validation.
-- Module-level non-answer phrase filtering.
-- Support for `predicted` and `answer` fields in benchmark results.
-- Context truncation based on `CONTEXT_CHARS` when `save_context=True`.
+Fix review BLOCKers:
+- Move NON_ANSWER_PHRASES above is_non_answer function to fix NameError
+- Remove 4 JSON test artifacts (longmemeval_*.json) from benchmarks/results/
+- Add direct unit tests for read_save_context with dict inputs as required by revision requirement (a)
+- Fix duplicate assertion in test_is_non_answer
+- Add newline at end of tests/test_longmemeval_rows.py
