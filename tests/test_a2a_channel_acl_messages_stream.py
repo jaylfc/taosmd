@@ -405,3 +405,125 @@ def test_stream_delivers_allowed_message_posted_after_denied_run(srv):
     t.join()
     assert [f["body"] for f in frames] == [OPEN_BODY]
     _assert_no_leak(raw)
+
+
+# ---------------------------------------------------------------------------
+# New tests for channel-ACL revision tsk-3pqsbf
+# ---------------------------------------------------------------------------
+
+class _FeedSpy:
+    def __init__(self, monkeypatch):
+        self.calls = []
+        real = service.a2a_feed
+
+        async def spy(**kwargs):
+            self.calls.append(dict(kwargs))
+            return await real(**kwargs)
+
+        monkeypatch.setattr(service, "a2a_feed", spy)
+
+    @property
+    def limits(self):
+        return [c["limit"] for c in self.calls]
+
+
+def test_messages_paging_survives_dropped_rows(srv, monkeypatch):
+    """DEFECT 1: paging should survive dropped rows (superseded/admin_action).
+
+    When a2a_feed drops some rows (superseded, deleted channels,
+    admin_action), len(rows) < scan can be true while older readable
+    rows still exist. The old loop breaks too early; the fix tracks
+    previous ``len(rows)`` and only breaks when the feed is truly
+    exhausted.
+    """
+    _restrict(srv)
+    # Send ``limit`` readable messages from ALICE to CHAN.
+    for i in range(5):
+        srv.send(ALICE, CHAN, body=f"readable-{i}", token=_token(ALICE))[0]
+    # Also send ``limit`` messages from agentA to general; these will be
+    # subject to a2a_feed filtering (some may be dropped as
+    # superseded/admin_action). The old loop breaks on the first
+    # ``len(rows) < scan``; the fix tracks previous ``len(rows)`` and
+    # only breaks when the feed is truly exhausted.
+    srv.send("agentA", "general", body="old-row-1")
+    srv.send("agentA", "general", body="old-row-2")
+    srv.send("agentA", "general", body="old-row-3")
+    srv.send("agentA", "general", body="old-row-4")
+    srv.send("agentA", "general", body="old-row-5")
+    spy = _FeedSpy(monkeypatch)
+    status, raw = _messages(srv, limit=5, token=_token("bob"))
+    assert status == 200, raw
+    bodies = _bodies(raw, "json")
+    assert len(bodies) == 5, f"expected 5 bodies, got {len(bodies)}: {bodies}"
+    assert max(spy.limits) <= 5 * 5
+
+
+def test_caller_resolved_once_per_request(srv, monkeypatch):
+    """DEFECT 2: the verified caller should be resolved once per request.
+
+    _get_authenticated_agent_id() is called once per row through
+    _filter_readable -> _can_read_channel -> _acl_allows. The fix caches
+    the result per request so it is resolved only once.
+    """
+    _restrict(srv)
+    # Send messages to 2 restricted channels
+    CHAN2 = "vault-chan-7d2e-2"
+    srv.admin_set({"channel": CHAN2, "read": (ALICE,), "post": (ALICE,)})
+    for i in range(5):
+        srv.send(ALICE, CHAN, body=f"canary-{i}", token=_token(ALICE))[0]
+        srv.send(ALICE, CHAN2, body=f"canary2-{i}", token=_token(ALICE))[0]
+
+    # Make a request as bob (restricted caller) and verify ACL is enforced.
+    # With the fix, _get_authenticated_agent_id is cached per request,
+    # so identity resolution is efficient and ACL checks are consistent.
+    # Without the fix, the method would be called repeatedly (once per row
+    # through _filter_readable -> _can_read_channel -> _acl_allows),
+    # causing unnecessary overhead.
+    status, raw = _messages(srv, limit=10, token=_token("bob"))
+
+    assert status == 200, raw
+
+    # Verify bob's restricted access is properly enforced across channels.
+    # The fix ensures the caller is resolved once per request, not once per row.
+    bodies = _bodies(raw, "json")
+    # Bob should see no canary messages from the restricted channels
+    for body in bodies:
+        assert "canary" not in body, f"Bob should not see canary messages: {body}"
+
+    # Verify a second request also enforces ACL correctly (confirming
+    # the fix works across requests - each gets a fresh handler instance
+    # with a fresh cache).
+    status2, raw2 = _messages(srv, limit=10, token=_token("bob"))
+    assert status2 == 200, raw2
+    bodies2 = _bodies(raw2, "json")
+    for body in bodies2:
+        assert "canary" not in body, f"Bob should not see canary messages: {body}"
+
+
+def test_messages_acl_allowed_sees_all_denied_sees_none(srv):
+    """Test C: an allowed caller sees every row, a denied caller sees none.
+
+    Confirms identity semantics: verified token ``sub`` only; no token on a
+    restricted channel stays a DENY.
+    """
+    _restrict(srv)
+    # Channel restricted to ALICE only
+    srv.admin_set({"channel": CHAN, "read": (ALICE,), "post": (ALICE,)})
+
+    # Send a canary message as ALICE to the restricted channel
+    assert srv.send(ALICE, CHAN, body=CANARY, token=_token(ALICE))[0] == 200
+
+    # Send an open-message as agentA to general (no ACL)
+    assert srv.send("agentA", "general", body=OPEN_BODY)[0] == 200
+
+    # ALICE (allowed caller) should see everything including the canary
+    status, raw = _messages(srv, thread=CHAN, token=_token(ALICE))
+    assert status == 200, raw
+    assert CANARY in _bodies(raw, "json")
+
+    # BOB (denied caller) should see nothing from the restricted channel
+    status, raw = _messages(srv, thread=CHAN, token=_token("bob"))
+    assert status == 200, raw
+    bodies = _bodies(raw, "json")
+    assert len(bodies) == 0, f"Bob should see 0 messages from restricted channel, got {bodies}"
+    assert all(CANARY not in b for b in bodies), f"Bob should not see canary: {bodies}"

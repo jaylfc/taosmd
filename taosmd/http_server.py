@@ -878,14 +878,22 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             ``None``; a valid token yields its ``sub``.  When no registry
             verifier is configured (standalone) it yields ``None``: receipt
             writes require an authenticated identity, never a body claim.
+
+            The verified caller is cached on the handler instance per request
+            so that ``_acl_allows`` and other ACL checks do not re-resolve
+            identity on every row.
             """
+            if hasattr(self, "_cached_agent_id") and self._cached_agent_id is not None:
+                return self._cached_agent_id
             if _registry_verifier is None:
                 return None
             auth = self.headers.get("Authorization", "")
             if not auth.startswith("Bearer "):
+                self._cached_agent_id = None
                 return None
             token = auth[len("Bearer "):].strip()
             if not token:
+                self._cached_agent_id = None
                 return None
             from . import registry_auth as _ra  # noqa: PLC0415
             try:
@@ -894,10 +902,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 claimed = unverified.get("sub", "") or ""
                 claims = _registry_verifier.authorize(token, claimed)
                 sub = claims.get("sub", "") or ""
-                return sub if sub else None
+                result = sub if sub else None
+                self._cached_agent_id = result
+                return result
             except _ra.AuthError:
+                self._cached_agent_id = None
                 return None
             except Exception:  # noqa: BLE001
+                self._cached_agent_id = None
                 return None
 
         @staticmethod
@@ -2143,13 +2155,17 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             acl_map: dict = {}
             scan_cap = limit_i * 5
             scan = limit_i
+            prev_len = 0
             while True:
                 rows = runner.run(
                     service.a2a_feed(thread=thread, since=since, limit=scan, data_dir=data_dir)
                 )
                 messages = self._filter_readable(rows, acl_map, aliases)
-                if len(messages) >= limit_i or len(rows) < scan or scan >= scan_cap:
+                if len(messages) >= limit_i or scan >= scan_cap:
                     break
+                if len(rows) <= prev_len:
+                    break
+                prev_len = len(rows)
                 scan = min(scan * 2, scan_cap)
             messages = messages[-limit_i:] if limit_i else []
             # Compact mode: ?fields=id,sender,body projects each message down
