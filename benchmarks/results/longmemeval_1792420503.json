@@ -1,0 +1,41 @@
+{
+  "question_type": null,
+  "limit": 1,
+  "generator": "qwen2.5:3b",
+  "judge": "qwen2.5:3b",
+  "rerank": false,
+  "decompose": false,
+  "self_verify": false,
+  "assemble_tokens": 4000,
+  "retrieve_limit": 12,
+  "fts_limit": 5,
+  "context_chars": 16000,
+  "num_ctx": 0,
+  "retrieval_path": "retrieve",
+  "graph_expansion": 0,
+  "retrieval_delta": null,
+  "metrics": {
+    "n": 1,
+    "correct": 0,
+    "accuracy": 0.0,
+    "by_type": {
+      "temporal": {
+        "correct": 0,
+        "total": 1
+      }
+    }
+  },
+  "results": [
+    {
+      "idx": 0,
+      "question_type": "temporal",
+      "question": "What happened in 2020?",
+      "correct": false,
+      "retrieved_chars": 20,
+      "retrieval_delta": null,
+      "predicted": null,
+      "answer": "The pandemic started",
+      "context": "  fake context chunk"
+    }
+  ]
+}

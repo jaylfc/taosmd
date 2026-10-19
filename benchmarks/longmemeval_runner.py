@@ -28,6 +28,70 @@ from taosmd.context_assembler import ContextAssembler
 from taosmd.retrieval import retrieve as _retrieve
 from taosmd.vector_memory import VectorMemory
 
+# Non-answer phrases for filtering
+def is_non_answer(text: str | None) -> bool:
+    """Return True if text is a non-answer phrase (i.don't know, etc.)."""
+    if text is None or text == "":
+        return True
+    lowered = text.lower()
+    for phrase in NON_ANSWER_PHRASES:
+        if phrase in lowered:
+            return True
+    return False
+
+NON_ANSWER_PHRASES = (
+    "i don't know",
+    "i do not know", 
+    "i'm sorry",
+    "not in the context",
+    "does not contain",
+    "no information"
+)
+
+
+def read_save_context(environ) -> bool:
+    """Parse TAOSMD_LME_SAVE_CONTEXT from environ.
+
+    Returns:
+        True if set to "1", False if set to "0" or unset.
+    Raises:
+        ValueError: if value is anything other than "0", "1", or unset.
+    """
+    value = environ.get("TAOSMD_LME_SAVE_CONTEXT")
+    if value is None or value == "":
+        return False
+    if value == "0":
+        return False
+    if value == "1":
+        return True
+    raise ValueError(
+        'TAOSMD_LME_SAVE_CONTEXT must be "0", "1", or unset; got {!r}'.format(value)
+    )
+
+
+def build_row(idx, question_type, question, correct, full_context, delta, predicted, gold_answer, save_context) -> dict:
+    """Build a row dict for the LongMemEval results.
+
+    Returns every key master writes today, with the same values (idx, question_type,
+    question, correct as bool, retrieved_chars = len(full_context), retrieval_delta),
+    plus "predicted" (the generated answer, None in retrieval-only mode) and
+    "answer" (the reference gold_answer). When save_context is True it also adds
+    "context" = full_context[:CONTEXT_CHARS]; when False there is no "context" key.
+    """
+    row = {
+        "idx": idx,
+        "question_type": question_type,
+        "question": question,
+        "correct": bool(correct),
+        "retrieved_chars": len(full_context),
+        "retrieval_delta": delta,
+        "predicted": predicted,
+        "answer": gold_answer,
+    }
+    if save_context:
+        row["context"] = full_context[:CONTEXT_CHARS]
+    return row
+
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json")
 
@@ -572,13 +636,8 @@ async def run_benchmark(
         report_retrieval_delta = args.report_retrieval_delta
         out_path = args.out
 
-    print("=" * 70)
-    print("LongMemEval Benchmark — taOSmd")
-    print("=" * 70)
-    print(
-        f"  retrieval_path={retrieval_path}  graph_expansion={graph_expansion}  "
-        f"num_ctx={NUM_CTX or 'ollama-default'}"
-    )
+    # Parse save_context from environment
+    save_context = read_save_context(os.environ)
 
     # Refuse rather than silently run two identical arms. Exits non-zero on
     # purpose so an automated chain checking $? reads a refusal as a failure.
@@ -735,7 +794,7 @@ async def run_benchmark(
             if SELF_VERIFY:
                 answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
-            if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
+            if answer and not is_non_answer(answer):
                 correct = await score_answer_llm(llm_client, answer, gold_answer, question)
             else:
                 correct = False
@@ -744,6 +803,7 @@ async def run_benchmark(
             if i < 5:
                 print(f"      [{llm_time:.1f}s] Answer: {(answer or 'EMPTY')[:80]} → {'✓' if correct else '✗'}")
         else:
+            answer = None
             correct = score_answer_substring(full_context, gold_answer)
 
         total_questions += 1
@@ -758,14 +818,19 @@ async def run_benchmark(
 
         elapsed = ingest_time + query_time
         total_time += elapsed
-        all_results.append({
-            "idx": i,
-            "question_type": qtype,
-            "question": question,
-            "correct": bool(correct),
-            "retrieved_chars": len(full_context),
-            "retrieval_delta": delta,
-        })
+        all_results.append(
+            build_row(
+                idx=i,
+                question_type=qtype,
+                question=question,
+                correct=bool(correct),
+                full_context=full_context,
+                delta=delta,
+                predicted=answer,
+                gold_answer=gold_answer,
+                save_context=save_context,
+            )
+        )
 
         status = "✓" if correct else "✗"
         print(f"  [{i+1:3d}/{len(dataset)}] {status} {qtype:25s} | ingest:{ingest_time:.1f}s query:{query_time:.3f}s | {question[:50]}")
