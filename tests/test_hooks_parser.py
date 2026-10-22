@@ -755,3 +755,43 @@ def test_lone_surrogate_does_not_raise(label, line):
         item["id"].encode("utf-8")
     except UnicodeEncodeError as exc:
         pytest.fail(f"{label}: item id still holds a lone surrogate: {exc}")
+
+
+@pytest.mark.parametrize(
+    "label,line",
+    [
+        (
+            "tool_name_surrogate",
+            r'{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"\ud800","input":{"q":"x"}}]},"uuid":"a9","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
+        ),
+        (
+            "tool_id_surrogate",
+            r'{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"\ud800","name":"Bash","input":{"q":"x"}}]},"uuid":"a9","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
+        ),
+    ],
+    ids=[
+        "surrogate-tool-name",
+        "surrogate-tool-id",
+    ],
+)
+def test_tool_use_metadata_lone_surrogate_sanitized(label, line):
+    """A lone UTF-16 surrogate in tool_use name or id must be sanitized."""
+    session_id = "s1"
+    items, base_id = parse_entry(0, line, session_id)
+
+    assert items is not None, f"{label}: expected one item, got None"
+    assert len(items) == 1, f"{label}: expected 1 item, got {len(items)}"
+
+    item = items[0]
+    assert item["metadata"]["kind"] == "tool_use", f"{label}: expected kind 'tool_use', got {item['metadata']['kind']}"
+
+    # tool_name and tool_id must encode to UTF-8 without error
+    try:
+        item["metadata"]["tool_name"].encode("utf-8")
+    except UnicodeEncodeError as exc:
+        pytest.fail(f"{label}: tool_name still holds a lone surrogate: {exc}")
+
+    try:
+        item["metadata"]["tool_id"].encode("utf-8")
+    except UnicodeEncodeError as exc:
+        pytest.fail(f"{label}: tool_id still holds a lone surrogate: {exc}")
