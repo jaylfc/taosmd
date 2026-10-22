@@ -691,3 +691,67 @@ def test_assistant_is_meta_true_with_text_returns_item():
     assert items[0]["metadata"]["kind"] == "message", f"Expected kind 'message', got {items[0]['metadata']['kind']}"
     assert items[0]["metadata"]["role"] == "assistant", f"Expected role 'assistant', got {items[0]['metadata']['role']}"
     assert items[0]["text"] == "assistant response", f"Expected text 'assistant response', got {items[0]['text']}"
+
+
+@pytest.mark.parametrize(
+    "label,line",
+    [
+        (
+            "user_string_content",
+            r'{"type":"user","message":{"role":"user","content":"\ud800"},"uuid":"u1","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
+        ),
+        (
+            "user_text_block",
+            r'{"type":"user","message":{"role":"user","content":[{"type":"text","text":"\ud800"}]},"uuid":"u2","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
+        ),
+        (
+            "tool_result_string_content",
+            r'{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"\ud800"}]},"uuid":"u3","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
+        ),
+        (
+            "assistant_text_block",
+            r'{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\ud800"}]},"uuid":"a1","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
+        ),
+        (
+            "uuid",
+            r'{"type":"user","message":{"role":"user","content":"plain"},"uuid":"\ud800","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"s1"}',
+        ),
+        (
+            "session_id",
+            r'{"type":"user","message":{"role":"user","content":"plain"},"uuid":"u6","timestamp":"2026-10-07T22:53:25.123Z","sessionId":"\ud800"}',
+        ),
+    ],
+    ids=[
+        "surrogate-user-string-content",
+        "surrogate-user-text-block",
+        "surrogate-tool-result-string-content",
+        "surrogate-assistant-text-block",
+        "surrogate-uuid",
+        "surrogate-session-id",
+    ],
+)
+def test_lone_surrogate_does_not_raise(label, line):
+    """A lone UTF-16 surrogate escape in any text field must not raise.
+
+    JSON parsed by json.loads can carry a lone surrogate from JS tools that
+    slice strings mid-pair. Such a value must be sanitized before any UTF-8
+    encoding, here or in the derived item id.
+    """
+    session_id = "s1"
+    try:
+        items, base_id = parse_entry(0, line, session_id)
+    except Exception as exc:
+        pytest.fail(f"{label}: parse_entry raised {type(exc).__name__}: {exc}")
+
+    assert items is not None, f"{label}: expected one item, got None"
+    assert len(items) == 1, f"{label}: expected 1 item, got {len(items)}"
+
+    item = items[0]
+    try:
+        item["text"].encode("utf-8")
+    except UnicodeEncodeError as exc:
+        pytest.fail(f"{label}: item text still holds a lone surrogate: {exc}")
+    try:
+        item["id"].encode("utf-8")
+    except UnicodeEncodeError as exc:
+        pytest.fail(f"{label}: item id still holds a lone surrogate: {exc}")
