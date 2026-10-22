@@ -159,7 +159,10 @@ class TestRunWiring:
         args.adjacent_turns = 0
         args.fusion = "none"
         args.embed_mode = "onnx"
-        args.onnx_path = "/fake/onnx/path"
+        model_dir = tmp_path / "onnx"
+        model_dir.mkdir()
+        (model_dir / "model.onnx").write_bytes(b"x")
+        args.onnx_path = str(model_dir)
         args.qmd_url = "http://localhost:7832"
         args.reranker = "off"
         args.binary_quant = False
