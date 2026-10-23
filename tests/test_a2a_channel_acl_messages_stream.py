@@ -411,93 +411,57 @@ def test_stream_delivers_allowed_message_posted_after_denied_run(srv):
 # New tests for channel-ACL revision tsk-3pqsbf
 # ---------------------------------------------------------------------------
 
-class _FeedSpy:
-    def __init__(self, monkeypatch):
-        self.calls = []
-        real = service.a2a_feed
-
-        async def spy(**kwargs):
-            self.calls.append(dict(kwargs))
-            return await real(**kwargs)
-
-        monkeypatch.setattr(service, "a2a_feed", spy)
-
-    @property
-    def limits(self):
-        return [c["limit"] for c in self.calls]
-
-
-def test_messages_paging_survives_dropped_rows(srv, monkeypatch):
-    """DEFECT 1: paging should survive dropped rows (superseded/admin_action).
-
-    When a2a_feed drops some rows (superseded, deleted channels,
-    admin_action), len(rows) < scan can be true while older readable
-    rows still exist. The old loop breaks too early; the fix tracks
-    previous ``len(rows)`` and only breaks when the feed is truly
-    exhausted.
-    """
-    _restrict(srv)
-    # Send ``limit`` readable messages from ALICE to CHAN.
+@pytest.mark.parametrize("n_newer", [2, 5, 12])
+def test_messages_short_page_pages_past_deleted_channel(srv, n_newer):
+    """Rows of a deleted channel are dropped by the feed. A page that is empty
+    or short after the drop must keep paging back to the older readable rows."""
     for i in range(5):
-        srv.send(ALICE, CHAN, body=f"readable-{i}", token=_token(ALICE))[0]
-    # Also send ``limit`` messages from agentA to general; these will be
-    # subject to a2a_feed filtering (some may be dropped as
-    # superseded/admin_action). The old loop breaks on the first
-    # ``len(rows) < scan``; the fix tracks previous ``len(rows)`` and
-    # only breaks when the feed is truly exhausted.
-    srv.send("agentA", "general", body="old-row-1")
-    srv.send("agentA", "general", body="old-row-2")
-    srv.send("agentA", "general", body="old-row-3")
-    srv.send("agentA", "general", body="old-row-4")
-    srv.send("agentA", "general", body="old-row-5")
+        assert srv.send("agentA", "general", body=f"old-{i}")[0] == 200
+    for i in range(n_newer):
+        assert srv.send("agentA", CHAN, body=f"gone-{i}")[0] == 200
+    status, raw = _call("POST", f"{srv.base}/a2a/admin/delete-channel", {"channel": CHAN}, ADMIN)
+    assert status == 200, raw
+    status, raw = _messages(srv, limit=5, token=_token("bob"))
+    assert status == 200, raw
+    assert _bodies(raw, "json") == [f"old-{i}" for i in range(5)]
+    assert "gone-" not in raw
+
+
+def test_messages_stops_paging_when_archive_exhausted(srv, monkeypatch):
+    for i in range(2):
+        assert srv.send("agentA", "general", body=f"only-{i}")[0] == 200
     spy = _FeedSpy(monkeypatch)
     status, raw = _messages(srv, limit=5, token=_token("bob"))
     assert status == 200, raw
-    bodies = _bodies(raw, "json")
-    assert len(bodies) == 5, f"expected 5 bodies, got {len(bodies)}: {bodies}"
-    assert max(spy.limits) <= 5 * 5
+    assert _bodies(raw, "json") == ["only-0", "only-1"]
+    assert spy.limits == [5], spy.limits
 
 
-def test_caller_resolved_once_per_request(srv, monkeypatch):
-    """DEFECT 2: the verified caller should be resolved once per request.
-
-    _get_authenticated_agent_id() is called once per row through
-    _filter_readable -> _can_read_channel -> _acl_allows. The fix caches
-    the result per request so it is resolved only once.
-    """
+def test_caller_verified_once_per_request(srv, monkeypatch):
+    from taosmd import registry_auth
+    chan2 = "vault-chan-7d2e-2"
     _restrict(srv)
-    # Send messages to 2 restricted channels
-    CHAN2 = "vault-chan-7d2e-2"
-    srv.admin_set({"channel": CHAN2, "read": (ALICE,), "post": (ALICE,)})
-    for i in range(5):
-        srv.send(ALICE, CHAN, body=f"canary-{i}", token=_token(ALICE))[0]
-        srv.send(ALICE, CHAN2, body=f"canary2-{i}", token=_token(ALICE))[0]
+    _restrict(srv, channel=chan2)
+    for i in range(6):
+        assert srv.send(ALICE, CHAN, body=f"canary-{i}", token=_token(ALICE))[0] == 200
+        assert srv.send(ALICE, chan2, body=f"canary2-{i}", token=_token(ALICE))[0] == 200
+    calls = []
+    real = registry_auth.RegistryVerifier.authorize
 
-    # Make a request as bob (restricted caller) and verify ACL is enforced.
-    # With the fix, _get_authenticated_agent_id is cached per request,
-    # so identity resolution is efficient and ACL checks are consistent.
-    # Without the fix, the method would be called repeatedly (once per row
-    # through _filter_readable -> _can_read_channel -> _acl_allows),
-    # causing unnecessary overhead.
+    def counting(self, token, claimed_from):
+        calls.append(claimed_from)
+        return real(self, token, claimed_from)
+
+    monkeypatch.setattr(registry_auth.RegistryVerifier, "authorize", counting)
     status, raw = _messages(srv, limit=10, token=_token("bob"))
-
     assert status == 200, raw
-
-    # Verify bob's restricted access is properly enforced across channels.
-    # The fix ensures the caller is resolved once per request, not once per row.
-    bodies = _bodies(raw, "json")
-    # Bob should see no canary messages from the restricted channels
-    for body in bodies:
-        assert "canary" not in body, f"Bob should not see canary messages: {body}"
-
-    # Verify a second request also enforces ACL correctly (confirming
-    # the fix works across requests - each gets a fresh handler instance
-    # with a fresh cache).
-    status2, raw2 = _messages(srv, limit=10, token=_token("bob"))
-    assert status2 == 200, raw2
-    bodies2 = _bodies(raw2, "json")
-    for body in bodies2:
-        assert "canary" not in body, f"Bob should not see canary messages: {body}"
+    assert _bodies(raw, "json") == []
+    assert len(calls) == 1, calls
+    calls.clear()
+    status, raw = _messages(srv, limit=10)
+    assert status == 200, raw
+    assert _bodies(raw, "json") == []
+    assert calls == []
 
 
 def test_messages_acl_allowed_sees_all_denied_sees_none(srv):

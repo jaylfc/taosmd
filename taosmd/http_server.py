@@ -257,6 +257,7 @@ _EXTRA_MIME = {
 }
 
 logger = logging.getLogger(__name__)
+_UNRESOLVED = object()  # per-request identity cache: "not resolved yet" (None is a real result)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7900
@@ -883,17 +884,20 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             so that ``_acl_allows`` and other ACL checks do not re-resolve
             identity on every row.
             """
-            if hasattr(self, "_cached_agent_id") and self._cached_agent_id is not None:
-                return self._cached_agent_id
+            cached = getattr(self, "_cached_agent_id", _UNRESOLVED)
+            if cached is not _UNRESOLVED:
+                return cached
+            self._cached_agent_id = self._resolve_authenticated_agent_id()
+            return self._cached_agent_id
+
+        def _resolve_authenticated_agent_id(self) -> str | None:
             if _registry_verifier is None:
                 return None
             auth = self.headers.get("Authorization", "")
             if not auth.startswith("Bearer "):
-                self._cached_agent_id = None
                 return None
             token = auth[len("Bearer "):].strip()
             if not token:
-                self._cached_agent_id = None
                 return None
             from . import registry_auth as _ra  # noqa: PLC0415
             try:
@@ -902,14 +906,10 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 claimed = unverified.get("sub", "") or ""
                 claims = _registry_verifier.authorize(token, claimed)
                 sub = claims.get("sub", "") or ""
-                result = sub if sub else None
-                self._cached_agent_id = result
-                return result
+                return sub if sub else None
             except _ra.AuthError:
-                self._cached_agent_id = None
                 return None
             except Exception:  # noqa: BLE001
-                self._cached_agent_id = None
                 return None
 
         @staticmethod
@@ -1196,6 +1196,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             path = parts.path.rstrip("/") or "/"
             query = parse_qs(parts.query)
             self._raw_qs = parts.query
+            self._cached_agent_id = _UNRESOLVED
             # Token gate: check before routing so even unknown paths are
             # protected (prevents enumeration without a token). Admin write
             # routes are exempt here (#154): they enforce their own, stricter
@@ -2155,17 +2156,22 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             acl_map: dict = {}
             scan_cap = limit_i * 5
             scan = limit_i
-            prev_len = 0
             while True:
+                raw_count: list = []
                 rows = runner.run(
-                    service.a2a_feed(thread=thread, since=since, limit=scan, data_dir=data_dir)
+                    service.a2a_feed(
+                        thread=thread, since=since, limit=scan, data_dir=data_dir,
+                        raw_count=raw_count,
+                    )
                 )
                 messages = self._filter_readable(rows, acl_map, aliases)
                 if len(messages) >= limit_i or scan >= scan_cap:
                     break
-                if len(rows) <= prev_len:
+                # Exhausted: the archive returned fewer raw rows than asked
+                # for. Judged on the pre-drop count, so a window whose rows
+                # were all dropped (deleted channel) keeps widening.
+                if (raw_count[0] if raw_count else len(rows)) < scan:
                     break
-                prev_len = len(rows)
                 scan = min(scan * 2, scan_cap)
             messages = messages[-limit_i:] if limit_i else []
             # Compact mode: ?fields=id,sender,body projects each message down
