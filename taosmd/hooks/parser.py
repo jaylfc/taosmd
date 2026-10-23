@@ -281,8 +281,8 @@ def parse_entry(
                         "timestamp": ts_epoch,
                         "transcript_path": "",
                         "truncated": truncated,
-                        "tool_name": tub.get("name", "") or "",
-                        "tool_id": tub.get("id", "") or "",
+                        "tool_name": _sanitize_text(tub.get("name", "") or ""),
+                        "tool_id": _sanitize_text(tub.get("id", "") or ""),
                     },
                 }
             )
