@@ -131,9 +131,11 @@ class _RecordingVectorMemory:
     """Stands in for VectorMemory: records the search limit and query."""
 
     calls: list[dict] = []
+    init_kwargs: list[dict] = []
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+        _RecordingVectorMemory.init_kwargs.append(kwargs)
 
     async def init(self):
         return None
@@ -165,6 +167,7 @@ def _run_named_arm(monkeypatch, config_name, top_k=5):
     import asyncio
     monkeypatch.setattr(module, "VectorMemory", _RecordingVectorMemory)
     _RecordingVectorMemory.calls = []
+    _RecordingVectorMemory.init_kwargs = []
     cfg = arm_config_from_env({})
     asyncio.run(module.run_question(_item(), top_k, config_name, cfg))
     assert len(_RecordingVectorMemory.calls) == 1
@@ -287,6 +290,38 @@ def test_arm_config_from_env_reranker_bogus():
         assert False, "Expected ValueError"
     except ValueError:
         pass
+
+
+def test_late_interaction_reaches_vector_memory_ctor(monkeypatch):
+    """late_interaction from config is passed to VectorMemory constructor."""
+    import asyncio
+    monkeypatch.setattr(module, "VectorMemory", _RecordingVectorMemory)
+    _RecordingVectorMemory.calls = []
+    _RecordingVectorMemory.init_kwargs = []
+
+    # Config with late_interaction=True
+    cfg_true = arm_config_from_env({"TAOSMD_BENCH_LATE_INTERACTION": "1"})
+    assert cfg_true["late_interaction"] is True
+    asyncio.run(module.run_question(_item(), 5, "hybrid_baseline", cfg_true))
+    assert _RecordingVectorMemory.init_kwargs[-1]["late_interaction"] is True
+
+    # Config with late_interaction=False
+    _RecordingVectorMemory.calls = []
+    _RecordingVectorMemory.init_kwargs = []
+    cfg_false = arm_config_from_env({})
+    assert cfg_false["late_interaction"] is False
+    asyncio.run(module.run_question(_item(), 5, "hybrid_baseline", cfg_false))
+    assert _RecordingVectorMemory.init_kwargs[-1]["late_interaction"] is False
+
+
+def test_late_interaction_only_exact_one():
+    """Only the string '1' yields late_interaction=True; all other values yield False."""
+    for v in ["true", "yes", "2", "0", ""]:
+        result = arm_config_from_env({"TAOSMD_BENCH_LATE_INTERACTION": v})
+        assert result["late_interaction"] is False, f"Expected False for value={v!r}"
+
+    result = arm_config_from_env({"TAOSMD_BENCH_LATE_INTERACTION": "1"})
+    assert result["late_interaction"] is True
 
 
 def test_reranker_unavailable_refuses(monkeypatch):
