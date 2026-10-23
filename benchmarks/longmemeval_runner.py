@@ -564,7 +564,7 @@ async def run_benchmark(
     report_retrieval_delta = False
     out_path = ""
     writer_url = None
-    writer_model = None
+    writer_model = "default"
     if args is not None:
         limit = args.limit
         question_type = args.type
@@ -702,6 +702,7 @@ async def run_benchmark(
                             kg=kg, archive=archive, source="longmemeval",
                         )
                         total_turns += 1
+                        method_regex_count += 1
                     # Archive raw content
                     await archive.record(
                         "conversation",
