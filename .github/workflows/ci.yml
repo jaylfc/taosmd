@@ -21,3 +21,19 @@ jobs:
         run: uv run ruff check taosmd/ tests/ benchmarks/
       - name: Tests
         run: uv run pytest tests/ -q
+
+  clean-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Create clean venv
+        run: uv venv --python 3.12 /tmp/ci-clean
+      - name: Install core package only
+        run: uv pip install --python /tmp/ci-clean/bin/python .
+      - name: Verify import works
+        run: cd /tmp && /tmp/ci-clean/bin/python -I -c "import taosmd, taosmd.cli"
+      - name: Verify CLI works
+        run: cd /tmp && /tmp/ci-clean/bin/taosmd --help
