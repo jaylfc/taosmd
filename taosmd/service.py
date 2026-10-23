@@ -635,6 +635,7 @@ async def a2a_feed(
     since: float | None = None,
     limit: int = 50,
     data_dir=None,
+    raw_count: list | None = None,
 ) -> list[dict]:
     """Return messages from the agent-to-agent bus, oldest-first.
 
@@ -647,6 +648,11 @@ async def a2a_feed(
     Each item has shape ``{"id", "ts", "from", "body", "thread",
     "reply_to"}`` plus ``refs`` and/or ``blocks`` when those were
     supplied on send (taOSmd #211).
+
+    ``raw_count``, when given, is a list that receives the number of archive
+    rows fetched before the drop filters below (deleted channels, superseded
+    messages, admin rows), so a pager can tell "exhausted" from "all dropped".
+    The remote path does not report it.
 
     When a remote server URL is configured the call is forwarded to
     :class:`~taosmd.remote.RemoteClient` transparently.
@@ -693,6 +699,8 @@ async def a2a_feed(
         )
     # archive.query returns newest-first; A2A feed is displayed oldest-first.
     rows = list(reversed(rows))
+    if raw_count is not None:
+        raw_count.append(len(rows))
     result = []
     for row in rows:
         try:
