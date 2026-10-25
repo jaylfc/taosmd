@@ -275,6 +275,7 @@ class VectorMemory:
             )
         self._conn: sqlite3.Connection | None = None
         self._http = None
+        self._owns_http = False
         self._local_model = None
         self._pylate_model = None
         self._onnx_session = None
@@ -304,7 +305,17 @@ class VectorMemory:
         migrations.migrate(self._conn, "vector_memory")
         self._check_store_mode()
         self._conn.commit()
-        self._http = http_client
+        # QMD embed mode talks to a remote QMD server over HTTP. When the
+        # caller does not hand in a client, create and own one so _embed_qmd
+        # has something to POST to; otherwise add() fails for every chunk and
+        # search silently falls back to FTS only. A caller-supplied client is
+        # reused as-is and is NOT closed by close().
+        if http_client is None and self._embed_mode == "qmd":
+            import httpx
+            self._http = httpx.AsyncClient()
+            self._owns_http = True
+        else:
+            self._http = http_client
 
         # Load local embedding model if requested
         if self._embed_mode == "local":
@@ -533,6 +544,10 @@ class VectorMemory:
         if self._conn:
             self._conn.close()
             self._conn = None
+        if self._owns_http and self._http is not None:
+            await self._http.aclose()
+            self._http = None
+            self._owns_http = False
 
     async def embed(self, text: str, task: str = "search_document") -> list[float]:
         """Get embedding vector.
