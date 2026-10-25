@@ -4,7 +4,7 @@ import taosmd
 def test_agent_rules_loads_bundled_markdown() -> None:
     text = taosmd.agent_rules()
     assert text.strip(), "agent_rules() returned empty markdown"
-    assert "# " in text or "## " in text, "expected markdown headings in agent-rules.md"
+    assert "# " in text or "## " in text, "expected markdown headings in agent_rules.md"
 
 
 def test_agent_rules_none_mode_returns_original() -> None:
@@ -57,3 +57,15 @@ def test_agent_rules_taosmd_mode_with_custom_tools() -> None:
     assert "taosmd_remember" not in text
     assert "{search_tool}" not in text
     assert "{write_tool}" not in text
+
+
+def test_agent_rules_supplements_do_not_repeat_the_base_contract() -> None:
+    for mode in ("taosmd", "both"):
+        text = taosmd.agent_rules(mode)
+        assert text.count("### How to consult her") == 1, mode
+        assert text.count("### Pending decisions") == 1, mode
+
+
+def test_agent_rules_have_no_em_dashes() -> None:
+    for mode in (None, "taosmd", "both"):
+        assert "\u2014" not in taosmd.agent_rules(mode), mode
