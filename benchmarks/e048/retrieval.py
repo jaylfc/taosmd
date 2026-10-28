@@ -267,7 +267,9 @@ def run(manifest_path, embedder, rankings_path=None) -> dict:
             for q_idx in range(len(captions)):
                 # Find true item and its rank
                 true_item_idx = query_item_index[q_idx]
-                ranked_indices = np.argsort(-scores[q_idx], kind="stable")
+                # Use full ranking (all items) to compute true_rank, not just top-10
+                full_scores = query_vecs[q_idx] @ item_vecs.T
+                ranked_indices = np.argsort(-full_scores, kind="stable")
                 true_rank = np.where(ranked_indices == true_item_idx)[0][0]
                 
                 # Get item info from manifest

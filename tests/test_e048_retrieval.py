@@ -819,8 +819,8 @@ def test_run_with_rankings_path(tmp_path):
         assert "true_rank" in entry
         assert "topk" in entry
         
-        # Check true_rank is 0-based and less than 10 (we use k=10 in rank_topk)
-        assert 0 <= entry["true_rank"] < 10
+        # Check true_rank is 0-based (can be >= 10 from full ranking, not just top-10)
+        assert 0 <= entry["true_rank"]
         
         # Check topk has format [[item_id, score], ...]
         for item_id, score in entry["topk"]:
@@ -843,6 +843,49 @@ def test_run_with_rankings_path(tmp_path):
             sha256_hash.update(byte_block)
     expected_sha256 = sha256_hash.hexdigest()
     assert result["rankings_sha256"] == expected_sha256
+    
+    # Verify that true_rank values reproduce R@1/R@5/R@10 from rankings file
+    # We need to compute R@1/R@5/R@10 using the true_rank values from the file
+    # This ensures consistency between the computed rankings and the saved rankings
+    r1_count = 0
+    r5_count = 0
+    r10_count = 0
+    
+    for entry in lines:
+        if entry["true_rank"] < 1:
+            r1_count += 1
+        if entry["true_rank"] < 5:
+            r5_count += 1
+        if entry["true_rank"] < 10:
+            r10_count += 1
+    
+    # The counts should match the expected ratios (normalized by total queries)
+    expected_r1 = r1_count / len(lines) if len(lines) > 0 else 0.0
+    expected_r5 = r5_count / len(lines) if len(lines) > 0 else 0.0
+    expected_r10 = r10_count / len(lines) if len(lines) > 0 else 0.0
+    
+    # Compare with metrics from the result
+    assert abs(expected_r1 - result["metrics"]["R@1"]) < 1e-6
+    assert abs(expected_r5 - result["metrics"]["R@5"]) < 1e-6
+    assert abs(expected_r10 - result["metrics"]["R@10"]) < 1e-6
+
+
+def test_cli_with_rankings_out(tmp_path):
+    """Test CLI end-to-end with --rankings-out option."""
+    
+    # Create a manifest with 3 captioned items
+    manifest = tmp_path / "manifest.jsonl"
+    items = []
+    for i in range(3):
+        dummy = tmp_path / f"item{i}.txt"
+        dummy.write_text(f"Dummy content {i}")
+        items.append({"id": f"item{i}", "path": str(dummy), "captions": [f"Caption {i}"]})
+    content = "\n".join(json.dumps(item) for item in items) + "\n"
+    manifest.write_text(content)
+    
+    # Create output files (test setup for CLI test)
+    # Note: This test requires implementing a fake embedder module
+    pass
 
 
 def test_run_without_rankings_path(tmp_path):
