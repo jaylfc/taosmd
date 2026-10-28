@@ -17,6 +17,7 @@ Configs:
 """
 
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -35,6 +36,10 @@ from benchmarks.bench_provenance import collect
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_full.json")
 ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx")
 
+# Module-level state for distractor texts (kept out of cfg)
+_DISTRACTOR_TEXTS_LIST = []
+_DISTRACTOR_EMBED_CACHE = {}  # keyed by (text, task) for distractor texts only
+
 
 def arm_config_from_env(env: dict) -> dict:
     """Read arm configuration from environment variables.
@@ -42,6 +47,7 @@ def arm_config_from_env(env: dict) -> dict:
     Returns dict with keys: onnx_path, binary_quant, mrl_dim, rescore_oversample,
     fusion, late_interaction.
     """
+    global _DISTRACTOR_TEXTS_LIST, _DISTRACTOR_EMBED_CACHE
     # Default onnx path is the existing hard-coded one
     default_onnx_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -101,6 +107,46 @@ def arm_config_from_env(env: dict) -> dict:
     late_interaction_str = env.get("TAOSMD_BENCH_LATE_INTERACTION")
     late_interaction = late_interaction_str is not None and late_interaction_str != '' and late_interaction_str == "1"
 
+    distractor_texts_path = env.get("TAOSMD_BENCH_DISTRACTOR_TEXTS")
+    distractor_texts_cfg = None
+    _DISTRACTOR_TEXTS_LIST = []
+    _DISTRACTOR_EMBED_CACHE = {}
+    if distractor_texts_path is not None and distractor_texts_path != '':
+        path_str = str(distractor_texts_path)
+        if not os.path.exists(path_str):
+            raise ValueError
+        with open(path_str, "rb") as f:
+            file_bytes = f.read()
+        sha256_hex = hashlib.sha256(file_bytes).hexdigest()
+        loaded = []
+        seen_ids = set()
+        try:
+            text_content = file_bytes.decode("utf-8")
+        except Exception:
+            text_content = file_bytes.decode("utf-8", errors="replace")
+        for line in text_content.splitlines():
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            try:
+                obj = json.loads(line_stripped)
+            except Exception as e:
+                raise ValueError from e
+            if not isinstance(obj, dict) or "id" not in obj or "text" not in obj:
+                raise ValueError
+            d_id = obj["id"]
+            d_text = obj["text"]
+            if d_id in seen_ids:
+                raise ValueError
+            seen_ids.add(d_id)
+            loaded.append({"id": d_id, "text": d_text})
+        _DISTRACTOR_TEXTS_LIST = loaded
+        distractor_texts_cfg = {
+            "path": path_str,
+            "sha256": sha256_hex,
+            "count": len(loaded),
+        }
+
     return {
         "onnx_path": onnx_path,
         "binary_quant": binary_quant,
@@ -109,6 +155,7 @@ def arm_config_from_env(env: dict) -> dict:
         "fusion": fusion,
         "late_interaction": late_interaction,
         "reranker": reranker,
+        "distractor_texts": distractor_texts_cfg,
     }
 
 
