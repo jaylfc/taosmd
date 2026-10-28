@@ -12,6 +12,7 @@ license-files = ["LICENSE"]
 authors = [{name = "the taOS project"}]
 requires-python = ">=3.10"
 dependencies = [
+    "httpx",
     "numpy",
     "transformers",
 ]

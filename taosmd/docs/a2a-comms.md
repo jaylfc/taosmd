@@ -551,9 +551,42 @@ Rules:
   post.
 - The ACL of a renamed channel follows the rename: the entries of the old and
   new name are both consulted and the more restrictive one wins.
-- This release gates `POST /a2a/send` and `POST /a2a/import` (an import batch
-  is denied whole if any envelope targets a channel the caller may not post
-  to). The read routes are gated in follow-up slices.
+- `POST /a2a/send` and `POST /a2a/import` are gated (an import batch is denied
+  whole if any envelope targets a channel the caller may not post to).
+- `GET /a2a/messages` (json and ndjson, with or without `?thread=`) and
+  `GET /a2a/stream` leave out messages from channels the caller may not read;
+  the response is still `200`, with those rows absent. `/a2a/messages` pages
+  the feed until `limit` readable rows are found and scans at most `limit * 5`
+  rows, so a long run of unreadable rows can return fewer than `limit`
+  messages. The stream resolves the ACL on every poll and moves its cursor
+  past rows it skipped.
+- `GET /a2a/channels` and `GET /a2a/census` leave out restricted channels the
+  caller may not read: the channel row (name, members, counts, timestamps) is
+  absent, and the census drops that channel's per-sender counts, recomputes
+  each sender's `total` from what remains and omits senders left with nothing.
+  `GET /a2a/members?channel=<name>` returns `403` (no channel metadata in the
+  body) for a channel the caller may not read.
+- `GET /a2a/mentions`, `GET /a2a/inbox` and `GET /a2a/inbox/unhandled` drop
+  rows from channels the caller may not read. The `reader` / `consumer` query
+  value only selects whose inbox is read; the ACL decision uses the verified
+  token `sub` alone. The filter runs after the service applies `limit`, so a
+  page can hold fewer than `limit` rows.
+- A thread is a channel (`kind` is `"channel"`): its `thread` name is the
+  channel name the ACL is keyed on. `GET /a2a/threads` leaves out threads of
+  channels the caller may not read. `GET /a2a/threads/{thread}/messages` (and
+  the bare `GET /a2a/threads/{thread}` form) and
+  `GET /a2a/threads/{thread}/members` return `403` with no channel metadata in
+  the body.
+- `GET /a2a/messages/{id}/receipts` and `GET /a2a/receipts?message_id=` decide
+  on the channel of the message (its `thread`) and return `403` when the
+  caller may not read it, before any receipt is looked up. These two routes
+  already answer `401` to an unverified caller when a registry verifier is
+  configured, so that `401` comes first; with no verifier the ACL answers
+  `403`. An unknown message id has no channel and keeps its existing answer
+  (`200` with empty lists, or `404 receipt not found`). The write routes
+  `POST /a2a/threads`, `POST` and `DELETE` on `/a2a/threads/{t}/members`,
+  `POST /a2a/receipts` and `PATCH /a2a/receipts` are not read routes and are
+  not channel-ACL gated.
 
 #### Thread path-segment encoding
 

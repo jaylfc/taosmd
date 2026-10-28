@@ -1,0 +1,2 @@
+### Fixed
+- `benchmarks/retrieval_latency_probe.py` now runs as a script (`python benchmarks/retrieval_latency_probe.py --help`) by moving the `benchmarks.bench_provenance` import after the `sys.path.insert` calls. Added `test_probe_runs_as_script` to prevent regression.

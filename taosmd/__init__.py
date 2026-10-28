@@ -98,12 +98,48 @@ from .recipes import (
 from importlib.resources import files
 
 
-def agent_rules() -> str:
-    """Return the verbatim `docs/agent-rules.md` contract.
+def agent_rules(
+    mode: str | None = None,
+    *,
+    search_tool: str = "taosmd_search",
+    write_tool: str = "taosmd_remember",
+) -> str:
+    """Return the agent rules contract for the given memory mode.
 
-    Works from both editable and wheel installs.
+    Args:
+        mode: One of None, "taosmd", "both", "framework".
+            None returns the original `docs/agent-rules.md` (backward compatible).
+            "taosmd" returns the base rules plus the taosmd-only supplement.
+            "both" returns the base rules plus the both-mode supplement.
+            "framework" returns an empty string (no rules).
+        search_tool: Name of the search tool (default: "taosmd_search").
+        write_tool: Name of the write/ingest tool (default: "taosmd_remember").
+
+    Returns:
+        The rules text with {search_tool} and {write_tool} placeholders substituted.
+
+    Raises:
+        ValueError: If mode is not one of the recognized values.
     """
-    return files("taosmd").joinpath("docs/agent-rules.md").read_text(encoding="utf-8")
+    base = files("taosmd").joinpath("docs/agent-rules.md").read_text(encoding="utf-8")
+
+    if mode is None:
+        return base
+
+    if mode == "framework":
+        return ""
+
+    if mode == "taosmd":
+        supplement = files("taosmd").joinpath("docs/agent-rules-mode-taosmd.md").read_text(encoding="utf-8")
+        supplement = supplement.replace("{search_tool}", search_tool).replace("{write_tool}", write_tool)
+        return base + "\n\n" + supplement
+
+    if mode == "both":
+        supplement = files("taosmd").joinpath("docs/agent-rules-mode-both.md").read_text(encoding="utf-8")
+        supplement = supplement.replace("{search_tool}", search_tool).replace("{write_tool}", write_tool)
+        return base + "\n\n" + supplement
+
+    raise ValueError(f"Unknown mode: {mode!r}. Expected None, 'taosmd', 'both', or 'framework'.")
 
 
 def a2a_setup_guide() -> str:

@@ -61,7 +61,7 @@ def _call(method, url, payload=None, token=None):
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read().decode()
             return resp.status, raw
     except urllib.error.HTTPError as exc:
