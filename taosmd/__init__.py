@@ -120,6 +120,12 @@ def agent_rules(
 
     Raises:
         ValueError: If mode is not one of the recognized values.
+
+    Note:
+        Do not pair these rules with a pre-turn hook that searches taOSmd and
+        injects the hits before every turn. In lab 053 that combination
+        suppressed every memory call and produced a false "saved to memory"
+        claim with nothing written.
     """
     base = files("taosmd").joinpath("docs/agent-rules.md").read_text(encoding="utf-8")
 
