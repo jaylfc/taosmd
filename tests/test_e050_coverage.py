@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -67,3 +68,59 @@ def test_e050_coverage_synthetic():
     assert result["answer_not_verbatim"] == 1  # q4
     assert result["coverage"] == 2 / 4
     assert "q3" in result["question_ids_with_answer_after_cut"]
+
+
+def test_main_writes_out(tmp_path):
+    dataset = [
+        {
+            "question_id": "q1",
+            "answer": "hello world",
+            "haystack_sessions": [
+                [
+                    {"role": "user", "content": "hi", "has_answer": False},
+                    {"role": "assistant", "content": "short answer hello world", "has_answer": True},
+                ]
+            ],
+        },
+        {
+            "question_id": "q2",
+            "answer": "secret42",
+            "haystack_sessions": [
+                [
+                    {"role": "user", "content": "x" * 100 + " secret42 " + "y" * 2000, "has_answer": True},
+                ]
+            ],
+        },
+        {
+            "question_id": "q3",
+            "answer": "lateanswer",
+            "haystack_sessions": [
+                [
+                    {"role": "assistant", "content": "x" * 2500 + " lateanswer", "has_answer": True},
+                ]
+            ],
+        },
+        {
+            "question_id": "q4",
+            "answer": "notthere",
+            "haystack_sessions": [
+                [
+                    {"role": "user", "content": "x" * 3000, "has_answer": True},
+                ]
+            ],
+        },
+        {
+            "question_id": "q5",
+            "answer": "ignoreme",
+            "haystack_sessions": [
+                [
+                    {"role": "assistant", "content": "x" * 5000, "has_answer": False},
+                ]
+            ],
+        },
+    ]
+    data = tmp_path / "data.json"
+    data.write_text(json.dumps(dataset), encoding="utf-8")
+    out = tmp_path / "out.json"
+    e050_coverage.main(["--data", str(data), "--out", str(out)])
+    assert json.load(open(out)) == e050_coverage.coverage(dataset)

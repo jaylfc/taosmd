@@ -77,16 +77,15 @@ def coverage(dataset: list[dict], question_ids: set[str] | None = None) -> dict:
     }
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--data",
-        path=os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json"),
         default=os.path.join(os.path.dirname(__file__), "data", "longmemeval_oracle.json"),
     )
     parser.add_argument("--ids-file", help="optional, one question_id per line", default=None)
     parser.add_argument("--out", help="optional JSON path", default=None)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     with open(args.data, "r", encoding="utf-8") as f:
         dataset = json.load(f)
