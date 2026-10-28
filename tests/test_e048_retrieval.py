@@ -10,7 +10,7 @@ import pytest
 # Make the benchmark module importable from the project root
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchmarks.e048.retrieval import load_manifest, recall_at_k, run, write_results
+from benchmarks.e048.retrieval import load_manifest, recall_at_k, run, write_results, rank_topk
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -636,3 +636,272 @@ def test_run_distractors_compete(tmp_path):
     assert result["metrics"]["R@5"] == 1.0
     assert result["metrics"]["R@10"] == 1.0
 
+
+
+def test_rank_topk_basic():
+    """Test rank_topk function returns correct top-K indices and scores."""
+    # Create test vectors
+    item_vecs = np.array([
+        [0.9, 0.1, 0.0],   # item0
+        [0.1, 0.8, 0.1],   # item1
+        [0.0, 0.1, 0.9],   # item2
+        [0.2, 0.2, 0.7],   # item3
+    ], dtype=np.float32)
+    
+    query_vecs = np.array([
+        [0.9, 0.0, 0.0],   # query0 matches item0 best
+        [0.0, 0.9, 0.0],   # query1 matches item1 best
+    ], dtype=np.float32)
+    
+    # Test rank_topk with k=2
+    indices, scores = rank_topk(query_vecs, item_vecs, k=2)
+    
+    # Check shapes
+    assert indices.shape == (2, 2)
+    assert scores.shape == (2, 2)
+    
+    # Check ordering: for query0, item0 should be first, item3 second (after item0)
+    # Scores: query0 vs items: [0.81, 0.09, 0.0, 0.18] -> ranked: [0.81, 0.18, 0.09, 0.0]
+    # So top2: item0 (score 0.81), item3 (score 0.18)
+    np.testing.assert_array_equal(indices[0], [0, 3])
+    np.testing.assert_allclose(scores[0], [0.81, 0.18])
+    
+    # Check query1: scores: [0.09, 0.72, 0.09, 0.18] -> ranked: [0.72, 0.18, 0.09, 0.09]
+    np.testing.assert_array_equal(indices[1], [1, 3])
+    np.testing.assert_allclose(scores[1], [0.72, 0.18])
+
+
+def test_rank_topk_tie_breaking():
+    """Test that rank_topk breaks ties by lower index."""
+    # Two items have identical vectors
+    item_vecs = np.array([
+        [0.7, 0.7, 0.0],   # item0
+        [0.7, 0.7, 0.0],   # item1 (same as item0)
+        [0.1, 0.1, 0.1],   # item2
+    ], dtype=np.float32)
+    
+    query_vecs = np.array([
+        [0.7, 0.7, 0.0],   # Matches both item0 and item1
+    ], dtype=np.float32)
+    
+    indices, scores = rank_topk(query_vecs, item_vecs, k=3)
+    
+    # With tie-breaking by lower index, item0 should come first, then item1
+    assert indices[0, 0] == 0
+    assert indices[0, 1] == 1
+    assert indices[0, 2] == 2
+    
+    # Scores should be identical for item0 and item1 (0.7*0.7 + 0.7*0.7 + 0.0*0.0 = 0.98)
+    np.testing.assert_allclose(scores[0, 0], 0.98)
+    np.testing.assert_allclose(scores[0, 1], 0.98)
+
+
+def test_rank_topk_agrees_with_recall():
+    """Test that rank_topk agrees with recall_at_k on a random fixture."""
+    # Create test data
+    item_vecs = np.array([
+        [1.0, 0.0, 0.0],  # item0
+        [0.0, 1.0, 0.0],  # item1
+        [0.0, 0.0, 1.0],  # item2
+    ], dtype=np.float32)
+    
+    query_vecs = np.array([
+        [0.9, 0.1, 0.0],  # query0: mainly item0
+        [0.0, 0.9, 0.1],  # query1: mainly item1
+        [0.0, 0.1, 0.9],  # query2: mainly item2
+    ], dtype=np.float32)
+    
+    query_item_index = np.array([0, 1, 2])  # Each query matches its own item
+    
+    # Test rank_topk with k=3 (covers all items)
+    indices, scores = rank_topk(query_vecs, item_vecs, k=3)
+    
+    # For each query, check that the true item is in the ranking
+    for q_idx in range(len(query_vecs)):
+        true_item_idx = query_item_index[q_idx]
+        true_rank = np.where(indices[q_idx] == true_item_idx)[0][0]
+        
+        # true_rank should be less than 3 (since we requested k=3)
+        assert true_rank < 3
+        
+        # Also check with recall_at_k for consistency
+        metrics = recall_at_k(query_vecs, item_vecs, query_item_index, ks=(1, 2, 3))
+        
+        # R@3 should be 1.0 since all items should be in top 3
+        assert metrics["R@3"] == 1.0
+
+
+@pytest.fixture
+def dummy_manifest_with_captions(tmp_path):
+    """Write a manifest with captioned items for rank_topk tests."""
+    manifest = tmp_path / "manifest.jsonl"
+    items = []
+    for i in range(3):
+        dummy = tmp_path / f"item{i}.txt"
+        dummy.write_text(f"Dummy content {i}")
+        items.append({"id": f"item{i}", "path": str(dummy), "captions": [f"Caption {i}", f"Another caption {i}"]})
+    content = "\n".join(json.dumps(it) for it in items) + "\n"
+    manifest.write_text(content)
+    return manifest, items
+
+
+def test_run_with_rankings_path(tmp_path):
+    """Test that run() writes rankings file when rankings_path is provided."""
+    manifest = tmp_path / "manifest.jsonl"
+    items = []
+    for i in range(3):
+        dummy = tmp_path / f"item{i}.txt"
+        dummy.write_text(f"content {i}")
+        items.append({"id": f"item{i}", "path": str(dummy), "captions": [f"Caption {i}"]})
+    content = "\n".join(json.dumps(item) for item in items) + "\n"
+    manifest.write_text(content)
+    
+    rankings_path = tmp_path / "rankings.jsonl"
+    
+    # Create a simple embedder for testing
+    class TestEmbedder:
+        def __init__(self):
+            self.dim = 3
+            self.name = "test-embedder"
+            self.modality = "image"
+            
+        def embed_items(self, paths):
+            # Create simple vectors based on path index
+            vecs = []
+            for path in paths:
+                idx = int(Path(path).stem.split("item")[1])
+                vec = [0.0] * self.dim
+                vec[idx % self.dim] = 1.0
+                vecs.append(vec)
+            return np.array(vecs, dtype=np.float32)
+            
+        def embed_queries(self, texts):
+            # Simple one-hot encoding
+            vecs = []
+            for text in texts:
+                idx = int(text.split()[1])  # Extract index from "Caption i"
+                vec = [0.0] * self.dim
+                vec[idx % self.dim] = 1.0
+                vecs.append(vec)
+            return np.array(vecs, dtype=np.float32)
+            
+        def provenance(self):
+            return {
+                "model_id": "test-model",
+                "revision": "1.0",
+                "model_files": {"test.onnx": "a" * 64},
+                "runtime": "test",
+                "runtime_version": "1.0",
+                "execution_provider": "CPU",
+                "dtype": "float32",
+            }
+    
+    embedder = TestEmbedder()
+    
+    # Run with rankings_path
+    result = run(manifest, embedder, rankings_path=str(rankings_path))
+    
+    # Check that rankings file was created
+    assert rankings_path.exists()
+    
+    # Check file contents
+    with open(rankings_path) as f:
+        lines = [json.loads(line) for line in f if line.strip()]
+    
+    # Should have one line per query
+    assert len(lines) == 3  # 3 items * 1 caption each = 3 queries
+    
+    # Check format of each entry
+    for entry in lines:
+        assert "q" in entry
+        assert "caption" in entry
+        assert "true_item" in entry
+        assert "true_rank" in entry
+        assert "topk" in entry
+        
+        # Check true_rank is 0-based and less than 10 (we use k=10 in rank_topk)
+        assert 0 <= entry["true_rank"] < 10
+        
+        # Check topk has format [[item_id, score], ...]
+        for item_id, score in entry["topk"]:
+            assert isinstance(item_id, str)
+            assert isinstance(score, (int, float))
+            
+        # Check that true_item appears in topk
+        assert entry["true_item"] in [item_id for item_id, _ in entry["topk"]]
+    
+    # Check that result contains rankings_path and rankings_sha256
+    assert "rankings_path" in result
+    assert "rankings_sha256" in result
+    assert result["rankings_path"] == str(rankings_path)
+    
+    # Verify SHA256 matches file
+    import hashlib
+    sha256_hash = hashlib.sha256()
+    with open(rankings_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    expected_sha256 = sha256_hash.hexdigest()
+    assert result["rankings_sha256"] == expected_sha256
+
+
+def test_run_without_rankings_path(tmp_path):
+    """Test that run() doesn't write rankings file when rankings_path is None."""
+    manifest = tmp_path / "manifest.jsonl"
+    items = []
+    for i in range(2):
+        dummy = tmp_path / f"item{i}.txt"
+        dummy.write_text(f"content {i}")
+        items.append({"id": f"item{i}", "path": str(dummy), "captions": [f"Caption {i}"]})
+    content = "\n".join(json.dumps(item) for item in items) + "\n"
+    manifest.write_text(content)
+    
+    rankings_path = tmp_path / "rankings.jsonl"
+    
+    # Create a simple embedder
+    class TestEmbedder:
+        def __init__(self):
+            self.dim = 3
+            self.name = "test-embedder"
+            self.modality = "image"
+            
+        def embed_items(self, paths):
+            vecs = []
+            for path in paths:
+                idx = int(Path(path).stem.split("item")[1])
+                vec = [0.0] * self.dim
+                vec[idx % self.dim] = 1.0
+                vecs.append(vec)
+            return np.array(vecs, dtype=np.float32)
+            
+        def embed_queries(self, texts):
+            vecs = []
+            for text in texts:
+                idx = int(text.split()[1])
+                vec = [0.0] * self.dim
+                vec[idx % self.dim] = 1.0
+                vecs.append(vec)
+            return np.array(vecs, dtype=np.float32)
+            
+        def provenance(self):
+            return {
+                "model_id": "test-model",
+                "revision": "1.0",
+                "model_files": {"test.onnx": "a" * 64},
+                "runtime": "test",
+                "runtime_version": "1.0",
+                "execution_provider": "CPU",
+                "dtype": "float32",
+            }
+    
+    embedder = TestEmbedder()
+    
+    # Run without rankings_path (default None)
+    result = run(manifest, embedder)
+    
+    # Check that rankings file was NOT created
+    assert not rankings_path.exists()
+    
+    # Check that result does NOT contain rankings_path or rankings_sha256
+    assert "rankings_path" not in result
+    assert "rankings_sha256" not in result
