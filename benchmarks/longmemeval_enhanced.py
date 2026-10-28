@@ -30,6 +30,7 @@ from taosmd import VectorMemory
 from taosmd.query_expansion import expand_query_fast
 from taosmd.temporal_boost import temporal_rerank, classify_temporal_query
 from taosmd.preference_extractor import extract_preferences
+from benchmarks.bench_provenance import collect
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_full.json")
 ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx")
@@ -38,7 +39,8 @@ ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 def arm_config_from_env(env: dict) -> dict:
     """Read arm configuration from environment variables.
 
-    Returns dict with keys: onnx_path, binary_quant, mrl_dim, rescore_oversample.
+    Returns dict with keys: onnx_path, binary_quant, mrl_dim, rescore_oversample,
+    fusion, late_interaction.
     """
     # Default onnx path is the existing hard-coded one
     default_onnx_path = os.path.join(
@@ -76,11 +78,37 @@ def arm_config_from_env(env: dict) -> dict:
     if rescore_oversample is not None and not binary_quant:
         raise ValueError("TAOSMD_BENCH_RESCORE_OVERSAMPLE requires TAOSMD_BENCH_BINARY_QUANT=1")
 
+    # Reranker selection (env-only, no CLI flag)
+    reranker_str = env.get("TAOSMD_BENCH_RERANKER")
+    if reranker_str is None or reranker_str == "":
+        reranker = "off"
+    else:
+        allowed = {"off", "ms-marco", "bge-v2-m3"}
+        if reranker_str not in allowed:
+            raise ValueError("TAOSMD_BENCH_RERANKER")
+        reranker = reranker_str
+
+    fusion_str = env.get("TAOSMD_BENCH_FUSION")
+    if fusion_str is None or fusion_str == '':
+        fusion = "boost"
+    else:
+        allowed_fusions = ["boost", "rrf", "bm25_rrf", "bm25_lemma_rrf",
+                           "mem0_additive", "none"]
+        if fusion_str not in allowed_fusions:
+            raise ValueError(f"TAOSMD_BENCH_FUSION must be one of {allowed_fusions}: {fusion_str}")
+        fusion = fusion_str
+
+    late_interaction_str = env.get("TAOSMD_BENCH_LATE_INTERACTION")
+    late_interaction = late_interaction_str is not None and late_interaction_str != '' and late_interaction_str == "1"
+
     return {
         "onnx_path": onnx_path,
         "binary_quant": binary_quant,
         "mrl_dim": mrl_dim,
         "rescore_oversample": rescore_oversample,
+        "fusion": fusion,
+        "late_interaction": late_interaction,
+        "reranker": reranker,
     }
 
 
@@ -169,7 +197,7 @@ def rescore(query_vec: list[float], candidates: list[dict], floats_by_text: dict
     return [cand for score, cand in scored[:k]]
 
 
-async def run_question(item, top_k, config_name, config):
+async def run_question(item, top_k, config_name, config, reranker=None):
     question = item["question"]
     answer_session_ids = item.get("answer_session_ids", [])
     sessions = item.get("haystack_sessions", [])
@@ -181,6 +209,7 @@ async def run_question(item, top_k, config_name, config):
         embed_mode="onnx",
         onnx_path=config['onnx_path'],
         binary_quant=config['binary_quant'],
+        late_interaction=config['late_interaction'],
     )
     await vmem.init()
 
@@ -233,7 +262,14 @@ async def run_question(item, top_k, config_name, config):
         retrieve_k = retrieve_k * config['rescore_oversample']
 
     # Retrieve
-    results = await vmem.search(search_query, limit=retrieve_k, hybrid=True)
+    pool_k = retrieve_k
+    if reranker is not None:
+        pool_k = max(retrieve_k, 20)
+    results = await vmem.search(search_query, limit=pool_k, hybrid=True, fusion=config['fusion'])
+
+    # Apply cross-encoder reranker if provided
+    if reranker is not None:
+        results = reranker.rerank(search_query, results, top_k)
 
     # Temporal reranking for temporal queries
     if config_name in ("temporal_boost", "combined_v2", "wider_retrieval"):
@@ -277,6 +313,32 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     # Read arm configuration from environment
     cfg = arm_config_from_env(os.environ)
     onnx_path_base = os.path.basename(cfg['onnx_path'])
+    cfg_dict = dict(cfg)
+    cfg_dict['top_k'] = top_k
+
+    # Load reranker if requested
+    reranker = None
+    if cfg.get('reranker') and cfg['reranker'] != 'off':
+        try:
+            import sys
+            import os as _os
+            _BENCH_DIR = _os.path.dirname(_os.path.abspath(__file__))
+            _REPO_ROOT = _os.path.dirname(_BENCH_DIR)
+            sys.path.insert(0, _REPO_ROOT)
+            sys.path.insert(0, _BENCH_DIR)
+            from locomo_runner import _load_reranker
+            reranker = _load_reranker(cfg['reranker'])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+        if reranker is None or not getattr(reranker, 'available', False):
+            print(f"ERROR: reranker {cfg['reranker']} requested but the model is "
+                  f"not loadable (model.onnx missing?). Pass TAOSMD_BENCH_RERANKER=off to "
+                  f"run without reranking.", file=sys.stderr)
+            sys.exit(2)
+
+    # After the reranker preflight, so a refusal does not need the dataset.
+    prov = collect(cfg_dict, cfg['onnx_path'] if cfg.get('onnx_path') else ONNX_PATH, DATA_PATH)
 
     print("=" * 74)
     print(f"LongMemEval-S Enhanced Retrieval Experiments — Recall@{top_k}")
@@ -285,7 +347,9 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     else:
         print(f"Model: {onnx_path_base} (ONNX), overridden via TAOSMD_BENCH_ONNX_PATH")
     print(f"Arm: onnx_path={onnx_path_base}, binary_quant={cfg['binary_quant']}, "
-          f"mrl_dim={cfg['mrl_dim']}, rescore_oversample={cfg['rescore_oversample']}")
+          f"mrl_dim={cfg['mrl_dim']}, rescore_oversample={cfg['rescore_oversample']}, "
+          f"fusion={cfg['fusion']}, late_interaction={cfg['late_interaction']}, "
+          f"reranker={cfg.get('reranker', 'off')}")
     print(f"Target: beat 96.6% (MemPalace) on {limit} questions")
     print("=" * 74)
 
@@ -315,7 +379,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
 
         for i, item in enumerate(dataset):
             qtype = item["question_type"]
-            recall_hit = await run_question(item, top_k, config_name, cfg)
+            recall_hit = await run_question(item, top_k, config_name, cfg, reranker=reranker)
 
             total_questions += 1
             if recall_hit:
@@ -366,6 +430,11 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
 
     output_path = os.path.join(os.path.dirname(__file__), "results",
                                 f"enhanced_{time.strftime('%Y%m%d_%H%M%S')}.json")
+    _write_results(output_path, top_k, all_results, cfg, prov)
+    print(f"\nResults saved to: {output_path}")
+
+
+def _write_results(output_path: str, top_k: int, all_results: dict, cfg: dict, prov: dict) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as f:
         json.dump({
@@ -373,9 +442,9 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
             "top_k": top_k,
             "results": all_results,
             "arm_config": cfg,
+            "provenance": prov,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }, f, indent=2)
-    print(f"\nResults saved to: {output_path}")
 
 
 if __name__ == "__main__":
