@@ -1026,6 +1026,25 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(403, {"error": f"channel ACL: {action} denied"})
             return False
 
+        def _filter_readable(self, msgs: list, acl_map: dict, aliases: dict) -> list:
+            """Keep the rows whose channel the verified caller may read.
+
+            ``acl_map`` and ``aliases`` are resolved once per request/poll and
+            shared across every row (R-ONCE). The channel of a row is its
+            ``thread``; a missing or non-string thread has no channel to match
+            and is dropped (fail closed).
+            """
+            kept = []
+            for m in msgs:
+                channel = m.get("thread")
+                if not isinstance(channel, str) or not channel:
+                    continue
+                if channel not in acl_map:
+                    acl_map[channel] = self._resolve_channel_acl(channel, aliases)
+                if self._can_read_channel(channel, acl_map):
+                    kept.append(m)
+            return kept
+
         def _check_admin_token(self) -> bool:
             """Return True when the request carries the correct admin token.
 
@@ -1756,18 +1775,42 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
         def _handle_a2a_channels(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
             channels = runner.run(service.a2a_channels(data_dir=data_dir))
+            # Channel ACL read filter: restricted channels the verified caller
+            # may not read are omitted whole (name, members, counts, times).
+            acl_map: dict = {}
+            channels = [
+                c for c in channels
+                if isinstance(c.get("channel"), str)
+                and c["channel"]
+                and self._can_read_channel(c["channel"], acl_map)
+            ]
             self._send_json(200, {"channels": channels})
 
         def _handle_a2a_census(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
             census = runner.run(service.a2a_sender_census(data_dir=data_dir))
-            self._send_json(200, {"census": census})
+            # Channel ACL read filter: drop the per-channel counts of every
+            # channel the verified caller may not read, recompute each total
+            # from what is left, and omit senders with nothing left.
+            acl_map: dict = {}
+            visible: dict = {}
+            for sender, entry in census.items():
+                per_channel = {
+                    chan: n for chan, n in (entry.get("channels") or {}).items()
+                    if isinstance(chan, str) and chan
+                    and self._can_read_channel(chan, acl_map)
+                }
+                if per_channel:
+                    visible[sender] = {"total": sum(per_channel.values()), "channels": per_channel}
+            self._send_json(200, {"census": visible})
 
         def _handle_a2a_members(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset({"channel"}), self._raw_qs)
             channel = (qs.get("channel") or [None])[0]
             if not channel:
                 raise _BadRequest("'channel' query parameter is required")
+            if not self._enforce_channel_acl(channel, "read"):
+                return
             members = runner.run(service.a2a_members(channel=channel, data_dir=data_dir))
             self._send_json(200, {"members": members})
 
@@ -2094,9 +2137,21 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 raise _BadRequest("'limit' must not be negative")
             if fmt not in ("json", "ndjson"):
                 raise _BadRequest("'format' must be 'json' or 'ndjson'")
-            messages = runner.run(
-                service.a2a_feed(thread=thread, since=since, limit=limit_i, data_dir=data_dir)
-            )
+            # Channel ACL read filter: page the feed until ``limit`` readable
+            # rows are found, scanning at most ``limit * 5`` rows in total.
+            aliases = self._channel_aliases()
+            acl_map: dict = {}
+            scan_cap = limit_i * 5
+            scan = limit_i
+            while True:
+                rows = runner.run(
+                    service.a2a_feed(thread=thread, since=since, limit=scan, data_dir=data_dir)
+                )
+                messages = self._filter_readable(rows, acl_map, aliases)
+                if len(messages) >= limit_i or len(rows) < scan or scan >= scan_cap:
+                    break
+                scan = min(scan * 2, scan_cap)
+            messages = messages[-limit_i:] if limit_i else []
             # Compact mode: ?fields=id,sender,body projects each message down
             # to the named keys so token-frugal consumers (LLM agents) skip
             # framing they never read. Unknown names are ignored, never a 400,
@@ -2174,6 +2229,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_mentions_feed(reader, since=since, limit=limit_i, data_dir=data_dir)
             )
+            messages = self._filter_readable(messages, {}, self._channel_aliases())
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_inbox(self, qs: dict) -> None:
@@ -2216,6 +2272,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_inbox(consumer, limit=limit_i, include_kinds=include_kinds, exclude_acked_by=exclude_acked_by, data_dir=data_dir)
             )
+            messages = self._filter_readable(messages, {}, self._channel_aliases())
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_inbox_advance(self) -> None:
@@ -2297,6 +2354,7 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             messages = runner.run(
                 service.a2a_inbox_unhandled(consumer, limit=limit_i, data_dir=data_dir)
             )
+            messages = self._filter_readable(messages, {}, self._channel_aliases())
             self._send_json(200, {"messages": messages})
 
         def _handle_a2a_stream(self, qs: dict) -> None:
@@ -2342,10 +2400,17 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     # re-sending the boundary row on subsequent polls.
                     new_msgs = [m for m in msgs if m["ts"] > last_ts]
                     if new_msgs:
-                        for msg in new_msgs:
+                        # Channel ACL read filter: the ACL map is resolved
+                        # once per poll, so a changed ACL takes effect on the
+                        # next poll. The cursor moves past DENIED rows too, so
+                        # they are never re-polled.
+                        readable = self._filter_readable(
+                            new_msgs, {}, self._channel_aliases(),
+                        )
+                        last_ts = max(m["ts"] for m in new_msgs)
+                        for msg in readable:
                             frame = f"data: {json.dumps(msg)}\n\n"
                             self.wfile.write(frame.encode("utf-8"))
-                            last_ts = msg["ts"]
                             if subscriber_agent is not None:
                                 runner.run(
                                     service.a2a_record_delivered(
@@ -2355,6 +2420,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                                         data_dir=data_dir,
                                     )
                                 )
+                        if not readable:
+                            self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
                     else:
                         self.wfile.write(b": keepalive\n\n")
@@ -2370,6 +2437,9 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             threads = runner.run(
                 service.a2a_threads(principal=principal, data_dir=data_dir)
             )
+            # Channel ACL read filter: a thread is a channel, so each row is
+            # judged on its ``thread`` name (ACL map resolved once, R-ONCE).
+            threads = self._filter_readable(threads, {}, self._channel_aliases())
             self._send_json(200, {"threads": threads})
 
         def _handle_a2a_thread_messages(self, thread: str, qs: dict) -> None:
@@ -2383,6 +2453,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 limit_i = int(limit_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'limit' must be an integer") from exc
+            if not self._enforce_channel_acl(thread, "read"):
+                return
             result = runner.run(
                 service.a2a_thread_messages(
                     thread=thread, before=before, after=after,
@@ -2417,6 +2489,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             """GET /a2a/threads/{thread}/members: list active members."""
             thread = unquote(thread)
             _validate_a2a_params(qs, frozenset(), self._raw_qs)
+            if not self._enforce_channel_acl(thread, "read"):
+                return
             members = runner.run(
                 service.a2a_list_members(thread=thread, data_dir=data_dir)
             )
@@ -2473,6 +2547,31 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return event.get("data", {}).get("from")
 
             return _coro()
+
+        def _get_message_channel(self, message_id: int) -> asyncio.coroutine:
+            """Return the channel of an archived message, or ``None`` if unknown."""
+
+            async def _coro():
+                stores = await _api._ensure_stores(data_dir)
+                event = await stores["archive"].get_event(message_id)
+                if event is None:
+                    return None
+                return (event.get("data", {}).get("thread")
+                        or event.get("app_id") or "general")
+
+            return _coro()
+
+        def _enforce_message_channel_read(self, message_id: int) -> bool:
+            """Channel ACL read gate for a receipt read keyed by message id.
+
+            The decision is on the message's CHANNEL. An unknown id has no
+            channel and keeps the route's existing behaviour. Returns False
+            AND writes the 403 when the channel is denied.
+            """
+            channel = runner.run(self._get_message_channel(message_id))
+            if channel is None:
+                return True
+            return self._enforce_channel_acl(channel, "read")
 
         # ----- A2A receipt handlers -----------------------------------------
 
@@ -2547,6 +2646,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 message_id = int(msg_id_str)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("message id must be an integer") from exc
+            if not self._enforce_message_channel_read(message_id):
+                return
             result = runner.run(
                 service.a2a_get_receipts(message_id, data_dir=data_dir)
             )
@@ -2588,6 +2689,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 message_id = int(message_id_raw)
             except (TypeError, ValueError) as exc:
                 raise _BadRequest("'message_id' must be an integer") from exc
+            if not self._enforce_message_channel_read(message_id):
+                return
             if _registry_verifier is not None and caller_id is not None and caller_id != requested_agent:
                 message_sender = runner.run(self._get_message_sender(message_id))
                 if message_sender is None or message_sender != caller_id:

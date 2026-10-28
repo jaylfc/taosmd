@@ -1,0 +1,2 @@
+### Fixed
+- Test fixture in `tests/test_retrieval_latency_probe.py` now creates a real temporary ONNX directory with a dummy model file, ensuring compatibility with master's `bench_provenance` validation that requires a real onnx_dir.
