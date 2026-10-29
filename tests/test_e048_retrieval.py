@@ -698,37 +698,47 @@ def test_rank_topk_tie_breaking():
 
 def test_rank_topk_agrees_with_recall():
     """Test that rank_topk agrees with recall_at_k on a random fixture."""
-    # Create test data
-    item_vecs = np.array([
-        [1.0, 0.0, 0.0],  # item0
-        [0.0, 1.0, 0.0],  # item1
-        [0.0, 0.0, 1.0],  # item2
-    ], dtype=np.float32)
+    rng = np.random.default_rng(0)
     
-    query_vecs = np.array([
-        [0.9, 0.1, 0.0],  # query0: mainly item0
-        [0.0, 0.9, 0.1],  # query1: mainly item1
-        [0.0, 0.1, 0.9],  # query2: mainly item2
-    ], dtype=np.float32)
+    n_queries = 20
+    n_items = 30
+    dim = 8
     
-    query_item_index = np.array([0, 1, 2])  # Each query matches its own item
+    # Generate random normalized vectors
+    item_vecs = rng.normal(size=(n_items, dim)).astype(np.float32)
+    item_vecs = item_vecs / np.linalg.norm(item_vecs, axis=1, keepdims=True)
     
-    # Test rank_topk with k=3 (covers all items)
-    indices, scores = rank_topk(query_vecs, item_vecs, k=3)
+    # True item for query i is item i
+    query_item_index = np.arange(n_queries, dtype=np.int64)
     
-    # For each query, check that the true item is in the ranking
-    for q_idx in range(len(query_vecs)):
+    # Query vectors match their true items (with some noise)
+    query_vecs = item_vecs[:n_queries].copy()
+    # Add small noise to make it non-trivial but still mostly correct
+    noise = rng.normal(scale=0.1, size=(n_queries, dim)).astype(np.float32)
+    query_vecs = query_vecs + noise
+    query_vecs = query_vecs / np.linalg.norm(query_vecs, axis=1, keepdims=True)
+    
+    # Compute full ranks via rank_topk with k=n_items (covers all items)
+    indices, scores = rank_topk(query_vecs, item_vecs, k=n_items)
+    
+    # For each query, find the true_rank from the full ranking
+    true_ranks = np.zeros(n_queries, dtype=np.int64)
+    for q_idx in range(n_queries):
         true_item_idx = query_item_index[q_idx]
         true_rank = np.where(indices[q_idx] == true_item_idx)[0][0]
+        true_ranks[q_idx] = true_rank
+    
+    # For EACH K in (1, 5, 10) assert recall_at_k at K equals the mean
+    # over queries of (true_rank < K) derived from those ranks
+    for K in (1, 5, 10):
+        # Expected recall from true_ranks
+        expected_recall = np.mean(true_ranks < K)
         
-        # true_rank should be less than 3 (since we requested k=3)
-        assert true_rank < 3
+        # Actual recall from recall_at_k
+        metrics = recall_at_k(query_vecs, item_vecs, query_item_index, ks=(K,))
+        actual_recall = metrics[f"R@{K}"]
         
-        # Also check with recall_at_k for consistency
-        metrics = recall_at_k(query_vecs, item_vecs, query_item_index, ks=(1, 2, 3))
-        
-        # R@3 should be 1.0 since all items should be in top 3
-        assert metrics["R@3"] == 1.0
+        assert actual_recall == pytest.approx(expected_recall), f"K={K}: expected {expected_recall}, got {actual_recall}"
 
 
 @pytest.fixture
@@ -870,22 +880,259 @@ def test_run_with_rankings_path(tmp_path):
     assert abs(expected_r10 - result["metrics"]["R@10"]) < 1e-6
 
 
-def test_cli_with_rankings_out(tmp_path):
-    """Test CLI end-to-end with --rankings-out option."""
+def test_cli_with_rankings_out(tmp_path, monkeypatch):
+    """Test the CLI end-to-end with --rankings-out option."""
+    import sys as _sys
     
-    # Create a manifest with 3 captioned items
+    # Create a temporary manifest
     manifest = tmp_path / "manifest.jsonl"
+    for i in range(3):
+        dummy = tmp_path / f"item{i}.txt"
+        dummy.write_text(f"content {i}")
+    
     items = []
     for i in range(3):
         dummy = tmp_path / f"item{i}.txt"
-        dummy.write_text(f"Dummy content {i}")
         items.append({"id": f"item{i}", "path": str(dummy), "captions": [f"Caption {i}"]})
-    content = "\n".join(json.dumps(item) for item in items) + "\n"
-    manifest.write_text(content)
     
-    # Create output files (test setup for CLI test)
-    # Note: This test requires implementing a fake embedder module
-    pass
+    manifest_content = "\n".join(json.dumps(item) for item in items) + "\n"
+    manifest.write_text(manifest_content)
+    
+    # Save the fake embedder factory to a temporary module
+    test_module = tmp_path / "test_fake_embedder.py"
+    test_module.write_text("""
+import numpy as np
+from benchmarks.e048.retrieval import MediaEmbedder
+
+class FakeEmbedder:
+    def __init__(self, dim=10):
+        self.name = "fake-embedder"
+        self.modality = "image"
+        self.dim = dim
+    
+    def embed_queries(self, texts):
+        vectors = []
+        for text in texts:
+            vec = [0.0] * self.dim
+            vec[0] = 1.0
+            vectors.append(vec)
+        return np.array(vectors, dtype=np.float32)
+    
+    def embed_items(self, paths):
+        vectors = []
+        for path in paths:
+            vec = [0.0] * self.dim
+            vec[0] = 1.0
+            vectors.append(vec)
+        return np.array(vectors, dtype=np.float32)
+    
+    def provenance(self):
+        return {
+            "model_id": "fake-model",
+            "revision": "1.0",
+            "model_files": {"fake.onnx": "a" * 64},
+            "runtime": "onnxruntime",
+            "runtime_version": "1.16.0",
+            "execution_provider": "CPUExecutionProvider",
+            "dtype": "float32",
+        }
+
+def make_fake(**kwargs):
+    return FakeEmbedder()
+""")
+    
+    # Add to sys.path so it can be imported
+    _sys.path.insert(0, str(tmp_path))
+    
+    # Import and patch the module
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("test_fake", test_module)
+    test_fake = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(test_fake)
+    
+    # Patch the import in the retrieval module
+    original_import = __import__
+    
+    def mock_import(name, *args, **kwargs):
+        if name == "test_fake":
+            return test_fake
+        return original_import(name, *args, **kwargs)
+    
+    monkeypatch.setattr('builtins.__import__', mock_import)
+    
+    # Run the CLI
+    from benchmarks.e048.retrieval import main
+    
+    out_path = tmp_path / "output.json"
+    rankings_path = tmp_path / "rankings.jsonl"
+    argv = [
+        "--manifest", str(manifest),
+        "--embedder", "test_fake:make_fake",
+        "--experiment", "E-048",
+        "--arm", "test-arm",
+        "--dataset", "test-dataset",
+        "--host-label", "test-host",
+        "--out", str(out_path),
+        "--rankings-out", str(rankings_path),
+    ]
+    
+    # This will try to import test_fake, which should be available now
+    try:
+        main(argv)
+    except SystemExit:
+        pass  # CLI calls sys.exit()
+    
+    # Check output
+    assert out_path.exists()
+    
+    # Check rankings file exists
+    assert rankings_path.exists()
+    
+    # Check rankings file has one line per query (3 items * 1 caption each = 3 queries)
+    with open(rankings_path) as f:
+        rankings_lines = [line for line in f if line.strip()]
+    assert len(rankings_lines) == 3
+    
+    # Read the output payload and check for rankings_file and rankings_sha256
+    import json as _json
+    with open(out_path) as f:
+        payload = _json.load(f)
+    
+    assert "rankings_file" in payload
+    assert "rankings_sha256" in payload
+    assert payload["rankings_file"] == str(rankings_path)
+    
+    # Verify SHA256 matches the file content
+    import hashlib
+    sha256_hash = hashlib.sha256()
+    with open(rankings_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    expected_sha256 = sha256_hash.hexdigest()
+    assert payload["rankings_sha256"] == expected_sha256
+    
+    # Clean up sys.path
+    _sys.path.remove(str(tmp_path))
+
+
+def test_cli_without_rankings_out(tmp_path, monkeypatch):
+    """Test the CLI end-to-end without --rankings-out option."""
+    import sys as _sys
+    
+    # Create a temporary manifest
+    manifest = tmp_path / "manifest.jsonl"
+    for i in range(3):
+        dummy = tmp_path / f"item{i}.txt"
+        dummy.write_text(f"content {i}")
+    
+    items = []
+    for i in range(3):
+        dummy = tmp_path / f"item{i}.txt"
+        items.append({"id": f"item{i}", "path": str(dummy), "captions": [f"Caption {i}"]})
+    
+    manifest_content = "\n".join(json.dumps(item) for item in items) + "\n"
+    manifest.write_text(manifest_content)
+    
+    # Save the fake embedder factory to a temporary module
+    test_module = tmp_path / "test_fake_embedder.py"
+    test_module.write_text("""
+import numpy as np
+from benchmarks.e048.retrieval import MediaEmbedder
+
+class FakeEmbedder:
+    def __init__(self, dim=10):
+        self.name = "fake-embedder"
+        self.modality = "image"
+        self.dim = dim
+    
+    def embed_queries(self, texts):
+        vectors = []
+        for text in texts:
+            vec = [0.0] * self.dim
+            vec[0] = 1.0
+            vectors.append(vec)
+        return np.array(vectors, dtype=np.float32)
+    
+    def embed_items(self, paths):
+        vectors = []
+        for path in paths:
+            vec = [0.0] * self.dim
+            vec[0] = 1.0
+            vectors.append(vec)
+        return np.array(vectors, dtype=np.float32)
+    
+    def provenance(self):
+        return {
+            "model_id": "fake-model",
+            "revision": "1.0",
+            "model_files": {"fake.onnx": "a" * 64},
+            "runtime": "onnxruntime",
+            "runtime_version": "1.16.0",
+            "execution_provider": "CPUExecutionProvider",
+            "dtype": "float32",
+        }
+
+def make_fake(**kwargs):
+    return FakeEmbedder()
+""")
+    
+    # Add to sys.path so it can be imported
+    _sys.path.insert(0, str(tmp_path))
+    
+    # Import and patch the module
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("test_fake", test_module)
+    test_fake = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(test_fake)
+    
+    # Patch the import in the retrieval module
+    original_import = __import__
+    
+    def mock_import(name, *args, **kwargs):
+        if name == "test_fake":
+            return test_fake
+        return original_import(name, *args, **kwargs)
+    
+    monkeypatch.setattr('builtins.__import__', mock_import)
+    
+    # Run the CLI
+    from benchmarks.e048.retrieval import main
+    
+    out_path = tmp_path / "output.json"
+    argv = [
+        "--manifest", str(manifest),
+        "--embedder", "test_fake:make_fake",
+        "--experiment", "E-048",
+        "--arm", "test-arm",
+        "--dataset", "test-dataset",
+        "--host-label", "test-host",
+        "--out", str(out_path),
+    ]
+    
+    # This will try to import test_fake, which should be available now
+    try:
+        main(argv)
+    except SystemExit:
+        pass  # CLI calls sys.exit()
+    
+    # Check output
+    assert out_path.exists()
+    
+    # Check no rankings file was created (no *.jsonl file other than manifest)
+    jsonl_files = list(tmp_path.glob("*.jsonl"))
+    assert len(jsonl_files) == 1  # Only the manifest
+    assert jsonl_files[0].name == "manifest.jsonl"
+    
+    # Read the output payload and check it does NOT have rankings_file or rankings_sha256
+    import json as _json
+    with open(out_path) as f:
+        payload = _json.load(f)
+    
+    assert "rankings_file" not in payload
+    assert "rankings_sha256" not in payload
+    
+    # Clean up sys.path
+    _sys.path.remove(str(tmp_path))
 
 
 def test_run_without_rankings_path(tmp_path):
