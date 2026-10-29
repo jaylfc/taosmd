@@ -884,8 +884,7 @@ async def run_benchmark(
         print(f"  results -> {out_path}")
     print(f"  writer: model={writer_model or 'default'} llm={method_llm_count} regex={method_regex_count}")
 
-    if total_questions:
-        return overall
+    return overall
 
 
 def main() -> None:
