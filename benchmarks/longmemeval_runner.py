@@ -840,6 +840,9 @@ async def run_benchmark(
     if llm_client:
         await llm_client.aclose()
 
+    if writer_client:
+        await writer_client.aclose()
+
     if total_questions:
         if not out_path:
             out_dir = _default_out_dir()
@@ -869,7 +872,7 @@ async def run_benchmark(
             },
             "results": all_results,
             "writer": {
-                "url_set": writer_url != "",
+                "url_set": bool(writer_url),
                 "model": writer_model if writer_url else None,
                 "turns": total_turns,
                 "method_llm": method_llm_count,
@@ -882,9 +885,7 @@ async def run_benchmark(
     print(f"  writer: model={writer_model or 'default'} llm={method_llm_count} regex={method_regex_count}")
 
     if total_questions:
-        sys.modules[__name__].result_doc = result_doc
-
-    return overall
+        return overall
 
 
 def main() -> None:
