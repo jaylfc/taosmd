@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from benchmarks.e048 import retrieval
 
@@ -147,6 +148,8 @@ def test_captions_requested_once_and_cached(monkeypatch, tmp_path):
             self.db_path = db_path
             self.embed_mode = embed_mode
             self.onnx_path = onnx_path
+            self._embed_mode = "onnx"
+            self._onnx_session = object()
             StubVM.instances.append(self)
 
         async def init(self):
@@ -206,7 +209,8 @@ def test_cache_line_with_different_captioner_digest_not_reused(monkeypatch, tmp_
 
     class StubVM:
         def __init__(self, *args, **kwargs):
-            pass
+            self._embed_mode = "onnx"
+            self._onnx_session = object()
 
         async def init(self):
             return None
@@ -271,7 +275,8 @@ def test_empty_caption_raises(monkeypatch, tmp_path):
 
     class StubVM:
         def __init__(self, *args, **kwargs):
-            pass
+            self._embed_mode = "onnx"
+            self._onnx_session = object()
 
         async def init(self):
             return None
@@ -315,7 +320,8 @@ def test_model_missing_from_tags_raises(monkeypatch, tmp_path):
 
     class StubVM:
         def __init__(self, *args, **kwargs):
-            pass
+            self._embed_mode = "onnx"
+            self._onnx_session = object()
 
         async def init(self):
             return None
@@ -362,7 +368,8 @@ def test_embed_items_rows_unit_norm_float32_and_provenance(monkeypatch, tmp_path
 
     class StubVM:
         def __init__(self, *args, **kwargs):
-            pass
+            self._embed_mode = "onnx"
+            self._onnx_session = object()
 
         async def init(self):
             return None
@@ -406,3 +413,95 @@ def test_embed_items_rows_unit_norm_float32_and_provenance(monkeypatch, tmp_path
     model_files = prov["model_files"]
     # Find entries
     assert any(k.endswith("model.onnx") for k in model_files.keys()) or "model.onnx" in model_files or any("model.onnx" in k for k in model_files)
+
+
+def test_onnx_fallback_raises_runtime_error(monkeypatch, tmp_path):
+    """Constructing the embedder must raise RuntimeError if VectorMemory.init()
+    silently fell back from ONNX to qmd (i.e. _embed_mode != 'onnx' or
+    _onnx_session is None)."""
+    from benchmarks.e048 import caption_text
+
+    onnx_dir = tmp_path / "models" / "minilm-onnx"
+    _write_minilm_files(onnx_dir)
+    cache_path = tmp_path / "cache.jsonl"
+
+    fake_client = FakeHttpxClient(
+        get_responses=[
+            FakeResponse({"models": [{"name": "llava:7b", "digest": "abc123"}]}),
+        ],
+    )
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: fake_client)
+
+    class FallbackVM:
+        def __init__(self, db_path=None, embed_mode=None, onnx_path=None):
+            self.db_path = db_path
+            self.embed_mode = embed_mode
+            self.onnx_path = onnx_path
+
+        async def init(self):
+            # Simulates the silent fallback path in VectorMemory.init():
+            # ONNX load failed, so it switches to qmd mode.
+            self._embed_mode = "qmd"
+            self._onnx_session = None
+            return None
+
+        async def embed(self, text, task="search_document"):
+            return _det_vec_from_text(text, task)
+
+    monkeypatch.setattr(caption_text, "VectorMemory", FallbackVM)
+
+    with pytest.raises(RuntimeError, match="MiniLM ONNX model did not load"):
+        caption_text.CaptionTextImageEmbedder(
+            captioner_url="http://127.0.0.1:11434",
+            captioner_model="llava:7b",
+            onnx_dir=str(onnx_dir),
+            cache_path=str(cache_path),
+        )
+
+
+def test_provenance_missing_tokenizer_raises(monkeypatch, tmp_path):
+    """provenance() must raise FileNotFoundError if tokenizer.json is missing
+    from the onnx_dir, rather than silently passing."""
+    from benchmarks.e048 import caption_text
+
+    onnx_dir = tmp_path / "models" / "minilm-onnx"
+    onnx_dir.mkdir(parents=True, exist_ok=True)
+    # Write only model.onnx, NOT tokenizer.json
+    (onnx_dir / "model.onnx").write_bytes(b"minilm-model-bytes-for-test")
+    cache_path = tmp_path / "cache.jsonl"
+
+    fake_client = FakeHttpxClient(
+        get_responses=[
+            FakeResponse({"models": [{"name": "llava:7b", "digest": "dig123"}]}),
+        ],
+    )
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: fake_client)
+
+    class GoodVM:
+        def __init__(self, *args, **kwargs):
+            self._embed_mode = "onnx"
+            self._onnx_session = object()
+
+        async def init(self):
+            return None
+
+        async def embed(self, text, task="search_document"):
+            return _det_vec_from_text(text, task)
+
+    monkeypatch.setattr(caption_text, "VectorMemory", GoodVM)
+
+    embedder = caption_text.CaptionTextImageEmbedder(
+        captioner_url="http://127.0.0.1:11434",
+        captioner_model="llava:7b",
+        onnx_dir=str(onnx_dir),
+        cache_path=str(cache_path),
+    )
+
+    with pytest.raises(FileNotFoundError, match="tokenizer.json"):
+        embedder.provenance()

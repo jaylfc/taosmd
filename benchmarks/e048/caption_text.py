@@ -76,6 +76,11 @@ class CaptionTextImageEmbedder(MediaEmbedder):
         db_path = os.path.join(self._tmpdir, "vm.db")
         self._vm = VectorMemory(db_path=db_path, embed_mode="onnx", onnx_path=self.onnx_dir)
         asyncio.run(self._vm.init())
+        if (
+            getattr(self._vm, '_embed_mode', None) != 'onnx'
+            or getattr(self._vm, '_onnx_session', None) is None
+        ):
+            raise RuntimeError(f"MiniLM ONNX model did not load from {self.onnx_dir}")
 
         # Compute cache sha256 at init time? provenance says "captions_cache_sha256 (hex of the cache file at the time provenance() is called)"
         # We'll compute it when called
@@ -226,8 +231,7 @@ class CaptionTextImageEmbedder(MediaEmbedder):
                 # Also add basename forms in case tests look for them
                 model_files[fname] = _sha256_file(fpath)
             else:
-                # Even if files don't exist in some test setups? Write tests create them
-                pass
+                raise FileNotFoundError(f"Missing {fname} in ONNX model dir {onnx_dir_path}")
 
         # Add captioner entry
         model_files[f"captioner:{self.captioner_model}"] = self._captioner_digest
