@@ -330,8 +330,14 @@ def test_provenance_keys_and_revision_and_exact_digests(tmp_path, monkeypatch):
 
     def unsorted_walk(top, topdown=True, onerror=None, followlinks=False):
         for root, dirs, files in original_walk(top, topdown, onerror, followlinks):
-            # Reverse files and dirs to force non-alphabetical order
-            yield root, list(reversed(dirs)), list(reversed(files))
+            # For the snapshot root, yield files in fixed non-sorted order
+            # to exercise the sort in provenance() deterministically
+            snapshot_files = {"model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"}
+            if set(files) == snapshot_files:
+                fixed_files = ["model-00002-of-00002.safetensors", "model-00001-of-00002.safetensors"]
+                yield root, list(reversed(dirs)), fixed_files
+            else:
+                yield root, list(reversed(dirs)), list(reversed(files))
 
     monkeypatch.setattr(os, "walk", unsorted_walk)
 
