@@ -405,3 +405,89 @@ def test_stream_delivers_allowed_message_posted_after_denied_run(srv):
     t.join()
     assert [f["body"] for f in frames] == [OPEN_BODY]
     _assert_no_leak(raw)
+
+
+# ---------------------------------------------------------------------------
+# New tests for channel-ACL revision tsk-3pqsbf
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("n_newer", [2, 5, 12])
+def test_messages_short_page_pages_past_deleted_channel(srv, n_newer):
+    """Rows of a deleted channel are dropped by the feed. A page that is empty
+    or short after the drop must keep paging back to the older readable rows."""
+    for i in range(5):
+        assert srv.send("agentA", "general", body=f"old-{i}")[0] == 200
+    for i in range(n_newer):
+        assert srv.send("agentA", CHAN, body=f"gone-{i}")[0] == 200
+    status, raw = _call("POST", f"{srv.base}/a2a/admin/delete-channel", {"channel": CHAN}, ADMIN)
+    assert status == 200, raw
+    status, raw = _messages(srv, limit=5, token=_token("bob"))
+    assert status == 200, raw
+    assert _bodies(raw, "json") == [f"old-{i}" for i in range(5)]
+    assert "gone-" not in raw
+
+
+def test_messages_stops_paging_when_archive_exhausted(srv, monkeypatch):
+    for i in range(2):
+        assert srv.send("agentA", "general", body=f"only-{i}")[0] == 200
+    spy = _FeedSpy(monkeypatch)
+    status, raw = _messages(srv, limit=5, token=_token("bob"))
+    assert status == 200, raw
+    assert _bodies(raw, "json") == ["only-0", "only-1"]
+    assert spy.limits == [5], spy.limits
+
+
+def test_caller_verified_once_per_request(srv, monkeypatch):
+    from taosmd import registry_auth
+    chan2 = "vault-chan-7d2e-2"
+    _restrict(srv)
+    _restrict(srv, channel=chan2)
+    for i in range(6):
+        assert srv.send(ALICE, CHAN, body=f"canary-{i}", token=_token(ALICE))[0] == 200
+        assert srv.send(ALICE, chan2, body=f"canary2-{i}", token=_token(ALICE))[0] == 200
+    calls = []
+    real = registry_auth.RegistryVerifier.authorize
+
+    def counting(self, token, claimed_from):
+        calls.append(claimed_from)
+        return real(self, token, claimed_from)
+
+    monkeypatch.setattr(registry_auth.RegistryVerifier, "authorize", counting)
+    status, raw = _messages(srv, limit=10, token=_token("bob"))
+    assert status == 200, raw
+    assert _bodies(raw, "json") == []
+    assert len(calls) == 1, calls
+    calls.clear()
+    status, raw = _messages(srv, limit=10)
+    assert status == 200, raw
+    assert _bodies(raw, "json") == []
+    assert calls == []
+
+
+def test_messages_acl_allowed_sees_all_denied_sees_none(srv):
+    """Test C: an allowed caller sees every row, a denied caller sees none.
+
+    Confirms identity semantics: verified token ``sub`` only; no token on a
+    restricted channel stays a DENY.
+    """
+    _restrict(srv)
+    # Channel restricted to ALICE only
+    srv.admin_set({"channel": CHAN, "read": (ALICE,), "post": (ALICE,)})
+
+    # Send a canary message as ALICE to the restricted channel
+    assert srv.send(ALICE, CHAN, body=CANARY, token=_token(ALICE))[0] == 200
+
+    # Send an open-message as agentA to general (no ACL)
+    assert srv.send("agentA", "general", body=OPEN_BODY)[0] == 200
+
+    # ALICE (allowed caller) should see everything including the canary
+    status, raw = _messages(srv, thread=CHAN, token=_token(ALICE))
+    assert status == 200, raw
+    assert CANARY in _bodies(raw, "json")
+
+    # BOB (denied caller) should see nothing from the restricted channel
+    status, raw = _messages(srv, thread=CHAN, token=_token("bob"))
+    assert status == 200, raw
+    bodies = _bodies(raw, "json")
+    assert len(bodies) == 0, f"Bob should see 0 messages from restricted channel, got {bodies}"
+    assert all(CANARY not in b for b in bodies), f"Bob should not see canary: {bodies}"
