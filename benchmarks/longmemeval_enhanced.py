@@ -315,7 +315,6 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
     onnx_path_base = os.path.basename(cfg['onnx_path'])
     cfg_dict = dict(cfg)
     cfg_dict['top_k'] = top_k
-    prov = collect(cfg_dict, cfg['onnx_path'] if cfg.get('onnx_path') else ONNX_PATH, DATA_PATH)
 
     # Load reranker if requested
     reranker = None
@@ -337,6 +336,9 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
                   f"not loadable (model.onnx missing?). Pass TAOSMD_BENCH_RERANKER=off to "
                   f"run without reranking.", file=sys.stderr)
             sys.exit(2)
+
+    # After the reranker preflight, so a refusal does not need the dataset.
+    prov = collect(cfg_dict, cfg['onnx_path'] if cfg.get('onnx_path') else ONNX_PATH, DATA_PATH)
 
     print("=" * 74)
     print(f"LongMemEval-S Enhanced Retrieval Experiments — Recall@{top_k}")
@@ -428,6 +430,11 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
 
     output_path = os.path.join(os.path.dirname(__file__), "results",
                                 f"enhanced_{time.strftime('%Y%m%d_%H%M%S')}.json")
+    _write_results(output_path, top_k, all_results, cfg, prov)
+    print(f"\nResults saved to: {output_path}")
+
+
+def _write_results(output_path: str, top_k: int, all_results: dict, cfg: dict, prov: dict) -> None:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as f:
         json.dump({
@@ -438,7 +445,6 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
             "provenance": prov,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }, f, indent=2)
-    print(f"\nResults saved to: {output_path}")
 
 
 if __name__ == "__main__":

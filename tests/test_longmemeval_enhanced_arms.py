@@ -1,3 +1,4 @@
+import copy
 import importlib.util
 import os
 import sys
@@ -131,9 +132,11 @@ class _RecordingVectorMemory:
     """Stands in for VectorMemory: records the search limit and query."""
 
     calls: list[dict] = []
+    init_kwargs: list[dict] = []
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+        _RecordingVectorMemory.init_kwargs.append(kwargs)
 
     async def init(self):
         return None
@@ -165,6 +168,7 @@ def _run_named_arm(monkeypatch, config_name, top_k=5):
     import asyncio
     monkeypatch.setattr(module, "VectorMemory", _RecordingVectorMemory)
     _RecordingVectorMemory.calls = []
+    _RecordingVectorMemory.init_kwargs = []
     cfg = arm_config_from_env({})
     asyncio.run(module.run_question(_item(), top_k, config_name, cfg))
     assert len(_RecordingVectorMemory.calls) == 1
@@ -289,6 +293,38 @@ def test_arm_config_from_env_reranker_bogus():
         pass
 
 
+def test_late_interaction_reaches_vector_memory_ctor(monkeypatch):
+    """late_interaction from config is passed to VectorMemory constructor."""
+    import asyncio
+    monkeypatch.setattr(module, "VectorMemory", _RecordingVectorMemory)
+    _RecordingVectorMemory.calls = []
+    _RecordingVectorMemory.init_kwargs = []
+
+    # Config with late_interaction=True
+    cfg_true = arm_config_from_env({"TAOSMD_BENCH_LATE_INTERACTION": "1"})
+    assert cfg_true["late_interaction"] is True
+    asyncio.run(module.run_question(_item(), 5, "hybrid_baseline", cfg_true))
+    assert _RecordingVectorMemory.init_kwargs[-1]["late_interaction"] is True
+
+    # Config with late_interaction=False
+    _RecordingVectorMemory.calls = []
+    _RecordingVectorMemory.init_kwargs = []
+    cfg_false = arm_config_from_env({})
+    assert cfg_false["late_interaction"] is False
+    asyncio.run(module.run_question(_item(), 5, "hybrid_baseline", cfg_false))
+    assert _RecordingVectorMemory.init_kwargs[-1]["late_interaction"] is False
+
+
+def test_late_interaction_only_exact_one():
+    """Only the string '1' yields late_interaction=True; all other values yield False."""
+    for v in ["true", "yes", "2", "0", ""]:
+        result = arm_config_from_env({"TAOSMD_BENCH_LATE_INTERACTION": v})
+        assert result["late_interaction"] is False, f"Expected False for value={v!r}"
+
+    result = arm_config_from_env({"TAOSMD_BENCH_LATE_INTERACTION": "1"})
+    assert result["late_interaction"] is True
+
+
 def test_reranker_unavailable_refuses(monkeypatch):
     """Fake reranker with available False makes run_benchmark refuse."""
     import asyncio
@@ -309,3 +345,264 @@ def test_reranker_unavailable_refuses(monkeypatch):
         assert False, "Expected SystemExit"
     except SystemExit as e:
         assert e.code != 0
+
+
+class _KwargsRecordingVectorMemory:
+    """VectorMemory fake that records constructor kwargs and returns controlled search results."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self._search_results = []
+        self._search_call_count = 0
+
+    async def init(self):
+        return None
+
+    async def add(self, text, metadata=None):
+        return 1
+
+    async def embed(self, text, task="search_document"):
+        # Return 384-dim vector to accommodate mrl_dim up to 384
+        return [1.0] * 384
+
+    async def search(self, query, limit=5, hybrid=True, fusion="boost"):
+        self._search_call_count += 1
+        if self._search_results:
+            return self._search_results.pop(0)
+        return []
+
+    async def close(self):
+        return None
+
+    def set_search_results(self, results_list):
+        self._search_results = results_list
+
+
+class _OrderProvingVectorMemory:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self._search_results = []
+        self._embed_results = {}
+        self._next_id = 1
+
+    async def init(self):
+        return None
+
+    async def add(self, text, metadata=None):
+        await self.embed(text)
+        vmem_id = self._next_id
+        self._next_id += 1
+        return vmem_id
+
+    async def embed(self, text, task="search_document"):
+        if text in self._embed_results:
+            return self._embed_results[text]
+        return [1.0, 0.0, 0.0, 0.0]
+
+    async def search(self, query, limit=5, hybrid=True, fusion="boost"):
+        if self._search_results:
+            return copy.deepcopy(self._search_results)
+        return []
+
+    async def close(self):
+        return None
+
+    def set_search_results(self, results_list):
+        self._search_results = results_list
+
+    def set_embed_result(self, text, vec):
+        self._embed_results[text] = vec
+
+
+def _make_order_item():
+    """Item with answer_session_ids=['sC'] and haystack sessions for sA, sB, sC."""
+    return {
+        "question": "test question",
+        "answer_session_ids": ["sC"],
+        "haystack_sessions": [
+            [{"role": "user", "content": "doc A"}],
+            [{"role": "user", "content": "doc B"}],
+            [{"role": "user", "content": "doc C"}],
+        ],
+        "haystack_session_ids": ["sA", "sB", "sC"],
+    }
+
+
+def test_vector_memory_kwargs_recorded(monkeypatch):
+    """(1) Recording fake VectorMemory stores kwargs; run_question with onnx_path 'models/arm-x' and binary_quant=True asserts recorded kwargs carry those values."""
+    import asyncio
+
+    captured_kwargs = {}
+
+    def make_fake_vmem(**kwargs):
+        captured_kwargs.update(kwargs)
+        fake = _KwargsRecordingVectorMemory(**kwargs)
+        return fake
+
+    monkeypatch.setattr(module, "VectorMemory", make_fake_vmem)
+
+    cfg = arm_config_from_env({
+        "TAOSMD_BENCH_ONNX_PATH": "models/arm-x",
+        "TAOSMD_BENCH_BINARY_QUANT": "1",
+    })
+
+    asyncio.run(module.run_question(_item(), 5, "hybrid_baseline", cfg))
+
+    assert captured_kwargs["onnx_path"] == "models/arm-x"
+    assert captured_kwargs["binary_quant"] is True
+
+
+def test_rescore_reorders_via_float_cosine(monkeypatch):
+    """(2) rescore_on => True (C wins by cosine), rescore_off => False (A stays top-1)."""
+    import asyncio
+
+    query_vec = [1.0, 0.0, 0.0, 0.0]
+    vec_a = [0.6, 0.8, 0.0, 0.0]
+    vec_b = [0.0, 1.0, 0.0, 0.0]
+    vec_c = [0.8, 0.0, 0.6, 0.0]
+
+    item = _make_order_item()
+    search_template = [
+        {"text": "doc A", "id": 1, "metadata": {"session_id": "sA"}},
+        {"text": "doc B", "id": 2, "metadata": {"session_id": "sB"}},
+        {"text": "doc C", "id": 3, "metadata": {"session_id": "sC"}},
+    ]
+
+    def _make_fake():
+        fake = _OrderProvingVectorMemory()
+        fake.set_search_results(search_template)
+        fake.set_embed_result("test question", query_vec)
+        fake.set_embed_result("doc A", vec_a)
+        fake.set_embed_result("doc B", vec_b)
+        fake.set_embed_result("doc C", vec_c)
+        return fake
+
+    # rescore ON: cosines C (0.8) > A (0.6) > B (0.0); top-1 is C = answer
+    monkeypatch.setattr(module, "VectorMemory", lambda **kw: _make_fake())
+    cfg_rescore = arm_config_from_env({
+        "TAOSMD_BENCH_BINARY_QUANT": "1",
+        "TAOSMD_BENCH_RESCORE_OVERSAMPLE": "2",
+    })
+    hit_rescore = asyncio.run(module.run_question(item, 1, "hybrid_baseline", cfg_rescore))
+    assert hit_rescore is True, "With rescore, C should be top-1 and hit"
+
+    # rescore OFF: binary order keeps A on top; A != answer sC
+    monkeypatch.setattr(module, "VectorMemory", lambda **kw: _make_fake())
+    cfg_no_rescore = arm_config_from_env({})
+    hit_no_rescore = asyncio.run(module.run_question(item, 1, "hybrid_baseline", cfg_no_rescore))
+    assert hit_no_rescore is False, "Without rescore, A stays top-1 and misses"
+
+
+def test_run_benchmark_writes_arm_config(monkeypatch, tmp_path):
+    """(3) run_benchmark writes arm_config matching env vars and results keys."""
+    import asyncio
+    import json
+
+    data_file = tmp_path / "test_data.json"
+    test_question = {
+        "question": "When did Alice move to Paris?",
+        "question_type": "single-session-user",
+        "answer_session_ids": ["s0"],
+        "haystack_sessions": [[{"role": "user", "content": "Alice moved to Paris in 2020"}]],
+        "haystack_session_ids": ["s0"],
+    }
+    data_file.write_text(json.dumps([test_question]))
+
+    fake_module_file = tmp_path / "longmemeval_enhanced.py"
+    fake_module_file.write_text("# fake")
+
+    # Create a model directory so bench_provenance.collect finds model files
+    arm_dir = tmp_path / "models" / "custom-arm"
+    arm_dir.mkdir(parents=True)
+    (arm_dir / "model.onnx").write_text("")
+    (arm_dir / "tokenizer.json").write_text("{}")
+
+    fake_vmem = _KwargsRecordingVectorMemory()
+    fake_vmem.set_search_results([[
+        {"text": "Alice moved to Paris in 2020", "id": 1, "metadata": {"session_id": "s0"}}
+    ]])
+
+    monkeypatch.setattr(module, "VectorMemory", lambda **kw: fake_vmem)
+    monkeypatch.setattr(module, "DATA_PATH", str(data_file))
+    monkeypatch.setattr(module, "__file__", str(fake_module_file))
+
+    monkeypatch.setenv("TAOSMD_BENCH_ONNX_PATH", str(arm_dir))
+    monkeypatch.setenv("TAOSMD_BENCH_BINARY_QUANT", "1")
+    monkeypatch.setenv("TAOSMD_BENCH_MRL_DIM", "64")
+    monkeypatch.setenv("TAOSMD_BENCH_RESCORE_OVERSAMPLE", "3")
+
+    asyncio.run(module.run_benchmark(limit=1, top_k=5))
+
+    results_dir = tmp_path / "results"
+    output_files = list(results_dir.glob("enhanced_*.json"))
+    assert len(output_files) == 1, f"Expected one output file, found {output_files}"
+
+    with open(output_files[0]) as f:
+        output = json.load(f)
+
+    arm_config = output["arm_config"]
+    assert arm_config["onnx_path"] == str(arm_dir)
+    assert arm_config["binary_quant"] is True
+    assert arm_config["mrl_dim"] == 64
+    assert arm_config["rescore_oversample"] == 3
+
+    expected = arm_config_from_env({
+        "TAOSMD_BENCH_ONNX_PATH": str(arm_dir),
+        "TAOSMD_BENCH_BINARY_QUANT": "1",
+        "TAOSMD_BENCH_MRL_DIM": "64",
+        "TAOSMD_BENCH_RESCORE_OVERSAMPLE": "3",
+    })
+    assert arm_config == expected
+
+    assert list(output['results'].keys()) == [
+        'hybrid_baseline', 'query_expand', 'temporal_boost', 'combined_v2', 'wider_retrieval'
+    ]
+
+
+def test_mrl_dim_vector_length(monkeypatch):
+    """(4) With mrl_dim=64 and a 384-dim embed, vectors stored through run_question are 64-dim."""
+    import asyncio
+
+    class _MRLTrackingVectorMemory:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.embed_lengths = []
+
+        async def init(self):
+            return None
+
+        async def add(self, text, metadata=None):
+            vec = await self.embed(text)
+            self.embed_lengths.append(len(vec))
+            return 1
+
+        async def embed(self, text, task="search_document"):
+            return [1.0] * 384
+
+        async def search(self, query, limit=5, hybrid=True, fusion="boost"):
+            return []
+
+        async def close(self):
+            return None
+
+    fake_vmem = _MRLTrackingVectorMemory()
+    monkeypatch.setattr(module, "VectorMemory", lambda **kw: fake_vmem)
+
+    cfg = arm_config_from_env({
+        "TAOSMD_BENCH_MRL_DIM": "64",
+        "TAOSMD_BENCH_BINARY_QUANT": "1",
+        "TAOSMD_BENCH_RESCORE_OVERSAMPLE": "2",
+    })
+
+    item = {
+        "question": "test question",
+        "answer_session_ids": ["s0"],
+        "haystack_sessions": [[{"role": "user", "content": "document content"}]],
+        "haystack_session_ids": ["s0"],
+    }
+
+    asyncio.run(module.run_question(item, 5, "hybrid_baseline", cfg))
+
+    assert len(fake_vmem.embed_lengths) > 0
+    for length in fake_vmem.embed_lengths:
+        assert length == 64, f"Expected vector length 64, got {length}"
