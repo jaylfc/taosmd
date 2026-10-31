@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import importlib.util
 import sys
 from pathlib import Path
@@ -452,3 +453,141 @@ def test_unwritable_out_path_is_refused_before_the_run(runner, monkeypatch, tmp_
 
     assert exc.value.code != 0
     assert opened == [], "the run must not answer a single question first"
+
+
+
+def test_writer_url_empty_no_llm_url(runner, monkeypatch):
+    """With writer_url empty, process_conversation_turn called without llm_url."""
+    monkeypatch.setattr(runner, "load_dataset", lambda: [
+        {
+            "question_type": "temporal",
+            "question": "When did Alice move to Paris?",
+            "answer": "Alice moved to Paris in 2020",
+            "haystack_sessions": [[{"role": "user", "content": "Alice moved to Paris in 2020"}]],
+        }
+    ])
+    recorded_kwargs = {}
+
+    async def fake_process_conversation_turn(content, agent_name, kg, archive, source, **kwargs):
+        recorded_kwargs.update(kwargs)
+        return {"facts_extracted": [], "triples_created": [], "method": "regex"}
+
+    monkeypatch.setattr(runner, "process_conversation_turn", fake_process_conversation_turn)
+
+    asyncio.run(runner.run_benchmark(args=_args(writer_url="")))
+
+    assert recorded_kwargs.get("llm_url") is None or recorded_kwargs.get("llm_url") == ""
+    assert "http_client" not in recorded_kwargs
+    assert "extraction_model" not in recorded_kwargs
+
+
+def test_writer_url_set_receives_kwargs(runner, monkeypatch):
+    """With writer_url set, process_conversation_turn receives llm_url, http_client and extraction_model."""
+    monkeypatch.setattr(runner, "load_dataset", lambda: [
+        {
+            "question_type": "temporal",
+            "question": "When did Alice move to Paris?",
+            "answer": "Alice moved to Paris in 2020",
+            "haystack_sessions": [[{"role": "user", "content": "Alice moved to Paris in 2020"}]],
+        }
+    ])
+    recorded_kwargs = {}
+
+    async def fake_process_conversation_turn(content, agent_name, kg, archive, source, **kwargs):
+        recorded_kwargs.update(kwargs)
+        return {"facts_extracted": [], "triples_created": [], "method": "llm"}
+
+    monkeypatch.setattr(runner, "process_conversation_turn", fake_process_conversation_turn)
+
+    asyncio.run(
+        runner.run_benchmark(
+            args=_args(writer_url="http://localhost:11434", writer_model="my-model")
+        )
+    )
+
+    assert recorded_kwargs.get("llm_url") == "http://localhost:11434"
+    assert recorded_kwargs.get("extraction_model") == "my-model"
+    assert "http_client" in recorded_kwargs
+    assert recorded_kwargs["http_client"] is not None
+
+
+def test_writer_counts_methods(runner, monkeypatch, tmp_path):
+    """result_doc['writer'] counts the returned methods (llm vs regex).
+
+    Pins the llm-vs-regex counting by monkeypatching process_conversation_turn
+    with a recorder that returns {"method": "llm"} on its first call and
+    {"method": "regex"} on every later call. A mutant that never increments
+    method_regex is caught: method_regex would stay 0 while the assertion
+    requires len(calls) - 1.
+    """
+    monkeypatch.setattr(runner, "load_dataset", lambda: [
+        {
+            "question_type": "temporal",
+            "question": "When did Alice move to Paris?",
+            "answer": "Alice moved to Paris in 2020",
+            "haystack_sessions": [
+                [
+                    {"role": "user", "content": "Alice moved to Paris in 2020"},
+                    {"role": "assistant", "content": "Roger lives in Lyon"},
+                ],
+            ],
+        }
+    ])
+    calls = []
+
+    async def fake_process_conversation_turn(content, agent_name, kg, archive, source, **kwargs):
+        calls.append(content)
+        return {"method": "llm" if len(calls) == 1 else "regex"}
+
+    monkeypatch.setattr(runner, "process_conversation_turn", fake_process_conversation_turn)
+
+    out_file = str(tmp_path / "test_results.json")
+
+    asyncio.run(
+        runner.run_benchmark(
+            args=_args(
+                writer_url="http://localhost:11434",
+                writer_model="test-model",
+                limit=1,
+                out=out_file,
+            )
+        )
+    )
+
+    with open(out_file) as f:
+        saved_doc = json.load(f)
+
+    assert "writer" in saved_doc
+    assert saved_doc["writer"]["url_set"] is True
+    assert saved_doc["writer"]["model"] == "test-model"
+    assert saved_doc["writer"]["method_llm"] == 1
+    assert saved_doc["writer"]["method_regex"] == len(calls) - 1
+    assert len(calls) > 1
+
+
+def test_writer_url_none_url_set_false(runner, monkeypatch, tmp_path):
+    """With writer_url None (or missing), url_set must be False.
+
+    A programmatic caller that omits --writer-url used to get url_set=True
+    because writer_url falls back to None via getattr and ``None != ""`` is
+    True. bool(None) is False.
+    """
+    monkeypatch.setattr(runner, "load_dataset", lambda: [
+        {
+            "question_type": "temporal",
+            "question": "When did Alice move to Paris?",
+            "answer": "Alice moved to Paris in 2020",
+            "haystack_sessions": [[{"role": "user", "content": "Alice moved to Paris in 2020"}]],
+        }
+    ])
+
+    out_file = str(tmp_path / "test_results.json")
+
+    asyncio.run(
+        runner.run_benchmark(args=_args(writer_url=None, out=out_file))
+    )
+
+    with open(out_file) as f:
+        saved_doc = json.load(f)
+
+    assert saved_doc["writer"]["url_set"] is False
