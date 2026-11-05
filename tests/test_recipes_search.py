@@ -156,6 +156,41 @@ def test_scope_is_applied_before_capping_returned_hits(strategy):
     assert vec.calls[0]["project"] == "ours"
 
 
+def test_fast_fills_caller_limit_from_secondary_when_agent_fanout_is_smaller(monkeypatch):
+    from taosmd import intent_classifier
+
+    class FourVectorHits(_FakeVector):
+        async def search(self, query, **kwargs):
+            self.calls.append(kwargs)
+            return [
+                {"id": str(i), "text": f"vector {i}", "similarity": 1 - i / 10,
+                 "metadata": {}}
+                for i in range(4)
+            ]
+
+    class TwoCatalogHits:
+        def __init__(self):
+            self.calls = 0
+
+        async def search_topic(self, query, limit=5):
+            self.calls += 1
+            return [
+                {"id": i, "topic": f"catalog {i}", "description": "extra hit"}
+                for i in range(2)
+            ]
+
+    monkeypatch.setattr(intent_classifier, "get_search_strategy",
+                        lambda query: {"primary": "vector", "secondary": "catalog"})
+    monkeypatch.setattr(taosmd_agents, "effective_fanout", lambda *a, **k: 3)
+    catalog = TwoCatalogHits()
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": FourVectorHits(), "catalog": catalog},
+        strategy="fast", agent="gina", limit=5))
+    assert catalog.calls == 1
+    assert len(hits) == 5
+    assert any(hit["source"] == "catalog" for hit in hits)
+
+
 @pytest.mark.parametrize("strategy", ["thorough", "custom"])
 def test_agent_llm_reranker_keeps_caller_limit(monkeypatch, strategy):
     class ManyHits(_FakeVector):

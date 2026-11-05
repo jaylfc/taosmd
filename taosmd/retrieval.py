@@ -931,7 +931,7 @@ async def retrieve(
                                           fusion=fusion, candidate_limit=candidate_top_k)
 
         results = _filter_project_scope(results, project, search_agents)
-        if len(results) < limit and secondary and secondary in sources:
+        if len(results) < result_limit and secondary and secondary in sources:
             secondary_results = await _query_source(secondary, sources[secondary], query, fetch_limit,
                                                     project=project, search_agents=search_agents,
                                                     fusion=fusion, candidate_limit=candidate_top_k)
