@@ -102,6 +102,46 @@ def test_different_claims_stay_distinct(tmp_path):
     assert a != b
 
 
+def test_concurrent_add_claim_same_text_single_row(tmp_path):
+    """Two processes writing the same claim must not both insert (CodeRabbit #654).
+
+    Without the BEGIN IMMEDIATE wrapper the norm lookup runs in autocommit,
+    so two connections can both miss the lookup and each insert a row;
+    idx_claims_norm is non-unique so nothing rejects the second.
+    """
+    import threading
+
+    n = 8
+    barrier = threading.Barrier(n)
+    ids: list[int] = []
+    lock = threading.Lock()
+
+    def worker(i: int) -> None:
+        async def go() -> None:
+            s = ClaimStore(db_path=str(tmp_path / "claims.db"))
+            await s.init()
+            barrier.wait()
+            cid = await s.add_claim("alice lives in Paris", [i], source_extractor="regex")
+            with lock:
+                ids.append(cid)
+            await s.close()
+        asyncio.run(go())
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(ids) == n
+    assert len(set(ids)) == 1, f"all writers must converge on one row id, got {sorted(ids)}"
+    s = ClaimStore(db_path=str(tmp_path / "claims.db"))
+    asyncio.run(s.init())
+    row = asyncio.run(s.get(ids[0]))
+    assert sorted(row["archive_span_ids"]) == list(range(n)), "every writer's span merged"
+    asyncio.run(s.close())
+
+
 def test_legacy_db_without_norm_backfills_and_dedups(tmp_path):
     """A claims.db predating the norm column still dedups after init."""
     import sqlite3

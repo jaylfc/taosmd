@@ -73,26 +73,37 @@ class ClaimStore:
         the verify pass already made.
         """
         norm = _normalize(text)
-        row = self._conn.execute(
-            "SELECT id, archive_span_ids FROM claims WHERE norm = ? ORDER BY id LIMIT 1",
-            (norm,),
-        ).fetchone()
-        if row is not None:
-            merged = sorted({*json.loads(row["archive_span_ids"]), *archive_span_ids})
-            self._conn.execute(
-                "UPDATE claims SET archive_span_ids = ? WHERE id = ?",
-                (json.dumps(merged), row["id"]),
+        # The lookup-then-insert/update runs inside a single BEGIN IMMEDIATE
+        # transaction so it is atomic across connections/processes: a second
+        # writer can't slip a same-norm insert between our miss and our insert
+        # (idx_claims_norm is non-unique, so nothing else stops the duplicate).
+        # Mirrors knowledge_graph.add_entity; busy_timeout makes the competing
+        # writer wait rather than race.
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._conn.execute(
+                "SELECT id, archive_span_ids FROM claims WHERE norm = ? ORDER BY id LIMIT 1",
+                (norm,),
+            ).fetchone()
+            if row is not None:
+                merged = sorted({*json.loads(row["archive_span_ids"]), *archive_span_ids})
+                self._conn.execute(
+                    "UPDATE claims SET archive_span_ids = ? WHERE id = ?",
+                    (json.dumps(merged), row["id"]),
+                )
+                self._conn.commit()
+                return int(row["id"])
+            cur = self._conn.execute(
+                "INSERT INTO claims (text, norm, archive_span_ids, status, source_extractor, created_at)"
+                " VALUES (?, ?, ?, 'unverified', ?, ?)",
+                (text, norm, json.dumps(archive_span_ids), source_extractor,
+                 now if now is not None else time.time()),
             )
             self._conn.commit()
-            return int(row["id"])
-        cur = self._conn.execute(
-            "INSERT INTO claims (text, norm, archive_span_ids, status, source_extractor, created_at)"
-            " VALUES (?, ?, ?, 'unverified', ?, ?)",
-            (text, norm, json.dumps(archive_span_ids), source_extractor,
-             now if now is not None else time.time()),
-        )
-        self._conn.commit()
-        return int(cur.lastrowid)
+            return int(cur.lastrowid)
+        except BaseException:
+            self._conn.rollback()
+            raise
 
     async def get(self, claim_id: int) -> dict | None:
         row = self._conn.execute("SELECT * FROM claims WHERE id = ?", (claim_id,)).fetchone()
