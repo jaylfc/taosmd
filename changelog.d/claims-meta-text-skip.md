@@ -1,0 +1,3 @@
+### Fixed
+
+- The regex fact extractor now skips agent meta-text before pattern matching (#653 item 3). Shadow deployments fed cron delivery instructions and system-prompt scaffolding ("Your final response is automatically delivered to the user.", "[SILENT] ... nothing more.", "- " bullet lines) straight into the extractor and got world facts out. `extract_facts_from_text` now drops sentences containing delivery-token markers (`[SILENT]`, `MEDIA:`, chat-template brackets), known scaffolding phrases (`your final response`, `full skill content`, ...), or a bare markdown bullet lead, before any pattern runs. Conversational prose is untouched (`tests/test_memory_extractor_meta.py`).
