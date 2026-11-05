@@ -519,14 +519,45 @@ def _format_hit(hit: dict) -> dict:
         if isinstance(md, dict) and md.get("similarity") is not None
         else hit.get("source_score", 0.0)
     )
+    if confidence is None:
+        confidence = 0.0
 
-    return {
+    # Cross-encoder reranking (see taosmd.cross_encoder) attaches a
+    # ``cross_encoder_score`` to each hit inside retrieve(). It lives on the
+    # hit envelope, not in row metadata, so the reshape below would silently
+    # drop it (issue #645): consumers could not tell whether reranking ran.
+    # The score is a relevance LOGIT (unbounded, not 0-1), so it is exposed
+    # as its own field rather than folded into ``confidence`` — confidence
+    # deliberately stays the pre-rerank cosine similarity that the
+    # agent-rules ``< 0.6`` threshold reads in the 0-1 range.
+    out = {
         "text": hit.get("text", ""),
         "source": hit.get("source", "unknown"),
         "timestamp": timestamp,
         "confidence": round(float(confidence), 4),
         "metadata": user_md if isinstance(user_md, dict) else {},
     }
+    ces = hit.get("cross_encoder_score")
+    if ces is not None:
+        try:
+            ces = round(float(ces), 4)
+        except (TypeError, ValueError):
+            logger.warning(
+                "_format_hit: cross_encoder_score %r is not numeric, dropping",
+                ces,
+            )
+            ces = None
+    if ces is not None:
+        out["cross_encoder_score"] = ces
+        out["metadata"]["rerank_score"] = ces
+    else:
+        # A client-supplied metadata.rerank_score must not masquerade as a
+        # rerank signal when no valid cross-encoder score exists (CodeRabbit
+        # review on #646). Drop it so absence of the field means "not reranked".
+        if "rerank_score" in out["metadata"]:
+            out["metadata"] = dict(out["metadata"])
+            out["metadata"].pop("rerank_score", None)
+    return out
 
 
 def _apply_runtime_overrides(recipe_retrieval: dict, overrides: dict) -> dict:
