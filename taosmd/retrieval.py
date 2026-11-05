@@ -879,10 +879,10 @@ async def retrieve(
 
         ranked_lists: list[list[dict]] = []
         for res in results_per_source:
-            if isinstance(res, Exception):
+            if isinstance(res, BaseException):
                 ranked_lists.append([])
             else:
-                ranked_lists.append(res)
+                ranked_lists.append(_filter_project_scope(res, project, search_agents))
 
         merged = _rrf_merge(ranked_lists, intent_primary=strategy_info.get("primary"))
         results = _deduplicate(merged)
@@ -935,6 +935,7 @@ async def retrieve(
             secondary_results = await _query_source(secondary, sources[secondary], query, fetch_limit,
                                                     project=project, search_agents=search_agents,
                                                     fusion=fusion, candidate_limit=candidate_top_k)
+            secondary_results = _filter_project_scope(secondary_results, project, search_agents)
             merged = _rrf_merge([results, secondary_results])
             results = _filter_project_scope(_deduplicate(merged), project, search_agents)
 
@@ -1002,10 +1003,10 @@ async def retrieve(
 
         ranked_lists: list[list[dict]] = []
         for res in results_per_source:
-            if isinstance(res, Exception):
+            if isinstance(res, BaseException):
                 ranked_lists.append([])
             else:
-                ranked_lists.append(res)
+                ranked_lists.append(_filter_project_scope(res, project, search_agents))
 
         merged = _rrf_merge(ranked_lists, intent_primary=strategy_info.get("primary"))
         results = _deduplicate(merged)

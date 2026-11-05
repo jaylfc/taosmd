@@ -156,6 +156,40 @@ def test_scope_is_applied_before_capping_returned_hits(strategy):
     assert vec.calls[0]["project"] == "ours"
 
 
+@pytest.mark.parametrize("strategy", ["thorough", "fast", "custom"])
+def test_out_of_scope_archive_hit_cannot_deduplicate_scoped_vector_hit(
+    monkeypatch, strategy,
+):
+    from taosmd import intent_classifier
+
+    class VectorHits(_FakeVector):
+        async def search(self, query, **kwargs):
+            return [
+                {"id": "v1", "text": "different first result", "similarity": 1.0,
+                 "metadata": {"project": "ours"}},
+                {"id": "v2", "text": "shared relevant result", "similarity": 0.9,
+                 "metadata": {"project": "ours"}},
+            ]
+
+    class ArchiveHits:
+        async def search_fts(self, query, limit=5):
+            return [{"id": "a1", "summary": "shared relevant result",
+                     "project": "elsewhere"}]
+
+    monkeypatch.setattr(intent_classifier, "get_search_strategy", lambda query: {
+        "primary": "vector" if strategy == "fast" else "archive",
+        "secondary": "archive",
+    })
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": VectorHits(), "archive": ArchiveHits()},
+        strategy=strategy, memory_layers=["vector", "archive"],
+        project="ours", limit=3,
+    ))
+    assert [(hit["source"], hit["source_id"]) for hit in hits] == [
+        ("vector", "v1"), ("vector", "v2"),
+    ]
+
+
 def test_fast_fills_caller_limit_from_secondary_when_agent_fanout_is_smaller(monkeypatch):
     from taosmd import intent_classifier
 
