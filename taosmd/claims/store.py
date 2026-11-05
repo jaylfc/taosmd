@@ -17,10 +17,20 @@ VALID_STATUSES = ("unverified", "supported", "partial", "unsupported", "contradi
 # What counts as a hallucination for the live rate (checked but not supported).
 _HALLUCINATED = ("unsupported", "partial", "contradicted")
 
+
+def _normalize(text: str) -> str:
+    """Canonical form used for claim dedup (issue #653).
+
+    Exact-normalized, not fuzzy: case and whitespace variants of the same
+    sentence merge; paraphrases stay distinct rows.
+    """
+    return " ".join(text.split()).lower()
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     text TEXT NOT NULL,
+    norm TEXT,
     archive_span_ids TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'unverified',
     verifier_model TEXT,
@@ -52,14 +62,48 @@ class ClaimStore:
 
     async def add_claim(self, text: str, archive_span_ids: list[int],
                         source_extractor: str, now: float | None = None) -> int:
-        cur = self._conn.execute(
-            "INSERT INTO claims (text, archive_span_ids, status, source_extractor, created_at)"
-            " VALUES (?, ?, 'unverified', ?, ?)",
-            (text, json.dumps(archive_span_ids), source_extractor,
-             now if now is not None else time.time()),
-        )
-        self._conn.commit()
-        return int(cur.lastrowid)
+        """Insert a claim, or merge into the existing row for the same text.
+
+        Dedup at insert (issue #653): a field report measured 10k rows for 4k
+        distinct texts because the same sentence re-extracted every turn got a
+        fresh row. Merging ``archive_span_ids`` into the existing row keeps the
+        zero-loss property (no row or span is dropped) and stops the corpus —
+        and any hallucination-rate metric computed over it — inflating. The
+        merged row keeps its original status: a re-add never resets a verdict
+        the verify pass already made.
+        """
+        norm = _normalize(text)
+        # The lookup-then-insert/update runs inside a single BEGIN IMMEDIATE
+        # transaction so it is atomic across connections/processes: a second
+        # writer can't slip a same-norm insert between our miss and our insert
+        # (idx_claims_norm is non-unique, so nothing else stops the duplicate).
+        # Mirrors knowledge_graph.add_entity; busy_timeout makes the competing
+        # writer wait rather than race.
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._conn.execute(
+                "SELECT id, archive_span_ids FROM claims WHERE norm = ? ORDER BY id LIMIT 1",
+                (norm,),
+            ).fetchone()
+            if row is not None:
+                merged = sorted({*json.loads(row["archive_span_ids"]), *archive_span_ids})
+                self._conn.execute(
+                    "UPDATE claims SET archive_span_ids = ? WHERE id = ?",
+                    (json.dumps(merged), row["id"]),
+                )
+                self._conn.commit()
+                return int(row["id"])
+            cur = self._conn.execute(
+                "INSERT INTO claims (text, norm, archive_span_ids, status, source_extractor, created_at)"
+                " VALUES (?, ?, ?, 'unverified', ?, ?)",
+                (text, norm, json.dumps(archive_span_ids), source_extractor,
+                 now if now is not None else time.time()),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+        except BaseException:
+            self._conn.rollback()
+            raise
 
     async def get(self, claim_id: int) -> dict | None:
         row = self._conn.execute("SELECT * FROM claims WHERE id = ?", (claim_id,)).fetchone()
