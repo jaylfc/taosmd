@@ -886,12 +886,13 @@ async def retrieve(
 
         merged = _rrf_merge(ranked_lists, intent_primary=strategy_info.get("primary"))
         results = _deduplicate(merged)
+        results = _filter_project_scope(results, project, search_agents)
 
         if reranker is not None and getattr(reranker, "available", False):
-            results = reranker.rerank(query, results, limit)
+            results = reranker.rerank(query, results, result_limit)
 
         if llm_reranker is not None:
-            results = await _apply_llm_rerank(query, results, llm_reranker, limit)
+            results = await _apply_llm_rerank(query, results, llm_reranker, result_limit)
 
         if verify and is_task_enabled(agent_name, "verification"):
             results = await _apply_verification(query, results, agent_name)
@@ -920,18 +921,22 @@ async def retrieve(
 
         if primary and primary in sources:
             results = await _query_source(primary, sources[primary], query, fetch_limit,
+                                          project=project, search_agents=search_agents,
                                           fusion=fusion, candidate_limit=candidate_top_k)
         elif sources:
             # Fall back to first available source
             first_name, first_src = next(iter(sources.items()))
             results = await _query_source(first_name, first_src, query, fetch_limit,
+                                          project=project, search_agents=search_agents,
                                           fusion=fusion, candidate_limit=candidate_top_k)
 
+        results = _filter_project_scope(results, project, search_agents)
         if len(results) < limit and secondary and secondary in sources:
             secondary_results = await _query_source(secondary, sources[secondary], query, fetch_limit,
+                                                    project=project, search_agents=search_agents,
                                                     fusion=fusion, candidate_limit=candidate_top_k)
             merged = _rrf_merge([results, secondary_results])
-            results = _deduplicate(merged)
+            results = _filter_project_scope(_deduplicate(merged), project, search_agents)
 
         if temporal:
             from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
@@ -956,12 +961,15 @@ async def retrieve(
 
         if primary and primary in sources:
             results = await _query_source(primary, sources[primary], query, fetch_limit,
+                                          project=project, search_agents=search_agents,
                                           fusion=fusion, candidate_limit=candidate_top_k)
         elif sources:
             first_name, first_src = next(iter(sources.items()))
             results = await _query_source(first_name, first_src, query, fetch_limit,
+                                          project=project, search_agents=search_agents,
                                           fusion=fusion, candidate_limit=candidate_top_k)
 
+        results = _filter_project_scope(results, project, search_agents)
         if temporal:
             from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
             results = apply_temporal_stage(results, temporal, query, logger=logger)
@@ -986,6 +994,7 @@ async def retrieve(
 
         tasks = [
             asyncio.create_task(_query_source(name, src, query, fetch_limit,
+                                              project=project, search_agents=search_agents,
                                               fusion=fusion, candidate_limit=candidate_top_k))
             for name, src in filtered_sources.items()
         ]
@@ -1000,12 +1009,13 @@ async def retrieve(
 
         merged = _rrf_merge(ranked_lists, intent_primary=strategy_info.get("primary"))
         results = _deduplicate(merged)
+        results = _filter_project_scope(results, project, search_agents)
 
         if reranker is not None and getattr(reranker, "available", False):
-            results = reranker.rerank(query, results, limit)
+            results = reranker.rerank(query, results, result_limit)
 
         if llm_reranker is not None:
-            results = await _apply_llm_rerank(query, results, llm_reranker, limit)
+            results = await _apply_llm_rerank(query, results, llm_reranker, result_limit)
 
         if temporal:
             from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415

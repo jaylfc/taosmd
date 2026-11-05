@@ -111,3 +111,67 @@ def test_agent_fanout_does_not_override_explicit_result_limit(monkeypatch, strat
         "q", sources={"vector": vec}, strategy=strategy, agent="gina", limit=3))
     assert vec.calls[0]["limit"] == 30  # agent K still controls retrieval breadth
     assert len(hits) == 3  # caller's explicit maximum controls returned hits
+
+
+@pytest.mark.parametrize("strategy", ["thorough", "custom"])
+def test_agent_reranker_keeps_caller_limit_when_fanout_is_smaller(monkeypatch, strategy):
+    class ManyHits(_FakeVector):
+        async def search(self, query, **kwargs):
+            self.calls.append(kwargs)
+            return [
+                {"id": str(i), "text": f"hit {i}", "similarity": 1 - i / 10,
+                 "metadata": {}}
+                for i in range(8)
+            ]
+
+    class TopKReranker:
+        available = True
+
+        def rerank(self, query, results, top_k):
+            return results[:top_k]
+
+    monkeypatch.setattr(taosmd_agents, "effective_fanout", lambda *a, **k: 3)
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": ManyHits()}, strategy=strategy,
+        agent="gina", limit=5, reranker=TopKReranker()))
+    assert len(hits) == 5
+
+
+@pytest.mark.parametrize("strategy", ["thorough", "fast", "minimal", "custom"])
+def test_scope_is_applied_before_capping_returned_hits(strategy):
+    class ScopedHits(_FakeVector):
+        async def search(self, query, **kwargs):
+            self.calls.append(kwargs)
+            return [
+                {"id": str(i), "text": f"hit {i}", "similarity": 1 - i / 10,
+                 "metadata": {"project": "other" if i < 2 else "ours"}}
+                for i in range(5)
+            ]
+
+    vec = ScopedHits()
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": vec}, strategy=strategy,
+        project="ours", limit=2))
+    assert [h["source_id"] for h in hits] == ["2", "3"]
+    assert vec.calls[0]["project"] == "ours"
+
+
+@pytest.mark.parametrize("strategy", ["thorough", "custom"])
+def test_agent_llm_reranker_keeps_caller_limit(monkeypatch, strategy):
+    class ManyHits(_FakeVector):
+        async def search(self, query, **kwargs):
+            return [
+                {"id": str(i), "text": f"hit {i}", "similarity": 1 - i / 10,
+                 "metadata": {}}
+                for i in range(8)
+            ]
+
+    async def top_k_only(query, results, reranker, top_k):
+        return results[:top_k]
+
+    monkeypatch.setattr(taosmd_agents, "effective_fanout", lambda *a, **k: 3)
+    monkeypatch.setattr(retrieval, "_apply_llm_rerank", top_k_only)
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": ManyHits()}, strategy=strategy,
+        agent="gina", limit=5, llm_reranker={"enabled": True}))
+    assert len(hits) == 5
