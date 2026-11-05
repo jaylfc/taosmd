@@ -1,6 +1,7 @@
 # tests/test_recipes_search.py
 from __future__ import annotations
 import asyncio
+import pytest
 from taosmd import retrieval
 
 
@@ -91,3 +92,22 @@ def test_recipe_controls_retrieval_breadth_via_fanout(tmp_path):
     assert (taosmd_agents._registry(d)
             .effective_fanout("gina", worker_capabilities=None)
             == taosmd_agents.FANOUT_LEVELS["low"])
+
+
+@pytest.mark.parametrize("strategy", ["thorough", "fast", "minimal", "custom"])
+def test_agent_fanout_does_not_override_explicit_result_limit(monkeypatch, strategy):
+    class ManyHits(_FakeVector):
+        async def search(self, query, **kwargs):
+            self.calls.append(kwargs)
+            return [
+                {"id": f"v{i}", "text": f"hit {i}", "similarity": 1 - i / 20,
+                 "metadata": {}}
+                for i in range(10)
+            ]
+
+    monkeypatch.setattr(taosmd_agents, "effective_fanout", lambda *a, **k: 10)
+    vec = ManyHits()
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": vec}, strategy=strategy, agent="gina", limit=3))
+    assert vec.calls[0]["limit"] == 30  # agent K still controls retrieval breadth
+    assert len(hits) == 3  # caller's explicit maximum controls returned hits

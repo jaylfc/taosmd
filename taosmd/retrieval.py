@@ -747,8 +747,8 @@ async def retrieve(
             Recognised keys: "vector", "kg", "catalog", "archive", "crystals".
             Missing keys mean that source is unavailable.
         limit: Maximum number of results to return. When *agent* is supplied,
-            this is overridden by ``effective_fanout(agent, worker_capabilities)``
-            so the per-agent fan-out setting controls the per-layer K.
+            ``effective_fanout(agent, worker_capabilities)`` controls retrieval
+            breadth without overriding the caller's result limit.
         reranker: Optional CrossEncoderReranker instance. When provided and
             ``reranker.available`` is True, used for thorough/custom reranking.
         llm_reranker: Optional dict enabling the LLM listwise reranker as an
@@ -854,6 +854,7 @@ async def retrieve(
     if sources is None:
         sources = {}
 
+    result_limit = limit
     # Resolve effective K from per-agent fanout config when an agent is given.
     if agent is not None:
         from taosmd.agents import effective_fanout as _effective_fanout  # noqa: PLC0415
@@ -899,7 +900,7 @@ async def retrieve(
             from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
             results = apply_temporal_stage(results, temporal, query, logger=logger)
 
-        results = results[:limit]
+        results = results[:result_limit]
         if adjacent_neighbors > 0:
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
@@ -936,7 +937,7 @@ async def retrieve(
             from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
             results = apply_temporal_stage(results, temporal, query, logger=logger)
 
-        results = results[:limit]
+        results = results[:result_limit]
         if adjacent_neighbors > 0:
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
@@ -965,7 +966,7 @@ async def retrieve(
             from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
             results = apply_temporal_stage(results, temporal, query, logger=logger)
 
-        results = results[:limit]
+        results = results[:result_limit]
         if adjacent_neighbors > 0:
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
@@ -1010,7 +1011,7 @@ async def retrieve(
             from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
             results = apply_temporal_stage(results, temporal, query, logger=logger)
 
-        results = results[:limit]
+        results = results[:result_limit]
         if adjacent_neighbors > 0:
             results = await _attach_neighbors(
                 results, sources, adjacent_neighbors, position_key, group_key,
