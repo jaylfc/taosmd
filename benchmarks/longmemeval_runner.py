@@ -563,6 +563,8 @@ async def run_benchmark(
     retrieval_path = "retrieve"
     report_retrieval_delta = False
     out_path = ""
+    writer_url = None
+    writer_model = "default"
     if args is not None:
         limit = args.limit
         question_type = args.type
@@ -571,9 +573,11 @@ async def run_benchmark(
         retrieval_path = args.retrieval_path
         report_retrieval_delta = args.report_retrieval_delta
         out_path = args.out
+        writer_url = getattr(args, "writer_url", None)
+        writer_model = getattr(args, "writer_model", None)
 
     print("=" * 70)
-    print("LongMemEval Benchmark — taOSmd")
+    print("LongMemEval Benchmark -- taOSmd")
     print("=" * 70)
     print(
         f"  retrieval_path={retrieval_path}  graph_expansion={graph_expansion}  "
@@ -627,12 +631,21 @@ async def run_benchmark(
     total_correct = 0
     total_questions = 0
     total_time = 0
+    method_llm_count = 0
+    method_regex_count = 0
+    total_turns = 0
 
     # Create LLM client if needed
     llm_client = None
     if use_llm:
         import httpx as _httpx
         llm_client = _httpx.AsyncClient(timeout=30)
+
+    # Create writer client for ingest-time fact extraction (E-050)
+    writer_client = None
+    if writer_url:
+        import httpx as _httpx
+        writer_client = _httpx.AsyncClient(timeout=30)
 
     for i, item in enumerate(dataset):
         qtype = item["question_type"]
@@ -669,10 +682,27 @@ async def run_benchmark(
                 role = turn.get("role", "user")
                 if content:
                     # Extract facts into KG
-                    await process_conversation_turn(
-                        content, agent_name="assistant" if role == "assistant" else None,
-                        kg=kg, archive=archive, source="longmemeval",
-                    )
+                    if writer_url:
+                        result = await process_conversation_turn(
+                            content, agent_name="assistant" if role == "assistant" else None,
+                            kg=kg, archive=archive, source="longmemeval",
+                            llm_url=writer_url,
+                            http_client=writer_client,
+                            extraction_model=writer_model,
+                        )
+                        method = result.get("method", "regex")
+                        if method == "llm":
+                            method_llm_count += 1
+                        else:
+                            method_regex_count += 1
+                        total_turns += 1
+                    else:
+                        result = await process_conversation_turn(
+                            content, agent_name="assistant" if role == "assistant" else None,
+                            kg=kg, archive=archive, source="longmemeval",
+                        )
+                        total_turns += 1
+                        method_regex_count += 1
                     # Archive raw content
                     await archive.record(
                         "conversation",
@@ -838,10 +868,21 @@ async def run_benchmark(
                 "by_type": results_by_type,
             },
             "results": all_results,
+            "writer": {
+                "url_set": writer_url != "",
+                "model": writer_model if writer_url else None,
+                "turns": total_turns,
+                "method_llm": method_llm_count,
+                "method_regex": method_regex_count,
+            },
         }
         with open(out_path, "w") as f:
             json.dump(result_doc, f, indent=2)
         print(f"  results -> {out_path}")
+    print(f"  writer: model={writer_model or 'default'} llm={method_llm_count} regex={method_regex_count}")
+
+    if total_questions:
+        sys.modules[__name__].result_doc = result_doc
 
     return overall
 
@@ -877,6 +918,16 @@ def main() -> None:
         "--out",
         default="",
         help="Result JSON path (default: benchmarks/results/longmemeval_<ts>.json)",
+    )
+    parser.add_argument(
+        "--writer-url",
+        default="",
+        help="OpenAI-compatible base URL (the extractor POSTs to <url>/v1/chat/completions); empty keeps regex-only path.",
+    )
+    parser.add_argument(
+        "--writer-model",
+        default="default",
+        help="Model name for ingest-time fact extraction; used with --writer-url.",
     )
     args = parser.parse_args()
 
