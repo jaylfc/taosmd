@@ -39,6 +39,20 @@ def _make_pipeline(tmp: Path) -> CatalogPipeline:
     )
 
 
+def _hermetic_model(monkeypatch) -> None:
+    """Pin model resolution to the mocked detect_best_tier fallback.
+
+    Without this, index_day's resolve_memory_model consults the real
+    generator profile for the real host tier: on CPU-only runners the
+    balanced profile maps 'cpu' to the empty (retrieval-only) value, the
+    fallback is ignored, and both stages skip for model reasons rather
+    than gate reasons. These tests are about the #636/#637 agent gate.
+    """
+    import taosmd.catalog_pipeline as CP
+    monkeypatch.setattr(CP, "resolve_memory_model",
+                        lambda fallback=None, **kw: fallback or "")
+
+
 def test_nightly_cron_shape_queues_enabled_tenant(tmp_path, monkeypatch):
     """Empty pipeline agent_name + tenant with intake ON => queued, not disabled."""
     _write_archive(tmp_path / "archive", [{
@@ -56,6 +70,7 @@ def test_nightly_cron_shape_queues_enabled_tenant(tmp_path, monkeypatch):
     })
 
     pipeline = _make_pipeline(tmp_path)
+    _hermetic_model(monkeypatch)
 
     async def run():
         await pipeline.init()
@@ -87,6 +102,7 @@ def test_crystallize_skips_only_disabled_tenants(tmp_path, monkeypatch):
     })
 
     pipeline = _make_pipeline(tmp_path)
+    _hermetic_model(monkeypatch)
 
     async def run():
         await pipeline.init()
