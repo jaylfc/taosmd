@@ -226,6 +226,19 @@ def test_fast_fills_caller_limit_from_secondary_when_agent_fanout_is_smaller(mon
 
 
 @pytest.mark.parametrize("strategy", ["thorough", "custom"])
+def test_parallel_source_cancellation_is_not_returned_as_empty_hits(strategy):
+    class CancelledVector:
+        async def search(self, query, **kwargs):
+            raise asyncio.CancelledError("source cancelled")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(retrieval.retrieve(
+            "q", sources={"vector": CancelledVector()}, strategy=strategy,
+            memory_layers=["vector"], limit=3,
+        ))
+
+
+@pytest.mark.parametrize("strategy", ["thorough", "custom"])
 def test_agent_llm_reranker_keeps_caller_limit(monkeypatch, strategy):
     class ManyHits(_FakeVector):
         async def search(self, query, **kwargs):

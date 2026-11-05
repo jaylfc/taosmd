@@ -879,8 +879,10 @@ async def retrieve(
 
         ranked_lists: list[list[dict]] = []
         for res in results_per_source:
-            if isinstance(res, BaseException):
+            if isinstance(res, Exception):
                 ranked_lists.append([])
+            elif isinstance(res, BaseException):
+                raise res
             else:
                 ranked_lists.append(_filter_project_scope(res, project, search_agents))
 
@@ -1003,8 +1005,10 @@ async def retrieve(
 
         ranked_lists: list[list[dict]] = []
         for res in results_per_source:
-            if isinstance(res, BaseException):
+            if isinstance(res, Exception):
                 ranked_lists.append([])
+            elif isinstance(res, BaseException):
+                raise res
             else:
                 ranked_lists.append(_filter_project_scope(res, project, search_agents))
 
