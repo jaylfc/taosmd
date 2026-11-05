@@ -249,6 +249,20 @@ def test_format_hit_non_numeric_cross_encoder_score_dropped():
     assert formatted["confidence"] == 0.4
 
 
+def test_format_hit_stale_user_rerank_score_dropped():
+    """A client-supplied metadata.rerank_score must not survive when no
+    cross-encoder score exists — absence means 'not reranked' (CodeRabbit #646)."""
+    hit = {
+        "text": "x",
+        "source": "vector",
+        "source_score": 0.4,
+        "metadata": {"similarity": 0.4, "metadata": {"rerank_score": 9.9}},
+    }
+    formatted = taosmd_api._format_hit(hit)
+    assert "cross_encoder_score" not in formatted
+    assert "rerank_score" not in formatted["metadata"]
+
+
 # ---------------------------------------------------------------------------
 # Collection doc-currency metadata on the hit envelope
 # ---------------------------------------------------------------------------

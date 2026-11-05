@@ -550,6 +550,13 @@ def _format_hit(hit: dict) -> dict:
     if ces is not None:
         out["cross_encoder_score"] = ces
         out["metadata"]["rerank_score"] = ces
+    else:
+        # A client-supplied metadata.rerank_score must not masquerade as a
+        # rerank signal when no valid cross-encoder score exists (CodeRabbit
+        # review on #646). Drop it so absence of the field means "not reranked".
+        if "rerank_score" in out["metadata"]:
+            out["metadata"] = dict(out["metadata"])
+            out["metadata"].pop("rerank_score", None)
     return out
 
 
