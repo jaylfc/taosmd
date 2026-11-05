@@ -1289,6 +1289,12 @@ def _claims_cmd(args: argparse.Namespace) -> int:
             rate.get(s, 0) for s in ("supported", "partial", "unsupported", "contradicted")
         )
         hall_rate = rate.get("hallucination_rate", 0.0)
+        by_ext = rate.get("by_extractor", {})
+        ext_part = ""
+        if by_ext:
+            ext_part = "  by_extractor=[" + ", ".join(
+                f"{k}:{v}" for k, v in sorted(by_ext.items())
+            ) + "]"
         print(
             f"claims: unverified={rate.get('unverified', 0)}"
             f"  supported={rate.get('supported', 0)}"
@@ -1297,6 +1303,7 @@ def _claims_cmd(args: argparse.Namespace) -> int:
             f"  contradicted={rate.get('contradicted', 0)}"
             f"  checked={checked}"
             f"  hallucination_rate={hall_rate:.3f}"
+            f"{ext_part}"
         )
         return 0
 
