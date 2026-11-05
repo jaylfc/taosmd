@@ -225,16 +225,12 @@ Respond with ONLY the insight in one sentence. Be specific and actionable."""
 
         try:
             import httpx
+            from .llm_complete import llm_complete
             async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(
-                    f"{llm_url}/api/generate",
-                    json={"model": model, "prompt": prompt, "stream": False,
-                          "options": {"temperature": 0.4, "num_predict": 100}},
-                )
-                if resp.status_code != 200:
-                    return None
-
-                insight_text = resp.json().get("response", "").strip()
+                insight_text = (await llm_complete(
+                    client, llm_url, model, prompt,
+                    temperature=0.4, max_tokens=100,
+                )).strip()
                 if not insight_text or len(insight_text) < 10:
                     return None
 
