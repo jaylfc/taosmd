@@ -211,6 +211,44 @@ def test_format_hit_falls_back_to_source_score():
     assert formatted["source"] == "kg"
 
 
+def test_format_hit_passes_through_cross_encoder_score():
+    """Issue #645: reranked hits must expose the reranker signal.
+
+    CrossEncoderReranker.rerank() attaches ``cross_encoder_score`` (a
+    relevance logit) to each hit inside retrieve(); _format_hit used to
+    drop it. It now surfaces as its own field and as metadata.rerank_score,
+    while confidence stays the pre-rerank cosine (0-1 range contract).
+    """
+    hit = {
+        "text": "reranked",
+        "source": "vector",
+        "source_id": "1",
+        "rank": 0,
+        "source_score": 0.55,
+        "cross_encoder_score": 3.2719,
+        "metadata": {"id": 1, "similarity": 0.55, "metadata": {}},
+    }
+    formatted = taosmd_api._format_hit(hit)
+    assert formatted["cross_encoder_score"] == 3.2719
+    assert formatted["metadata"]["rerank_score"] == 3.2719
+    assert formatted["confidence"] == 0.55
+
+
+def test_format_hit_non_numeric_cross_encoder_score_dropped():
+    """A malformed cross_encoder_score warns and is dropped, not crashed on."""
+    hit = {
+        "text": "x",
+        "source": "vector",
+        "source_score": 0.4,
+        "cross_encoder_score": "not-a-number",
+        "metadata": {"similarity": 0.4, "metadata": {}},
+    }
+    formatted = taosmd_api._format_hit(hit)
+    assert "cross_encoder_score" not in formatted
+    assert "rerank_score" not in formatted["metadata"]
+    assert formatted["confidence"] == 0.4
+
+
 # ---------------------------------------------------------------------------
 # Collection doc-currency metadata on the hit envelope
 # ---------------------------------------------------------------------------
