@@ -456,7 +456,7 @@ def test_unwritable_out_path_is_refused_before_the_run(runner, monkeypatch, tmp_
 
 
 
-def test_writer_url_empty_no_llm_url(runner, monkeypatch):
+def test_writer_url_empty_no_llm_url(runner, monkeypatch, tmp_path):
     """With writer_url empty, process_conversation_turn called without llm_url."""
     monkeypatch.setattr(runner, "load_dataset", lambda: [
         {
@@ -474,14 +474,18 @@ def test_writer_url_empty_no_llm_url(runner, monkeypatch):
 
     monkeypatch.setattr(runner, "process_conversation_turn", fake_process_conversation_turn)
 
-    asyncio.run(runner.run_benchmark(args=_args(writer_url="")))
+    asyncio.run(
+        runner.run_benchmark(
+            args=_args(writer_url="", out=str(tmp_path / "results.json"))
+        )
+    )
 
     assert recorded_kwargs.get("llm_url") is None or recorded_kwargs.get("llm_url") == ""
     assert "http_client" not in recorded_kwargs
     assert "extraction_model" not in recorded_kwargs
 
 
-def test_writer_url_set_receives_kwargs(runner, monkeypatch):
+def test_writer_url_set_receives_kwargs(runner, monkeypatch, tmp_path):
     """With writer_url set, process_conversation_turn receives llm_url, http_client and extraction_model."""
     monkeypatch.setattr(runner, "load_dataset", lambda: [
         {
@@ -501,7 +505,11 @@ def test_writer_url_set_receives_kwargs(runner, monkeypatch):
 
     asyncio.run(
         runner.run_benchmark(
-            args=_args(writer_url="http://localhost:11434", writer_model="my-model")
+            args=_args(
+                writer_url="http://localhost:11434",
+                writer_model="my-model",
+                out=str(tmp_path / "results.json"),
+            )
         )
     )
 
