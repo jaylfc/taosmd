@@ -5,6 +5,8 @@ Fixture corpus is drawn from the shadow-deployment claims.db reported in
 "is_a" claims. Each bad case below currently produces a fact on master.
 """
 
+import pytest
+
 from taosmd.memory_extractor import extract_facts_from_text
 
 
@@ -60,3 +62,16 @@ def test_good_facts_still_extracted():
     assert ("jay", "manages") in triples
     assert ("dialtone", "uses") in triples
     assert ("pi", "uses") in triples
+
+
+# tsk-g6ga5l: trim trailing time words instead of dropping the fact;
+# keep real 'X is a Y' facts with capitalized proper-name subjects.
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Bob moved to Berlin today.", [("Bob", "moved_to", "Berlin")]),
+        ("Big Data is a company.", [("Big Data", "is_a", "company")]),
+    ],
+)
+def test_trim_trailing_time_and_keep_proper_subject(text, expected):
+    assert _objects(text) == expected

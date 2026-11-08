@@ -138,13 +138,24 @@ def _clean_entity(text: str, role: str = "entity") -> str | None:
     if role == "object":
         if words[0].lower().strip(".,;:!?") in _BAD_OBJ_FIRST:
             return None
-        if words[-1].lower().strip(".,;:!?") in _BAD_OBJ_LAST:
+        while words and words[-1].lower().strip(".,;:!?") in _BAD_OBJ_LAST:
+            words = words[:-1]
+        if not words:
             return None
+        text = " ".join(words)
     elif role == "subject":
         if words[0].lower().strip(".,;:!?") in _CLAUSE_INITIAL:
             return None
-        if words[-1].lower().strip(".,;:!?") in _VAGUE_HEAD:
-            return None
+        head = words[-1].lower().strip(".,;:!?")
+        if head in _VAGUE_HEAD:
+            first = words[0].strip(".,;:!?")
+            lowered_starts = {
+                "your", "my", "our", "their", "this", "that", "the", "a", "an",
+            }
+            if not first[:1].isupper() or first.lower() in lowered_starts:
+                return None
+            if not all(w.strip(".,;:!?")[:1].isupper() for w in words):
+                return None
     return text
 
 
