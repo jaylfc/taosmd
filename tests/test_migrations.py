@@ -266,6 +266,47 @@ def test_legacy_vector_memory_gains_valid_to_and_its_index(tmp_path):
     conn.close()
 
 
+def test_legacy_claims_db_gains_norm_and_backfills(tmp_path):
+    """A claims.db predating the norm column gains it, backfills, and indexes.
+
+    Dedup at insert (#653) only works if every row (including rows written
+    before the column existed) carries the normalized text.
+    """
+    conn = _db.connect(tmp_path / "claims.db")
+    conn.executescript(
+        """
+        CREATE TABLE claims (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            archive_span_ids TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'unverified',
+            verifier_model TEXT,
+            last_checked REAL,
+            source_extractor TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL
+        );
+        INSERT INTO claims (text, archive_span_ids, source_extractor, created_at)
+        VALUES ('  Alice lives IN   paris ', '[7]', 'regex', 1.0),
+               ('bob loves olives', '[8]', 'regex', 1.0);
+        """
+    )
+    conn.commit()
+
+    result = migrations.migrate(conn, "claims")
+
+    assert "norm" in _columns(conn, "claims")
+    idx = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_claims_norm" in idx
+    from taosmd.claims.store import _normalize
+    norms = dict(conn.execute("SELECT id, norm FROM claims"))
+    assert norms[1] == _normalize("  Alice lives IN   paris ") == "alice lives in paris"
+    assert norms[2] == "bob loves olives"
+    assert _user_version(conn) == migrations.latest_version("claims")
+    assert result.to_version == migrations.latest_version("claims")
+    conn.close()
+
+
 def test_legacy_collections_db_is_stamped_to_phase1_baseline(tmp_path):
     """collections.db shipped with no migration path at all; stamp it."""
     from taosmd.collections import SCHEMA as COLLECTIONS_SCHEMA
