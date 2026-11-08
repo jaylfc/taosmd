@@ -17,25 +17,9 @@ import time
 from pathlib import Path
 
 from . import _db, migrations
+from .api import _is_lfs_pointer
 
 logger = logging.getLogger(__name__)
-
-
-def _is_lfs_pointer(p: Path) -> bool:
-    """True if ``p`` is a Git LFS pointer file.
-
-    LFS pointers are small (<= 1024 bytes) text files starting with
-    ``version https://git-lfs.github.com/spec/``.
-    """
-    try:
-        if not p.exists():
-            return False
-        if p.stat().st_size > 1024:
-            return False
-        first_bytes = p.read_bytes()[:64]
-        return first_bytes.startswith(b"version https://git-lfs.github.com/spec/")
-    except OSError:
-        return False
 
 
 # Default token embedding dimension (all-MiniLM-L6-v2 backbone). Kept as a

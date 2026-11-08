@@ -58,13 +58,13 @@ def _load_config(data_dir: str) -> dict:
 def _is_lfs_pointer(p: Path) -> bool:
     """True if ``p`` is a Git LFS pointer file.
 
-    LFS pointers are small (<= 1024 bytes) text files starting with
+    LFS pointers are small (< 1024 bytes) text files starting with
     ``version https://git-lfs.github.com/spec/``.
     """
     try:
         if not p.exists():
             return False
-        if p.stat().st_size > 1024:
+        if p.stat().st_size >= 1024:
             return False
         first_bytes = p.read_bytes()[:64]
         return first_bytes.startswith(b"version https://git-lfs.github.com/spec/")

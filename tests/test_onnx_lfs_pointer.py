@@ -67,7 +67,7 @@ def test_is_lfs_pointer_false_for_missing_file(tmp_path):
 
 
 def test_is_lfs_pointer_false_for_large_file(tmp_path):
-    """_is_lps_pointer returns False for a file >= 1024 bytes even if it starts with 'version'."""
+    """_is_lfs_pointer returns False for a file >= 1024 bytes even if it starts with 'version'."""
     large = tmp_path / "model.onnx"
     # 1024 bytes starting with "version" but not an LFS pointer
     large.write_bytes(b"version " + b"x" * 1016)
