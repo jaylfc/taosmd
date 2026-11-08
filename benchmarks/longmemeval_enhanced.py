@@ -40,6 +40,9 @@ ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 # Module-level cache for distractor embeddings to avoid recomputation
 _DISTRA_SELECTOR_CACHE: dict[tuple[str, str], list[float]] = {}
 
+# Module-level cache for loaded distractor texts to avoid reloading
+_DISTRA_TEXTS_CACHE: dict[str, list[dict]] = {}
+
 
 def _load_distractor_texts(path: str) -> list[dict]:
     """Load distractor texts from a JSONL file.
@@ -48,7 +51,7 @@ def _load_distractor_texts(path: str) -> list[dict]:
         path: Path to JSONL file with {"id": str, "text": str} lines.
         
     Returns:
-        List of distractor dicts with id, text, and SHA256 hash.
+        List of distractor dicts with id and text.
         
     Raises:
         ValueError: If file is missing, a line lacks both keys, or ids duplicate.
@@ -78,15 +81,9 @@ def _load_distractor_texts(path: str) -> list[dict]:
                         f"Duplicate distractor id {distractor_id} at line {line_num}"
                     )
                 
-                # Compute SHA256 for integrity verification
-                text_hash = hashlib.sha256(
-                    f'{record["id"]}{record["text"]}'.encode('utf-8')
-                ).hexdigest()
-                
                 distractors.append({
                     "id": record["id"],
                     "text": record["text"],
-                    "sha256": text_hash,
                 })
                 seen_ids.add(distractor_id)
                 
@@ -94,6 +91,22 @@ def _load_distractor_texts(path: str) -> list[dict]:
                 raise ValueError(
                     f"Invalid JSON at line {line_num}: {e}"
                 ) from e
+    
+    if distractors:
+        # Compute file-level SHA256 for integrity verification
+        file_hash = hashlib.sha256()
+        with open(path, "rb") as f:
+            while chunk := f.read(8192):
+                file_hash.update(chunk)
+        file_hex = file_hash.hexdigest()
+        
+        # Store in module-level cache for reuse
+        _DISTRA_TEXTS_CACHE[path] = {
+            "path": path,
+            "sha256": file_hex,
+            "count": len(distractors),
+            "list": distractors
+        }
     
     return distractors
 
@@ -175,11 +188,40 @@ def arm_config_from_env(env: dict) -> dict:
 
     # Distractor texts configuration
     distractor_texts_path_str = env.get("TAOSMD_BENCH_DISTRACTOR_TEXTS")
+    distractor_texts_cfg = None
     distractor_texts = None
     if distractor_texts_path_str is not None and distractor_texts_path_str != "":
-        # We can't load the file here as it needs vmem access, so we'll just store the path
-        distractor_texts = {"path": distractor_texts_path_str, "sha256": None, "count": None}
-
+        # Load from module-level cache or fresh load
+        if distractor_texts_path_str in _DISTRA_TEXTS_CACHE:
+            cached = _DISTRA_TEXTS_CACHE[distractor_texts_path_str]
+            distractor_texts_cfg = {
+                "path": cached["path"],
+                "sha256": cached["sha256"],
+                "count": cached["count"]
+            }
+            # Use the cached distractor list
+            distractor_texts = cached["list"]
+        else:
+            # Load and cache fresh
+            distractor_texts = _load_distractor_texts(distractor_texts_path_str)
+            # Compute file-level SHA256 for cfg
+            with open(distractor_texts_path_str, "rb") as f:
+                file_hash = hashlib.sha256()
+                while chunk := f.read(8192):
+                    file_hash.update(chunk)
+            file_hex = file_hash.hexdigest()
+            
+            distractor_texts_cfg = {
+                "path": distractor_texts_path_str,
+                "sha256": file_hex,
+                "count": len(distractor_texts)
+            }
+            _DISTRA_TEXTS_CACHE[distractor_texts_path_str] = distractor_texts_cfg | {"list": distractor_texts}
+        
+        # Validate the distractor texts before storing them in cfg
+        if not distractor_texts:
+            raise ValueError(f"Distractor texts file is empty: {distractor_texts_path_str}")
+    
     return {
         "onnx_path": onnx_path,
         "binary_quant": binary_quant,
@@ -188,7 +230,7 @@ def arm_config_from_env(env: dict) -> dict:
         "fusion": fusion,
         "late_interaction": late_interaction,
         "reranker": reranker,
-        "distractor_texts": distractor_texts,
+        "distractor_texts": distractor_texts_cfg,
     }
 
 
@@ -317,6 +359,12 @@ async def run_question(item, top_k, config_name, config, reranker=None):
         if vmem_id > 0:
             session_map[vmem_id] = sid
 
+    # Add distractors (after ingest loop, before search)
+    distractor_texts = config.get('distractor_texts')
+    if distractor_texts and distractor_texts.get('list'):
+        for distractor in distractor_texts.get('list'):
+            await vmem.add(distractor['text'][:512], metadata={"distractor_id": distractor['id']})
+
     # Build search query based on config
     search_query = question
     retrieve_k = top_k
@@ -375,6 +423,7 @@ async def run_question(item, top_k, config_name, config, reranker=None):
 
     # Score
     retrieved_session_ids = set()
+    distractor_count = 0
     for r in results:
         meta = r.get("metadata", {})
         sid = meta.get("session_id", "")
@@ -383,10 +432,14 @@ async def run_question(item, top_k, config_name, config, reranker=None):
         vmem_id = r.get("id")
         if vmem_id in session_map:
             retrieved_session_ids.add(session_map[vmem_id])
+        
+        # Count distractors in results
+        if meta and "distractor_id" in meta:
+            distractor_count += 1
 
     recall_hit = any(aid in retrieved_session_ids for aid in answer_session_ids)
     await vmem.close()
-    return recall_hit
+    return recall_hit, distractor_count
 
 
 async def run_benchmark(limit: int = 500, top_k: int = 5):
@@ -455,11 +508,13 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
         results_by_type = {}
         total_recall = 0
         total_questions = 0
+        total_distractors = 0
         t_start = time.time()
 
         for i, item in enumerate(dataset):
             qtype = item["question_type"]
-            recall_hit = await run_question(item, top_k, config_name, cfg, reranker=reranker)
+            recall_hit, distractor_count = await run_question(item, top_k, config_name, cfg, reranker=reranker)
+            total_distractors += distractor_count
 
             total_questions += 1
             if recall_hit:
@@ -485,10 +540,12 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
             pct = data["hits"] / data["total"] * 100
             print(f"    {qtype:35s} {data['hits']:3d}/{data['total']:<3d} ({pct:.1f}%)")
 
+        distractor_in_topk_mean = total_distractors / total_questions if total_questions > 0 else 0.0
         all_results[config_name] = {
             "overall": overall, "total": total_recall,
             "questions": total_questions, "time": total_time,
             "by_type": results_by_type,
+            "distractor_in_topk_mean": distractor_in_topk_mean,
         }
 
     # Summary
