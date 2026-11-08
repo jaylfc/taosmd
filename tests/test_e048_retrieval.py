@@ -713,8 +713,10 @@ def test_rank_topk_agrees_with_recall():
     
     # Query vectors match their true items (with some noise)
     query_vecs = item_vecs[:n_queries].copy()
-    # Add small noise to make it non-trivial but still mostly correct
-    noise = rng.normal(scale=0.1, size=(n_queries, dim)).astype(np.float32)
+    # Noise large enough that true ranks spread across the K boundaries;
+    # with small noise every true rank is 0 and R@1 == R@5 == R@10 == 1.0,
+    # so the comparison below could not tell < K from <= K.
+    noise = rng.normal(scale=1.0, size=(n_queries, dim)).astype(np.float32)
     query_vecs = query_vecs + noise
     query_vecs = query_vecs / np.linalg.norm(query_vecs, axis=1, keepdims=True)
     
@@ -728,6 +730,10 @@ def test_rank_topk_agrees_with_recall():
         true_rank = np.where(indices[q_idx] == true_item_idx)[0][0]
         true_ranks[q_idx] = true_rank
     
+    # The fixture must exercise the K boundaries, or this test cannot fail.
+    assert 0.0 < np.mean(true_ranks < 1) < np.mean(true_ranks < 5) < 1.0
+    assert np.mean(true_ranks < 1) != np.mean(true_ranks <= 1)
+
     # For EACH K in (1, 5, 10) assert recall_at_k at K equals the mean
     # over queries of (true_rank < K) derived from those ranks
     for K in (1, 5, 10):
