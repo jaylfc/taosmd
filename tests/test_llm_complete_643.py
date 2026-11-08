@@ -6,6 +6,7 @@ llama.cpp case from #643) while keeping the native Ollama dialect.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 
@@ -28,7 +29,7 @@ def _transport():
             return httpx.Response(200, json={"response": "OLLAMA-TEXT"})
         if path == "/v1/chat/completions":
             calls["openai_chat"] += 1
-            body = request.json()
+            body = json.loads(request.content) if request.content else {}
             assert body["messages"][0]["content"], "prompt must be carried"
             return httpx.Response(200, json={
                 "choices": [{"message": {"content": "OPENAI-TEXT"}}]})
@@ -99,4 +100,74 @@ def test_reasoning_null_content_falls_back_to_reasoning_field():
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         text = await llm_complete(client, "http://r.test", "m", "p", api="openai")
         assert text == "THOUGHT-TEXT"
+    asyncio.run(run())
+
+
+def test_ollama_no_think_sends_think_false():
+    async def run():
+        async def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content) if request.content else {}
+            assert body.get("think") is False, f"expected think=False, got {body}"
+            return httpx.Response(200, json={"response": "OLLAMA-TEXT"})
+
+        c = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        text = await llm_complete(c, OLLAMA_BASE, "m", "p", api="ollama", no_think=True)
+        await c.aclose()
+        assert text == "OLLAMA-TEXT"
+    asyncio.run(run())
+
+
+def test_ollama_no_think_no_think_key_when_false():
+    async def run():
+        async def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content) if request.content else {}
+            assert "think" not in body, f"expected no 'think' key, got {body}"
+            return httpx.Response(200, json={"response": "OLLAMA-TEXT"})
+
+        c = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        text = await llm_complete(c, OLLAMA_BASE, "m", "p", api="ollama", no_think=False)
+        await c.aclose()
+        assert text == "OLLAMA-TEXT"
+    asyncio.run(run())
+
+
+def test_ollama_non_200_raises():
+    async def run():
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, json={"response": "error"})
+
+        c = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            text = await llm_complete(c, OLLAMA_BASE, "m", "p", api="ollama")
+            await c.aclose()
+            assert False, "expected HTTPStatusError"
+        except httpx.HTTPStatusError:
+            pass
+    asyncio.run(run())
+
+
+def test_openai_non_200_raises():
+    async def run():
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, json={"error": "server error"})
+
+        c = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            text = await llm_complete(c, OPENAI_BASE, "m", "p", api="openai")
+            await c.aclose()
+            assert False, "expected HTTPStatusError"
+        except httpx.HTTPStatusError:
+            pass
+    asyncio.run(run())
+
+
+def test_ollama_thinking_fallback():
+    async def run():
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"response": "", "thinking": "abc"})
+
+        c = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        text = await llm_complete(c, OLLAMA_BASE, "m", "p", api="ollama")
+        await c.aclose()
+        assert text == "abc"
     asyncio.run(run())
