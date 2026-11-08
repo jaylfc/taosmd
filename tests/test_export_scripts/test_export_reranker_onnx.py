@@ -91,8 +91,14 @@ class TestExportRerankerOnnxScript:
         )
 
         log = (tmp_path / "uv.log").read_text()
-        lines = [l for l in log.splitlines() if l.startswith("export onnx")]
+        # The Step 3 preflight also calls `export onnx --help` through the
+        # stub, so the real export call is the one carrying --model.
+        lines = [l for l in log.splitlines()
+                 if l.startswith("export onnx") and "--model" in l]
         assert len(lines) == 1, f"expected exactly one 'export onnx' line, got: {log!r}"
+        preflight = [l for l in log.splitlines()
+                     if l.strip() == "export onnx --help"]
+        assert len(preflight) == 1, f"expected one preflight --help call, got: {log!r}"
         assert "BAAI/bge-reranker-v2-m3" in lines[0]
         assert "text-classification" in lines[0]
         assert "UV_RUN_CALLED" not in log

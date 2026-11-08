@@ -34,7 +34,9 @@ uv venv --seed "$EXPORT_VENV"
 echo ""
 echo "Step 2: Installing optimum[exporters]..."
 # Use uv pip with the export venv's python to install optimum[exporters]
-uv pip install --python "$EXPORT_VENV/bin/python" --quiet "optimum[exporters]"
+# optimum 2.x rewrote the export CLI (no more `export onnx --model ...`),
+# so pin the 1.x line this script's invocation belongs to (#640).
+uv pip install --python "$EXPORT_VENV/bin/python" --quiet "optimum[exporters]<2"
 echo "  optimum[exporters] installed."
 
 # --- Step 3: verify optimum-cli is available in the export venv ----------------
@@ -45,6 +47,13 @@ if [ ! -x "$EXPORT_VENV/bin/optimum-cli" ]; then
   exit 1
 fi
 echo "  optimum-cli found at $EXPORT_VENV/bin/optimum-cli"
+
+# Preflight the exact subcommand form used below, so an incompatible optimum
+# fails here instead of after a ~2GB model download (#640).
+if ! "$EXPORT_VENV/bin/optimum-cli" export onnx --help >/dev/null 2>&1; then
+  echo "error: 'optimum-cli export onnx' unavailable (optimum 2.x removed this form); install optimum[exporters]<2" >&2
+  exit 1
+fi
 
 # --- Step 4: run optimum-cli export from the export venv's own binary ---------
 echo ""
