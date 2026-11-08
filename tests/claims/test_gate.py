@@ -33,3 +33,33 @@ def test_off_is_identity():
 
 def test_empty():
     assert apply_claims_gate([], mode="strict") == []
+
+
+def test_prefer_verified_does_not_resort_across_source_scales():
+    """Scores arrive in source-native units (BM25 vs cosine); re-sorting the
+    pool by score demoted a rank-2 keyword hit to rank 10 in a live shadow
+    deployment even though its claim status was fine. The gate must filter
+    and front, never re-sort: retrieval order stays intact inside groups."""
+    hits = [
+        _hit("cos-a", 0.197, None),
+        _hit("bm25-answer", 0.099, "unverified"),
+        _hit("cos-b", 0.314, "unverified"),
+        _hit("cos-c", 0.274, None),
+        _hit("bad", 0.263, "contradicted"),
+    ]
+    out = apply_claims_gate(hits, mode="prefer_verified")
+    ids = [h["id"] for h in out]
+    assert "bad" not in ids                                     # drop unchanged
+    assert ids == ["cos-a", "bm25-answer", "cos-b", "cos-c"]    # order preserved
+
+
+def test_supported_hits_front_without_resorting_rest():
+    hits = [
+        _hit("raw-high", 0.9, None),
+        _hit("supported-late", 0.1, "supported"),
+        _hit("unverified-mid", 0.5, "unverified"),
+    ]
+    out = apply_claims_gate(hits, mode="prefer_verified")
+    ids = [h["id"] for h in out]
+    assert ids[0] == "supported-late"                   # supported still fronts
+    assert ids[1:] == ["raw-high", "unverified-mid"]    # rest keeps retrieval order
