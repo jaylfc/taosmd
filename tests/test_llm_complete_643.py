@@ -138,7 +138,7 @@ def test_ollama_non_200_raises():
 
         c = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         try:
-            text = await llm_complete(c, OLLAMA_BASE, "m", "p", api="ollama")
+            await llm_complete(c, OLLAMA_BASE, "m", "p", api="ollama")
             await c.aclose()
             assert False, "expected HTTPStatusError"
         except httpx.HTTPStatusError:
@@ -153,7 +153,7 @@ def test_openai_non_200_raises():
 
         c = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         try:
-            text = await llm_complete(c, OPENAI_BASE, "m", "p", api="openai")
+            await llm_complete(c, OPENAI_BASE, "m", "p", api="openai")
             await c.aclose()
             assert False, "expected HTTPStatusError"
         except httpx.HTTPStatusError:
