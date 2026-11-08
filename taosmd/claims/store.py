@@ -107,11 +107,14 @@ class ClaimStore:
         checked = sum(counts[s] for s in VALID_STATUSES if s != "unverified")
         hall = sum(counts[s] for s in _HALLUCINATED)
         counts["hallucination_rate"] = (hall / checked) if checked else 0.0
-        # Extractor breakdown (issue #653 item 4): a corpus that is 100%
-        # source_extractor=regex means the LLM path never fired. Counting it
-        # here keeps the signal persistent across restarts -- the in-process
-        # counters in memory_extractor.extraction_stats() reset with the
-        # service, this row does not.
+        # Extractor breakdown (issue #653 item 4): how each claim row was
+        # produced (source_extractor column: regex / llm / unknown). This is
+        # per-claim provenance stored with the table; it is not the persistent
+        # counterpart of memory_extractor.extraction_stats() -- that counts
+        # LLM extraction outcomes per call (llm, regex_fallback,
+        # regex_direct) -- and it is not an LLM-health signal, because
+        # source_extractor is fixed when the claim row is inserted, not
+        # observed per LLM call.
         counts["by_extractor"] = {
             (r["source_extractor"] or "unknown"): r["c"]
             for r in self._conn.execute(

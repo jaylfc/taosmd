@@ -166,7 +166,6 @@ _extraction_counts: dict[str, int] = {
     "regex_direct": 0,    # regex by design (no llm_url, or task gate off)
 }
 _consecutive_fallbacks = 0
-_llm_inner_fallback = False
 
 # Alert once per streak when this many consecutive turns fell back to regex.
 _FALLBACK_ALERT_AFTER = 10
@@ -176,8 +175,14 @@ def extraction_stats() -> dict:
     """Snapshot of the per-process extraction-method counters.
 
     Returns ``{llm, regex_fallback, regex_direct, consecutive_regex_fallbacks}``.
-    The persistent counterpart is ``ClaimStore.rate()['by_extractor']``, which
-    ``taosmd claims status`` prints across restarts.
+    Per-call LLM outcomes: ``llm`` when the LLM call produced the facts used,
+    ``regex_fallback`` when the LLM call failed or returned nothing and regex
+    took over, ``regex_direct`` when regex ran by design (no ``llm_url``, or
+    the task gate turned LLM off). ``ClaimStore.rate()['by_extractor']`` is a
+    separate per-claim-row provenance tally (the source_extractor column);
+    it is not the persistent counterpart of these counters and not an
+    LLM-health signal -- source_extractor is fixed when the claim row is
+    inserted, not observed per LLM call.
     """
     return {
         **_extraction_counts,
@@ -187,11 +192,10 @@ def extraction_stats() -> dict:
 
 def _reset_extraction_stats() -> None:
     """Zero the counters (tests; nothing in production resets them)."""
-    global _consecutive_fallbacks, _llm_inner_fallback
+    global _consecutive_fallbacks
     for key in _extraction_counts:
         _extraction_counts[key] = 0
     _consecutive_fallbacks = 0
-    _llm_inner_fallback = False
 
 
 def _bump_llm() -> None:
@@ -224,30 +228,30 @@ def _bump_regex_fallback() -> None:
         )
 
 
-async def extract_facts_with_llm(
+async def _extract_with_llm_status(
     text: str,
     llm_url: str,
     http_client,
     *,
     agent_name: str = "default",
     model: str = "default",
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     """Extract facts using an LLM for higher quality. Falls back to pattern matching.
 
     The prompt comes from :mod:`taosmd.prompts` so every LLM call across
     the library shares the same librarian persona and "never invent"
     rules. Pass ``agent_name`` so the persona binds to the right shelf.
 
-    Every path that ends in the regex fallback bumps the extraction
-    counters (see :func:`extraction_stats`); the true-LLM success path
-    resets the consecutive-fallback streak. Counting lives here because
-    the regex fallback happens inside this function: callers cannot tell
-    an LLM answer from a silent degrade by inspecting the return value.
+    Returns ``(facts, fell_back)``. ``fell_back`` is True when the LLM call
+    failed, returned a non-200, or returned nothing usable; ``facts`` is then
+    the regex result. The caller owns the extraction-method counters:
+    :func:`process_conversation_turn` bumps them from this flag (see
+    :func:`extraction_stats`), not here -- the flag is per call, so a
+    concurrent turn falling back while this one is in flight cannot mislabel
+    this turn's outcome.
     """
-    global _consecutive_fallbacks, _llm_inner_fallback
     if not llm_url:
-        return extract_facts_from_text(text)
-    _llm_inner_fallback = False
+        return extract_facts_from_text(text), False
 
     from .prompts import extraction_prompt
     from .generator_profiles import split_provider  # noqa: PLC0415
@@ -275,7 +279,12 @@ async def extract_facts_with_llm(
                 content = content.split("\n", 1)[1].rsplit("```", 1)[0]
             facts = json.loads(content)
             if isinstance(facts, list):
-                return [f for f in facts if "subject" in f and "predicate" in f and "object" in f]
+                cleaned = [
+                    f for f in facts
+                    if "subject" in f and "predicate" in f and "object" in f
+                ]
+                if cleaned:
+                    return cleaned, False
     except Exception as e:
         key = (model_name, llm_url)
         level = logging.DEBUG if key in _llm_fallback_warned else logging.WARNING
@@ -287,11 +296,35 @@ async def extract_facts_with_llm(
             model_name, llm_url, e,
         )
 
-    # Fall-through here means: exception, non-200, or unparseable response.
-    # Signal the caller so the regex degrade is counted, not mistaken for an
-    # LLM success (issue #653 item 4).
-    _llm_inner_fallback = True
-    return extract_facts_from_text(text)
+    # Fall-through here means: exception, non-200, or an empty/unusable LLM
+    # answer. The regex degrade happened here and is counted once by the
+    # caller from the returned flag (issue #653 item 4).
+    return extract_facts_from_text(text), True
+
+
+async def extract_facts_with_llm(
+    text: str,
+    llm_url: str,
+    http_client,
+    *,
+    agent_name: str = "default",
+    model: str = "default",
+) -> list[dict]:
+    """Extract facts using an LLM for higher quality. Falls back to pattern matching.
+
+    The prompt comes from :mod:`taosmd.prompts` so every LLM call across
+    the library shares the same librarian persona and "never invent"
+    rules. Pass ``agent_name`` so the persona binds to the right shelf.
+
+    Keeps the exact public signature: returns facts only. The extraction
+    counters are updated in :func:`process_conversation_turn` from the
+    ``fell_back`` flag returned by :func:`_extract_with_llm_status`, not
+    inside this function.
+    """
+    facts, _ = await _extract_with_llm_status(
+        text, llm_url, http_client, agent_name=agent_name, model=model
+    )
+    return facts
 
 
 # ------------------------------------------------------------------
@@ -355,7 +388,6 @@ async def process_conversation_turn(
             agent_name,
         )
         use_llm = False
-    global _consecutive_fallbacks, _llm_inner_fallback
     if use_llm and llm_url and http_client:
         # The memory model is a system-wide setting. When the caller didn't
         # pin a model (unset or the literal "default" sentinel), defer to the
@@ -366,17 +398,18 @@ async def process_conversation_turn(
         resolved_model = extraction_model
         if not resolved_model or resolved_model == "default":
             resolved_model = resolve_memory_model(agent=agent_name or "default") or "default"
-        _llm_inner_fallback = False
-        facts = await extract_facts_with_llm(
+        facts, fell_back = await _extract_with_llm_status(
             text, llm_url, http_client,
             agent_name=agent_name or "default",
             model=resolved_model,
         )
-        if _llm_inner_fallback:
-            # The LLM call itself failed; extract_facts_with_llm already
-            # degraded to regex internally. Count the degrade regardless of
-            # whether those regex facts came back non-empty -- this is the
-            # silent-fallback case the field report couldn't see.
+        if fell_back:
+            # The LLM call failed or returned nothing usable; the helper
+            # already degraded to regex internally. Count the degrade once,
+            # whatever the regex fact yield -- this is the silent-fallback
+            # case the field report couldn't see. The flag is per call, so a
+            # concurrent turn falling back while this one is in flight cannot
+            # mislabel this turn as regex_fallback (issue #657).
             _bump_regex_fallback()
         elif facts:
             method = "llm"

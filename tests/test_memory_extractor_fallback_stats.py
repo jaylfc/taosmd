@@ -144,6 +144,72 @@ def test_stats_count_regex_direct_without_llm(fresh_stats, tmp_path):
     assert stats["regex_fallback"] == 0
 
 
+def test_concurrent_success_not_counted_as_fallback(fresh_stats, tmp_path):
+    """Race: turn A's LLM call is in flight while turn B falls back; with the
+    old module-global _llm_inner_fallback, A's later success was mislabeled
+    regex_fallback. The per-call fell_back flag from
+    _extract_with_llm_status makes A count as llm and B as regex_fallback.
+    """
+    me._reset_extraction_stats()
+
+    release = asyncio.Event()
+
+    class _SlowClient:
+        """Fake client whose post() awaits an event before answering."""
+
+        async def post(self, url, json=None, timeout=None):
+            await release.wait()
+            return _FakeResponse()
+
+    class _FailingClient:
+        """Fake client whose post() raises immediately (fallback)."""
+
+        async def post(self, url, json=None, timeout=None):
+            raise RuntimeError("connection refused")
+
+    async def inner():
+        kg = TemporalKnowledgeGraph(db_path=tmp_path / "kg.db")
+        await kg.init()
+        try:
+            b_done = asyncio.Event()
+
+            async def call_a():
+                return await _turn(
+                    kg,
+                    text="Alice prefers green tea.",
+                    http_client=_SlowClient(),
+                )
+
+            async def call_b():
+                try:
+                    return await _turn(
+                        kg,
+                        text="Bob prefers coffee.",
+                        http_client=_FailingClient(),
+                    )
+                finally:
+                    b_done.set()
+
+            # Both process_conversation_turn calls run under gather.
+            a_task = asyncio.create_task(call_a())
+            b_task = asyncio.create_task(call_b())
+            await b_done.wait()        # B has finished (failed immediately)
+            release.set()              # only now release A's in-flight LLM call
+            a_result, b_result = await asyncio.gather(a_task, b_task)
+            return a_result, b_result
+        finally:
+            await kg.close()
+
+    a_result, b_result = _run(inner())
+
+    stats = me.extraction_stats()
+    assert stats["llm"] == 1, stats
+    assert stats["regex_fallback"] == 1, stats
+    assert stats["regex_direct"] == 0, stats
+    assert a_result["method"] == "llm", a_result
+    assert b_result["method"] == "regex", b_result
+
+
 def test_consecutive_regex_fallback_alerts_loud_once_then_resets(
     monkeypatch, tmp_path, caplog
 ):
