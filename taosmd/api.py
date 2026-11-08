@@ -55,9 +55,35 @@ def _load_config(data_dir: str) -> dict:
         return {}
 
 
+def _is_lfs_pointer(p: Path) -> bool:
+    """True if ``p`` is a Git LFS pointer file.
+
+    LFS pointers are small (<= 1024 bytes) text files starting with
+    ``version https://git-lfs.github.com/spec/``.
+    """
+    try:
+        if not p.exists():
+            return False
+        if p.stat().st_size > 1024:
+            return False
+        first_bytes = p.read_bytes()[:64]
+        return first_bytes.startswith(b"version https://git-lfs.github.com/spec/")
+    except OSError:
+        return False
+
+
 def _has_onnx_model(d: Path) -> bool:
-    """True if ``d`` holds an ONNX model at the root or under ``onnx/``."""
-    return (d / "model.onnx").exists() or (d / "onnx" / "model.onnx").exists()
+    """True if ``d`` holds an ONNX model at the root or under ``onnx/``.
+
+    Git LFS pointer files (which are small text files, not real models)
+    are explicitly rejected.
+    """
+    root_model = d / "model.onnx"
+    onnx_model = d / "onnx" / "model.onnx"
+    return (
+        (root_model.exists() and not _is_lfs_pointer(root_model))
+        or (onnx_model.exists() and not _is_lfs_pointer(onnx_model))
+    )
 
 
 def _resolve_onnx_path(data_dir: str, model_name: str = "minilm-onnx") -> str | None:
