@@ -17,6 +17,7 @@ Configs:
 """
 
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -34,6 +35,77 @@ from benchmarks.bench_provenance import collect
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_full.json")
 ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx")
+
+
+# Module-level cache for distractor embeddings to avoid recomputation
+_DISTRA_SELECTOR_CACHE: dict[tuple[str, str], list[float]] = {}
+
+
+def _load_distractor_texts(path: str) -> list[dict]:
+    """Load distractor texts from a JSONL file.
+    
+    Args:
+        path: Path to JSONL file with {"id": str, "text": str} lines.
+        
+    Returns:
+        List of distractor dicts with id, text, and SHA256 hash.
+        
+    Raises:
+        ValueError: If file is missing, a line lacks both keys, or ids duplicate.
+    """
+    if not os.path.exists(path):
+        raise ValueError(f"Distractor texts file not found: {path}")
+    
+    seen_ids = set()
+    distractors = []
+    
+    with open(path, "r", encoding="utf-8") as f:
+        for line_num, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            
+            try:
+                record = json.loads(line)
+                if "id" not in record or "text" not in record:
+                    raise ValueError(
+                        f"Line {line_num} must have both 'id' and 'text' keys"
+                    )
+                
+                distractor_id = record["id"]
+                if distractor_id in seen_ids:
+                    raise ValueError(
+                        f"Duplicate distractor id {distractor_id} at line {line_num}"
+                    )
+                
+                # Compute SHA256 for integrity verification
+                text_hash = hashlib.sha256(
+                    f'{record["id"]}{record["text"]}'.encode('utf-8')
+                ).hexdigest()
+                
+                distractors.append({
+                    "id": record["id"],
+                    "text": record["text"],
+                    "sha256": text_hash,
+                })
+                seen_ids.add(distractor_id)
+                
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Invalid JSON at line {line_num}: {e}"
+                ) from e
+    
+    return distractors
+
+
+def _embed_distractor_cached(vmem, text: str, task: str = "search_document"):
+    """Embed a distractor text with caching to avoid recomputation."""
+    key = (text, task)
+    if key not in _DISTRA_SELECTOR_CACHE:
+        # This will use vmem.embed which could be wrapped by make_embed_wrapper
+        _DISTRA_SELECTOR_CACHE[key] = vmem.embed(text, task)
+    
+    return _DISTRA_SELECTOR_CACHE[key]
 
 
 def arm_config_from_env(env: dict) -> dict:
@@ -101,6 +173,13 @@ def arm_config_from_env(env: dict) -> dict:
     late_interaction_str = env.get("TAOSMD_BENCH_LATE_INTERACTION")
     late_interaction = late_interaction_str is not None and late_interaction_str != '' and late_interaction_str == "1"
 
+    # Distractor texts configuration
+    distractor_texts_path_str = env.get("TAOSMD_BENCH_DISTRACTOR_TEXTS")
+    distractor_texts = None
+    if distractor_texts_path_str is not None and distractor_texts_path_str != "":
+        # We can't load the file here as it needs vmem access, so we'll just store the path
+        distractor_texts = {"path": distractor_texts_path_str, "sha256": None, "count": None}
+
     return {
         "onnx_path": onnx_path,
         "binary_quant": binary_quant,
@@ -109,6 +188,7 @@ def arm_config_from_env(env: dict) -> dict:
         "fusion": fusion,
         "late_interaction": late_interaction,
         "reranker": reranker,
+        "distractor_texts": distractor_texts,
     }
 
 
