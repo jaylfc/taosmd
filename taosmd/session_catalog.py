@@ -606,18 +606,12 @@ class SessionCatalog:
         """
         prompt = prompts.session_enrichment_prompt(session_log=content)
 
+        from .llm_complete import llm_complete
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{llm_url}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {"temperature": 0.2, "num_predict": 150},
-                },
+            text = await llm_complete(
+                client, llm_url, model, prompt,
+                temperature=0.2, max_tokens=150,
             )
-            response.raise_for_status()
-            text = response.json()["response"]
 
         # Strip markdown fences if the model wrapped the JSON.
         stripped = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.DOTALL)

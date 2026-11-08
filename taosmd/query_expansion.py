@@ -164,16 +164,15 @@ ENTITIES:
 - <entity 1>
 - <entity 2>"""
 
+        from .llm_complete import llm_complete
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"{llm_url}/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False,
-                      "options": {"temperature": 0.3, "num_predict": 200}},
-            )
-            if resp.status_code != 200:
+            try:
+                text = await llm_complete(
+                    client, llm_url, model, prompt,
+                    temperature=0.3, max_tokens=200,
+                )
+            except httpx.HTTPError:
                 return fast
-
-            text = resp.json().get("response", "")
 
             # Parse reformulations
             reformulations = []
