@@ -150,6 +150,79 @@ def extract_facts_from_text(text: str) -> list[dict]:
 # drop to debug so a dead Ollama doesn't flood the log on every turn.
 _llm_fallback_warned: set[tuple[str, str]] = set()
 
+# ------------------------------------------------------------------
+# Extraction-method counters (issue #653 item 4)
+# ------------------------------------------------------------------
+# A silently permanent degrade to the regex path is the most dangerous
+# failure mode in the claims field report: a shadow deployment produced
+# 10,063/10,063 regex claims with only a debug log to show for it. These
+# per-process counters make the llm-vs-regex split inspectable, and the
+# consecutive-fallback streak makes a persistently dead LLM path loud
+# once instead of once-per-process-then-debug.
+# WITNESS: tests/test_memory_extractor_fallback_stats.py::consecutive regex fallback
+_extraction_counts: dict[str, int] = {
+    "llm": 0,             # LLM extraction produced the facts used
+    "regex_fallback": 0,  # LLM failed or returned nothing; regex took over
+    "regex_direct": 0,    # regex by design (no llm_url, or task gate off)
+}
+_consecutive_fallbacks = 0
+_llm_inner_fallback = False
+
+# Alert once per streak when this many consecutive turns fell back to regex.
+_FALLBACK_ALERT_AFTER = 10
+
+
+def extraction_stats() -> dict:
+    """Snapshot of the per-process extraction-method counters.
+
+    Returns ``{llm, regex_fallback, regex_direct, consecutive_regex_fallbacks}``.
+    The persistent counterpart is ``ClaimStore.rate()['by_extractor']``, which
+    ``taosmd claims status`` prints across restarts.
+    """
+    return {
+        **_extraction_counts,
+        "consecutive_regex_fallbacks": _consecutive_fallbacks,
+    }
+
+
+def _reset_extraction_stats() -> None:
+    """Zero the counters (tests; nothing in production resets them)."""
+    global _consecutive_fallbacks, _llm_inner_fallback
+    for key in _extraction_counts:
+        _extraction_counts[key] = 0
+    _consecutive_fallbacks = 0
+    _llm_inner_fallback = False
+
+
+def _bump_llm() -> None:
+    """One genuine LLM extraction: count it and reset the fallback streak."""
+    global _consecutive_fallbacks
+    _extraction_counts["llm"] += 1
+    _consecutive_fallbacks = 0
+
+
+def _bump_regex_fallback() -> None:
+    """One silent degrade to regex: count it, extend the streak, alert if stuck.
+
+    The per-call WARNING-once-then-debug rule in extract_facts_with_llm covers
+    single failures; this streak alert covers the pattern -- a permanently
+    dead LLM path -- so it stays loud even after the first-warning window.
+    """
+    global _consecutive_fallbacks
+    _extraction_counts["regex_fallback"] += 1
+    _consecutive_fallbacks += 1
+    if _consecutive_fallbacks == _FALLBACK_ALERT_AFTER:
+        logger.warning(
+            "memory extraction: %d consecutive regex fallbacks "
+            "(llm=%d, regex_fallback=%d, regex_direct=%d) -- the LLM "
+            "extraction path is likely dead or unresolved; check the "
+            "memory model config and the LLM endpoint",
+            _consecutive_fallbacks,
+            _extraction_counts["llm"],
+            _extraction_counts["regex_fallback"],
+            _extraction_counts["regex_direct"],
+        )
+
 
 async def extract_facts_with_llm(
     text: str,
@@ -164,9 +237,17 @@ async def extract_facts_with_llm(
     The prompt comes from :mod:`taosmd.prompts` so every LLM call across
     the library shares the same librarian persona and "never invent"
     rules. Pass ``agent_name`` so the persona binds to the right shelf.
+
+    Every path that ends in the regex fallback bumps the extraction
+    counters (see :func:`extraction_stats`); the true-LLM success path
+    resets the consecutive-fallback streak. Counting lives here because
+    the regex fallback happens inside this function: callers cannot tell
+    an LLM answer from a silent degrade by inspecting the return value.
     """
+    global _consecutive_fallbacks, _llm_inner_fallback
     if not llm_url:
         return extract_facts_from_text(text)
+    _llm_inner_fallback = False
 
     from .prompts import extraction_prompt
     from .generator_profiles import split_provider  # noqa: PLC0415
@@ -206,6 +287,10 @@ async def extract_facts_with_llm(
             model_name, llm_url, e,
         )
 
+    # Fall-through here means: exception, non-200, or unparseable response.
+    # Signal the caller so the regex degrade is counted, not mistaken for an
+    # LLM success (issue #653 item 4).
+    _llm_inner_fallback = True
     return extract_facts_from_text(text)
 
 
@@ -270,6 +355,7 @@ async def process_conversation_turn(
             agent_name,
         )
         use_llm = False
+    global _consecutive_fallbacks, _llm_inner_fallback
     if use_llm and llm_url and http_client:
         # The memory model is a system-wide setting. When the caller didn't
         # pin a model (unset or the literal "default" sentinel), defer to the
@@ -280,17 +366,28 @@ async def process_conversation_turn(
         resolved_model = extraction_model
         if not resolved_model or resolved_model == "default":
             resolved_model = resolve_memory_model(agent=agent_name or "default") or "default"
+        _llm_inner_fallback = False
         facts = await extract_facts_with_llm(
             text, llm_url, http_client,
             agent_name=agent_name or "default",
             model=resolved_model,
         )
-        if facts:
+        if _llm_inner_fallback:
+            # The LLM call itself failed; extract_facts_with_llm already
+            # degraded to regex internally. Count the degrade regardless of
+            # whether those regex facts came back non-empty -- this is the
+            # silent-fallback case the field report couldn't see.
+            _bump_regex_fallback()
+        elif facts:
             method = "llm"
+            _bump_llm()
         else:
+            # LLM answered but extracted nothing; regex retries the text.
             facts = extract_facts_from_text(text)
+            _bump_regex_fallback()
     else:
         facts = extract_facts_from_text(text)
+        _extraction_counts["regex_direct"] += 1
 
     triple_ids: list[str] = []
     deferred_ids: list[str] = []

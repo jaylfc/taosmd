@@ -101,12 +101,23 @@ class ClaimStore:
         return worst
 
     async def rate(self) -> dict:
-        counts = {s: 0 for s in VALID_STATUSES}
+        counts: dict = {s: 0 for s in VALID_STATUSES}
         for r in self._conn.execute("SELECT status, COUNT(*) c FROM claims GROUP BY status"):
             counts[r["status"]] = r["c"]
         checked = sum(counts[s] for s in VALID_STATUSES if s != "unverified")
         hall = sum(counts[s] for s in _HALLUCINATED)
         counts["hallucination_rate"] = (hall / checked) if checked else 0.0
+        # Extractor breakdown (issue #653 item 4): a corpus that is 100%
+        # source_extractor=regex means the LLM path never fired. Counting it
+        # here keeps the signal persistent across restarts -- the in-process
+        # counters in memory_extractor.extraction_stats() reset with the
+        # service, this row does not.
+        counts["by_extractor"] = {
+            (r["source_extractor"] or "unknown"): r["c"]
+            for r in self._conn.execute(
+                "SELECT source_extractor, COUNT(*) c FROM claims GROUP BY source_extractor"
+            )
+        }
         return counts
 
     @staticmethod

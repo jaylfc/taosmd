@@ -59,5 +59,20 @@ def test_rate(tmp_path):
     assert abs(r["hallucination_rate"] - (1 / 3)) < 1e-9
 
 
+def test_rate_by_extractor_breakdown(tmp_path):
+    """rate() carries a by_extractor count so a permanent regex fallback is loud.
+
+    Issue #653 item 4: the shadow deployment produced 10,063/10,063 claims with
+    source_extractor=regex and nothing surfaced it. The persistent counter lives
+    here (survives restarts, unlike the in-process extraction_stats counters).
+    """
+    s = _store(tmp_path)
+    asyncio.run(s.add_claim("a b", [1], source_extractor="regex"))
+    asyncio.run(s.add_claim("c d", [2], source_extractor="regex"))
+    asyncio.run(s.add_claim("e f", [3], source_extractor="llm"))
+    r = asyncio.run(s.rate())
+    assert r["by_extractor"] == {"regex": 2, "llm": 1}
+
+
 def test_status_set_constant():
     assert "unverified" in VALID_STATUSES and "supported" in VALID_STATUSES
