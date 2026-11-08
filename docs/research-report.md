@@ -402,7 +402,7 @@ Provenance: benchmarks/results/20260930-locomo-screen/ and benchmarks/results/20
 
 ### 3.11 Fusion at the lite base on LoCoMo: boost leads bm25_rrf and mem0_additive (F-021)
 
-**F-021.** A side result of E-049 block R, descriptive, one run per arm. At the lite base (MiniLM ONNX, `--reranker off`, `--adjacent-turns 0`, float vectors) on LoCoMo subset-200, judge-free, the shipped `VectorMemory.search` default `boost` fusion retrieves evidence better than both BM25 fusions, and at no extra latency.
+**F-021.** A side result of E-049 block R, descriptive, one run per arm. At the lite base (MiniLM ONNX, `--reranker off`, `--adjacent-turns 0`, float vectors) on LoCoMo subset-200, judge-free, the shipped `VectorMemory.search` default `boost` fusion retrieves evidence better than both BM25 fusions at R@5 and R@10 (at R@20 bm25_rrf is slightly higher, 0.7121 against 0.7071), and at no extra latency.
 
 | Fusion | R@5 | R@10 | R@20 | p50 ms at K=10 |
 |---|---|---|---|---|
@@ -1476,10 +1476,10 @@ Reading against the kill criterion, clause by clause, as amended:
 
 - (1) R0 reproduced 485/500, so the blocks are read.
 - (2) R1 loses 7/500 on LongMemEval-S and fails, despite +0.1162 on LoCoMo R@5. R4 loses 9/500 and fails. Its LoCoMo R@5 loss is 0.0202 (4 questions of 198), just over the 0.02 bound, so it fails that half too.
-- (8) R5, R6 and R8 have no LongMemEval-S row in the harness at 496f3301 and are reported on LoCoMo only. R6 (+0.1313 R@5) and R8 (+0.2121 R@5, at about 85 times R0's p50 latency) are the two that would need one; cards tsk-po6auw and tsk-dhguza add it.
+- (8) R5, R6 and R8 have no LongMemEval-S row in the harness at 496f3301 and are reported on LoCoMo only. R6 (+0.1313 R@5) and R8 (+0.2121 R@5, at about 80 times R0's p50 latency at K=5) are the two that would need one; cards tsk-po6auw and tsk-dhguza add it.
 - R10 changes K, so it is reported, not gated.
 
-So block R yields no adoption candidate, and no default changes. The fusion ordering in the R0 and R0-boost rows is recorded separately as F-021.
+So the block R arms that ran yield no adoption candidate, and no default changes (R2 is held; R3 and R12 were not runnable; R7 is deferred; R9 is withdrawn; R11 and R13 to R15 have not run, per Amendment 2). The fusion ordering in the R0 and R0-boost rows is recorded separately as F-021.
 
 Provenance: benchmarks/results/e049/enhanced_20261018_{034649,051904,060905,070053}.json (LongMemEval-S R0, R1, R4, R10), benchmarks/results/e049/locomo-k/ (R@5 and R@10), benchmarks/results/e049/locomo-bm25s/ (R@20 and R8's R@10), all at master 496f3301 on omarchy (Python 3.13.15, onnxruntime 1.30.0, bm25s 0.3.13), run by the lab on the shared omarchy slot.
 
