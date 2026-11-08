@@ -269,8 +269,8 @@ def test_legacy_vector_memory_gains_valid_to_and_its_index(tmp_path):
 def test_legacy_claims_db_gains_norm_and_backfills(tmp_path):
     """A claims.db predating the norm column gains it, backfills, and indexes.
 
-    Dedup at insert (#653) only works if every row — including rows written
-    before the column existed — carries the normalized text.
+    Dedup at insert (#653) only works if every row (including rows written
+    before the column existed) carries the normalized text.
     """
     conn = _db.connect(tmp_path / "claims.db")
     conn.executescript(

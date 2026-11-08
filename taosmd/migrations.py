@@ -353,7 +353,7 @@ def _claims_norm_dedup(conn: sqlite3.Connection) -> None:
     """Dedup-at-insert support (issue #653): ``norm`` column + lookup index.
 
     ``add_claim`` merges into an existing row whose ``norm`` matches, so every
-    row — including rows written before this column existed — must carry the
+    row (including rows written before this column existed) must carry the
     normalized form. Backfill runs in Python through the store's ``_normalize``
     so the stored form and the insert-time form cannot drift apart. The index
     is deliberately *not* UNIQUE: legacy databases already contain duplicate

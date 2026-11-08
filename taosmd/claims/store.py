@@ -67,8 +67,8 @@ class ClaimStore:
         Dedup at insert (issue #653): a field report measured 10k rows for 4k
         distinct texts because the same sentence re-extracted every turn got a
         fresh row. Merging ``archive_span_ids`` into the existing row keeps the
-        zero-loss property (no row or span is dropped) and stops the corpus —
-        and any hallucination-rate metric computed over it — inflating. The
+        zero-loss property (no row or span is dropped) and stops the corpus
+        (and any hallucination-rate metric computed over it) inflating. The
         merged row keeps its original status: a re-add never resets a verdict
         the verify pass already made.
         """
