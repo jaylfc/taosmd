@@ -116,6 +116,31 @@ def load_manifest(path) -> list[dict]:
     return entries
 
 
+def rank_topk(query_vecs, item_vecs, k=10):
+    """Score and rank queries against items, return top-K indices and scores.
+    
+    Args:
+        query_vecs: float32 [N_queries, D] normalized query vectors
+        item_vecs: float32 [N_items, D] normalized item vectors
+        k: number of top items to return for each query
+        
+    Returns:
+        tuple (indices int64 [N_queries, K], scores float32 [N_queries, K])
+            indices: top K item indices for each query
+            scores: corresponding scores (descending, ties by lower index)
+    """
+    scores = query_vecs @ item_vecs.T  # [N_queries, N_items]
+    
+    # Rank items by descending score, breaking ties by LOWER item index
+    ranked_indices = np.argsort(-scores, kind="stable")  # [N_queries, N_items]
+    
+    # Take top K for each query
+    top_k_indices = ranked_indices[:, :k]
+    top_k_scores = scores[np.arange(scores.shape[0])[:, None], top_k_indices]
+    
+    return top_k_indices, top_k_scores
+
+
 def recall_at_k(query_vecs, item_vecs, query_item_index, ks=(1, 5, 10)) -> dict:
     """Score and rank queries against items, compute Recall@K.
     
@@ -150,12 +175,13 @@ def recall_at_k(query_vecs, item_vecs, query_item_index, ks=(1, 5, 10)) -> dict:
     return results
 
 
-def run(manifest_path, embedder) -> dict:
+def run(manifest_path, embedder, rankings_path=None) -> dict:
     """Run retrieval benchmark using the provided embedder.
     
     Args:
         manifest_path: path to JSONL manifest
         embedder: MediaEmbedder instance
+        rankings_path: optional path to write rankings JSONL file
         
     Returns:
         dict with metrics, n_items, n_queries, n_distractors and timing information
@@ -227,6 +253,53 @@ def run(manifest_path, embedder) -> dict:
     # Compute metrics
     metrics = recall_at_k(query_vecs, item_vecs, query_item_index)
     
+    # Write rankings file if requested
+    if rankings_path is not None:
+        # Get top K rankings
+        indices, scores = rank_topk(query_vecs, item_vecs, k=10)
+        
+        # Write JSONL file
+        rankings_path = Path(rankings_path).resolve()
+        rankings_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(rankings_path, "w") as f:
+            # For each query, write a line
+            for q_idx in range(len(captions)):
+                # Find true item and its rank
+                true_item_idx = query_item_index[q_idx]
+                # Use full ranking (all items) to compute true_rank, not just top-10
+                full_scores = query_vecs[q_idx] @ item_vecs.T
+                ranked_indices = np.argsort(-full_scores, kind="stable")
+                true_rank = np.where(ranked_indices == true_item_idx)[0][0]
+                
+                # Get item info from manifest
+                entry = entries[true_item_idx]
+                
+                # Build topk list of [item_id, score] pairs
+                topk = []
+                for idx, score in zip(indices[q_idx], scores[q_idx]):
+                    # Get item id for this index
+                    if idx < len(item_paths):
+                        item_entry = entries[idx]
+                        topk.append([item_entry["id"], float(score)])
+                
+                rankings_entry = {
+                    "q": q_idx,
+                    "caption": captions[q_idx],
+                    "true_item": entry["id"],
+                    "true_rank": int(true_rank),
+                    "topk": topk,
+                }
+                f.write(json.dumps(rankings_entry) + "\n")
+        
+        # Calculate SHA256 of the written file
+        import hashlib
+        sha256_hash = hashlib.sha256()
+        with open(rankings_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        rankings_sha256 = sha256_hash.hexdigest()
+    
     return {
         "metrics": metrics,
         "n_items": len(item_paths),
@@ -234,6 +307,8 @@ def run(manifest_path, embedder) -> dict:
         "n_distractors": n_distractors,
         "embed_items_seconds": embed_items_seconds,
         "embed_queries_seconds": embed_queries_seconds,
+        **({"rankings_path": str(rankings_path), "rankings_sha256": rankings_sha256} 
+           if rankings_path is not None else {}),
     }
 
 # ---------------------------------------------------------------------------
@@ -331,6 +406,7 @@ def main(argv=None):
     parser.add_argument("--dataset", required=True, help="Dataset name")
     parser.add_argument("--host-label", required=True, help="Host label (free-form)")
     parser.add_argument("--out", required=True, help="Output file path")
+    parser.add_argument("--rankings-out", help="Optional path to write rankings JSONL file")
     parser.add_argument("--factory-kwargs", default="{}", help="JSON kwargs for embedder factory")
     
     args = parser.parse_args(argv)
@@ -361,7 +437,7 @@ def main(argv=None):
     
     # Run benchmark
     try:
-        result = run(args.manifest, embedder)
+        result = run(args.manifest, embedder, rankings_path=args.rankings_out)
     except Exception as e:
         raise ValueError(f"Benchmark run failed: {e}")
     
@@ -378,6 +454,11 @@ def main(argv=None):
         "n_queries": result["n_queries"],
         "provenance": embedder.provenance(),
     }
+    
+    # Add rankings info if file was written
+    if args.rankings_out and "rankings_path" in result:
+        payload["rankings_file"] = result["rankings_path"]
+        payload["rankings_sha256"] = result["rankings_sha256"]
     
     # Write results
     try:
