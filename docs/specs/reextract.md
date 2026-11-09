@@ -1,7 +1,7 @@
 # Re-extraction over the archive (`taosmd reextract`)
 
-Status: SPEC for Jay's approval (issue #658). No code ships with this document.
-Implementation cards are filed only after the open questions below are answered.
+Status: APPROVED by Jay 2026-11-09 (issue #658): Q1 A, Q2 A, Q3 B (KG triples are
+in scope, section 5). No code ships with this document.
 
 ## Goal
 
@@ -11,7 +11,7 @@ keeps every turn verbatim, so the raw material is there: the shadow corpus in
 #658 had 76 archive rows matching "apple" and one claim mentioning it.
 
 `taosmd reextract` re-runs an extractor over archived conversation spans,
-deduplicates the output against existing claims, records which extractor
+deduplicates the output against existing claims and KG triples, records which extractor
 processed which span, and never rewrites what an earlier run produced. It is
 resumable and safe to run again after every future extractor change.
 
@@ -65,12 +65,13 @@ reextract_log(
     claims_found   INTEGER NOT NULL,   -- facts the extractor returned
     claims_new     INTEGER NOT NULL,   -- rows inserted
     claims_matched INTEGER NOT NULL,   -- folded into an existing row by norm
-    PRIMARY KEY (span_id, extractor_id)
+    target         TEXT    NOT NULL,   -- 'claims' or 'kg'
+    PRIMARY KEY (span_id, extractor_id, target)
 )
 ```
 
 Rows are inserted and never updated or deleted. A span counts as covered for an
-extractor when it has a row for that `extractor_id`, including spans that
+extractor and target when it has a row for that `extractor_id` and `target`, including spans that
 yielded zero facts.
 
 Rejected alternatives:
@@ -84,7 +85,7 @@ Rejected alternatives:
 
 ```
 taosmd reextract [--since YYYY-MM-DD] [--agent NAME] [--extractor regex|llm]
-                 [--limit N] [--dry-run] [--data-dir DIR]
+                 [--target claims|kg|all] [--limit N] [--dry-run] [--data-dir DIR]
 ```
 
 1. Resolve `extractor_id` for the chosen extractor.
@@ -100,7 +101,8 @@ taosmd reextract [--since YYYY-MM-DD] [--agent NAME] [--extractor regex|llm]
    next run resumes where this one stopped.
 6. `--dry-run` runs steps 1 to 4 read-only and reports what would change.
 7. Return and print `{"run_id", "extractor_id", "processed", "skipped_covered",
-   "skipped_no_content", "claims_new", "claims_matched"}`. Running again with the
+   "skipped_no_content", "claims_new", "claims_matched", "kg_new", "kg_matched",
+   "kg_deferred"}`. Running again with the
    same arguments reports `processed == 0`.
 
 With no filters, every conversation span not yet covered by the current
@@ -111,22 +113,62 @@ New claims land `status='unverified'` for the existing verify pass. Live ingest
 and `reextract` can run concurrently: both write under `BEGIN IMMEDIATE`, as
 `add_claim` already does.
 
-### 4. Dedup contract
+`--target` defaults to `all`. Claims and KG are covered separately, so a span
+can be done for one target and pending for the other.
+
+### 4. Dedup contract (claims)
 
 `reextract` reuses `add_claim` semantics exactly: dedup on exact `norm`, no fuzzy
 matching, and an existing row's text, status and `source_extractor` are never
 changed. A new row gets the new `extractor_id` as its `source_extractor`.
 
-The one open point is what happens when a re-extracted claim matches an existing
-row whose `archive_span_ids` lacks this span. See Q1.
+When a re-extracted claim matches an existing row whose `archive_span_ids` lacks
+this span, the span id is unioned into that row's `archive_span_ids`, exactly as
+live ingest does under #653 (Q1 A). No text, status or `source_extractor` changes.
 
-### 5. Files a lane would touch
+### 5. KG triples (Q3 B)
+
+The extractor's facts are also written as KG triples. Re-extraction reads old
+history, so the live KG write path is NOT reusable as-is: `add_triple` only
+dedups against an ACTIVE identical triple, and `add_triple_with_contradiction_check`
+with `auto_resolve` invalidates the current value (stamping `valid_to = now`) and,
+given `vmem`, soft-supersedes vector chunks. Replaying a 2025 "I live in London"
+through that path would close today's `lives_in Paris` and hide its vector rows.
+`reextract` therefore uses its own insert rule, `KnowledgeGraph.add_historical_triple`:
+
+1. `valid_from` is the span's `archive_index.timestamp`, never `now`.
+2. Dedup on subject, predicate and object across ALL rows, open or closed. A
+   match is counted as matched and nothing is written, so a superseded fact is
+   never resurrected as current.
+3. For a predicate in `SINGULAR_PREDICATES`, compare against the subject's other
+   values for that predicate:
+   - A value whose `valid_from` is later than the span: the re-found triple is
+     history. It is inserted closed, with `valid_to` set to the earliest such
+     later `valid_from`.
+   - Only earlier values, or none: the re-found triple would become the current
+     value. It is NOT written. It goes to the pending-decisions queue
+     (`kind="contradiction"`, evidence = the span text) for `taosmd review`,
+     whatever its confidence.
+4. `reextract` never calls `invalidate`, never auto-resolves, and never passes
+   `vmem`, so no existing KG or vector row is changed. That is stronger than the
+   claims path, which unions span ids, and it is deliberate: a triple row has no
+   span-id provenance column in use today.
+5. `source` is `reextract:<extractor_id>:span:<span_id>`.
+
+The coverage row for `target='kg'` is written after the span's triple writes.
+The KG lives in its own database, so the two writes are not one transaction. A
+crash between them re-runs the span, and rule 2 makes the re-run write nothing
+new. For `target='kg'` rows, the `claims_*` columns hold the
+triple counts (found, inserted, matched); deferrals appear only in the run summary.
+
+### 6. Files a lane would touch
 
 `taosmd/claims/extract.py` (extractor ids, LLM claim path), `taosmd/claims/store.py`
-(insert path for Q1, coverage-log reads/writes), `taosmd/migrations.py`
-(`reextract_log` table), `taosmd/service.py` (`reextract()`), `taosmd/cli.py`
-(subcommand). Expected split is three cards: extractor ids plus coverage table,
-the regex pass plus CLI, and the LLM extractor path.
+(coverage-log reads/writes), `taosmd/migrations.py` (`reextract_log` table),
+`taosmd/knowledge_graph.py` (`add_historical_triple`), `taosmd/service.py`
+(`reextract()`), `taosmd/cli.py` (subcommand). Expected split is four cards:
+extractor ids plus coverage table, the regex claims pass plus CLI, the KG target,
+and the LLM extractor path.
 
 ## Acceptance
 
@@ -135,33 +177,31 @@ the regex pass plus CLI, and the LLM extractor path.
   table changed (row counts plus a content hash of `claims`).
 - Crash test: fail mid-run after K spans, re-run, and assert every span is
   covered exactly once.
-- Never-mutate test, whose form depends on Q1: the text, status and
-  `source_extractor` of every pre-existing claim row are byte-identical
-  after the run.
+- Never-mutate test: the text, status and `source_extractor` of every
+  pre-existing claim row are byte-identical after the run (only
+  `archive_span_ids` may grow), and every pre-existing `kg_triples` row and every
+  vector row is byte-identical.
+- KG history test: KG holds `user lives_in Paris` (valid_from today). Re-extract a
+  span dated last year saying "I live in London". Assert Paris is still current,
+  London is inserted closed with `valid_to` = Paris's `valid_from`, and no vector
+  row changed. Then re-extract a span dated tomorrow saying "I live in Rome":
+  assert nothing is written to the KG and one pending decision exists.
+- KG no-resurrection test: a closed `lives_in Berlin` triple plus a re-found
+  Berlin span leaves the KG unchanged.
 - Measurement (the #658 probe): on the shadow corpus, record the claim count and
   the `apple foundation models on-device llm` probe outcome before and after
   `reextract --extractor llm`, naming the model, the corpus snapshot and the
   command. The regex pass alone is not expected to close this gap; the issue's
   missing claims need the LLM extractor.
 
-## Open questions for Jay
+## Decisions (Jay, 2026-11-09)
 
-- **Q1. A re-found claim matching an existing row.**
-  (A, recommended) Union the span id into the existing row's `archive_span_ids`,
-  exactly as every live ingest already does under #653. This adds provenance and
-  changes no fact, status or text, and the recall gate (`status_for_spans`) sees
-  the link with no read-path change.
-  (B) Strict no-UPDATE: leave the existing row untouched and record the link only
-  in `reextract_log` (or a link table). That needs `status_for_spans` and any
-  other span reader to union the log in.
-- **Q2. Default extractor.** (A, recommended) `regex` by default, with `llm`
-  opt-in, since an LLM pass over a large corpus is real compute and its ids churn
-  with every model change. (B) `llm` by default when an LLM is configured.
-- **Q3. Scope.** (A, recommended) Claims only in this spec, with KG and vector
-  re-extraction as a later spec on the same coverage log. (B) Fold KG triples in
-  now.
+- **Q1 A.** A re-found claim's span id is unioned into the matching row, as live
+  ingest does.
+- **Q2 A.** `regex` is the default extractor; `llm` is opt-in.
+- **Q3 B.** KG triples are in scope now (section 5). Vector re-extraction is not.
 
 ## Out of scope
 
-KG and vector re-extraction (Q3), non-conversation event types, scheduling it in
-the nightly cron, and deleting or rewriting any claim row.
+Vector re-extraction, non-conversation event types, scheduling it in
+the nightly cron, and deleting or rewriting any claim or triple row.
