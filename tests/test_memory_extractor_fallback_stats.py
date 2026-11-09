@@ -210,6 +210,48 @@ def test_concurrent_success_not_counted_as_fallback(fresh_stats, tmp_path):
     assert b_result["method"] == "regex", b_result
 
 
+def test_patched_public_seam_is_called(fresh_stats, tmp_path, monkeypatch):
+    """Patching the public extract_facts_with_llm seam still intercepts the call.
+
+    process_conversation_turn looks up extract_facts_with_llm as a module
+    global at call time, so monkeypatch/patch.object on the module reaches it
+    even though the call site used to call the private _extract_with_llm_status
+    directly. A patched seam that returns [] never sets the _llm_fell_back
+    ContextVar, so it lands as None and the existing elif facts / else branches
+    decide -- no exception, and the turn is counted.
+    """
+    from unittest.mock import AsyncMock
+
+    from taosmd.memory_extractor import process_conversation_turn
+
+    spy = AsyncMock(return_value=[])
+    monkeypatch.setattr(me, "extract_facts_with_llm", spy)
+
+    async def go():
+        kg = TemporalKnowledgeGraph(db_path=tmp_path / "kg.db")
+        await kg.init()
+        try:
+            return await process_conversation_turn(
+                text="Alice uses Postgres.",
+                agent_name=None,
+                kg=kg,
+                llm_url="http://fake:11434",
+                http_client=AsyncMock(),
+                use_llm=True,
+            )
+        finally:
+            await kg.close()
+
+    result = _run(go())
+
+    spy.assert_called_once()
+    assert result["method"] == "regex"
+    stats = me.extraction_stats()
+    assert stats["regex_fallback"] == 1
+    assert stats["llm"] == 0
+    assert stats["regex_direct"] == 0
+
+
 def test_consecutive_regex_fallback_alerts_loud_once_then_resets(
     monkeypatch, tmp_path, caplog
 ):

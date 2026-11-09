@@ -10,6 +10,7 @@ Can optionally call an LLM for higher-quality extraction when available.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -170,6 +171,21 @@ _consecutive_fallbacks = 0
 # Alert once per streak when this many consecutive turns fell back to regex.
 _FALLBACK_ALERT_AFTER = 10
 
+# Per-call fallback flag, carried across the public patch seam.
+#
+# process_conversation_turn looks up extract_facts_with_llm as a module
+# global at call time (so monkeypatch/patch.object on the module still
+# intercepts it), and extract_facts_with_llm returns only facts -- the
+# fell_back bool has nowhere to travel in that public return type. This
+# ContextVar is the carrier: set by _extract_with_llm_status (or by
+# extract_facts_with_llm after it gets the tuple) and read by
+# process_conversation_turn after the call. It is per asyncio task, so a
+# concurrent turn falling back while this one is in flight cannot mislabel
+# this turn (issue #657).
+_llm_fell_back: contextvars.ContextVar[bool | None] = contextvars.ContextVar(
+    "_llm_fell_back", default=None
+)
+
 
 def extraction_stats() -> dict:
     """Snapshot of the per-process extraction-method counters.
@@ -251,6 +267,7 @@ async def _extract_with_llm_status(
     this turn's outcome.
     """
     if not llm_url:
+        _llm_fell_back.set(False)
         return extract_facts_from_text(text), False
 
     from .prompts import extraction_prompt
@@ -284,6 +301,7 @@ async def _extract_with_llm_status(
                     if "subject" in f and "predicate" in f and "object" in f
                 ]
                 if cleaned:
+                    _llm_fell_back.set(False)
                     return cleaned, False
     except Exception as e:
         key = (model_name, llm_url)
@@ -299,6 +317,7 @@ async def _extract_with_llm_status(
     # Fall-through here means: exception, non-200, or an empty/unusable LLM
     # answer. The regex degrade happened here and is counted once by the
     # caller from the returned flag (issue #653 item 4).
+    _llm_fell_back.set(True)
     return extract_facts_from_text(text), True
 
 
@@ -398,12 +417,23 @@ async def process_conversation_turn(
         resolved_model = extraction_model
         if not resolved_model or resolved_model == "default":
             resolved_model = resolve_memory_model(agent=agent_name or "default") or "default"
-        facts, fell_back = await _extract_with_llm_status(
-            text, llm_url, http_client,
-            agent_name=agent_name or "default",
-            model=resolved_model,
-        )
-        if fell_back:
+
+        # Looked up as a module global at call time so monkeypatch/patch.object
+        # on taosmd.memory_extractor.extract_facts_with_llm still intercepts
+        # it. extract_facts_with_llm returns only facts, so the per-call
+        # fell_back flag travels through the _llm_fell_back ContextVar.
+        token = _llm_fell_back.set(None)
+        try:
+            facts = await extract_facts_with_llm(
+                text, llm_url, http_client,
+                agent_name=agent_name or "default",
+                model=resolved_model,
+            )
+            fell_back = _llm_fell_back.get()
+        finally:
+            _llm_fell_back.reset(token)
+
+        if fell_back is True:
             # The LLM call failed or returned nothing usable; the helper
             # already degraded to regex internally. Count the degrade once,
             # whatever the regex fact yield -- this is the silent-fallback
@@ -411,13 +441,24 @@ async def process_conversation_turn(
             # concurrent turn falling back while this one is in flight cannot
             # mislabel this turn as regex_fallback (issue #657).
             _bump_regex_fallback()
-        elif facts:
-            method = "llm"
-            _bump_llm()
+        elif fell_back is False:
+            if facts:
+                method = "llm"
+                _bump_llm()
+            else:
+                # LLM answered but extracted nothing; regex retries the text.
+                facts = extract_facts_from_text(text)
+                _bump_regex_fallback()
         else:
-            # LLM answered but extracted nothing; regex retries the text.
-            facts = extract_facts_from_text(text)
-            _bump_regex_fallback()
+            # fell_back is None: a patched extract_facts_with_llm that never
+            # set the var. Treat as not fell back and let the existing
+            # elif facts / else branches decide.
+            if facts:
+                method = "llm"
+                _bump_llm()
+            else:
+                facts = extract_facts_from_text(text)
+                _bump_regex_fallback()
     else:
         facts = extract_facts_from_text(text)
         _extraction_counts["regex_direct"] += 1
