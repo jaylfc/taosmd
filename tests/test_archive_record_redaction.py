@@ -6,6 +6,8 @@ redacted in archive_index.data_json and archive_fts.
 from __future__ import annotations
 
 import copy
+import json
+import threading
 
 import pytest
 
@@ -95,5 +97,77 @@ async def test_nested_leaf_redacted_in_index(tmp_path):
     data_json = row["data_json"]
     assert TOKEN not in data_json, f"Token found in nested data_json: {data_json}"
     assert "[REDACTED:github_pat]" in data_json, "Redaction placeholder missing from nested data_json"
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_uncopyable_value_still_archived(tmp_path):
+    """A value deepcopy cannot copy must still be archived (raw write must not fail).
+
+    Regression: record() used to run copy.deepcopy(data) before the JSONL write.
+    A value like threading.Lock() cannot be deep-copied, so the raw record was
+    lost. The caller's dict must still never change, and the JSONL line must be
+    byte-identical to master's for the same input (json.dumps(event, default=str)).
+    """
+    store = ArchiveStore(
+        archive_dir=tmp_path / "archive",
+        index_path=tmp_path / "archive-index.db",
+    )
+    await store.init()
+
+    lock = threading.Lock()
+    data = {"content": "hello", "handle": lock}
+
+    row_id = await store.record("test_event", data)
+
+    assert row_id > 0
+
+    # Caller's dict must still hold the same Lock object (identity preserved).
+    assert data["handle"] is lock
+
+    # Read the day's JSONL file (the store's archive_dir, the only *.jsonl file).
+    jsonl_files = list(tmp_path.glob("**/*.jsonl"))
+    assert len(jsonl_files) == 1, f"expected exactly one .jsonl file, got {jsonl_files}"
+    lines = jsonl_files[0].read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1, f"expected exactly one line, got {len(lines)}"
+    record = json.loads(lines[0])
+    assert record["data"]["content"] == "hello"
+    assert record["data"]["handle"].startswith("<unlocked _thread.lock")
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_non_str_leaf_str_is_redacted(tmp_path):
+    """A non-str leaf whose str() contains a token must be redacted in data_json.
+
+    _redact_leaves leaves non-str, non-container values unchanged, and the
+    index INSERT serialised them with json.dumps(derived, default=str), so
+    str(obj) landed in archive_index.data_json UNSCANNED. Build the derived
+    copy from a JSON-plain snapshot so every leaf that becomes a string is
+    scanned.
+    """
+    store = ArchiveStore(
+        archive_dir=tmp_path / "archive",
+        index_path=tmp_path / "archive-index.db",
+    )
+    await store.init()
+
+    class Tok:
+        def __str__(self) -> str:
+            return "tok " + TOKEN
+
+    data = {"obj": Tok()}
+
+    await store.record("test_event", data)
+
+    row = store._conn.execute(
+        "SELECT data_json FROM archive_index WHERE id = (SELECT MAX(id) FROM archive_index)"
+    ).fetchone()
+    assert row is not None
+    data_json = row["data_json"]
+    assert TOKEN not in data_json, f"Token leaked in data_json: {data_json}"
+    assert "[REDACTED:github_pat]" in data_json, "Redaction placeholder missing from data_json"
 
     await store.close()

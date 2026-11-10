@@ -289,8 +289,16 @@ class ArchiveStore:
         if event_type in USER_ACTIVITY_EVENTS and not self._user_tracking_enabled:
             return -1
 
-        # Deep-copy caller's data so we never mutate it
-        data = copy.deepcopy(data)
+        # Deep-copy caller's data so we never mutate it. A bare deepcopy can
+        # raise on values that cannot be copied (e.g. threading.Lock() -> "cannot
+        # pickle '_thread.lock' object"); on ANY Exception fall back to a
+        # JSON-plain snapshot. The caller's dict must still never change, and
+        # the JSONL line is byte-identical to master's for the same input
+        # (json.dumps(event, default=str)).
+        try:
+            data = copy.deepcopy(data)
+        except Exception:
+            data = json.loads(json.dumps(data, default=str))
 
         # Redact secrets before storage (for JSONL write - same keys as before)
         from .secret_filter import redact_secrets
@@ -336,8 +344,14 @@ class ArchiveStore:
             self._line_counts[file_path] += 1
         line_count = self._line_counts[file_path]
 
-        # Fully redacted copy for index and FTS (all string leaves)
-        derived = _redact_leaves(data)
+        # Fully redacted copy for index and FTS (all string leaves).
+        # Build the derived copy from a JSON-plain snapshot so every leaf that
+        # becomes a string (including str() of a non-JSON leaf) is scanned by
+        # _redact_leaves. A bare _redact_leaves(data) left non-str, non-container
+        # leaves unchanged, and the index INSERT serialised them with
+        # json.dumps(derived, default=str), so str(obj) landed in
+        # archive_index.data_json UNSCANNED.
+        derived = _redact_leaves(json.loads(json.dumps(data, default=str)))
 
         # Index for fast lookup
         cursor = self._conn.execute(
