@@ -252,6 +252,48 @@ def test_patched_public_seam_is_called(fresh_stats, tmp_path, monkeypatch):
     assert stats["regex_direct"] == 0
 
 
+
+def test_patched_public_seam_with_facts_counts_as_llm(fresh_stats, tmp_path, monkeypatch):
+    """A patched seam that returns facts and never sets the var counts as llm.
+
+    Pins the fell_back-is-None branch: None must mean "did not fall back", so
+    a non-empty answer counts as llm, not regex_fallback. With an empty
+    answer (test above) both readings give regex_fallback, so only this case
+    tells them apart.
+    """
+    from unittest.mock import AsyncMock
+
+    from taosmd.memory_extractor import process_conversation_turn
+
+    spy = AsyncMock(
+        return_value=[{"subject": "Alice", "predicate": "uses", "object": "Postgres"}]
+    )
+    monkeypatch.setattr(me, "extract_facts_with_llm", spy)
+
+    async def go():
+        kg = TemporalKnowledgeGraph(db_path=tmp_path / "kg.db")
+        await kg.init()
+        try:
+            return await process_conversation_turn(
+                text="Alice uses Postgres.",
+                agent_name=None,
+                kg=kg,
+                llm_url="http://fake:11434",
+                http_client=AsyncMock(),
+                use_llm=True,
+            )
+        finally:
+            await kg.close()
+
+    result = _run(go())
+
+    spy.assert_called_once()
+    assert result["method"] == "llm"
+    stats = me.extraction_stats()
+    assert stats["llm"] == 1
+    assert stats["regex_fallback"] == 0
+    assert stats["regex_direct"] == 0
+
 def test_consecutive_regex_fallback_alerts_loud_once_then_resets(
     monkeypatch, tmp_path, caplog
 ):
