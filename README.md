@@ -468,6 +468,16 @@ One-tap bundles of the live controls. The recall gate is on globally by default;
 
 The numbers above are cross-linked to their measurements in [docs/benchmarks.md](docs/benchmarks.md), and the full method and provenance for each lever are in the [research report](docs/research-report.md) (F-010 embedder, F-011 recall gate, F-013 reranking and self-verification, E-018 the tri-judge gate confirm).
 
+### LLM backends, embed modes, result fields and paths
+
+**LLM routes.** Most librarian stages speak the Ollama HTTP API: `/api/generate` (taosmd/catalog_pipeline.py, taosmd/session_catalog.py, taosmd/crystallize.py, taosmd/reflect.py, taosmd/query_expansion.py, taosmd/llm_rerank.py) and `/api/chat` (taosmd/emem_edu.py, taosmd/emem_event_lift.py). LLM fact extraction (taosmd/memory_extractor.py) instead speaks the OpenAI-compatible `/v1/chat/completions` route and reads `choices[0].message.content`. So a non-Ollama server (llama.cpp, vLLM, LM Studio) covers fact extraction on its own, but the other librarian stages need a server or proxy that also serves the Ollama routes. The URL is set with `llm_url` (config or constructor argument, as the existing README examples show) and the model with `taosmd memory-model set <model>` (`taosmd memory-model get` prints the current one). Reasoning models read nothing useful: taosmd takes the answer from `message.content` (OpenAI route) or `response` (Ollama route) only, so a reply whose text lives only in a separate reasoning field yields nothing -- use a non-thinking model or mode for librarian work.
+
+**Embed modes.** `embed_mode` is one of `onnx`, `qmd`, `local` (taosmd/vector_memory.py). There is no OpenAI `/v1/embeddings` mode; that is a deliberate choice (the shipped default is the local ONNX embedder), so a box with only an embeddings endpoint still downloads the ONNX model.
+
+**Result fields.** `taosmd.api.search()` hits carry `confidence`, not `score` -- shape `{text, source, timestamp, confidence, metadata}` (taosmd/api.py module docstring). Retrieval drops near-duplicates at word-set Jaccard >= 0.8 (taosmd/retrieval.py `_deduplicate`), so the same turn can still appear twice when the archive span and the vector chunk differ enough, once with source=archive and once with source=vector.
+
+**Paths.** The data dir is `$TAOSMD_DATA_DIR`, else `~/.taosmd`, and the CLI, api and serve all resolve it the same way (taosmd/config.py `_resolve_data_dir`). scripts/setup.sh separately downloads the embedding models under `$TAOSMD_DIR/models/` (default `~/taosmd/models/`, for example `minilm-onnx` and `arctic-embed-s`); pass that model directory explicitly (for example `onnx_path=`) rather than assuming it lives under the data dir.
+
 ## MCP server
 
 taOSmd can expose its memory over the [Model Context Protocol](https://modelcontextprotocol.io) so any MCP-capable agent (Claude Desktop, Cursor, Codex, OpenWebUI, …) can read and write memory directly, no custom integration. The server is local-first and offline: it speaks the **stdio** transport (the standard for desktop MCP clients), with no network listener and no cloud dependency.
