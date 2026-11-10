@@ -35,8 +35,18 @@ New pure function in `taosmd/secret_filter.py`:
     find_secret_spans(text: str) -> list[SecretSpan]   # SecretSpan(start, end, kind)
 
 - Runs every pattern against the ORIGINAL string, never a rewritten one.
-- Overlaps resolve as: earliest start wins; on a tie, the longest span wins;
-  any span overlapping a kept span is dropped. Output is sorted and disjoint.
+- Overlaps MERGE, they are never dropped. Sort candidates by (start asc,
+  length desc, pattern index asc) and walk them: a candidate whose start is
+  before the current span's end extends that span to `max(end, cand.end)`;
+  otherwise it opens a new span. A merged span keeps the `kind` and placeholder
+  of the candidate that opened it; every contributing kind counts as found.
+  Output is sorted and disjoint. Dropping an overlapping candidate is a leak:
+  `password=abc-----BEGIN PRIVATE KEY-----\n...` would keep `password_field`
+  (ends at the first newline) and drop the key block, leaving the key body in
+  the clear (measured on PR #690). Longest-first dropping is no better: it
+  keeps the key block and leaves `password=abc` in the clear. Only the union
+  covers both, and it matches today's `redact_secrets` output on all 27
+  existing `SECRET_CASES`.
 - Offsets are Python `str` code point indices (what survives a JSON round trip),
   not byte offsets.
 - For patterns with a capture group (`aws_secret`, `generic_api_key`,
@@ -124,7 +134,8 @@ CLI `taosmd archive export --reveal` built on it). It is NOT exposed by
    leak). Raw JSONL behaviour unchanged in this card. Pure, no crypto.
 2. **`find_secret_spans`** per section 2, with `redact_secrets` rebuilt on it.
    Tests: the three prose strings from tsk-ycyw7m return no span; overlapping
-   matches resolve per the rule; a mutation that swaps the tie rule goes red.
+   matches merge per the rule (a key block starting inside a password span is
+   fully covered); a mutation that swaps the tie rule goes red.
 3. **Codec + key provider + `reveal`** (no wiring into `record()` yet).
    Tests: `reveal(encode(x)) == x` for padded, multi-line and non-ASCII input;
    one flipped byte in `ct`, `nonce` or any AAD field makes decrypt refuse;
