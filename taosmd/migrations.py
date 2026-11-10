@@ -372,6 +372,22 @@ def _claims_norm_dedup(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_claims_norm ON claims(norm)")
 
 
+def _claims_reextract_log(conn: sqlite3.Connection) -> None:
+    exec_script(conn, """
+    CREATE TABLE IF NOT EXISTS reextract_log(
+        span_id        INTEGER NOT NULL,
+        extractor_id   TEXT    NOT NULL,
+        run_id         TEXT    NOT NULL,
+        extracted_at   REAL    NOT NULL,
+        claims_found   INTEGER NOT NULL,
+        claims_new     INTEGER NOT NULL,
+        claims_matched INTEGER NOT NULL,
+        target         TEXT    NOT NULL,
+        PRIMARY KEY (span_id, extractor_id, target)
+    );
+    """)
+
+
 _CLAIMS: tuple[Migration, ...] = (
     Migration(
         1, "claims_baseline", _claims_baseline,
@@ -383,6 +399,10 @@ _CLAIMS: tuple[Migration, ...] = (
             has_column(c, "claims", "norm")
             and index_exists(c, "idx_claims_norm")
         ),
+    ),
+    Migration(
+        3, "claims_reextract_log", _claims_reextract_log,
+        lambda c: table_exists(c, "reextract_log"),
     ),
 )
 
