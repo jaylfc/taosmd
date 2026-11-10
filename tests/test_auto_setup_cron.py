@@ -54,7 +54,7 @@ def _make_fake_subprocess_run(monkeypatch, data_dir: str):
         return _FakeResult(stdout="", stderr="", returncode=0)
 
     import taosmd.auto_setup as _mod
-    _mod.subprocess.run = fake_run
+    monkeypatch.setattr(_mod.subprocess, "run", fake_run)
     return captured
 
 
