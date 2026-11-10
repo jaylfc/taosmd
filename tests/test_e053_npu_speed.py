@@ -653,7 +653,7 @@ print(f'transformers_loaded={transformers_loaded}')
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        cwd="/tmp/exec-tsk-k2z4mn",
+        cwd=str(Path(__file__).resolve().parents[1]),
     )
     assert result.returncode == 0, f"Subprocess failed: {result.stderr}"
     assert "transformers_loaded=False" in result.stdout
@@ -725,6 +725,123 @@ def test_score_uses_tokenizer_for_cap_hits(tmp_path):
 
     # With whitespace tokenizer, 600 words >= 512 -> cap hit
     assert summary["arms"]["G"]["loop"]["cap_hits"] == 20
+
+
+# ---------------------------------------------------------------------------
+# Test: score counts cap hits from eval_count, not whitespace words
+# ---------------------------------------------------------------------------
+
+def _write_g_loop_raw_with_eval_count(out_dir, eval_counts, word_count=380):
+    """Write a G raw.jsonl with 20 loop rows carrying the given eval_counts.
+
+    output_text is ~word_count whitespace words per row, which is well under
+    512 words but the eval_count values are the generated token counts.
+    """
+    raw_path = out_dir / "e053-G-raw.jsonl"
+    host_path = out_dir / "e053-G-host.json"
+    host = {"arm": "G", "mem_before": {"VmHWM_kB": 200000}, "mem_after": {"VmHWM_kB": 200000}, "host": {}}
+    host_path.write_text(json.dumps(host))
+
+    with raw_path.open("w") as f:
+        for i in range(20):
+            row = {
+                "arm": "G",
+                "kind": "loop",
+                "index": i,
+                "repeat": 1,
+                "ttft_s": 0.1,
+                "prefill_tps": 100.0,
+                "decode_tps": 50.0,
+                "output_text": "word " * word_count,
+                "eval_count": eval_counts[i],
+                "total_duration_ns": 1000000000,
+                "load_duration_ns": 100000000,
+                "prompt_eval_count": 300,
+                "prompt_eval_duration_ns": 200000000,
+                "eval_duration_ns": 500000000,
+                "done_reason": "stop",
+                "server_prefill_fabricated": False,
+                "utc_timestamp": time.time(),
+            }
+            f.write(json.dumps(row) + "\n")
+    return raw_path
+
+
+def _write_control_arms(out_dir):
+    for arm in ("QH", "Q"):
+        rp = out_dir / f"e053-{arm}-raw.jsonl"
+        hp = out_dir / f"e053-{arm}-host.json"
+        hp.write_text(json.dumps({"arm": arm, "mem_before": {"VmHWM_kB": 200000}, "mem_after": {"VmHWM_kB": 200000}, "host": {}}))
+        with rp.open("w") as f2:
+            for L in (128, 512, 2048):
+                for r in range(5):
+                    f2.write(json.dumps({"arm": arm, "kind": "length", "length": L, "repeat": r, "ttft_s": 0.1, "prefill_tps": 100.0, "decode_tps": 50.0, "output_text": "x", "eval_count": 1, "utc_timestamp": time.time()}) + "\n")
+            for i in range(20):
+                f2.write(json.dumps({"arm": arm, "kind": "loop", "index": i, "repeat": 1, "ttft_s": 0.1, "prefill_tps": 100.0, "decode_tps": 50.0, "output_text": "word " * 100, "eval_count": 100, "utc_timestamp": time.time()}) + "\n")
+
+
+def test_score_cap_hits_from_eval_count(tmp_path):
+    """A loop row is a cap hit when its eval_count (generated token count) is
+    >= the 512-token cap, not when its whitespace word count reaches 512.
+
+    3 of 20 rows carry eval_count=512 with ~380 whitespace words each. The old
+    scorer counted 0 cap hits (whitespace words never reach 512); the fixed
+    scorer counts 3, so the cap_hits kill check is FAIL.
+    """
+    from benchmarks.e053_npu_speed import cmd_score
+    import argparse
+
+    prompts_path = tmp_path / "prompts.json"
+    prompts_path.write_text(json.dumps({"header": {}, "prompts": []}))
+
+    out_dir = tmp_path / "score_in"
+    out_dir.mkdir()
+
+    eval_counts = [512, 512, 512] + [100] * 17
+    _write_g_loop_raw_with_eval_count(out_dir, eval_counts)
+    _write_control_arms(out_dir)
+
+    out_path = tmp_path / "summary.json"
+    args = argparse.Namespace(prompts=str(prompts_path), dir=str(out_dir), out=str(out_path))
+    rc = cmd_score(args)
+    assert rc == 0
+
+    with out_path.open() as f:
+        summary = json.load(f)
+
+    assert summary["arms"]["G"]["loop"]["cap_hits"] == 3
+    assert summary["arms"]["G"]["loop"]["cap_unknown"] == 0
+    assert summary["kill_checks"]["cap_hits"]["status"] == "FAIL"
+    assert summary["kill_checks"]["cap_hits"]["g_value"] == 3
+
+
+def test_score_cap_unknown_when_eval_count_missing(tmp_path):
+    """A valid loop row with eval_count missing is counted as cap_unknown, and
+    the cap_hits kill check status is MISSING, not PASS."""
+    from benchmarks.e053_npu_speed import cmd_score
+    import argparse
+
+    prompts_path = tmp_path / "prompts.json"
+    prompts_path.write_text(json.dumps({"header": {}, "prompts": []}))
+
+    out_dir = tmp_path / "score_in"
+    out_dir.mkdir()
+
+    eval_counts = [None] + [100] * 19
+    _write_g_loop_raw_with_eval_count(out_dir, eval_counts)
+    _write_control_arms(out_dir)
+
+    out_path = tmp_path / "summary.json"
+    args = argparse.Namespace(prompts=str(prompts_path), dir=str(out_dir), out=str(out_path))
+    rc = cmd_score(args)
+    assert rc == 0
+
+    with out_path.open() as f:
+        summary = json.load(f)
+
+    assert summary["arms"]["G"]["loop"]["cap_hits"] == 0
+    assert summary["arms"]["G"]["loop"]["cap_unknown"] == 1
+    assert summary["kill_checks"]["cap_hits"]["status"] == "MISSING"
 
 
 import subprocess  # noqa: E402 (needed for test_import_does_not_load_transformers)

@@ -32,6 +32,7 @@ LENGTH_TOKENS = (128, 512, 2048)
 LOOP_MAX_QWEN_TOKENS = 300
 LOOP_MAX_PROMPTS = 20
 LOOP_MIN_WORDS = 20
+LOOP_CAP_TOKENS = 512
 
 ARM_TOKENIZER_MAP = {
     "G": "granite",
@@ -256,7 +257,6 @@ def _post_json(url: str, payload: dict, timeout: float = 600.0) -> urllib.reques
 
 def _parse_ndjson_stream(resp, prompt_tokens_qwen: int, prompt_tokens_granite: int, arm: str) -> dict[str, Any]:
     first_text_time = None
-    first_text_chunk = None
     output_parts = []
     done_chunk = None
     start_time = time.perf_counter()
@@ -522,17 +522,13 @@ def _median(values: list[float]) -> float | None:
     return sorted_vals[mid]
 
 
-def _tokenize_whitespace(text: str) -> list[str]:
-    return text.split()
-
-
 def cmd_score(args: argparse.Namespace) -> int:
     prompts_path = Path(args.prompts)
     dir_path = Path(args.dir)
     out_path = Path(args.out)
 
     with prompts_path.open("r", encoding="utf-8") as f:
-        prompts_data = json.load(f)
+        json.load(f)
 
     arms = ["G", "QH", "Q"]
     summary = {"arms": {}, "kill_checks": {}}
@@ -600,20 +596,15 @@ def cmd_score(args: argparse.Namespace) -> int:
         error_count += len(errors_loop)
 
         cap_hits = 0
-        eval_count_mismatch = 0
+        cap_unknown = 0
 
         for r in valid_loop:
-            output_text = r.get("output_text", "")
             eval_count = r.get("eval_count")
 
-            tokens_arm = _tokenize_whitespace(output_text)
-            gen_count = len(tokens_arm)
-
-            if gen_count >= 512:
+            if eval_count is not None and eval_count >= LOOP_CAP_TOKENS:
                 cap_hits += 1
-
-            if eval_count is not None and abs(gen_count - eval_count) > 2:
-                eval_count_mismatch += 1
+            elif eval_count is None:
+                cap_unknown += 1
 
         arm_summary["loop"] = {
             "total": len(loop_rows),
@@ -621,7 +612,7 @@ def cmd_score(args: argparse.Namespace) -> int:
             "skipped": len(skipped_loop),
             "errors": len(errors_loop),
             "cap_hits": cap_hits,
-            "eval_count_mismatch": eval_count_mismatch,
+            "cap_unknown": cap_unknown,
         }
 
         arm_summary["skipped_total"] = skipped_count
@@ -637,6 +628,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     qh_vmhwm = summary["arms"].get("QH", {}).get("host", {}).get("mem_after", {}).get("VmHWM_kB")
 
     g_cap_hits = summary["arms"].get("G", {}).get("loop", {}).get("cap_hits", 0)
+    g_cap_unknown = summary["arms"].get("G", {}).get("loop", {}).get("cap_unknown", 0)
 
     checks = {}
 
@@ -688,17 +680,20 @@ def cmd_score(args: argparse.Namespace) -> int:
     }
     print(f"Kill check 3 (RSS): {status} -- G={g_vmhwm}, QH={qh_vmhwm}, ratio={ratio}")
 
-    if g_cap_hits is not None:
+    if g_cap_unknown > 0:
+        status = "MISSING"
+    elif g_cap_hits is not None:
         status = "PASS" if g_cap_hits <= KILL_CAP_HITS_MAX else "FAIL"
     else:
         status = "MISSING"
     checks["cap_hits"] = {
         "check": "G cap hits <= 2 of 20",
         "g_value": g_cap_hits,
+        "unknown": g_cap_unknown,
         "threshold": KILL_CAP_HITS_MAX,
         "status": status,
     }
-    print(f"Kill check 4 (cap hits): {status} -- G={g_cap_hits}")
+    print(f"Kill check 4 (cap hits): {status} -- G={g_cap_hits}, unknown={g_cap_unknown}")
 
     summary["kill_checks"] = checks
 
