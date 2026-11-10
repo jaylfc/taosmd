@@ -349,10 +349,40 @@ def _claims_baseline(conn: sqlite3.Connection) -> None:
     exec_script(conn, _SCHEMA)
 
 
+def _claims_norm_dedup(conn: sqlite3.Connection) -> None:
+    """Dedup-at-insert support (issue #653): ``norm`` column + lookup index.
+
+    ``add_claim`` merges into an existing row whose ``norm`` matches, so every
+    row (including rows written before this column existed) must carry the
+    normalized form. Backfill runs in Python through the store's ``_normalize``
+    so the stored form and the insert-time form cannot drift apart. The index
+    is deliberately *not* UNIQUE: legacy databases already contain duplicate
+    texts (rows are never deleted, zero-loss) and a UNIQUE index would fail to
+    build; dedup happens at insert, not by constraint.
+    """
+    from taosmd.claims.store import _normalize  # noqa: PLC0415
+
+    add_column(conn, "claims", "norm", "TEXT")
+    for row in conn.execute(
+        "SELECT id, text FROM claims WHERE norm IS NULL OR norm = ''"
+    ).fetchall():
+        conn.execute(
+            "UPDATE claims SET norm = ? WHERE id = ?", (_normalize(row[1]), row[0])
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_claims_norm ON claims(norm)")
+
+
 _CLAIMS: tuple[Migration, ...] = (
     Migration(
         1, "claims_baseline", _claims_baseline,
         lambda c: table_exists(c, "claims"),
+    ),
+    Migration(
+        2, "claims_norm_dedup", _claims_norm_dedup,
+        lambda c: (
+            has_column(c, "claims", "norm")
+            and index_exists(c, "idx_claims_norm")
+        ),
     ),
 )
 
