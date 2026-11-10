@@ -180,8 +180,14 @@ class CatalogPipeline:
             sessions_to_classify = await self.catalog.lookup_date(date)
             for session in sessions_to_classify:
                 sid = session["id"]
+                # Gate on the agent that OWNS the session. The pipeline-level
+                # agent_name is empty in the documented nightly cron
+                # (auto_setup._install_cron), which used to resolve every
+                # tenant's tasks as disabled regardless of their librarian
+                # config (#636).
+                _owner = session.get("agent_name") or agent_name
                 enabled = run_if_enabled(
-                    agent_name, "intake_classification",
+                    _owner, "intake_classification",
                     lambda: True, fallback=False
                 )
                 if enabled:
@@ -202,9 +208,10 @@ class CatalogPipeline:
 
         for session in sessions:
             sid = session["id"]
+            _owner = session.get("agent_name") or agent_name
             if tier >= 2 and model:
                 _enrich_enabled = run_if_enabled(
-                    agent_name, "catalog_enrichment",
+                    _owner, "catalog_enrichment",
                     lambda: True, fallback=False
                 )
                 if _enrich_enabled:
@@ -214,7 +221,7 @@ class CatalogPipeline:
                             llm_url=self._llm_url,
                             model=model,
                             tier=tier,
-                            agent_name=agent_name,
+                            agent_name=_owner,
                         )
                         enriched_count += 1
                     except Exception as exc:
@@ -233,11 +240,17 @@ class CatalogPipeline:
         }
 
         # --- Stage 3: Crystallize ---
-        _crystallize_enabled = run_if_enabled(
-            agent_name, "crystallise",
-            lambda: True, fallback=False
-        )
-        if tier >= 2 and not skip_crystallize and model and _crystallize_enabled:
+        # Gate per-session on the owning agent (see #636): a stage-level gate
+        # on the pipeline agent_name would skip all tenants whenever any one
+        # tenant disables the task, or none when the nightly cron passes "".
+        _any_crystallize_enabled = False
+        sessions_fresh_all = await self.catalog.lookup_date(date)
+        for session in sessions_fresh_all:
+            if run_if_enabled(session.get("agent_name") or agent_name,
+                              "crystallise", lambda: True, fallback=False):
+                _any_crystallize_enabled = True
+                break
+        if tier >= 2 and not skip_crystallize and model and _any_crystallize_enabled:
             crystallized_count = 0
             crystal_errors = []
 
@@ -249,6 +262,9 @@ class CatalogPipeline:
             sessions_fresh = await self.catalog.lookup_date(date, agent_name=agent_name or None)
             for session in sessions_fresh:
                 sid = session["id"]
+                if not run_if_enabled(session.get("agent_name") or agent_name,
+                                      "crystallise", lambda: True, fallback=False):
+                    continue
                 try:
                     ctx = await self.catalog.get_session_context(sid, agent_name=agent_name or None)
                     if ctx is None:
@@ -294,10 +310,18 @@ class CatalogPipeline:
                 "errors": crystal_errors,
             }
         else:
+            if tier < 2:
+                _skip_reason = "tier < 2"
+            elif not model:
+                _skip_reason = "no model resolved"
+            elif not _any_crystallize_enabled:
+                _skip_reason = "task gate off (crystallise disabled for agent)"
+            else:
+                _skip_reason = "skip_crystallize=True"
             result["crystallize"] = {
                 "crystallized": 0,
                 "skipped": True,
-                "reason": "tier < 2" if tier < 2 else "skip_crystallize=True",
+                "reason": _skip_reason,
             }
 
         result["total_time"] = round(time.time() - t0, 3)

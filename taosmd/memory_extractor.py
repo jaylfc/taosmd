@@ -72,9 +72,49 @@ SKIP_WORDS = {
 # Minimum word length for entities
 MIN_ENTITY_LEN = 2
 
+# Junk-object filter (#653 item 2). The regex patterns happily turn agent
+# meta-text into bogus is_a claims: "Your job is to publish..." ->
+# is_a(to publish...), "full skill content is loaded below" -> is_a(...below).
+# Reject objects whose first word is a preposition/conjunction/infinitive
+# marker/negation, and objects that end on a stray adverb/particle.
+# WITNESS: tests/test_memory_extractor_junk.py::full skill content
+_BAD_OBJ_FIRST = {
+    "in", "on", "at", "to", "of", "for", "with", "from", "by", "outside",
+    "over", "under", "into", "onto", "upon", "about", "as", "than", "like",
+    "not", "no", "and", "or", "but", "so", "because", "if", "when", "while",
+    "already", "genuinely", "never", "always", "often", "also", "again",
+    "currently", "below", "above",
+}
+_BAD_OBJ_LAST = {
+    "below", "above", "here", "there", "now", "then", "today", "yesterday",
+    "tomorrow", "away", "back", "out",
+}
+# Vague head nouns -- a subject whose head is one of these carries no entity
+# ("Your job", "that message", "the content", "the full skill content").
+_VAGUE_HEAD = {
+    "job", "thing", "stuff", "content", "message", "text", "note", "way",
+    "case", "fact", "part", "point", "topic", "task", "role", "purpose",
+    "reason", "idea", "information", "data", "answer", "question", "story",
+    "stories", "report", "list", "line", "word", "sentence", "clause",
+    "section", "portion", "segment",
+}
+# Clause-initial words -- a subject starting with one of these is a clause
+# fragment, not an entity ("If there", "that message", "whether the server").
+_CLAUSE_INITIAL = {
+    "if", "whether", "that", "when", "while", "because", "although",
+    "though", "since", "unless", "there", "here",
+}
 
-def _clean_entity(text: str) -> str | None:
-    """Clean and validate an extracted entity name."""
+
+def _clean_entity(text: str, role: str = "entity") -> str | None:
+    """Clean and validate an extracted entity name.
+
+    ``role`` selects the junk filter: ``"subject"`` additionally rejects
+    clause fragments (``If there``, ``that message``) and vague head nouns
+    (``Your job``); ``"object"`` rejects objects headed by a
+    preposition/infinitive/adverb or ending on a stray particle. Default
+    keeps the old behaviour for any other caller.
+    """
     text = text.strip().strip(".,;:!?\"'()[]{}").strip()
     # Truncate at conjunctions/relative pronouns (captures cleaner entities)
     for stop in (" which ", " who ", " that ", " for the ", " rather ", " instead ", " including "):
@@ -95,6 +135,27 @@ def _clean_entity(text: str) -> str | None:
     words = text.split()
     if len(words) == 1 and text.islower() and len(text) < 4:
         return None
+    if role == "object":
+        if words[0].lower().strip(".,;:!?") in _BAD_OBJ_FIRST:
+            return None
+        while words and words[-1].lower().strip(".,;:!?") in _BAD_OBJ_LAST:
+            words = words[:-1]
+        if not words:
+            return None
+        text = " ".join(words)
+    elif role == "subject":
+        if words[0].lower().strip(".,;:!?") in _CLAUSE_INITIAL:
+            return None
+        head = words[-1].lower().strip(".,;:!?")
+        if head in _VAGUE_HEAD:
+            first = words[0].strip(".,;:!?")
+            lowered_starts = {
+                "your", "my", "our", "their", "this", "that", "the", "a", "an",
+            }
+            if not first[:1].isupper() or first.lower() in lowered_starts:
+                return None
+            if not all(w.strip(".,;:!?")[:1].isupper() for w in words):
+                return None
     return text
 
 
@@ -164,8 +225,8 @@ def extract_facts_from_text(text: str) -> list[dict]:
             work = work[2:].strip()
         for pattern, predicate in RELATIONSHIP_PATTERNS:
             for match in re.finditer(pattern, work, re.IGNORECASE):
-                subject = _clean_entity(_strip_leading_article(match.group(1)))
-                obj = _clean_entity(_strip_leading_article(match.group(2)))
+                subject = _clean_entity(_strip_leading_article(match.group(1)), role="subject")
+                obj = _clean_entity(_strip_leading_article(match.group(2)), role="object")
                 if not subject or not obj:
                     continue
                 # Deduplicate

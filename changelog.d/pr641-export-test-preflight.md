@@ -1,0 +1,1 @@
+Export test green-run assertion now tolerates the Step 3 preflight `optimum-cli export onnx --help` call logged by the stub uv, and pins exactly one real `--model` export call plus exactly one preflight call.
