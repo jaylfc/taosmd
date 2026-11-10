@@ -1,4 +1,4 @@
-"""Tests for taosmd.llm_complete — the OpenAI-compat router (#643).
+"""Tests for taosmd.llm_complete: the OpenAI-compat router (#643).
 
 Proves the librarian stages work against an OpenAI-compat server (the
 llama.cpp case from #643) while keeping the native Ollama dialect.
