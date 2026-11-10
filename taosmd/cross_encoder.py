@@ -87,6 +87,9 @@ class CrossEncoderReranker:
         import numpy as np
 
         session_input_names = [inp.name for inp in self._session.get_inputs()]
+        # transformers >= 5 stopped emitting token_type_ids by default; the
+        # ONNX export still requires them for sentence pairs, so request
+        # them explicitly when the session declares the input.
         needs_token_types = "token_type_ids" in session_input_names
 
         scores = []
@@ -104,6 +107,7 @@ class CrossEncoderReranker:
                 feed["token_type_ids"] = np.zeros_like(
                     inputs["input_ids"], dtype=np.int64)
             output = self._session.run(None, feed)
+            # Cross-encoder outputs logits; higher = more relevant
             score = float(output[0][0][0]) if output[0].ndim > 1 else float(output[0][0])
             scores.append(score)
 
