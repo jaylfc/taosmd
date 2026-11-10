@@ -186,10 +186,11 @@ class CatalogPipeline:
                 # tenant's tasks as disabled regardless of their librarian
                 # config (#636).
                 _owner = session.get("agent_name") or agent_name
-                enabled = run_if_enabled(
+                enabled = (not _owner) or run_if_enabled(
                     _owner, "intake_classification",
                     lambda: True, fallback=False
                 )
+                # Anonymous callers (agent_name is None or "") always run.
                 if enabled:
                     classify_results.append({"session_id": sid, "status": "queued"})
                 else:
@@ -210,10 +211,11 @@ class CatalogPipeline:
             sid = session["id"]
             _owner = session.get("agent_name") or agent_name
             if tier >= 2 and model:
-                _enrich_enabled = run_if_enabled(
+                _enrich_enabled = (not _owner) or run_if_enabled(
                     _owner, "catalog_enrichment",
                     lambda: True, fallback=False
                 )
+                # Anonymous callers (agent_name is None or "") always run.
                 if _enrich_enabled:
                     try:
                         await self.catalog.enrich_session(
