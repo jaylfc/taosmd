@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import sqlite3
 
 import pytest
@@ -10,7 +9,6 @@ from taosmd.claims.extract import (
     claims_from_text,
     llm_extractor_id,
     regex_extractor_id,
-    regex_pattern_source,
 )
 from taosmd.claims.store import ClaimStore
 from taosmd.migrations import table_exists
@@ -28,8 +26,10 @@ def test_regex_extractor_id():
 
 
 def test_regex_pattern_hash_pinned():
-    expected = hashlib.sha256(regex_pattern_source().encode()).hexdigest()
-    assert REGEX_PATTERN_HASH == expected
+    assert (REGEX_EXTRACTOR_VERSION, REGEX_PATTERN_HASH) == (
+        1,
+        "5bf6443d5a55bb040b83535868a2009389110bad053c612c7cfb86524bb578ac",
+    ), "regex extraction behaviour changed: bump REGEX_EXTRACTOR_VERSION in taosmd/claims/extract.py and update this pinned hash in the same commit"
 
 
 def test_llm_extractor_id_changes_with_prompt():

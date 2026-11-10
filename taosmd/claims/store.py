@@ -70,7 +70,23 @@ class ClaimStore:
     async def add_claim_ex(self, text: str, archive_span_ids: list[int],
                            source_extractor: str, now: float | None = None,
                            *, commit: bool = True) -> tuple[int, bool]:
-        """Insert or merge a claim; return (id, created)."""
+        """Insert a claim, or merge into the existing row for the same text.
+
+        Dedup at insert (issue #653): a field report measured 10k rows for 4k
+        distinct texts because the same sentence re-extracted every turn got a
+        fresh row. Merging ``archive_span_ids`` into the existing row keeps the
+        zero-loss property (no row or span is dropped) and stops the corpus
+        (and any hallucination-rate metric computed over it) inflating. The
+        merged row keeps its original status: a re-add never resets a verdict
+        the verify pass already made.
+
+        The lookup-then-insert/update runs inside a single BEGIN IMMEDIATE
+        transaction so it is atomic across connections/processes: a second
+        writer can't slip a same-norm insert between our miss and our insert
+        (idx_claims_norm is non-unique, so nothing else stops the duplicate).
+        With commit=False the caller must already hold a BEGIN IMMEDIATE
+        transaction, otherwise the dedup is not atomic.
+        """
         norm = _normalize(text)
         if commit:
             self._conn.execute("BEGIN IMMEDIATE")
