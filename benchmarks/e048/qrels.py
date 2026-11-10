@@ -25,10 +25,18 @@ def recall_at_k_qrels(
         Dict mapping f"R@{k}" to recall fraction for each k in ks.
 
     Raises:
-        ValueError: If qrels is empty.
+        ValueError: If qrels is empty, if ks is empty, or if any k in ks is
+            not an int greater than 0.
     """
     if not qrels:
         raise ValueError("qrels is empty")
+
+    if not ks:
+        raise ValueError("ks is empty")
+
+    for k in ks:
+        if not isinstance(k, int) or k <= 0:
+            raise ValueError(f"k={k} is not a positive int")
 
     # Initialize hit counters for each K
     hits = {k: 0 for k in ks}

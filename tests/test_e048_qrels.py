@@ -165,9 +165,50 @@ def test_relevant_doc_not_in_top_k_is_miss():
     qrels = {
         "q1": {"d6"},  # At position 6 (index 5)
     }
-    
+
     result = recall_at_k_qrels(ranked_doc_ids, qrels, ks=(3, 5, 10))
-    
+
     assert result["R@3"] == 0.0
     assert result["R@5"] == 0.0
     assert result["R@10"] == 1.0
+
+
+def test_k_zero_raises():
+    """k=0 is not a valid K and must raise ValueError."""
+    ranked_doc_ids = {"q1": ["d1", "d2"]}
+    qrels = {"q1": {"d1"}}
+
+    with pytest.raises(ValueError, match="k=0"):
+        recall_at_k_qrels(ranked_doc_ids, qrels, ks=(0,))
+
+
+def test_k_negative_raises():
+    """k=-1 is not a valid K and must raise ValueError."""
+    ranked_doc_ids = {"q1": ["d1", "d2"]}
+    qrels = {"q1": {"d1"}}
+
+    with pytest.raises(ValueError, match="k=-1"):
+        recall_at_k_qrels(ranked_doc_ids, qrels, ks=(-1,))
+
+
+def test_empty_ks_raises():
+    """An empty ks tuple must raise ValueError."""
+    ranked_doc_ids = {"q1": ["d1", "d2"]}
+    qrels = {"q1": {"d1"}}
+
+    with pytest.raises(ValueError, match="ks is empty"):
+        recall_at_k_qrels(ranked_doc_ids, qrels, ks=())
+
+
+def test_valid_ks_one_five_unchanged():
+    """Valid ks=(1, 5) returns the same dict as before."""
+    ranked_doc_ids = {
+        "q1": ["d1", "d2", "d3", "d4", "d5"],
+    }
+    qrels = {
+        "q1": {"d3", "d4"},
+    }
+
+    result = recall_at_k_qrels(ranked_doc_ids, qrels, ks=(1, 5))
+
+    assert result == {"R@1": 0.0, "R@5": 1.0}
