@@ -62,24 +62,18 @@ class ClaimStore:
 
     async def add_claim(self, text: str, archive_span_ids: list[int],
                         source_extractor: str, now: float | None = None) -> int:
-        """Insert a claim, or merge into the existing row for the same text.
+        claim_id, _ = await self.add_claim_ex(
+            text, archive_span_ids, source_extractor, now=now
+        )
+        return claim_id
 
-        Dedup at insert (issue #653): a field report measured 10k rows for 4k
-        distinct texts because the same sentence re-extracted every turn got a
-        fresh row. Merging ``archive_span_ids`` into the existing row keeps the
-        zero-loss property (no row or span is dropped) and stops the corpus
-        (and any hallucination-rate metric computed over it) inflating. The
-        merged row keeps its original status: a re-add never resets a verdict
-        the verify pass already made.
-        """
+    async def add_claim_ex(self, text: str, archive_span_ids: list[int],
+                           source_extractor: str, now: float | None = None,
+                           *, commit: bool = True) -> tuple[int, bool]:
+        """Insert or merge a claim; return (id, created)."""
         norm = _normalize(text)
-        # The lookup-then-insert/update runs inside a single BEGIN IMMEDIATE
-        # transaction so it is atomic across connections/processes: a second
-        # writer can't slip a same-norm insert between our miss and our insert
-        # (idx_claims_norm is non-unique, so nothing else stops the duplicate).
-        # Mirrors knowledge_graph.add_entity; busy_timeout makes the competing
-        # writer wait rather than race.
-        self._conn.execute("BEGIN IMMEDIATE")
+        if commit:
+            self._conn.execute("BEGIN IMMEDIATE")
         try:
             row = self._conn.execute(
                 "SELECT id, archive_span_ids FROM claims WHERE norm = ? ORDER BY id LIMIT 1",
@@ -91,18 +85,59 @@ class ClaimStore:
                     "UPDATE claims SET archive_span_ids = ? WHERE id = ?",
                     (json.dumps(merged), row["id"]),
                 )
-                self._conn.commit()
-                return int(row["id"])
+                if commit:
+                    self._conn.commit()
+                return int(row["id"]), False
             cur = self._conn.execute(
                 "INSERT INTO claims (text, norm, archive_span_ids, status, source_extractor, created_at)"
                 " VALUES (?, ?, ?, 'unverified', ?, ?)",
                 (text, norm, json.dumps(archive_span_ids), source_extractor,
                  now if now is not None else time.time()),
             )
-            self._conn.commit()
-            return int(cur.lastrowid)
+            if commit:
+                self._conn.commit()
+            return int(cur.lastrowid), True
         except BaseException:
-            self._conn.rollback()
+            if commit:
+                self._conn.rollback()
+            raise
+
+    async def covered_span_ids(self, extractor_id: str, target: str,
+                               span_ids: list[int]) -> set[int]:
+        if not span_ids:
+            return set()
+        placeholders = ",".join("?" * len(span_ids))
+        rows = self._conn.execute(
+            f"SELECT span_id FROM reextract_log WHERE extractor_id = ? AND target = ? "
+            f"AND span_id IN ({placeholders})",
+            (extractor_id, target, *span_ids),
+        ).fetchall()
+        return {int(r[0]) for r in rows}
+
+    async def log_coverage(self, row: dict, *, commit: bool = True) -> None:
+        if commit:
+            self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute(
+                "INSERT INTO reextract_log "
+                "(span_id, extractor_id, run_id, extracted_at, claims_found, claims_new, claims_matched, target) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row["span_id"],
+                    row["extractor_id"],
+                    row["run_id"],
+                    row["extracted_at"],
+                    row["claims_found"],
+                    row["claims_new"],
+                    row["claims_matched"],
+                    row["target"],
+                ),
+            )
+            if commit:
+                self._conn.commit()
+        except BaseException:
+            if commit:
+                self._conn.rollback()
             raise
 
     async def get(self, claim_id: int) -> dict | None:

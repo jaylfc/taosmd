@@ -9,7 +9,7 @@ def test_claims_carry_span_id():
     assert c["archive_span_ids"] == [42]
     assert "Alice" in c["text"] and "doctor" in c["text"]
     assert "_" not in c["text"]              # predicate underscores rendered as spaces
-    assert c["source_extractor"] == "regex"
+    assert c["source_extractor"] == "regex@1"
 
 
 def test_empty_text_no_claims():
