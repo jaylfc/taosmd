@@ -15,6 +15,7 @@ import gzip
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -697,7 +698,16 @@ class ArchiveStore:
     # ------------------------------------------------------------------
 
     async def compress_old_files(self, days_old: int = 1) -> int:
-        """Gzip JSONL files older than N days. Returns count compressed."""
+        """Gzip JSONL files older than N days. Returns count compressed.
+
+        The raw archive is eternal and lossless, so this is the only code path
+        that deletes raw archive data. Every write is verified before the
+        source is touched: the gz is written to a temp path, flushed and
+        fsynced, then re-read and byte-compared to the source. Only on a
+        clean round-trip is the temp atomically renamed onto the final .gz,
+        the directory fsynced, and the .jsonl unlinked. A mismatch or any
+        exception leaves the .jsonl in place and logs a warning.
+        """
         cutoff = time.time() - (days_old * 86400)
         compressed = 0
         for jsonl in self._archive_dir.rglob("*.jsonl"):
@@ -705,11 +715,39 @@ class ArchiveStore:
                 gz_path = jsonl.with_suffix(".jsonl.gz")
                 if gz_path.exists():
                     continue
-                with open(jsonl, "rb") as f_in:
-                    with gzip.open(gz_path, "wb") as f_out:
-                        f_out.write(f_in.read())
-                jsonl.unlink()
-                compressed += 1
+                tmp_path = jsonl.with_name(jsonl.name + ".gz.tmp")
+                try:
+                    with open(jsonl, "rb") as f_in:
+                        source_bytes = f_in.read()
+                    with gzip.open(tmp_path, "wb") as f_out:
+                        f_out.write(source_bytes)
+                        f_out.flush()
+                        os.fsync(f_out.fileno())
+                    with gzip.open(tmp_path, "rb") as f_verify:
+                        if f_verify.read() != source_bytes:
+                            raise ValueError(
+                                f"gzip round-trip mismatch for {jsonl}: "
+                                "decompressed bytes differ from source"
+                            )
+                    os.replace(tmp_path, gz_path)
+                    dir_fd = os.open(str(jsonl.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                    jsonl.unlink()
+                    compressed += 1
+                except Exception:
+                    if tmp_path.exists():
+                        try:
+                            tmp_path.unlink()
+                        except OSError:
+                            pass
+                    logger.warning(
+                        "compress_old_files: kept %s, .gz verification failed",
+                        jsonl,
+                    )
+                    continue
         return compressed
 
     async def export_day(self, date: str) -> list[dict]:
