@@ -1,0 +1,2 @@
+### Fixed
+- ArchiveStore.record now deep-copies the caller's data dict before any transformation so the original is never mutated, and recursively redacts secrets from ALL string leaves (including nested structures and tool/result/error keys) in both archive_index.data_json and archive_fts.
