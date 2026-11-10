@@ -159,6 +159,41 @@ def _clean_entity(text: str, role: str = "entity") -> str | None:
     return text
 
 
+# Meta-text skip guard (#653 item 3). The shadow deployment fed agent
+# scaffolding -- cron delivery instructions, delivery tokens, system-prompt
+# bullets -- straight into the extractor and got world facts out: "Your
+# final response is automatically delivered to the user." and
+# "[SILENT] ... nothing more." produced claims like the real traffic did.
+# A cheap per-sentence check: delivery-token markers, scaffolding phrases,
+# and bare "- " bullet artifacts never reach the patterns.
+# WITNESS: tests/test_memory_extractor_meta.py::full skill content
+_META_TOKENS = (
+    "[silent]", "media:", "[image:", "<|", "|>",
+)
+_META_PHRASES = (
+    "your final response",
+    "final response is automatically",
+    "full skill content",
+    "loaded below",
+    "do not use send_message",
+    "suppress delivery",
+    "delivered to the user",
+)
+
+
+def _is_meta_text(sentence: str) -> bool:
+    """True when a sentence looks like agent scaffolding, not world prose."""
+    s = sentence.strip()
+    # A leading bullet marker is scaffolding only when its content is meta;
+    # strip it and run the remaining checks on the rest of the line.
+    if s.startswith("- ") or s.startswith("* "):
+        s = s[2:].strip()
+    low = s.lower()
+    if any(tok in low for tok in _META_TOKENS):
+        return True
+    return any(phrase in low for phrase in _META_PHRASES)
+
+
 def _split_sentences(text: str) -> list[str]:
     """Split text into sentences. Handles ". " and newlines."""
     # Split on period+space, newlines, semicolons
@@ -182,8 +217,14 @@ def extract_facts_from_text(text: str) -> list[dict]:
     sentences = _split_sentences(text)
 
     for sentence in sentences:
+        if _is_meta_text(sentence):
+            continue
+        # Strip a leading bullet marker so bulleted facts extract cleanly.
+        work = sentence
+        if work.startswith("- ") or work.startswith("* "):
+            work = work[2:].strip()
         for pattern, predicate in RELATIONSHIP_PATTERNS:
-            for match in re.finditer(pattern, sentence, re.IGNORECASE):
+            for match in re.finditer(pattern, work, re.IGNORECASE):
                 subject = _clean_entity(_strip_leading_article(match.group(1)), role="subject")
                 obj = _clean_entity(_strip_leading_article(match.group(2)), role="object")
                 if not subject or not obj:
