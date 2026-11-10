@@ -107,23 +107,14 @@ async def llm_listwise_rerank(
     if no_think_prefix:
         prompt = "/no_think\n\n" + prompt
 
-    payload = {
-        "model": rerank_model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0.0, "num_predict": 200},
-    }
-    if not no_think_prefix:
-        payload["think"] = False
-
+    from .llm_complete import llm_complete
     try:
-        resp = await client.post(
-            f"{ollama_url.rstrip('/')}/api/generate",
-            json=payload,
+        text = (await llm_complete(
+            client, ollama_url, rerank_model, prompt,
+            temperature=0.0, max_tokens=200,
+            no_think=not no_think_prefix,
             timeout=timeout,
-        )
-        resp.raise_for_status()
-        text = (resp.json().get("response") or "").strip()
+        )).strip()
     except Exception as e:
         logger.debug("LLM listwise rerank failed: %s; trusting upstream order", e)
         return candidates[:top_k]

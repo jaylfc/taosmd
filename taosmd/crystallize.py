@@ -206,16 +206,12 @@ If no lessons or files, write "none" for that section."""
 
         try:
             import httpx
+            from .llm_complete import llm_complete
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    f"{llm_url}/api/generate",
-                    json={"model": model, "prompt": prompt, "stream": False,
-                          "options": {"temperature": 0.2, "num_predict": 400}},
+                text = await llm_complete(
+                    client, llm_url, model, prompt,
+                    temperature=0.2, max_tokens=400,
                 )
-                if resp.status_code != 200:
-                    return self._fallback_crystallize(conversation)
-
-                text = resp.json().get("response", "")
                 return self._parse_crystal_response(text, conversation)
 
         except Exception as e:
