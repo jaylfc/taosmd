@@ -1,0 +1,2 @@
+### Fixed
+- Removed card-instruction text from LLM routes paragraph (`-- check the exact spelling with \`taosmd --help\` and quote it as printed`) and reworded model reference to `taosmd memory-model set <model>` (`taosmd memory-model get` prints the current one). Also corrected Paths paragraph to describe embedding models under `$TAOSMD_DIR/models/` (default `~/taosmd/models/`) with example model names instead of root path `/models/...`.
