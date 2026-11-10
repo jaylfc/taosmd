@@ -10,6 +10,7 @@ Can optionally call an LLM for higher-quality extraction when available.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -252,23 +253,124 @@ def extract_facts_from_text(text: str) -> list[dict]:
 # drop to debug so a dead Ollama doesn't flood the log on every turn.
 _llm_fallback_warned: set[tuple[str, str]] = set()
 
+# ------------------------------------------------------------------
+# Extraction-method counters (issue #653 item 4)
+# ------------------------------------------------------------------
+# A silently permanent degrade to the regex path is the most dangerous
+# failure mode in the claims field report: a shadow deployment produced
+# 10,063/10,063 regex claims with only a debug log to show for it. These
+# per-process counters make the llm-vs-regex split inspectable, and the
+# consecutive-fallback streak makes a persistently dead LLM path loud
+# once instead of once-per-process-then-debug.
+# WITNESS: tests/test_memory_extractor_fallback_stats.py::consecutive regex fallback
+_extraction_counts: dict[str, int] = {
+    "llm": 0,             # LLM extraction produced the facts used
+    "regex_fallback": 0,  # LLM failed or returned nothing; regex took over
+    "regex_direct": 0,    # regex by design (no llm_url, or task gate off)
+}
+_consecutive_fallbacks = 0
 
-async def extract_facts_with_llm(
+# Alert once per streak when this many consecutive turns fell back to regex.
+_FALLBACK_ALERT_AFTER = 10
+
+# Per-call fallback flag, carried across the public patch seam.
+#
+# process_conversation_turn looks up extract_facts_with_llm as a module
+# global at call time (so monkeypatch/patch.object on the module still
+# intercepts it), and extract_facts_with_llm returns only facts -- the
+# fell_back bool has nowhere to travel in that public return type. This
+# ContextVar is the carrier: set by _extract_with_llm_status (or by
+# extract_facts_with_llm after it gets the tuple) and read by
+# process_conversation_turn after the call. It is per asyncio task, so a
+# concurrent turn falling back while this one is in flight cannot mislabel
+# this turn (issue #657).
+_llm_fell_back: contextvars.ContextVar[bool | None] = contextvars.ContextVar(
+    "_llm_fell_back", default=None
+)
+
+
+def extraction_stats() -> dict:
+    """Snapshot of the per-process extraction-method counters.
+
+    Returns ``{llm, regex_fallback, regex_direct, consecutive_regex_fallbacks}``.
+    Per-call LLM outcomes: ``llm`` when the LLM call produced the facts used,
+    ``regex_fallback`` when the LLM call failed or returned nothing and regex
+    took over, ``regex_direct`` when regex ran by design (no ``llm_url``, or
+    the task gate turned LLM off). ``ClaimStore.rate()['by_extractor']`` is a
+    separate per-claim-row provenance tally (the source_extractor column);
+    it is not the persistent counterpart of these counters and not an
+    LLM-health signal -- source_extractor is fixed when the claim row is
+    inserted, not observed per LLM call.
+    """
+    return {
+        **_extraction_counts,
+        "consecutive_regex_fallbacks": _consecutive_fallbacks,
+    }
+
+
+def _reset_extraction_stats() -> None:
+    """Zero the counters (tests; nothing in production resets them)."""
+    global _consecutive_fallbacks
+    for key in _extraction_counts:
+        _extraction_counts[key] = 0
+    _consecutive_fallbacks = 0
+
+
+def _bump_llm() -> None:
+    """One genuine LLM extraction: count it and reset the fallback streak."""
+    global _consecutive_fallbacks
+    _extraction_counts["llm"] += 1
+    _consecutive_fallbacks = 0
+
+
+def _bump_regex_fallback() -> None:
+    """One silent degrade to regex: count it, extend the streak, alert if stuck.
+
+    The per-call WARNING-once-then-debug rule in extract_facts_with_llm covers
+    single failures; this streak alert covers the pattern -- a permanently
+    dead LLM path -- so it stays loud even after the first-warning window.
+    """
+    global _consecutive_fallbacks
+    _extraction_counts["regex_fallback"] += 1
+    _consecutive_fallbacks += 1
+    if _consecutive_fallbacks == _FALLBACK_ALERT_AFTER:
+        logger.warning(
+            "memory extraction: %d consecutive regex fallbacks "
+            "(llm=%d, regex_fallback=%d, regex_direct=%d) -- the LLM "
+            "extraction path is likely dead or unresolved; check the "
+            "memory model config and the LLM endpoint",
+            _consecutive_fallbacks,
+            _extraction_counts["llm"],
+            _extraction_counts["regex_fallback"],
+            _extraction_counts["regex_direct"],
+        )
+
+
+async def _extract_with_llm_status(
     text: str,
     llm_url: str,
     http_client,
     *,
     agent_name: str = "default",
     model: str = "default",
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     """Extract facts using an LLM for higher quality. Falls back to pattern matching.
 
     The prompt comes from :mod:`taosmd.prompts` so every LLM call across
     the library shares the same librarian persona and "never invent"
     rules. Pass ``agent_name`` so the persona binds to the right shelf.
+
+    Returns ``(facts, fell_back)``. ``fell_back`` is True when the LLM call
+    failed, returned a non-200, or returned nothing usable; ``facts`` is then
+    the regex result. The caller owns the extraction-method counters:
+    :func:`process_conversation_turn` bumps them from this flag (see
+    :func:`extraction_stats`), not here -- the flag is per call, so a
+    concurrent turn falling back while this one is in flight cannot mislabel
+    this turn's outcome.
     """
     if not llm_url:
-        return extract_facts_from_text(text)
+        _llm_fell_back.set(False)
+        return extract_facts_from_text(text), False
 
     from .prompts import extraction_prompt
     from .generator_profiles import split_provider  # noqa: PLC0415
@@ -296,7 +398,13 @@ async def extract_facts_with_llm(
                 content = content.split("\n", 1)[1].rsplit("```", 1)[0]
             facts = json.loads(content)
             if isinstance(facts, list):
-                return [f for f in facts if "subject" in f and "predicate" in f and "object" in f]
+                cleaned = [
+                    f for f in facts
+                    if "subject" in f and "predicate" in f and "object" in f
+                ]
+                if cleaned:
+                    _llm_fell_back.set(False)
+                    return cleaned, False
     except Exception as e:
         key = (model_name, llm_url)
         level = logging.DEBUG if key in _llm_fallback_warned else logging.WARNING
@@ -308,7 +416,36 @@ async def extract_facts_with_llm(
             model_name, llm_url, e,
         )
 
-    return extract_facts_from_text(text)
+    # Fall-through here means: exception, non-200, or an empty/unusable LLM
+    # answer. The regex degrade happened here and is counted once by the
+    # caller from the returned flag (issue #653 item 4).
+    _llm_fell_back.set(True)
+    return extract_facts_from_text(text), True
+
+
+async def extract_facts_with_llm(
+    text: str,
+    llm_url: str,
+    http_client,
+    *,
+    agent_name: str = "default",
+    model: str = "default",
+) -> list[dict]:
+    """Extract facts using an LLM for higher quality. Falls back to pattern matching.
+
+    The prompt comes from :mod:`taosmd.prompts` so every LLM call across
+    the library shares the same librarian persona and "never invent"
+    rules. Pass ``agent_name`` so the persona binds to the right shelf.
+
+    Keeps the exact public signature: returns facts only. The extraction
+    counters are updated in :func:`process_conversation_turn` from the
+    ``fell_back`` flag returned by :func:`_extract_with_llm_status`, not
+    inside this function.
+    """
+    facts, _ = await _extract_with_llm_status(
+        text, llm_url, http_client, agent_name=agent_name, model=model
+    )
+    return facts
 
 
 # ------------------------------------------------------------------
@@ -382,17 +519,51 @@ async def process_conversation_turn(
         resolved_model = extraction_model
         if not resolved_model or resolved_model == "default":
             resolved_model = resolve_memory_model(agent=agent_name or "default") or "default"
-        facts = await extract_facts_with_llm(
-            text, llm_url, http_client,
-            agent_name=agent_name or "default",
-            model=resolved_model,
-        )
-        if facts:
-            method = "llm"
+
+        # Looked up as a module global at call time so monkeypatch/patch.object
+        # on taosmd.memory_extractor.extract_facts_with_llm still intercepts
+        # it. extract_facts_with_llm returns only facts, so the per-call
+        # fell_back flag travels through the _llm_fell_back ContextVar.
+        token = _llm_fell_back.set(None)
+        try:
+            facts = await extract_facts_with_llm(
+                text, llm_url, http_client,
+                agent_name=agent_name or "default",
+                model=resolved_model,
+            )
+            fell_back = _llm_fell_back.get()
+        finally:
+            _llm_fell_back.reset(token)
+
+        if fell_back is True:
+            # The LLM call failed or returned nothing usable; the helper
+            # already degraded to regex internally. Count the degrade once,
+            # whatever the regex fact yield -- this is the silent-fallback
+            # case the field report couldn't see. The flag is per call, so a
+            # concurrent turn falling back while this one is in flight cannot
+            # mislabel this turn as regex_fallback (issue #657).
+            _bump_regex_fallback()
+        elif fell_back is False:
+            if facts:
+                method = "llm"
+                _bump_llm()
+            else:
+                # LLM answered but extracted nothing; regex retries the text.
+                facts = extract_facts_from_text(text)
+                _bump_regex_fallback()
         else:
-            facts = extract_facts_from_text(text)
+            # fell_back is None: a patched extract_facts_with_llm that never
+            # set the var. Treat as not fell back and let the existing
+            # elif facts / else branches decide.
+            if facts:
+                method = "llm"
+                _bump_llm()
+            else:
+                facts = extract_facts_from_text(text)
+                _bump_regex_fallback()
     else:
         facts = extract_facts_from_text(text)
+        _extraction_counts["regex_direct"] += 1
 
     triple_ids: list[str] = []
     deferred_ids: list[str] = []

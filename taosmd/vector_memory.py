@@ -17,8 +17,10 @@ import time
 from pathlib import Path
 
 from . import _db, migrations
+from .api import _is_lfs_pointer
 
 logger = logging.getLogger(__name__)
+
 
 # Default token embedding dimension (all-MiniLM-L6-v2 backbone). Kept as a
 # module-level constant for backward-compat imports in existing tests.
@@ -394,6 +396,12 @@ class VectorMemory:
                 model_file = f"{model_dir}/model.onnx"
                 if not Path(model_file).exists() and Path(f"{model_dir}/onnx/model.onnx").exists():
                     model_file = f"{model_dir}/onnx/model.onnx"
+                # Reject Git LFS pointer files early with an actionable message.
+                if _is_lfs_pointer(Path(model_file)):
+                    raise RuntimeError(
+                        f"{model_file} is a Git LFS pointer, not an ONNX model: "
+                        "re-download the real file (hf download <repo> onnx/model.onnx, without --include)"
+                    )
                 self._onnx_session = ort.InferenceSession(
                     model_file,
                     providers=["CPUExecutionProvider"],
