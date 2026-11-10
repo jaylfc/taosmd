@@ -69,3 +69,11 @@ def test_agent_rules_supplements_do_not_repeat_the_base_contract() -> None:
 def test_agent_rules_have_no_em_dashes() -> None:
     for mode in (None, "taosmd", "both"):
         assert "\u2014" not in taosmd.agent_rules(mode), mode
+
+
+def test_agent_rules_memory_modes_route_local_docs_to_search_tool_first() -> None:
+    for mode in ("taosmd", "both"):
+        text = taosmd.agent_rules(mode, search_tool="memory_search", write_tool="memory_ingest")
+        assert "local docs" in text, mode
+        assert "before any web search" in text, mode
+        assert "Use web search only when `memory_search` has nothing relevant." in text, mode

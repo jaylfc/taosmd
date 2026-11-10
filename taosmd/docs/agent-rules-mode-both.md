@@ -4,3 +4,4 @@ You have two memory systems. taOSmd is the shared long-term store: its read tool
 
 - Recall always starts with `{search_tool}`: before answering anything about the user, their past work, or facts you were told, call it first, even if your framework memory already has an answer.
 - Anything worth keeping goes to `{write_tool}`, even if you also note it in your framework memory.
+- Questions about your own deployment, its local docs, projects, workers or releases start with `{search_tool}` too, before any web search. Use web search only when `{search_tool}` has nothing relevant.
