@@ -328,6 +328,8 @@ class TestCatalogPipelineAgentGates:
         """agent_name='' (anonymous/nightly cron) -> enrich_session awaited and classify status 'queued'."""
         from unittest.mock import AsyncMock, patch
 
+        monkeypatch.setenv("TAOSMD_DATA_DIR", str(self.tmp))
+
         self._write_single_session(agent_name="")
 
         pipeline = _make_pipeline(self.tmp)
@@ -360,6 +362,8 @@ class TestCatalogPipelineAgentGates:
         """Registered agent with catalog_enrichment=False -> enrich_session NOT awaited."""
         from unittest.mock import AsyncMock, patch
 
+        monkeypatch.setenv("TAOSMD_DATA_DIR", str(self.tmp))
+
         import taosmd.agents as agents_mod
 
         # Create a temp registry and register an agent with catalog_enrichment disabled
@@ -388,16 +392,18 @@ class TestCatalogPipelineAgentGates:
 
         # enrich_session should NOT be called because catalog_enrichment is disabled for alice
         enrich_spy.assert_not_awaited()
-        # classify should also be disabled for alice
+        # intake_classification defaults to enabled, so it should be "queued"
         classify_results = result["intake_classify"]["results"]
         assert classify_results, "Expected at least one classify result"
-        assert classify_results[0]["status"] == "disabled", (
-            f"Agent with intake_classification disabled should get 'disabled', got {classify_results[0]['status']!r}"
+        assert classify_results[0]["status"] == "queued", (
+            f"Agent with intake_classification enabled should get 'queued', got {classify_results[0]['status']!r}"
         )
 
     def test_unregistered_nonempty_agent_skips_enrichment(self, tmp_path, monkeypatch):
         """Unregistered non-empty agent_name -> enrich_session NOT awaited (unchanged behavior)."""
         from unittest.mock import AsyncMock, patch
+
+        monkeypatch.setenv("TAOSMD_DATA_DIR", str(self.tmp))
 
         self._write_single_session(agent_name="unknown_agent")
 
