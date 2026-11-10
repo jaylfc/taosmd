@@ -334,6 +334,14 @@ class TestCatalogPipelineAgentGates:
 
         pipeline = _make_pipeline(self.tmp)
 
+        # Pin memory-model resolution so the cpu-tier CI profile ("") cannot
+        # override the patched detect_best_tier model and silently gate out
+        # both stages (#678 head fails on CPU-only runners without this).
+        monkeypatch.setattr(
+            "taosmd.catalog_pipeline.resolve_memory_model",
+            lambda fallback=None, **kw: "test-model",
+        )
+
         # Force tier >= 2 and a model so the enrichment/classification blocks are entered
         with patch.object(
             pipeline, "detect_best_tier", new=AsyncMock(return_value=(2, "test-model"))
@@ -375,6 +383,14 @@ class TestCatalogPipelineAgentGates:
 
         pipeline = _make_pipeline(self.tmp)
 
+        # Pin memory-model resolution so the cpu-tier CI profile ("") cannot
+        # override the patched detect_best_tier model and silently gate out
+        # both stages (#678 head fails on CPU-only runners without this).
+        monkeypatch.setattr(
+            "taosmd.catalog_pipeline.resolve_memory_model",
+            lambda fallback=None, **kw: "test-model",
+        )
+
         # Patch is_task_enabled to use our tmp registry
         with patch("taosmd.catalog_pipeline.run_if_enabled", side_effect=agents_mod.run_if_enabled):
             with patch.object(
@@ -408,6 +424,14 @@ class TestCatalogPipelineAgentGates:
         self._write_single_session(agent_name="unknown_agent")
 
         pipeline = _make_pipeline(self.tmp)
+
+        # Pin memory-model resolution so the cpu-tier CI profile ("") cannot
+        # override the patched detect_best_tier model and silently gate out
+        # both stages (#678 head fails on CPU-only runners without this).
+        monkeypatch.setattr(
+            "taosmd.catalog_pipeline.resolve_memory_model",
+            lambda fallback=None, **kw: "test-model",
+        )
 
         with patch.object(
             pipeline, "detect_best_tier", new=AsyncMock(return_value=(2, "test-model"))
