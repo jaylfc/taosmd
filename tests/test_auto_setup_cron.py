@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 import shlex
 
-import pytest
-
 
 def _make_fake_subprocess_run(monkeypatch, data_dir: str):
     """Replace subprocess.run with a fake that captures crontab -l / crontab - calls.
@@ -98,7 +96,7 @@ class TestInstallCron:
         logs_dir = os.path.join(data_dir, "logs")
         assert not os.path.isdir(logs_dir), "logs dir should not exist before test"
 
-        captured = _make_fake_subprocess_run(monkeypatch, data_dir)
+        _make_fake_subprocess_run(monkeypatch, data_dir)
 
         from taosmd.auto_setup import _install_cron
         _install_cron(data_dir)
