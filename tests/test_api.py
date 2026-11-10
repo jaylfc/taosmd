@@ -83,14 +83,24 @@ def test_ingest_string_archives_and_embeds(isolated_data_dir):
     assert "adjacent_neighbors" in contents
 
 
-def test_ingest_skips_empty_content(isolated_data_dir):
+def test_ingest_archives_empty_content(isolated_data_dir):
+    """Empty/whitespace turns are still archived (zero-loss), but not embedded or claimed."""
     _setup_stores(isolated_data_dir)
     result = asyncio.run(taosmd.ingest(
         [{"role": "user", "content": "real message"}, {"role": "user", "content": "   "}, {"role": "user", "content": ""}],
         agent="test-agent",
         data_dir=str(isolated_data_dir),
     ))
-    assert result["archived"] == 1
+    assert result["archived"] == 3
+
+    # Verify 3 archive JSONL rows exist for test-agent
+    archive_files = list((isolated_data_dir / "archive").rglob("*.jsonl"))
+    assert archive_files, "expected at least one archive jsonl file"
+    lines = []
+    for f in archive_files:
+        lines.extend(f.read_text().strip().split("\n"))
+    agent_lines = [l for l in lines if "test-agent" in l]
+    assert len(agent_lines) == 3, f"expected 3 archive rows for test-agent, got {len(agent_lines)}"
 
 
 def test_ingest_accepts_dict_and_iterable(isolated_data_dir):
@@ -633,6 +643,44 @@ def test_ingest_batch_skips_empty_text_counts(isolated_data_dir):
     assert result["skipped"] == 1
 
 
+def test_ingest_batch_archives_raw_text_verbatim(isolated_data_dir):
+    """ingest_batch archives the caller's original text byte-verbatim (no strip)."""
+    _setup_stores(isolated_data_dir)
+    result = asyncio.run(taosmd.ingest_batch(
+        [{"text": "  padded \n", "id": "p1"}, {"text": "   "}],
+        agent="user-memory",
+        data_dir=str(isolated_data_dir),
+    ))
+    assert result["ingested"] == 1
+    assert result["skipped"] == 1
+
+    # Read the archive JSONL and verify raw content is preserved exactly
+    archive_files = list((isolated_data_dir / "archive").rglob("*.jsonl"))
+    assert archive_files, "expected at least one archive jsonl file"
+    lines = []
+    for f in archive_files:
+        lines.extend(f.read_text().strip().split("\n"))
+
+    # Find the row for p1 - its data.content should be "  padded \n" exactly
+    import json as _json
+    found_p1 = False
+    found_empty = False
+    for line in lines:
+        if not line:
+            continue
+        row = _json.loads(line)
+        if row.get("agent_name") == "user-memory":
+            data = row.get("data", {})
+            content = data.get("content", "")
+            if content == "  padded \n":
+                found_p1 = True
+            if content == "   ":
+                found_empty = True
+
+    assert found_p1, "archive row for p1 should have content == '  padded \\n' exactly"
+    assert found_empty, "archive row with content '   ' (whitespace) should exist"
+
+
 def test_ingest_batch_validates_before_writing(isolated_data_dir):
     stores = _setup_stores(isolated_data_dir)
     with pytest.raises(ValueError, match="items"):
@@ -848,6 +896,31 @@ def test_search_prefer_verified_resolves_from_config():
     with tempfile.TemporaryDirectory() as d:
         assert _cfg.get_controls(data_dir=d)["prefer_verified"] == "prefer_verified"
     assert _ctrl.default_controls()["prefer_verified"] == "prefer_verified"
+
+
+def test_ingest_claims_get_redacted_text(isolated_data_dir, monkeypatch):
+    """claims_from_text receives redacted text, not the raw secret."""
+    _setup_stores(isolated_data_dir)
+    captured_text = {}
+
+    def capture_claims_text(text, span_id):
+        captured_text["text"] = text
+        return []
+
+    # Patch where api.py imports claims_from_text from (taosmd.claims.extract)
+    monkeypatch.setattr("taosmd.claims.extract.claims_from_text", capture_claims_text)
+
+    secret = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij0123456789"
+    asyncio.run(taosmd.ingest(
+        {"role": "user", "content": f"My key is {secret}"},
+        agent="test-agent",
+        data_dir=str(isolated_data_dir),
+    ))
+
+    # The captured text should have the secret redacted
+    assert captured_text.get("text") is not None
+    assert "[REDACTED:" in captured_text["text"]
+    assert "sk-ant-" not in captured_text["text"]
 
 
 # ---------------------------------------------------------------------------
