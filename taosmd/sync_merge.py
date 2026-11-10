@@ -35,15 +35,49 @@ def _content_key(text: str, metadata_json: str) -> str:
 
 
 def _get_store_mode(conn: sqlite3.Connection) -> str | None:
-    """Get the store mode from store_meta table."""
-    row = conn.execute("SELECT value FROM store_meta WHERE key = 'mode'").fetchone()
-    return row["value"] if row else None
+    """Get the store mode from store_meta table. Missing table treated as no marker."""
+    try:
+        row = conn.execute("SELECT value FROM store_meta WHERE key = 'mode'").fetchone()
+        return row["value"] if row else None
+    except sqlite3.OperationalError:
+        # Table does not exist (older store) -> treat as no marker
+        return None
 
 
-def _compare_store_modes(local_mode: str | None, peer_mode: str | None) -> None:
-    """Compare store modes; raise StoreModeMismatch if they differ on any key present in both."""
+def _compare_store_modes(local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection) -> None:
+    """Compare store modes; raise StoreModeMismatch if they differ on any key present in both.
+
+    A side with no marker but with rows is treated as legacy dense
+    (late_interaction=0, binary_quant=0). A side with no marker and no rows
+    imposes no constraint.
+    """
+    local_mode = _get_store_mode(local_conn)
+    peer_mode = _get_store_mode(peer_conn)
+
+    # Helper to check if a store has any rows
+    def _has_rows(conn: sqlite3.Connection) -> bool:
+        row = conn.execute("SELECT 1 FROM vector_memory LIMIT 1").fetchone()
+        return row is not None
+
+    local_has_rows = _has_rows(local_conn)
+    peer_has_rows = _has_rows(peer_conn)
+
+    # Resolve local mode: if no marker but has rows, use legacy format
+    if local_mode is None:
+        if local_has_rows:
+            local_mode = "late_interaction=0;binary_quant=0"
+        else:
+            local_mode = None  # no constraint
+
+    # Resolve peer mode: if no marker but has rows, use legacy format
+    if peer_mode is None:
+        if peer_has_rows:
+            peer_mode = "late_interaction=0;binary_quant=0"
+        else:
+            peer_mode = None  # no constraint
+
+    # If either resolved to None (empty no-marker store), no comparison needed
     if local_mode is None or peer_mode is None:
-        # If either is missing, we can't compare; allow the merge (legacy behavior)
         return
 
     # Use the same parsing logic as VectorMemory._parse_mode
@@ -112,9 +146,7 @@ def merge_vectors(local_db_path: str, peer_db_path: str) -> dict:
 
     try:
         # Compare store_meta modes before any merge
-        local_mode = _get_store_mode(local_conn)
-        peer_mode = _get_store_mode(peer_conn)
-        _compare_store_modes(local_mode, peer_mode)
+        _compare_store_modes(local_conn, peer_conn)
 
         # Begin transaction on local
         local_conn.execute("BEGIN IMMEDIATE")
@@ -175,8 +207,13 @@ def merge_vectors(local_db_path: str, peer_db_path: str) -> dict:
                         new_metadata_json = metadata_json
 
                 new_valid_to = local_valid_to
-                if valid_to is not None:
+                if local_valid_to is not None and valid_to is not None:
+                    # Both sides have valid_to set -> keep the EARLIER (min) one (convergence, bus 7404)
+                    new_valid_to = min(local_valid_to, valid_to)
+                elif valid_to is not None:
+                    # Only peer has valid_to set -> closure wins (bus 7401)
                     new_valid_to = valid_to
+                # else: only local has it or neither -> keep local_valid_to (which may be None)
 
                 if update_metadata or new_valid_to != local_valid_to:
                     local_conn.execute("""

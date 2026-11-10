@@ -1,0 +1,4 @@
+### Fixed
+- `merge_vectors` now converges `valid_to` correctly in both merge directions: when both sides have `valid_to` set, the earlier (min) value is kept; when only one side has it set, that value wins (closure); when neither, `None` is kept.
+- Store mode comparison now correctly treats a legacy store with rows but no marker as dense format (`late_interaction=0;binary_quant=0`), raising `StoreModeMismatch` against `binary_quant=1` or `late_interaction=1` peers. Empty no-marker stores impose no constraint.
+- Missing `store_meta` table (older schema) is now tolerated and treated the same as a missing marker.
