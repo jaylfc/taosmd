@@ -1,0 +1,2 @@
+### Added
+- `taosmd.sync_merge.merge_vectors()` for content-keyed vector_memory merge in account-device-sync (taOS S4). Merges by sha256(namespace + normalised text), never by row id. New rows get fresh autoincrement ids; metadata last-write-wins by created_at with lexicographic tie-break; valid_to propagated from peer; store_meta mode mismatch raises StoreModeMismatch; single transaction with rollback on error.
