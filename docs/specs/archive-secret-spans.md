@@ -1,7 +1,8 @@
 # Encrypted secret spans in the raw archive
 
-Status: DRAFT for Jay. Implements his 2026-11-10 ruling (option 1). No code ships
-with this document. Open decisions are listed in section 9.
+Status: D1 and D2 RULED by Jay 2026-11-10 (both as recommended, section 9).
+Implements his 2026-11-10 ruling (option 1). No code ships with this document.
+Cards: tsk-xk3rux (1), tsk-s4bg4o (2), tsk-v3u74k (3), tsk-un3xer (4, held).
 
 ## Goal
 
@@ -132,7 +133,7 @@ CLI `taosmd archive export --reveal` built on it). It is NOT exposed by
    control: after `record()` of a known token, the token's bytes are absent from
    the JSONL file, `data_json` and `archive_fts`, and `reveal` returns it.
 
-## 9. Decisions for Jay
+## 9. Decisions (ruled 2026-11-10: D1 core, D2 key file)
 
 - **D1 (dependency):** `cryptography` is only in the `registry` and `dev`
   extras today. Recommended: promote it to a core dependency (wheels exist for
