@@ -106,5 +106,10 @@ async def test_vector_memory_onnx_lfs_pointer_logs_warning(tmp_path, caplog):
     assert any("Git LFS pointer" in msg for msg in warning_messages), (
         f"Expected a WARNING containing 'Git LFS pointer'; got: {warning_messages}"
     )
+    # ... and it must name the pointer file (#634: the error names the file)
+    pointer_path = str(model_dir / "model.onnx")
+    assert any(pointer_path in msg for msg in warning_messages), (
+        f"Expected the warning to name {pointer_path}; got: {warning_messages}"
+    )
     # Should have fallen back to qmd
     assert vm._embed_mode == "qmd"
