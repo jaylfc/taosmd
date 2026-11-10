@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -43,26 +44,77 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern, str]] = [
 ]
 
 
-def contains_secrets(text: str) -> bool:
-    """Check if text contains any known secret patterns."""
-    for _, pattern, _ in SECRET_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
+class SecretSpan(NamedTuple):
+    start: int
+    end: int
+    kind: str
+    replacement: str
+
+
+def find_secret_spans(text: str) -> list[SecretSpan]:
+    """Find all secret spans in the ORIGINAL text.
+
+    Returns disjoint, sorted spans (Python str indices over `text`). Every
+    (name, pattern, replacement) in SECRET_PATTERNS contributes its
+    pattern.finditer(text) whole-match (m.start(), m.end()) offsets; zero-length
+    matches are skipped. Overlaps are resolved by sorting candidates by
+    (start ascending, length descending, SECRET_PATTERNS index ascending) and
+    walking them, keeping a candidate only if its start is at or past the end
+    of the last kept span.
+    """
+    candidates: list[tuple[int, int, int, str, str]] = []
+    for index, (name, pattern, replacement) in enumerate(SECRET_PATTERNS):
+        for match in pattern.finditer(text):
+            if match.end() == match.start():
+                continue
+            candidates.append((match.start(), match.end(), index, name, replacement))
+
+    candidates.sort(key=lambda c: (c[0], -(c[1] - c[0]), c[2]))
+
+    spans: list[SecretSpan] = []
+    last_end = 0
+    for start, end, _index, name, replacement in candidates:
+        if start >= last_end:
+            spans.append(SecretSpan(start, end, name, replacement))
+            last_end = end
+    return spans
 
 
 def redact_secrets(text: str) -> tuple[str, list[str]]:
     """Redact all secrets from text.
 
     Returns (redacted_text, list_of_redaction_types).
+
+    Spans are located on the original text via find_secret_spans and each
+    span's replacement is spliced over text[start:end], so a later pattern can
+    never match inside an earlier [REDACTED:...] placeholder and offsets always
+    refer to the original text.
     """
-    redacted = text
+    spans = find_secret_spans(text)
+
+    parts: list[str] = []
+    prev = 0
+    for span in spans:
+        parts.append(text[prev:span.start])
+        parts.append(span.replacement)
+        prev = span.end
+    parts.append(text[prev:])
+    redacted = "".join(parts)
+
     found: list[str] = []
-    for name, pattern, replacement in SECRET_PATTERNS:
-        if pattern.search(redacted):
-            redacted = pattern.sub(replacement, redacted)
+    kinds = {span.kind for span in spans}
+    for name, _, _ in SECRET_PATTERNS:
+        if name in kinds:
             found.append(name)
     return redacted, found
+
+
+def contains_secrets(text: str) -> bool:
+    """Check if text contains any known secret patterns."""
+    for _, pattern, _ in SECRET_PATTERNS:
+        if pattern.search(text):
+            return True
+    return False
 
 
 def filter_text(text: str, mode: str = "redact") -> str:
