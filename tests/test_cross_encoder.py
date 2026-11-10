@@ -3,7 +3,6 @@ import sys
 import pytest
 
 from taosmd.cross_encoder import CrossEncoderReranker
-
 def test_reranker_fallback_no_model():
     reranker = CrossEncoderReranker(onnx_path="/nonexistent/path")
     results = [
@@ -179,9 +178,6 @@ def test_case_d(tmp_path, monkeypatch):
     """New test: limit=2 truncates to 2 hits in BOTH the guardrail path (min_confidence=0.0 with all-negative scores)
     and the sorted path"""
     
-    # Import patch from unittest.mock for nested patching
-    from unittest.mock import patch
-    
     # Test guardrail path (all scores negative)
     guardrail_dir = tmp_path / "guardrail"
     guardrail_dir.mkdir()
@@ -191,28 +187,28 @@ def test_case_d(tmp_path, monkeypatch):
     
     reranker_guardrail = CrossEncoderReranker(onnx_path=str(onnx_dir), min_confidence=0.0)
     
-    # Apply patches for guardrail test using nested patch contexts
-    with patch('taosmd.cross_encoder.CrossEncoderReranker.available', new_callable=lambda: property(lambda self: True)):
-        with patch.object(reranker_guardrail, '_load', lambda: None):
-            with patch.object(reranker_guardrail, '_score', lambda query, results: [-1.0, -2.0, -3.0, -4.0]):
-                
-                guardrail_results = [
-                    {"text": "A", "score": 0.9},
-                    {"text": "B", "score": 0.8},
-                    {"text": "C", "score": 0.7},
-                    {"text": "D", "score": 0.6},
-                ]
-                
-                guardrail_output = reranker_guardrail.rerank("test query", guardrail_results, limit=2)
-                
-                # Expected: limit=2, so only A and B in input order with rerank_applied=False
-                assert len(guardrail_output) == 2
-                assert guardrail_output[0]["text"] == "A"
-                assert guardrail_output[1]["text"] == "B"
-                assert guardrail_output[0]["rerank_applied"] is False
-                assert guardrail_output[1]["rerank_applied"] is False
+    # Apply patches for guardrail test using monkeypatch pattern
+    monkeypatch.setattr(CrossEncoderReranker, "available", property(lambda self: True))
+    monkeypatch.setattr(reranker_guardrail, "_load", lambda: None)
+    monkeypatch.setattr(reranker_guardrail, "_score", lambda query, results: [-1.0, -2.0, -3.0, -4.0])
     
-    # Test sorted path (mixed scores, above confidence) - separate test context
+    guardrail_results = [
+        {"text": "A", "score": 0.9},
+        {"text": "B", "score": 0.8},
+        {"text": "C", "score": 0.7},
+        {"text": "D", "score": 0.6},
+    ]
+    
+    guardrail_output = reranker_guardrail.rerank("test query", guardrail_results, limit=2)
+    
+    # Expected: limit=2, so only A and B in input order with rerank_applied=False
+    assert len(guardrail_output) == 2
+    assert guardrail_output[0]["text"] == "A"
+    assert guardrail_output[1]["text"] == "B"
+    assert guardrail_output[0]["rerank_applied"] is False
+    assert guardrail_output[1]["rerank_applied"] is False
+    
+    # Test sorted path (mixed scores, above confidence) - separate test function
     sorted_dir = tmp_path / "sorted"
     sorted_dir.mkdir()
     sorted_onnx_dir = sorted_dir / "cross-encoder-onnx"
@@ -221,23 +217,23 @@ def test_case_d(tmp_path, monkeypatch):
     
     reranker_sorted = CrossEncoderReranker(onnx_path=str(sorted_onnx_dir), min_confidence=0.0)
     
-    # Apply patches for sorted test in a separate context
-    with patch('taosmd.cross_encoder.CrossEncoderReranker.available', new_callable=lambda: property(lambda self: True)):
-        with patch.object(reranker_sorted, '_load', lambda: None):
-            with patch.object(reranker_sorted, '_score', lambda query, results: [1.0, -1.0, 2.0, -2.0]):
-                
-                sorted_results = [
-                    {"text": "A", "score": 0.9},
-                    {"text": "B", "score": 0.8},
-                    {"text": "C", "score": 0.7},
-                    {"text": "D", "score": 0.6},
-                ]
-                
-                sorted_output = reranker_sorted.rerank("test query", sorted_results, limit=2)
-                
-                # Expected: sorted by score descending (2.0, 1.0), then C, A
-                assert len(sorted_output) == 2
-                assert sorted_output[0]["text"] == "C"
-                assert sorted_output[1]["text"] == "A"
-                assert sorted_output[0]["rerank_applied"] is True
-                assert sorted_output[1]["rerank_applied"] is True
+    # Apply patches for sorted test using monkeypatch pattern
+    monkeypatch.setattr(CrossEncoderReranker, "available", property(lambda self: True))
+    monkeypatch.setattr(reranker_sorted, "_load", lambda: None)
+    monkeypatch.setattr(reranker_sorted, "_score", lambda query, results: [1.0, -1.0, 2.0, -2.0])
+    
+    sorted_results = [
+        {"text": "A", "score": 0.9},
+        {"text": "B", "score": 0.8},
+        {"text": "C", "score": 0.7},
+        {"text": "D", "score": 0.6},
+    ]
+    
+    sorted_output = reranker_sorted.rerank("test query", sorted_results, limit=2)
+    
+    # Expected: sorted by score descending (2.0, 1.0), then C, A
+    assert len(sorted_output) == 2
+    assert sorted_output[0]["text"] == "C"
+    assert sorted_output[1]["text"] == "A"
+    assert sorted_output[0]["rerank_applied"] is True
+    assert sorted_output[1]["rerank_applied"] is True
