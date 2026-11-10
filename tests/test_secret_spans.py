@@ -86,3 +86,44 @@ def test_no_match_inside_placeholder():
     redacted, found = redact_secrets("[REDACTED:bearer]")
     assert redacted == "[REDACTED:bearer]"
     assert found == []
+
+
+def test_overlap_merges_key_block_inside_password():
+    text = "password=abc-----BEGIN PRIVATE KEY-----\nMIIsecretbody\n-----END PRIVATE KEY-----"
+    redacted, found = redact_secrets(text)
+    assert "MIIsecretbody" not in redacted
+    assert "END PRIVATE KEY" not in redacted
+    assert redacted == "[REDACTED:password]"
+    assert found == ["private_key_block", "password_field"]
+    spans = find_secret_spans(text)
+    assert len(spans) == 1
+    assert spans[0].start == 0
+    assert spans[0].end == len(text)
+    assert spans[0].kind == "password_field"
+
+
+def test_overlap_merges_private_tag_inside_password():
+    text = "pwd:abcdefgh<private>top secret words</private>"
+    redacted, found = redact_secrets(text)
+    assert redacted == "[REDACTED:password]"
+    assert found == ["password_field", "private_tag"]
+
+
+def test_merged_spans_disjoint():
+    texts = [
+        "password=abc-----BEGIN PRIVATE KEY-----\nMIIsecretbody\n-----END PRIVATE KEY-----",
+        "pwd:abcdefgh<private>top secret words</private>",
+        (
+            "sk-ABCDEFGHIJKLMNOPQRSTUVWX and "
+            "ghp_" + "B" * 36 + " and "
+            "-----BEGIN PRIVATE KEY-----\nMIIabc\n-----END PRIVATE KEY-----"
+        ),
+    ]
+    pattern_names = [name for name, _, _ in SECRET_PATTERNS]
+    for text in texts:
+        spans = find_secret_spans(text)
+        for first, second in zip(spans, spans[1:]):
+            assert first.end <= second.start
+        redacted, found = redact_secrets(text)
+        for kind in found:
+            assert kind in pattern_names

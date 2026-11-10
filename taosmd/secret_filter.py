@@ -51,16 +51,14 @@ class SecretSpan(NamedTuple):
     replacement: str
 
 
-def find_secret_spans(text: str) -> list[SecretSpan]:
-    """Find all secret spans in the ORIGINAL text.
+def _find_secret_spans_with_kinds(text: str) -> tuple[list[SecretSpan], list[list[str]]]:
+    """Find all secret spans in the ORIGINAL text with contributing kinds.
 
-    Returns disjoint, sorted spans (Python str indices over `text`). Every
-    (name, pattern, replacement) in SECRET_PATTERNS contributes its
-    pattern.finditer(text) whole-match (m.start(), m.end()) offsets; zero-length
-    matches are skipped. Overlaps are resolved by sorting candidates by
-    (start ascending, length descending, SECRET_PATTERNS index ascending) and
-    walking them, keeping a candidate only if its start is at or past the end
-    of the last kept span.
+    Returns (spans, span_kinds) where spans are disjoint, sorted SecretSpan
+    objects and span_kinds[i] is the list of pattern names that contributed
+    to spans[i], in SECRET_PATTERNS order. Overlapping candidates are merged
+    into a single span covering the union of their ranges; the merged span
+    keeps the kind and replacement of the candidate that opened it.
     """
     candidates: list[tuple[int, int, int, str, str]] = []
     for index, (name, pattern, replacement) in enumerate(SECRET_PATTERNS):
@@ -72,11 +70,35 @@ def find_secret_spans(text: str) -> list[SecretSpan]:
     candidates.sort(key=lambda c: (c[0], -(c[1] - c[0]), c[2]))
 
     spans: list[SecretSpan] = []
+    span_kinds: list[list[str]] = []
     last_end = 0
     for start, end, _index, name, replacement in candidates:
         if start >= last_end:
             spans.append(SecretSpan(start, end, name, replacement))
+            span_kinds.append([name])
             last_end = end
+        else:
+            # Merge: extend the last span's end and add this kind
+            last_span = spans[-1]
+            new_end = max(last_span.end, end)
+            spans[-1] = SecretSpan(last_span.start, new_end, last_span.kind, last_span.replacement)
+            span_kinds[-1].append(name)
+            last_end = new_end
+    return spans, span_kinds
+
+
+def find_secret_spans(text: str) -> list[SecretSpan]:
+    """Find all secret spans in the ORIGINAL text.
+
+    Returns disjoint, sorted spans (Python str indices over `text`). Every
+    (name, pattern, replacement) in SECRET_PATTERNS contributes its
+    pattern.finditer(text) whole-match (m.start(), m.end()) offsets; zero-length
+    matches are skipped. Overlaps are resolved by sorting candidates by
+    (start ascending, length descending, SECRET_PATTERNS index ascending) and
+    walking them, merging any candidate whose start is before the current
+    span's end into that span (extending the end to the union).
+    """
+    spans, _ = _find_secret_spans_with_kinds(text)
     return spans
 
 
@@ -88,9 +110,10 @@ def redact_secrets(text: str) -> tuple[str, list[str]]:
     Spans are located on the original text via find_secret_spans and each
     span's replacement is spliced over text[start:end], so a later pattern can
     never match inside an earlier [REDACTED:...] placeholder and offsets always
-    refer to the original text.
+    refer to the original text. The returned list contains every contributing
+    kind (including those from merged spans), ordered by SECRET_PATTERNS.
     """
-    spans = find_secret_spans(text)
+    spans, span_kinds = _find_secret_spans_with_kinds(text)
 
     parts: list[str] = []
     prev = 0
@@ -101,10 +124,13 @@ def redact_secrets(text: str) -> tuple[str, list[str]]:
     parts.append(text[prev:])
     redacted = "".join(parts)
 
+    # Collect all contributing kinds from all spans, deduplicated, in SECRET_PATTERNS order
+    all_kinds: set[str] = set()
+    for kinds in span_kinds:
+        all_kinds.update(kinds)
     found: list[str] = []
-    kinds = {span.kind for span in spans}
     for name, _, _ in SECRET_PATTERNS:
-        if name in kinds:
+        if name in all_kinds:
             found.append(name)
     return redacted, found
 
