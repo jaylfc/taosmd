@@ -33,19 +33,22 @@ class FileKeyProvider:
         try:
             kid = current_path.read_text().strip()
         except (FileNotFoundError, NotADirectoryError):
-            os.makedirs(self.key_dir, exist_ok=True)
-            os.chmod(self.key_dir, 0o700)
-            kid = secrets.token_hex(8)
-            key = os.urandom(32)
-            key_path = self.key_dir / f"archive-{kid}.key"
-            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(key)
-            fd = os.open(current_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as handle:
-                handle.write(kid)
-            return kid, key
+            return self._mint_key(current_path)
         return kid, self.get(kid)
+
+    def _mint_key(self, current_path: Path) -> tuple[str, bytes]:
+        os.makedirs(self.key_dir, exist_ok=True)
+        os.chmod(self.key_dir, 0o700)
+        kid = secrets.token_hex(8)
+        key = os.urandom(32)
+        key_path = self.key_dir / f"archive-{kid}.key"
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(key)
+        fd = os.open(current_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(kid)
+        return kid, key
 
     def get(self, kid: str) -> bytes:
         path = self.key_dir / f"archive-{kid}.key"

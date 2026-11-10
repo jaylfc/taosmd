@@ -130,22 +130,21 @@ def test_tamper_ct_or_nonce_raises_invalid_tag(tmp_path, label, mutate):
 
 
 @pytest.mark.parametrize(
-    "label,mutate",
+    "label,entry_mut,kwargs_mut",
     [
-        ("ts changed", lambda e: None),
-        ("event_type changed", lambda e: None),
-        ("path changed", lambda e: e.update(path=["other"])),
+        ("ts changed", None, {"ts": _TAMPER_TS + 1.0}),
+        ("event_type changed", None, {"event_type": "other"}),
+        ("path changed", {"path": ["other"]}, None),
     ],
 )
-def test_tamper_aad_field_raises(tmp_path, label, mutate):
+def test_tamper_aad_field_raises(tmp_path, label, entry_mut, kwargs_mut):
     provider, redacted, entry = _tamper_base(tmp_path)
     entry = dict(entry)
-    mutate(entry)
+    if entry_mut:
+        entry.update(entry_mut)
     kwargs = {"ts": _TAMPER_TS, "event_type": _TAMPER_EVENT, "provider": provider}
-    if label == "ts changed":
-        kwargs["ts"] = _TAMPER_TS + 1.0
-    elif label == "event_type changed":
-        kwargs["event_type"] = "other"
+    if kwargs_mut:
+        kwargs.update(kwargs_mut)
     with pytest.raises((InvalidTag, ValueError)):
         reveal_leaf(redacted, [entry], **kwargs)
 
