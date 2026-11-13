@@ -1,0 +1,3 @@
+### Fixed
+- ArchiveStore.record now deep-copies the caller's data dict before any transformation so the original is never mutated, and recursively redacts secrets from ALL string leaves (including nested structures and tool/result/error keys) in both archive_index.data_json and archive_fts.
+- The raw JSONL write no longer fails on uncopyable values (deepcopy falls back to a JSON-plain snapshot), and the derived index copy is built from a JSON-plain snapshot so str() of any non-JSON leaf is scanned and redacted before it reaches archive_index.data_json.
