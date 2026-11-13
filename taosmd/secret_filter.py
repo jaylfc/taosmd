@@ -31,7 +31,7 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     ("gitlab_pat", re.compile(r"glpat-[A-Za-z0-9\-]{20,}"), "[REDACTED:gitlab_pat]"),
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED:aws_key]"),
     ("aws_secret", re.compile(r"""(?:aws_secret_access_key|AWS_SECRET)\s*[=:]\s*['"]?([A-Za-z0-9/+=]{40})"""), "[REDACTED:aws_secret]"),
-    ("bearer_token", re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE), "[REDACTED:bearer]"),
+    ("bearer_token", re.compile(r"\bBearer\s+(?=[A-Za-z0-9\-._~+/]*[0-9._~+/])[A-Za-z0-9\-._~+/]{16,}=*", re.IGNORECASE), "[REDACTED:bearer]"),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "[REDACTED:jwt]"),
     ("npm_token", re.compile(r"npm_[A-Za-z0-9]{36,}"), "[REDACTED:npm_token]"),
     ("digitalocean", re.compile(r"dop_v1_[A-Za-z0-9]{64}"), "[REDACTED:do_token]"),
