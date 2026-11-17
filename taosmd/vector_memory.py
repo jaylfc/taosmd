@@ -12,9 +12,12 @@ import json
 import logging
 import math
 import os
+import shutil
 import sqlite3
 import time
 from pathlib import Path
+
+import numpy as np
 
 from . import _db, migrations
 from .api import _is_lfs_pointer
@@ -305,6 +308,7 @@ class VectorMemory:
         # before any query, so a legacy table has gained `valid_to` (and its
         # index) by the time the first SELECT touches it.
         migrations.migrate(self._conn, "vector_memory")
+        self._migrate_dense_to_f32()
         self._check_store_mode()
         self._conn.commit()
         # QMD embed mode talks to a remote QMD server over HTTP. When the
@@ -452,16 +456,19 @@ class VectorMemory:
         """The storage-format and vector-space mode of this instance.
 
         Two kinds of dimension belong here. Format: late_interaction (per-token
-        matrix vs single pooled vector) and binary_quant (packed bits vs float).
-        Space: the embedder identity, because two embedders (e.g. MiniLM vs
-        arctic-embed) produce vectors in incompatible spaces even at the same
-        dim, so a stored MiniLM vector is meaningless to an arctic query and the
-        store must be re-embedded on a switch. embed_mode (qmd/local/onnx) is
-        NOT included: those are transports for the same model, interoperable.
+        matrix vs single pooled vector), binary_quant (packed bits vs float),
+        and dense_format (JSON vs base64 float32). Space: the embedder identity,
+        because two embedders (e.g. MiniLM vs arctic-embed) produce vectors in
+        incompatible spaces even at the same dim, so a stored MiniLM vector is
+        meaningless to an arctic query and the store must be re-embedded on a
+        switch. embed_mode (qmd/local/onnx) is NOT included: those are
+        transports for the same model, interoperable.
         """
+        dense_fmt = "f32" if not self.binary_quant and not self.late_interaction else "none"
         return (
             f"late_interaction={int(self.late_interaction)};"
             f"binary_quant={int(self.binary_quant)};"
+            f"dense_format={dense_fmt};"
             f"embedder={self._embedder_identity()}"
         )
 
@@ -490,6 +497,121 @@ class VectorMemory:
                 k, v = part.split("=", 1)
                 out[k] = v
         return out
+
+    def _migrate_dense_to_f32(self) -> None:
+        """Migrate dense embeddings from JSON to base64 little-endian float32.
+
+        Runs on init for dense stores (not binary_quant, not late_interaction)
+        whose recorded marker lacks dense_format (or has no marker but has rows).
+        Conversion happens in a single transaction: all rows JSON -> f32 base64,
+        then the new marker with dense_format=f32 is written. On any exception,
+        the transaction rolls back, the error is logged, and the exception is
+        re-raised. The store remains in its original JSON state.
+        """
+        # Only applies to dense stores
+        if self.binary_quant or self.late_interaction:
+            return
+
+        current_sig = self._store_mode_signature()
+
+        row = self._conn.execute(
+            "SELECT value FROM store_meta WHERE key = 'mode'"
+        ).fetchone()
+        recorded = row["value"] if row else None
+
+        # Check if migration is needed
+        needs_migration = False
+        if recorded is not None:
+            rec = self._parse_mode(recorded)
+            # Migration needed if recorded marker lacks dense_format key
+            if "dense_format" not in rec:
+                needs_migration = True
+        else:
+            # No marker: check if there are any rows (legacy store)
+            has_rows = self._conn.execute(
+                "SELECT 1 FROM vector_memory LIMIT 1"
+            ).fetchone() is not None
+            if has_rows:
+                needs_migration = True
+
+        if not needs_migration:
+            return
+
+        logger.info("Migrating dense embeddings from JSON to base64 float32 at %s", self._db_path)
+
+        try:
+            # Start transaction
+            self._conn.execute("BEGIN IMMEDIATE")
+
+            # Fetch all rows that need migration (JSON format starts with '[')
+            rows = self._conn.execute(
+                "SELECT id, embedding FROM vector_memory WHERE embedding LIKE '[%'"
+            ).fetchall()
+
+            if rows:
+                # Convert each row
+                updates = []
+                for row in rows:
+                    try:
+                        vec = json.loads(row["embedding"])
+                        # Convert to base64 little-endian float32
+                        arr = np.asarray(vec, dtype="<f4")
+                        f32_b64 = base64.b64encode(arr.tobytes()).decode("ascii")
+                        updates.append((f32_b64, row["id"]))
+                    except (json.JSONDecodeError, TypeError, ValueError) as e:
+                        # Rollback on any parse failure
+                        self._conn.execute("ROLLBACK")
+                        logger.error("Migration failed at row %s: %s", row["id"], e)
+                        raise RuntimeError(f"Failed to parse embedding for row {row['id']}: {e}") from e
+
+                # Batch update all rows
+                self._conn.executemany(
+                    "UPDATE vector_memory SET embedding = ? WHERE id = ?",
+                    updates,
+                )
+
+            # Write the new marker with dense_format=f32
+            self._conn.execute(
+                "INSERT OR REPLACE INTO store_meta (key, value) VALUES ('mode', ?)",
+                (current_sig,),
+            )
+
+            self._conn.execute("COMMIT")
+            logger.info("Migrated %d dense embeddings to base64 float32", len(rows))
+
+            # VACUUM if free disk space >= 2x db file size
+            self._maybe_vacuum_after_migration()
+
+        except Exception:
+            # Ensure rollback on any exception
+            try:
+                self._conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            logger.exception("Dense->f32 migration failed, rolled back")
+            raise
+
+    def _maybe_vacuum_after_migration(self) -> None:
+        """Run VACUUM after migration if free disk space >= 2x db file size.
+
+        VACUUM failure is logged but does not fail init.
+        """
+        try:
+            db_path = Path(self._db_path)
+            if not db_path.exists():
+                return
+            db_size = db_path.stat().st_size
+            free_space = shutil.disk_usage(db_path.parent).free
+            if free_space >= 2 * db_size:
+                logger.info("Running VACUUM after migration (free space %.1fx db size)", free_space / db_size)
+                self._conn.execute("VACUUM")
+            else:
+                logger.info(
+                    "Skipping VACUUM after migration: free space %.1fx db size (need >= 2x), space will be reclaimed later",
+                    free_space / db_size,
+                )
+        except Exception as e:
+            logger.warning("VACUUM after migration failed (non-fatal): %s", e)
 
     def _check_store_mode(self) -> None:
         """Refuse to open a store in a different format or vector space than it
@@ -799,7 +921,6 @@ class VectorMemory:
             # as a base64 float16 blob — large (a matrix per memory, not one
             # vector), but that's the point of the MaxSim probe. The shape is
             # recovered on read as nbytes/(self._token_dim*2) tokens x self._token_dim.
-            import numpy as np
 
             token_mat = await self.embed_tokens(text, task="search_document")
             if not token_mat:
@@ -812,9 +933,13 @@ class VectorMemory:
                 return -1
             # In binary-quant mode store only the packed sign bits (1 bit/dim,
             # 32x smaller) — the full-precision floats are intentionally
-            # discarded, that footprint saving is the point of the mode. Cosine
-            # mode stores the float vector as JSON as before.
-            embedding_text = pack_sign_bits(embedding) if self.binary_quant else json.dumps(embedding)
+            # discarded, that footprint saving is the point of the mode.
+            # Dense mode stores the float vector as base64 little-endian float32.
+            if self.binary_quant:
+                embedding_text = pack_sign_bits(embedding)
+            else:
+                arr = np.asarray(embedding, dtype="<f4")
+                embedding_text = base64.b64encode(arr.tobytes()).decode("ascii")
 
         now = time.time()
         cursor = self._conn.execute(
@@ -1090,7 +1215,7 @@ class VectorMemory:
             # Parse all stored embeddings. In binary-quant mode the column holds
             # base64 packed sign bits; in late-interaction mode it holds a base64
             # float16 token matrix (decoded to a seq_len x _token_dim float32 array); in
-            # cosine mode it holds a JSON float list.
+            # dense mode it holds base64 little-endian float32 (new) or JSON float list (legacy).
             ids = []
             texts = []
             metas = []
@@ -1106,7 +1231,17 @@ class VectorMemory:
                     elif self.binary_quant:
                         emb = base64.b64decode(raw)
                     else:
-                        emb = json.loads(raw)
+                        # Dense store: try f32 base64 first, fall back to JSON for safety
+                        if raw.startswith("["):
+                            # Legacy JSON format
+                            emb = json.loads(raw)
+                        else:
+                            # New f32 base64 format
+                            try:
+                                emb = np.frombuffer(base64.b64decode(raw), dtype="<f4")
+                            except (base64.binascii.Error, ValueError) as e:
+                                logger.warning("Failed to decode f32 embedding for row %s: %s", row["id"], e)
+                                continue
                     if emb is not None and len(emb):
                         ids.append(row["id"])
                         texts.append(row["text"])
@@ -1307,7 +1442,22 @@ class VectorMemory:
             scored = []
             for row in rows:
                 try:
-                    emb = json.loads(row["embedding"])
+                    raw = row["embedding"]
+                    # Dense store: try f32 base64 first, fall back to JSON for safety
+                    if raw.startswith("["):
+                        # Legacy JSON format
+                        emb = json.loads(raw)
+                    else:
+                        # New f32 base64 format - decode without numpy
+                        try:
+                            decoded = base64.b64decode(raw)
+                            # Unpack little-endian float32 manually
+                            import struct
+                            emb = list(struct.iter_unpack("<f", decoded))
+                            emb = [v[0] for v in emb]
+                        except (base64.binascii.Error, ValueError, struct.error) as e:
+                            logger.warning("Failed to decode f32 embedding for row %s: %s", row["id"], e)
+                            continue
                     sim = cosine_similarity(query_emb, emb)
                     scored.append({
                         "id": row["id"],
