@@ -702,11 +702,12 @@ class ArchiveStore:
 
         The raw archive is eternal and lossless, so this is the only code path
         that deletes raw archive data. Every write is verified before the
-        source is touched: the gz is written to a temp path, flushed and
-        fsynced, then re-read and byte-compared to the source. Only on a
-        clean round-trip is the temp atomically renamed onto the final .gz,
-        the directory fsynced, and the .jsonl unlinked. A mismatch or any
-        exception leaves the .jsonl in place and logs a warning.
+        source is touched: the gz is written to a temp path, the gzip context
+        closes (writing the trailer), then the finished file is fsynced,
+        re-opened and decompressed for comparison, then os.replace'd onto the
+        final path with a directory fsync (skipped silently where refused).
+        A mismatch or any exception leaves the .jsonl in place and logs a
+        warning.
         """
         cutoff = time.time() - (days_old * 86400)
         compressed = 0
@@ -721,8 +722,11 @@ class ArchiveStore:
                         source_bytes = f_in.read()
                     with gzip.open(tmp_path, "wb") as f_out:
                         f_out.write(source_bytes)
-                        f_out.flush()
-                        os.fsync(f_out.fileno())
+                    fd = os.open(tmp_path, os.O_RDONLY)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
                     with gzip.open(tmp_path, "rb") as f_verify:
                         if f_verify.read() != source_bytes:
                             raise ValueError(
@@ -733,6 +737,8 @@ class ArchiveStore:
                     dir_fd = os.open(str(jsonl.parent), os.O_RDONLY)
                     try:
                         os.fsync(dir_fd)
+                    except OSError:
+                        pass
                     finally:
                         os.close(dir_fd)
                     jsonl.unlink()
