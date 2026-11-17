@@ -225,6 +225,62 @@ def test_fast_fills_caller_limit_from_secondary_when_agent_fanout_is_smaller(mon
     assert any(hit["source"] == "catalog" for hit in hits)
 
 
+@pytest.mark.parametrize("strategy", ["fast", "minimal"])
+def test_primary_vector_query_receives_project_scope(monkeypatch, strategy):
+    """The fast/minimal primary branch threads project and search_agents to the
+    vector source (regression: dropping the two kwargs left this untested and
+    the scope tests only ever reached the fallback branch)."""
+    from taosmd import intent_classifier
+
+    class RecordingVector:
+        def __init__(self):
+            self.calls = []
+
+        async def search(self, query, **kwargs):
+            self.calls.append(kwargs)
+            return [{"id": "v1", "text": "hit", "similarity": 1.0, "metadata": {}}]
+
+    monkeypatch.setattr(intent_classifier, "get_search_strategy",
+                        lambda query: {"primary": "vector", "secondary": None})
+
+    vec = RecordingVector()
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": vec}, strategy=strategy,
+        project="ours", search_agents=["dave"], limit=2))
+    assert vec.calls, "vector source was not queried"
+    assert vec.calls[0]["project"] == "ours"
+    assert vec.calls[0]["search_agents"] == ["dave"]
+    assert hits, "the recorded vector hit did not flow through retrieve()"
+
+
+def test_limit_above_fanout_ceiling_is_honoured(monkeypatch):
+    """fetch_limit used to be fixed at fan-out * 3, so a caller limit above it
+    returned fewer hits than requested even when more existed."""
+    from taosmd import intent_classifier
+
+    class ManyHits:
+        def __init__(self):
+            self.calls = []
+
+        async def search(self, query, **kwargs):
+            self.calls.append(kwargs)
+            return [
+                {"id": str(i), "text": f"hit {i}", "similarity": 1 - i / 60,
+                 "metadata": {}}
+                for i in range(60)
+            ]
+
+    monkeypatch.setattr(intent_classifier, "get_search_strategy",
+                        lambda query: {"primary": "vector", "secondary": None})
+    monkeypatch.setattr(taosmd_agents, "effective_fanout", lambda *a, **k: 10)
+    vec = ManyHits()
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": vec}, strategy="minimal",
+        agent="gina", limit=50))
+    assert vec.calls[0]["limit"] == 50  # fetch limit follows the caller, not the fan-out ceiling
+    assert len(hits) == 50
+
+
 @pytest.mark.parametrize("strategy", ["thorough", "custom"])
 def test_parallel_source_cancellation_is_not_returned_as_empty_hits(strategy):
     class CancelledVector:
