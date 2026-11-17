@@ -54,7 +54,7 @@ def _make_fake_subprocess_run(monkeypatch, data_dir: str):
         return _FakeResult(stdout="", stderr="", returncode=0)
 
     import taosmd.auto_setup as _mod
-    _mod.subprocess.run = fake_run
+    monkeypatch.setattr(_mod.subprocess, "run", fake_run)
     return captured
 
 
@@ -124,3 +124,9 @@ class TestInstallCron:
         )
         # /dev/null must NOT be present
         assert "/dev/null" not in stdin_input
+
+
+def test_subprocess_run_restored_after_fake():
+    """After previous tests using _make_fake_subprocess_run, the real subprocess.run must be restored."""
+    import subprocess
+    assert subprocess.run.__module__ == "subprocess"
