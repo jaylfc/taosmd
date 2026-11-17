@@ -94,13 +94,14 @@ def test_get_invalid_key_raises(tmp_path):
     provider = FileKeyProvider(key_dir)
     kid, _ = provider.current()
 
-    bad = key_dir / "archive-bad.key"
+    bad_kid = "bad0000000000000"
+    bad = key_dir / f"archive-{bad_kid}.key"
     os.write(os.open(bad, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), b"x" * 31)
 
     with pytest.raises(ValueError):
-        provider.get("bad")
+        provider.get(bad_kid)
     with pytest.raises(KeyError):
-        provider.get("missing")
+        provider.get("missing000000000000")
 
 
 def test_round_trip_multiple_spans(tmp_path):

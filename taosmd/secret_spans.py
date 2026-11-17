@@ -52,7 +52,7 @@ class FileKeyProvider:
         return kid, key
 
     def get(self, kid: str) -> bytes:
-        if not re.fullmatch(r"[0-9a-f]+", kid):
+        if not re.fullmatch(r"[0-9a-f]{16}", kid):
             raise KeyError(kid)
         key_path = self.key_dir / f"archive-{kid}.key"
         if not key_path.exists():
