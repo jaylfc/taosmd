@@ -367,9 +367,24 @@ def test_thread_members_restricted_allowed_sees_everything(srv):
     assert sorted(m["principal_id"] for m in _j(raw)["members"]) == sorted([ALICE, MEMBER])
 
 
-def test_thread_members_open_works_unauthenticated(srv):
+def test_thread_members_member_restricted_denied_unauthenticated(srv):
+    """Member-restricted thread: unauthenticated GET /a2a/threads/{t}/members returns 403.
+    
+    OPEN_THREAD has a membership row (OPEN_MEMBER). Under the membership read gate,
+    a thread with any membership is restricted to verified members only. An
+    unauthenticated caller has no verified sub, so it is a non-member and gets 403.
+    """
     _seed(srv)
     status, raw = _get(srv, f"/a2a/threads/{OPEN_THREAD}/members")
+    assert status == 403, raw
+    _assert_no_leak(raw)
+    assert OPEN_MEMBER not in raw
+
+
+def test_thread_members_member_restricted_allowed_for_member(srv):
+    """Member-restricted thread: a verified member can read /a2a/threads/{t}/members."""
+    _seed(srv)
+    status, raw = _get(srv, f"/a2a/threads/{OPEN_THREAD}/members", _token(OPEN_MEMBER))
     assert status == 200, raw
     assert OPEN_MEMBER in raw
 

@@ -434,39 +434,46 @@ def test_standalone_open_thread_works(srv_standalone):
     assert OPEN_BODY in raw
 
 
-def test_standalone_member_thread_not_enforced(srv_standalone):
-    """Standalone server: without verifier, membership is not enforced (falls back to open).
+def test_standalone_member_thread_stays_readable(srv_standalone):
+    """Standalone server (no verifier): a thread with members stays fully readable.
     
-    This is the current behaviour: when no verifier is configured, _get_authenticated_agent_id
-    returns None, and the membership gate treats None as non-member. But since there's no
-    channel ACL either, the thread would be open. The membership gate only applies when
-    has_any_membership is True AND a verified sub exists.
+    RED-FIRST: on the base head this test FAILS (returns 403) because
+    _can_read_thread_by_membership returns False when _get_authenticated_agent_id
+    is None, and that is ALWAYS None when no registry verifier is configured.
+    The fix makes the membership read gate apply ONLY when a registry verifier
+    is configured; when _registry_verifier is None the gate returns True at once.
     """
-    # Create member-restricted thread via service
+    # Create a thread with members alice+bob via the service layer
     srv_standalone.httpd.service_loop.run(service.a2a_create_thread(
-        MEMBER_THREAD, [BOB], ALICE, data_dir=srv_standalone.data_dir
+        "standalone-member-thread", [BOB], ALICE, data_dir=srv_standalone.data_dir
     ))
-    # Post canary
+    # Post a message to it
     status, raw = _call("POST", f"{srv_standalone.base}/a2a/send",
-                        {"from": ALICE, "body": f"{CANARY} from alice", "thread": MEMBER_THREAD})
+                        {"from": ALICE, "body": "standalone-member-canary", "thread": "standalone-member-thread"})
     assert status == 200, raw
-
-    # In standalone mode, without a verifier, the membership gate cannot identify
-    # the caller, so the thread behaves as open (no verified sub = non-member,
-    # but the gate should still allow since no ACL is configured and membership
-    # gate only restricts when there's a verified sub).
-    # Actually, the spec says: "A caller with no verified sub is a non-member."
-    # So even in standalone, if a thread has membership, it should be restricted.
-    # But without a verifier, there's no way to BE a member. This test documents
-    # the expected behaviour: without verifier, membership-gated threads are
-    # inaccessible (403 on single-thread reads, filtered on list reads).
-    status, raw = _call("GET", f"{srv_standalone.base}/a2a/threads/{MEMBER_THREAD}/messages")
-    # Since no verifier, _get_authenticated_agent_id returns None -> non-member -> 403
-    assert status == 403, raw
-
-    # But open thread still works
-    status, raw = _call("GET", f"{srv_standalone.base}/a2a/threads/{OPEN_THREAD}/messages")
+    
+    # With NO token: the message IS present on GET /a2a/messages (200)
+    status, raw = _call("GET", f"{srv_standalone.base}/a2a/messages?thread=standalone-member-thread")
     assert status == 200, raw
+    assert "standalone-member-canary" in raw
+    assert "standalone-member-thread" in raw
+    
+    # GET /a2a/threads/{t}/messages is 200
+    status, raw = _call("GET", f"{srv_standalone.base}/a2a/threads/standalone-member-thread/messages")
+    assert status == 200, raw
+    assert "standalone-member-canary" in raw
+    
+    # The thread IS listed on GET /a2a/threads
+    status, raw = _call("GET", f"{srv_standalone.base}/a2a/threads")
+    assert status == 200, raw
+    threads = {t["thread"] for t in _j(raw)["threads"]}
+    assert "standalone-member-thread" in threads
+    
+    # GET /a2a/threads/{t}/members is 200 listing alice and bob
+    status, raw = _call("GET", f"{srv_standalone.base}/a2a/threads/standalone-member-thread/members")
+    assert status == 200, raw
+    members = {m["principal_id"] for m in _j(raw)["members"]}
+    assert members == {"alice-mem", "bob-mem"}
 
 
 # ---------------------------------------------------------------------------

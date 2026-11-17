@@ -1065,7 +1065,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             A thread with membership rows is readable only by its active members,
             identified by the verified token ``sub``. A caller with no verified
             sub is a non-member.
+
+            When no registry verifier is configured (standalone), the membership
+            gate does not apply and the thread is open to all.
             """
+            if _registry_verifier is None:
+                return True
             has_membership, members_set = self._resolve_thread_membership(thread, membership_map)
             if not has_membership:
                 return True
