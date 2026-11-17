@@ -868,6 +868,58 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 return auth[len("Bearer "):].strip() == _server_token
             return False
 
+        def _require_a2a_reader(self) -> bool:
+            """Enforce read auth for GET /a2a/* routes when configured.
+
+            Returns True to proceed. Returns False (after writing a response)
+            when the request must be rejected.
+            """
+            if _registry_verifier is None:
+                return True
+            if not _config.get_a2a_auth_enforce(data_dir):
+                return True
+            auth = self.headers.get("Authorization", "")
+            token = auth[len("Bearer "):].strip() if auth.startswith("Bearer ") else ""
+            if not token:
+                self._send_json(401, {"error": "a2a read: missing Bearer token"})
+                return False
+            from . import registry_auth as _ra  # noqa: PLC0415
+            try:
+                import jwt as _jwt  # noqa: PLC0415
+                unverified = _jwt.decode(token, options={"verify_signature": False})
+                claimed = unverified.get("sub", "") or ""
+                _registry_verifier.authorize(token, claimed)
+            except _ra.HumanAuthError:
+                self._send_json(403, {"error": "registry auth: forbidden"})
+                return False
+            except Exception:  # noqa: BLE001
+                self._send_json(403, {"error": "registry auth: forbidden"})
+                return False
+            # Token is verified; get sub
+            try:
+                import jwt as _jwt  # noqa: PLC0415
+                unverified = _jwt.decode(token, options={"verify_signature": False})
+                sub = unverified.get("sub", "") or ""
+            except Exception:  # noqa: BLE001
+                self._send_json(403, {"error": "registry auth: forbidden"})
+                return False
+            if sub == "":
+                self._send_json(403, {"error": "registry auth: forbidden"})
+                return False
+            self._cached_agent_id = sub
+            if _grants_verifier is not None:
+                if not _registry_verifier.is_human(sub):
+                    try:
+                        if not _grants_verifier.has_grant(sub, scope="a2a_receive"):
+                            self._send_json(403, {"error": "registry auth: no active grant for a2a_receive"})
+                            return False
+                    except _ra.AuthError:
+                        self._send_json(403, {"error": "registry auth: no active grant for a2a_receive"})
+                        return False
+                else:
+                    logger.info("grants check skipped for human principal %r", sub)
+            return True
+
         def _get_authenticated_agent_id(self) -> str | None:
             """Return the agent identity from a verified registry token, or None.
 
@@ -1262,39 +1314,61 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "POST" and path == "/a2a/import":
                     self._handle_a2a_import()
                 elif method == "GET" and path == "/a2a/channels":
+                    if not self._require_a2a_reader():
+                        return
                     self._handle_a2a_channels(query)
                 elif method == "GET" and path == "/a2a/census":
+                    if not self._require_a2a_reader():
+                        return
                     self._handle_a2a_census(query)
                 elif method == "GET" and path == "/a2a/members":
+                    if not self._require_a2a_reader():
+                        return
                     self._handle_a2a_members(query)
                 elif method == "GET" and path == "/a2a/messages":
+                    if not self._require_a2a_reader():
+                        return
                     self._handle_a2a_messages(query)
                 elif method == "GET" and path == "/a2a/mentions":
+                    if not self._require_a2a_reader():
+                        return
                     self._handle_a2a_mentions(query)
                 elif method == "GET" and path == "/a2a/inbox":
+                    if not self._require_a2a_reader():
+                        return
                     self._handle_a2a_inbox(query)
                 elif method == "POST" and path == "/a2a/inbox/advance":
                     self._handle_a2a_inbox_advance()
                 elif method == "POST" and path == "/a2a/ack":
                     self._handle_a2a_ack()
                 elif method == "GET" and path == "/a2a/inbox/unhandled":
+                    if not self._require_a2a_reader():
+                        return
                     self._handle_a2a_inbox_unhandled(query)
                 elif method == "GET" and path == "/a2a/stream":
+                    if not self._require_a2a_reader():
+                        return
                     self._handle_a2a_stream(query)
                     return  # SSE response already sent; skip _send_json error path
                 elif method == "POST" and path == "/a2a/threads":
                     self._handle_a2a_create_thread()
                 elif method == "GET" and path == "/a2a/threads":
+                    if not self._require_a2a_reader():
+                        return
                     self._handle_a2a_threads(query)
                 elif method == "GET" and path.startswith("/a2a/threads/"):
                     rest = path[len("/a2a/threads/"):]
                     if rest.endswith("/members"):
+                        if not self._require_a2a_reader():
+                            return
                         thread = rest[: -len("/members")]
                         if not thread:
                             self._send_json(404, {"error": "thread name required"})
                         else:
                             self._handle_a2a_list_members(thread, query)
                     else:
+                        if not self._require_a2a_reader():
+                            return
                         if rest.endswith("/messages"):
                             thread = rest[: -len("/messages")]
                         else:
