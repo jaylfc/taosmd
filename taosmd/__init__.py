@@ -17,6 +17,7 @@ from .crystallize import CrystalStore
 from .reflect import InsightStore
 from .pending_decisions import PendingDecisionsStore
 from . import predicate_vocab
+from .sync_merge import merge_kg
 from . import emem_event_lift
 from . import loaders
 from .session_catalog import SessionCatalog
@@ -259,4 +260,5 @@ __all__ = [
     "resolve_pending_decision",
     # A2A thread membership store
     "MembershipStore",
+    "merge_kg",
 ]
