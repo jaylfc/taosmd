@@ -681,6 +681,39 @@ def test_ingest_batch_archives_raw_text_verbatim(isolated_data_dir):
     assert found_empty, "archive row with content '   ' (whitespace) should exist"
 
 
+def test_ingest_batch_empty_item_with_id_added_to_seen(isolated_data_dir):
+    """An item with an id and empty/whitespace text is archived but its id
+    must be added to `seen` so that resending the same batch does not
+    re-archive the empty item every time.
+
+    This tests the fix for: seen.add(sid) only ran after indexing, and
+    existing_source_ids comes from the vector store (which never sees empty
+    items). The fix adds sid to seen right after the archive write for any
+    item with an id.
+    """
+    _setup_stores(isolated_data_dir)
+
+    # First call: two copies of the same empty item with same id in ONE call
+    batch = [{"text": "   ", "id": "e1"}, {"text": "   ", "id": "e1"}]
+    result = asyncio.run(taosmd.ingest_batch(
+        batch, agent="user-memory", data_dir=str(isolated_data_dir),
+    ))
+    # Both items are empty -> both skipped for indexing
+    assert result["ingested"] == 0
+    assert result["skipped"] == 2
+
+    # Exactly ONE archive JSONL row with that content (deduped by seen)
+    archive_files = list((isolated_data_dir / "archive").rglob("*.jsonl"))
+    assert archive_files, "expected at least one archive jsonl file"
+    lines = []
+    for f in archive_files:
+        lines.extend(f.read_text().strip().split("\n"))
+    agent_lines = [l for l in lines if "user-memory" in l and '"content": "   "' in l]
+    assert len(agent_lines) == 1, (
+        f"expected exactly 1 archive row for empty item with id e1, got {len(agent_lines)}"
+    )
+
+
 def test_ingest_batch_validates_before_writing(isolated_data_dir):
     stores = _setup_stores(isolated_data_dir)
     with pytest.raises(ValueError, match="items"):

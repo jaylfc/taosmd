@@ -240,3 +240,51 @@ async def test_compress_dir_fsync_refused_still_compresses(tmp_path, monkeypatch
     # No 'verification failed' warning should be logged
     verification_warnings = [r for r in caplog.records if "verification failed" in r.getMessage().lower()]
     assert not verification_warnings, f"unexpected verification failed warning: {verification_warnings}"
+
+
+@pytest.mark.asyncio
+async def test_compress_dir_os_open_raises_on_windows(tmp_path, monkeypatch):
+    """On Windows opening a directory with os.open raises PermissionError.
+
+    The bug: dir_fd = os.open(dir, os.O_RDONLY) sits OUTSIDE the try/except
+    OSError around the directory fsync, so the exception escapes and the
+    .jsonl is kept beside the .gz forever (since os.replace already happened).
+
+    Fix: move the os.open inside the try (keep the close in a finally only
+    when the open succeeded).
+
+    Test: monkeypatch os.open in taosmd.archive to raise PermissionError for
+    a directory path (os.path.isdir) and call through otherwise. compress_old_files
+    returns 1, the .jsonl is gone, the .gz decompresses to the source bytes.
+    """
+    import os
+    import time
+
+    arc = ArchiveStore(archive_dir=str(tmp_path / "a"), index_path=str(tmp_path / "idx.db"))
+    await arc.init()
+
+    jsonl = arc._archive_dir / "2026" / "11" / "08.jsonl"
+    jsonl.parent.mkdir(parents=True, exist_ok=True)
+    payload = '{"text": "windows dir open fails"}\n'
+    jsonl.write_text(payload, encoding="utf-8")
+    original_bytes = jsonl.read_bytes()
+    os.utime(jsonl, (time.time() - 3 * 86400, time.time() - 3 * 86400))
+
+    real_open = os.open
+
+    def raising_open(path, flags, *args, **kwargs):
+        # Raise PermissionError when trying to open a directory
+        if os.path.isdir(path):
+            raise PermissionError("Windows does not allow opening directories")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr("taosmd.archive.os.open", raising_open)
+
+    result = await arc.compress_old_files(days_old=1)
+
+    assert result == 1, "compression should succeed even when dir os.open raises"
+    assert not jsonl.exists(), "raw .jsonl must be removed after successful compression"
+    gz_path = jsonl.with_suffix(".jsonl.gz")
+    assert gz_path.exists(), "the .gz must exist"
+    with gzip.open(gz_path, "rb") as fh:
+        assert fh.read() == original_bytes, ".gz must decompress to the original bytes"

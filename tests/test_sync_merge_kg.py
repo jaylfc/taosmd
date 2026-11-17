@@ -476,3 +476,65 @@ async def test_case_8_determinism_across_devices(tmp_path):
         "both merge directions must converge to the same (subject, predicate, "
         "object, valid_from, valid_to) set regardless of insert order"
     )
+
+
+@pytest.mark.asyncio
+async def test_case_9_superseded_by_remap_peer_id_to_local_id(tmp_path):
+    """Peer has (User, lives_in, Paris) closed + superseded_by its Berlin row;
+    local is empty. After merge_kg the local Paris row's superseded_by equals
+    the LOCAL Berlin row's id (and that id exists in local kg_triples).
+
+    The peer's superseded_by is a device-local peer id that does not exist in
+    the local db (bus 7401: never reuse peer ids). The fix remaps it in a
+    second pass after all inserts by looking up the peer's superseding row
+    in the PEER db by that id, taking its content key and valid_from, and
+    finding the LOCAL row with the same content key and valid_from.
+    """
+    merge_kg = _merge_kg_guard()
+
+    local_db = str(tmp_path / "local.db")
+    peer_db = str(tmp_path / "peer.db")
+
+    # Local is empty
+    kg_local = await _kg(local_db)
+    await kg_local.close()
+
+    # Peer: Paris closed, superseded_by -> Berlin row
+    kg_peer = await _kg(peer_db)
+    paris_id = await kg_peer.add_triple("User", "lives_in", "Paris", valid_from=100.0)
+    await kg_peer.invalidate(paris_id, ended_at=200.0)
+    berlin_id = await kg_peer.add_triple("User", "lives_in", "Berlin", valid_from=200.0)
+    kg_peer._conn.execute(
+        "UPDATE kg_triples SET superseded_by = ? WHERE id = ?", (berlin_id, paris_id)
+    )
+    kg_peer._conn.commit()
+    await kg_peer.close()
+
+    result = merge_kg(local_db, peer_db)
+
+    # Both triples should be added (local was empty)
+    assert result["triples_added"] == 2
+
+    # Verify: local Paris row's superseded_by points to LOCAL Berlin row's id
+    con = sqlite3.connect(local_db)
+    try:
+        paris_row = con.execute("""
+            SELECT id, superseded_by, valid_from, valid_to FROM kg_triples
+            WHERE subject_id = 'user' AND predicate = 'lives_in' AND object_id = 'paris'
+        """).fetchone()
+        berlin_row = con.execute("""
+            SELECT id, valid_from, valid_to FROM kg_triples
+            WHERE subject_id = 'user' AND predicate = 'lives_in' AND object_id = 'berlin'
+        """).fetchone()
+    finally:
+        con.close()
+
+    assert paris_row is not None, "Paris row must exist"
+    assert berlin_row is not None, "Berlin row must exist"
+    assert paris_row[3] == 200.0, "Paris must be closed at 200.0"
+    assert berlin_row[2] is None, "Berlin must be open"
+    assert paris_row[1] == berlin_row[0], (
+        "Paris superseded_by must equal LOCAL Berlin row's id"
+    )
+    # The local Berlin id must exist in kg_triples
+    assert berlin_row[0] is not None

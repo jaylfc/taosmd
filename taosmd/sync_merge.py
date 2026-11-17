@@ -299,8 +299,11 @@ def _merge_open_pair(conn, local_row: dict, prow: sqlite3.Row, predicate: str) -
     )
 
 
-def _insert_peer_triple(conn: sqlite3.Connection, prow: sqlite3.Row, predicate: str) -> None:
-    """Insert a peer triple as a new local row with a fresh id (never a peer id)."""
+def _insert_peer_triple(conn: sqlite3.Connection, prow: sqlite3.Row, predicate: str) -> str:
+    """Insert a peer triple as a new local row with a fresh id (never a peer id).
+
+    Returns the new local triple id.
+    """
     tid = _new_triple_id(prow["subject_id"], predicate, prow["object_id"])
     conn.execute(
         "INSERT INTO kg_triples (id, subject_id, predicate, object_id, valid_from, valid_to, "
@@ -316,11 +319,59 @@ def _insert_peer_triple(conn: sqlite3.Connection, prow: sqlite3.Row, predicate: 
             prow["confidence"],
             prow["source"],
             prow["source_ids"],
-            prow["superseded_by"],
+            prow["superseded_by"],  # may be a peer id; remapped in second pass
             prow["appeared_count"],
             prow["created_at"],
         ),
     )
+    return tid
+
+
+def _remap_superseded_by(
+    local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection, inserted: list[tuple]
+) -> None:
+    """Remap superseded_by from peer ids to local ids.
+
+    Args:
+        local_conn: Local database connection (read-write).
+        peer_conn: Peer database connection (read-only).
+        inserted: List of (local_id, peer_superseded_by, subject_id, predicate, object_id, valid_from)
+            for each inserted peer triple that had a non-NULL superseded_by.
+    """
+    for local_id, peer_superseded_by, subject_id, predicate, object_id, valid_from in inserted:
+        if peer_superseded_by is None:
+            continue
+        # Look up the peer's superseding row by its peer id
+        peer_row = peer_conn.execute(
+            "SELECT subject_id, predicate, object_id, valid_from FROM kg_triples WHERE id = ?",
+            (peer_superseded_by,),
+        ).fetchone()
+        if peer_row is None:
+            # Superseding row not found in peer db; leave as NULL
+            local_conn.execute(
+                "UPDATE kg_triples SET superseded_by = NULL WHERE id = ?", (local_id,)
+            )
+            continue
+        # Find the LOCAL row with the same content key and valid_from
+        # Content key = (subject_id, normalised predicate, object_id)
+        sup_predicate = normalise(peer_row["predicate"])
+        sup_key = (peer_row["subject_id"], sup_predicate, peer_row["object_id"])
+        sup_valid_from = peer_row["valid_from"]
+        local_row = local_conn.execute(
+            "SELECT id FROM kg_triples "
+            "WHERE subject_id = ? AND predicate = ? AND object_id = ? AND valid_from = ?",
+            (sup_key[0], sup_key[1], sup_key[2], sup_valid_from),
+        ).fetchone()
+        if local_row is None:
+            # No matching local row found; leave as NULL
+            local_conn.execute(
+                "UPDATE kg_triples SET superseded_by = NULL WHERE id = ?", (local_id,)
+            )
+        else:
+            local_conn.execute(
+                "UPDATE kg_triples SET superseded_by = ? WHERE id = ?",
+                (local_row["id"], local_id),
+            )
 
 
 def _merge_entities(local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection, counts: dict) -> None:
@@ -348,10 +399,13 @@ def _merge_entities(local_conn: sqlite3.Connection, peer_conn: sqlite3.Connectio
             counts["entities_typed"] += 1
 
 
-def _merge_triples(local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection, counts: dict) -> None:
+def _merge_triples(local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection, counts: dict) -> list:
     """Content-keyed triple merge keyed by (subject_id, normalised predicate, object_id).
 
     Never deletes; an inserted peer triple always gets a fresh local id.
+
+    Returns a list of (local_id, peer_superseded_by, subject_id, predicate, object_id, valid_from)
+    for each inserted peer triple that had a non-NULL superseded_by, for later remapping.
     """
     local_index = _load_local_triples(local_conn)
     peer_triples = peer_conn.execute(
@@ -359,6 +413,8 @@ def _merge_triples(local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection
         "confidence, source, source_ids, superseded_by, appeared_count, created_at "
         "FROM kg_triples"
     ).fetchall()
+
+    inserted_with_superseded_by: list[tuple] = []
 
     for prow in peer_triples:
         predicate = normalise(prow["predicate"])
@@ -384,8 +440,12 @@ def _merge_triples(local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection
                 continue
             else:
                 # Re-assert after closure: keep both rows as separate intervals.
-                _insert_peer_triple(local_conn, prow, predicate)
+                local_id = _insert_peer_triple(local_conn, prow, predicate)
                 counts["triples_added"] += 1
+                if prow["superseded_by"] is not None:
+                    inserted_with_superseded_by.append(
+                        (local_id, prow["superseded_by"], prow["subject_id"], predicate, prow["object_id"], prow["valid_from"])
+                    )
         else:
             # Peer closed.
             peer_valid_to = prow["valid_to"]
@@ -401,8 +461,12 @@ def _merge_triples(local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection
                     counts["triples_closed"] += 1
                 else:
                     # Local re-asserted after peer closed: keep both intervals.
-                    _insert_peer_triple(local_conn, prow, predicate)
+                    local_id = _insert_peer_triple(local_conn, prow, predicate)
                     counts["triples_added"] += 1
+                    if prow["superseded_by"] is not None:
+                        inserted_with_superseded_by.append(
+                            (local_id, prow["superseded_by"], prow["subject_id"], predicate, prow["object_id"], prow["valid_from"])
+                        )
             elif closes and any(
                 c["valid_from"] == prow["valid_from"] and c["valid_to"] == peer_valid_to
                 for c in closes
@@ -411,8 +475,14 @@ def _merge_triples(local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection
                 continue
             else:
                 # Historical interval the local store lacks.
-                _insert_peer_triple(local_conn, prow, predicate)
+                local_id = _insert_peer_triple(local_conn, prow, predicate)
                 counts["triples_added"] += 1
+                if prow["superseded_by"] is not None:
+                    inserted_with_superseded_by.append(
+                        (local_id, prow["superseded_by"], prow["subject_id"], predicate, prow["object_id"], prow["valid_from"])
+                    )
+
+    return inserted_with_superseded_by
 
 
 def _resolve_singular_predicates(conn: sqlite3.Connection, counts: dict) -> None:
@@ -501,7 +571,8 @@ def merge_kg(local_db_path: str, peer_db_path: str) -> dict:
     try:
         local_conn.execute("BEGIN IMMEDIATE")
         _merge_entities(local_conn, peer_conn, counts)
-        _merge_triples(local_conn, peer_conn, counts)
+        inserted_with_superseded_by = _merge_triples(local_conn, peer_conn, counts)
+        _remap_superseded_by(local_conn, peer_conn, inserted_with_superseded_by)
         _resolve_singular_predicates(local_conn, counts)
         local_conn.commit()
     except BaseException:
