@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import secrets
 from pathlib import Path
 
@@ -34,7 +35,15 @@ class FileKeyProvider:
         finally:
             os.close(fd)
 
-        fd = os.open(current_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            fd = os.open(current_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            try:
+                key_path.unlink()
+            except FileNotFoundError:
+                pass
+            existing_kid = current_path.read_text(encoding="utf-8").strip()
+            return existing_kid, self.get(existing_kid)
         try:
             os.write(fd, kid.encode("utf-8"))
         finally:
@@ -43,6 +52,8 @@ class FileKeyProvider:
         return kid, key
 
     def get(self, kid: str) -> bytes:
+        if not re.fullmatch(r"[0-9a-f]+", kid):
+            raise KeyError(kid)
         key_path = self.key_dir / f"archive-{kid}.key"
         if not key_path.exists():
             raise KeyError(kid)
@@ -89,8 +100,9 @@ def encode_leaf(text: str, spans, *, ts: float, event_type: str, path: list, pro
 
 
 def reveal_leaf(redacted: str, enc: list[dict], *, ts, event_type, provider) -> str:
-    result = redacted
-    shift = 0
+    parts: list[str] = []
+    cursor = 0
+    delta = 0
     for entry in sorted(enc, key=lambda e: e["start"]):
         start = entry["start"]
         end = entry["end"]
@@ -100,8 +112,8 @@ def reveal_leaf(redacted: str, enc: list[dict], *, ts, event_type, provider) -> 
         path = entry["path"]
         nonce = base64.b64decode(entry["nonce"])
         ct = base64.b64decode(entry["ct"])
-        pos = start + shift
-        if result[pos:pos + len(replacement)] != replacement:
+        pos = start + delta
+        if redacted[pos : pos + len(replacement)] != replacement:
             raise ValueError("placeholder mismatch")
         plaintext_bytes = AESGCM(provider.get(kid)).decrypt(
             nonce,
@@ -111,6 +123,9 @@ def reveal_leaf(redacted: str, enc: list[dict], *, ts, event_type, provider) -> 
         plaintext = plaintext_bytes.decode("utf-8")
         if len(plaintext) != end - start:
             raise ValueError("plaintext length mismatch")
-        result = result[:pos] + plaintext + result[pos + len(replacement):]
-        shift += len(plaintext) - len(replacement)
-    return result
+        parts.append(redacted[cursor:pos])
+        parts.append(plaintext)
+        cursor = pos + len(replacement)
+        delta += len(replacement) - (end - start)
+    parts.append(redacted[cursor:])
+    return "".join(parts)

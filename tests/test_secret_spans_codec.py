@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import stat
+from pathlib import Path
 from typing import NamedTuple
 
 import pytest
@@ -100,3 +101,79 @@ def test_get_invalid_key_raises(tmp_path):
         provider.get("bad")
     with pytest.raises(KeyError):
         provider.get("missing")
+
+
+def test_round_trip_multiple_spans(tmp_path):
+    provider = FileKeyProvider(tmp_path / "keys")
+
+    text1 = "a ghp_" + "A" * 36 + " mid sk-" + "B" * 24 + " end"
+    span1_1 = Span(text1.index("ghp_"), text1.index("ghp_") + 4 + 36, "github_pat", "[REDACTED:github_pat]")
+    span1_2 = Span(text1.index("sk-"), text1.index("sk-") + 3 + 24, "openai_key", "[REDACTED:openai_key]")
+    redacted1, enc1 = encode_leaf(text1, [span1_1, span1_2], ts=1.0, event_type="evt", path=["p"], provider=provider)
+    assert "ghp_" not in redacted1
+    assert "sk-" not in redacted1
+    assert "ghp_" not in json.dumps(enc1)
+    assert "sk-" not in json.dumps(enc1)
+    assert reveal_leaf(redacted1, enc1, ts=1.0, event_type="evt", provider=provider) == text1
+
+    text2 = "α秘β" + "X" * 10 + "γ密δ" + "Y" * 5 + "ε"
+    span2_1 = Span(text2.index("X"), text2.index("X") + 10, "kind1", "LONGER_REPLACEMENT")
+    span2_2 = Span(text2.index("Y"), text2.index("Y") + 5, "kind2", "SHORT")
+    span2_3 = Span(0, 1, "kind3", "Z")
+    redacted2, enc2 = encode_leaf(text2, [span2_1, span2_2, span2_3], ts=2.0, event_type="evt", path=["p"], provider=provider)
+    assert reveal_leaf(redacted2, enc2, ts=2.0, event_type="evt", provider=provider) == text2
+    assert "X" * 10 not in redacted2
+    assert "Y" * 5 not in redacted2
+    assert text2[0] not in redacted2
+
+
+def test_current_concurrent_first_use(tmp_path, monkeypatch):
+    key_dir = tmp_path / "keys"
+    provider = FileKeyProvider(key_dir)
+
+    original_open = os.open
+    call_count = {"count": 0}
+    existing_kid_holder = {"kid": None, "key": None}
+
+    def wrapped_open(path, flags, mode=0o777, *args, **kwargs):
+        if path.name == "current" and (flags & os.O_CREAT) and (flags & os.O_EXCL):
+            call_count["count"] += 1
+            if call_count["count"] == 1:
+                existing_kid = "deadbeefdeadbeef"
+                existing_key = os.urandom(32)
+                existing_kid_holder["kid"] = existing_kid
+                existing_kid_holder["key"] = existing_key
+                (key_dir / f"archive-{existing_kid}.key").write_bytes(existing_key)
+                os.makedirs(key_dir, exist_ok=True)
+                (key_dir / "current").write_text(existing_kid, encoding="utf-8")
+                raise FileExistsError
+        return original_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", wrapped_open)
+
+    kid, key = provider.current()
+    assert kid == existing_kid_holder["kid"]
+    assert key == existing_kid_holder["key"]
+
+    key_files = list(key_dir.glob("archive-*.key"))
+    assert len(key_files) == 1
+    assert key_files[0].name == f"archive-{kid}.key"
+
+
+def test_get_rejects_bad_kid(tmp_path, monkeypatch):
+    key_dir = tmp_path / "keys"
+    provider = FileKeyProvider(key_dir)
+    provider.current()
+
+    def fail_exists(self):
+        raise AssertionError("filesystem should not be touched")
+
+    def fail_read_bytes(self):
+        raise AssertionError("filesystem should not be touched")
+
+    monkeypatch.setattr(Path, "exists", property(fail_exists))
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    for bad_kid in ["../x", "ABCDEF0123456789", "", "z" * 16]:
+        with pytest.raises(KeyError):
+            provider.get(bad_kid)
