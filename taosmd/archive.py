@@ -11,10 +11,12 @@ Storage: data/archive/YYYY/MM/DD.jsonl (one JSON line per event, gzipped after d
 
 from __future__ import annotations
 
+import copy
 import gzip
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -24,6 +26,27 @@ from typing import Any
 from . import _db, migrations
 
 logger = logging.getLogger(__name__)
+
+
+def _redact_leaves(value: Any) -> Any:
+    """Recursively redact secrets from all string leaves in a structure.
+
+    Returns a NEW structure with the same shape:
+    - str -> redact_secrets(str)[0]
+    - dict -> {k: _redact_leaves(v) for k, v in value.items()}
+    - list/tuple -> [_redact_leaves(v) for v in value]
+    - anything else -> returned as is
+    """
+    from .secret_filter import redact_secrets
+
+    if isinstance(value, str):
+        return redact_secrets(value)[0]
+    if isinstance(value, dict):
+        return {k: _redact_leaves(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_leaves(v) for v in value]
+    return value
+
 
 # Event types
 EVENT_CONVERSATION = "conversation"       # Agent chat message (user or agent)
@@ -267,7 +290,18 @@ class ArchiveStore:
         if event_type in USER_ACTIVITY_EVENTS and not self._user_tracking_enabled:
             return -1
 
-        # Redact secrets before storage
+        # Deep-copy caller's data so we never mutate it. A bare deepcopy can
+        # raise on values that cannot be copied (e.g. threading.Lock() -> "cannot
+        # pickle '_thread.lock' object"); on ANY Exception fall back to a
+        # JSON-plain snapshot. The caller's dict must still never change, and
+        # the JSONL line is byte-identical to master's for the same input
+        # (json.dumps(event, default=str)).
+        try:
+            data = copy.deepcopy(data)
+        except Exception:
+            data = json.loads(json.dumps(data, default=str))
+
+        # Redact secrets before storage (for JSONL write - same keys as before)
         from .secret_filter import redact_secrets
         summary, _ = redact_secrets(summary)
         for key in ("content", "text", "msg", "query", "body"):
@@ -311,20 +345,29 @@ class ArchiveStore:
             self._line_counts[file_path] += 1
         line_count = self._line_counts[file_path]
 
+        # Fully redacted copy for index and FTS (all string leaves).
+        # Build the derived copy from a JSON-plain snapshot so every leaf that
+        # becomes a string (including str() of a non-JSON leaf) is scanned by
+        # _redact_leaves. A bare _redact_leaves(data) left non-str, non-container
+        # leaves unchanged, and the index INSERT serialised them with
+        # json.dumps(derived, default=str), so str(obj) landed in
+        # archive_index.data_json UNSCANNED.
+        derived = _redact_leaves(json.loads(json.dumps(data, default=str)))
+
         # Index for fast lookup
         cursor = self._conn.execute(
             """INSERT INTO archive_index
                (timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ts, event_type, agent_name, app_id, project, summary, file_path, line_count, json.dumps(data, default=str)),
+            (ts, event_type, agent_name, app_id, project, summary, file_path, line_count, json.dumps(derived, default=str)),
         )
 
         # Index in FTS for full-text search
         row_id = cursor.lastrowid
-        # Build searchable content from data fields
+        # Build searchable content from data fields (use fully redacted derived)
         content_parts = [summary]
         for key in ("content", "text", "msg", "query", "tool", "result", "error"):
-            val = data.get(key)
+            val = derived.get(key)
             if val and isinstance(val, str):
                 content_parts.append(val)
         content_text = " ".join(content_parts)
@@ -697,7 +740,17 @@ class ArchiveStore:
     # ------------------------------------------------------------------
 
     async def compress_old_files(self, days_old: int = 1) -> int:
-        """Gzip JSONL files older than N days. Returns count compressed."""
+        """Gzip JSONL files older than N days. Returns count compressed.
+
+        The raw archive is eternal and lossless, so this is the only code path
+        that deletes raw archive data. Every write is verified before the
+        source is touched: the gz is written to a temp path, the gzip context
+        closes (writing the trailer), then the finished file is fsynced,
+        re-opened and decompressed for comparison, then os.replace'd onto the
+        final path with a directory fsync (skipped silently where refused).
+        A mismatch or any exception leaves the .jsonl in place and logs a
+        warning.
+        """
         cutoff = time.time() - (days_old * 86400)
         compressed = 0
         for jsonl in self._archive_dir.rglob("*.jsonl"):
@@ -705,11 +758,44 @@ class ArchiveStore:
                 gz_path = jsonl.with_suffix(".jsonl.gz")
                 if gz_path.exists():
                     continue
-                with open(jsonl, "rb") as f_in:
-                    with gzip.open(gz_path, "wb") as f_out:
-                        f_out.write(f_in.read())
-                jsonl.unlink()
-                compressed += 1
+                tmp_path = jsonl.with_name(jsonl.name + ".gz.tmp")
+                try:
+                    with open(jsonl, "rb") as f_in:
+                        source_bytes = f_in.read()
+                    with gzip.open(tmp_path, "wb") as f_out:
+                        f_out.write(source_bytes)
+                    fd = os.open(tmp_path, os.O_RDONLY)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                    with gzip.open(tmp_path, "rb") as f_verify:
+                        if f_verify.read() != source_bytes:
+                            raise ValueError(
+                                f"gzip round-trip mismatch for {jsonl}: "
+                                "decompressed bytes differ from source"
+                            )
+                    os.replace(tmp_path, gz_path)
+                    dir_fd = os.open(str(jsonl.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    except OSError:
+                        pass
+                    finally:
+                        os.close(dir_fd)
+                    jsonl.unlink()
+                    compressed += 1
+                except Exception:
+                    if tmp_path.exists():
+                        try:
+                            tmp_path.unlink()
+                        except OSError:
+                            pass
+                    logger.warning(
+                        "compress_old_files: kept %s, .gz verification failed",
+                        jsonl,
+                    )
+                    continue
         return compressed
 
     async def export_day(self, date: str) -> list[dict]:

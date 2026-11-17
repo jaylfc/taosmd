@@ -238,10 +238,11 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
 
     Returns:
         ``{"archived": int, "agent": str, "project": str|None, "data_dir": str}``, where ``archived``
-        is the count of non-empty turns that were shelved. When one or more
-        vector writes fail (embedder down), ``"vector_failures": int`` and
-        ``"degraded": True`` are added: the turns are safe in the archive but
-        not searchable until :func:`reconcile` repairs the gap.
+        is the count of turns that were archived (including empty/whitespace
+        turns). When one or more vector writes fail (embedder down),
+        ``"vector_failures": int`` and ``"degraded": True`` are added: the
+        turns are safe in the archive but not searchable until
+        :func:`reconcile` repairs the gap.
     """
     if not agent:
         raise ValueError("agent name is required")
@@ -254,16 +255,20 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
     archived = 0
     vector_failures = 0
     for item in items:
-        text = str(item.get("content", "")).strip()
-        if not text:
-            continue
+        raw_text = str(item.get("content", ""))
         span_id = await stores["archive"].record(
             "conversation",
             item,
             agent_name=agent,
-            summary=text[:80],
+            summary=raw_text[:80],
             project=project,
         )
+        archived += 1
+
+        text = raw_text.strip()
+        if not text:
+            continue
+
         meta: dict = {"agent": agent}
         if project:
             meta["project"] = project
@@ -281,10 +286,11 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
         # archive span. Stored unverified; the verify-pass checks them async.
         if "claims" in stores and isinstance(span_id, int) and span_id >= 0:
             from taosmd.claims.extract import claims_from_text  # noqa: PLC0415
-            for c in claims_from_text(text, span_id):
+            from taosmd.secret_filter import redact_secrets  # noqa: PLC0415
+            redacted_text = redact_secrets(text)[0]
+            for c in claims_from_text(redacted_text, span_id):
                 await stores["claims"].add_claim(
                     c["text"], c["archive_span_ids"], c["source_extractor"])
-        archived += 1
 
     update_stats(agent, last_ingest_at=int(time.time()))
     result = {"archived": archived, "agent": agent, "project": project, "data_dir": stores["data_dir"]}
@@ -330,11 +336,13 @@ async def ingest_batch(
 
     Returns:
         ``{"ingested": int, "skipped": int, "agent": str, "data_dir": str}``.
-        ``skipped`` counts duplicate ids (incl. in-batch repeats) and
-        empty-text items. When one or more vector writes fail (embedder
-        down), ``"vector_failures": int`` and ``"degraded": True`` are added:
-        the items are safe in the archive but not searchable until
-        :func:`reconcile` repairs the gap.
+        ``ingested`` counts items that were archived AND indexed (non-empty,
+        non-duplicate). ``skipped`` counts items not indexed (empty/whitespace
+        text or duplicate id). All items are archived (zero-loss), including
+        empty ones; duplicates are not re-archived. When one or more vector
+        writes fail (embedder down), ``"vector_failures": int`` and
+        ``"degraded": True`` are added: the items are safe in the archive but
+        not searchable until :func:`reconcile` repairs the gap.
 
     Raises:
         ValueError: On a structurally invalid request (bad agent, items not
@@ -366,21 +374,32 @@ async def ingest_batch(
     skipped = 0
     vector_failures = 0
     for item in items:
-        text = item["text"].strip()
+        raw_text = item["text"]
         sid = item.get("id")
+
+        # Archive every item (zero-loss), but skip re-archiving duplicate ids
+        if not (sid and sid in seen):
+            user_md = dict(item.get("metadata") or {})
+            if sid:
+                user_md["source_id"] = sid
+            span_id = await stores["archive"].record(
+                "conversation",
+                {"content": raw_text, "metadata": user_md},
+                agent_name=agent,
+                summary=raw_text[:80],
+                project=project,
+            )
+        else:
+            span_id = None
+
+        text = raw_text.strip()
         if not text or (sid and sid in seen):
             skipped += 1
             continue
+
         user_md = dict(item.get("metadata") or {})
         if sid:
             user_md["source_id"] = sid
-        span_id = await stores["archive"].record(
-            "conversation",
-            {"content": text, "metadata": user_md},
-            agent_name=agent,
-            summary=text[:80],
-            project=project,
-        )
         meta: dict = {"agent": agent, "metadata": user_md}
         if project:
             meta["project"] = project
@@ -395,7 +414,9 @@ async def ingest_batch(
         # backing archive span; stored unverified for the async verify-pass.
         if "claims" in stores and isinstance(span_id, int) and span_id >= 0:
             from taosmd.claims.extract import claims_from_text  # noqa: PLC0415
-            for c in claims_from_text(text, span_id):
+            from taosmd.secret_filter import redact_secrets  # noqa: PLC0415
+            redacted_text = redact_secrets(text)[0]
+            for c in claims_from_text(redacted_text, span_id):
                 await stores["claims"].add_claim(
                     c["text"], c["archive_span_ids"], c["source_extractor"])
         if sid:
