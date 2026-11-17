@@ -50,10 +50,15 @@ echo "  optimum-cli found at $EXPORT_VENV/bin/optimum-cli"
 
 # Preflight the exact subcommand form used below, so an incompatible optimum
 # fails here instead of after a ~2GB model download (#640).
-if ! "$EXPORT_VENV/bin/optimum-cli" export onnx --help >/dev/null 2>&1; then
-  echo "error: 'optimum-cli export onnx' unavailable (optimum 2.x removed this form); install optimum[exporters]<2" >&2
+PREFLIGHT_STDERR="$(mktemp)"
+if ! "$EXPORT_VENV/bin/optimum-cli" export onnx --help >/dev/null 2>"$PREFLIGHT_STDERR"; then
+  echo "error: 'optimum-cli export onnx' preflight failed; the export subcommand form this script invokes is not available in the installed optimum." >&2
+  echo "  stderr from optimum-cli:" >&2
+  sed 's/^/  /' "$PREFLIGHT_STDERR" >&2
+  rm -f "$PREFLIGHT_STDERR"
   exit 1
 fi
+rm -f "$PREFLIGHT_STDERR"
 
 # --- Step 4: run optimum-cli export from the export venv's own binary ---------
 echo ""

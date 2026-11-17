@@ -146,13 +146,14 @@ class CaptionTextImageEmbedder(MediaEmbedder):
             f.flush()
             os.fsync(f.fileno())
 
-    def _caption_image(self, img_path: str) -> str:
+    def _caption_image(self, img_path: str, cache_index: dict | None = None) -> str:
         img_path_obj = Path(img_path)
         img_bytes = img_path_obj.read_bytes()
         img_b64 = base64.b64encode(img_bytes).decode("utf-8")
         img_sha = _sha256_bytes(img_bytes)
 
-        cache_index = self._load_cache_index()
+        if cache_index is None:
+            cache_index = self._load_cache_index()
         key = (img_sha, self._captioner_digest, self._prompt_sha256)
         if key in cache_index:
             return cache_index[key]
@@ -179,8 +180,10 @@ class CaptionTextImageEmbedder(MediaEmbedder):
         caption_stripped = str(caption).strip()
         if not caption_stripped:
             raise RuntimeError(f"Empty caption for {img_path}")
-        # Append to cache
+        # Append to cache and keep the in-memory index in sync so a later
+        # path in the same embedding loop can reuse it without re-reading disk.
         self._append_cache_line(img_sha, caption_stripped)
+        cache_index[key] = caption_stripped
         return caption_stripped
 
     def embed_queries(self, texts: list[str]) -> np.ndarray:
