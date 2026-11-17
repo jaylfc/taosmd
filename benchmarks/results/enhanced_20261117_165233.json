@@ -1,0 +1,95 @@
+{
+  "benchmark": "enhanced",
+  "top_k": 5,
+  "results": {
+    "hybrid_baseline": {
+      "overall": 0.0,
+      "total": 0,
+      "questions": 1,
+      "time": 0.00013017654418945312,
+      "by_type": {
+        "single-session-user": {
+          "hits": 0,
+          "total": 1
+        }
+      }
+    },
+    "query_expand": {
+      "overall": 0.0,
+      "total": 0,
+      "questions": 1,
+      "time": 0.0025873184204101562,
+      "by_type": {
+        "single-session-user": {
+          "hits": 0,
+          "total": 1
+        }
+      }
+    },
+    "temporal_boost": {
+      "overall": 0.0,
+      "total": 0,
+      "questions": 1,
+      "time": 0.0038728713989257812,
+      "by_type": {
+        "single-session-user": {
+          "hits": 0,
+          "total": 1
+        }
+      }
+    },
+    "combined_v2": {
+      "overall": 0.0,
+      "total": 0,
+      "questions": 1,
+      "time": 0.0002315044403076172,
+      "by_type": {
+        "single-session-user": {
+          "hits": 0,
+          "total": 1
+        }
+      }
+    },
+    "wider_retrieval": {
+      "overall": 0.0,
+      "total": 0,
+      "questions": 1,
+      "time": 0.0001270771026611328,
+      "by_type": {
+        "single-session-user": {
+          "hits": 0,
+          "total": 1
+        }
+      }
+    }
+  },
+  "arm_config": {
+    "onnx_path": "/tmp/exec-tsk-hcke6s.tmp/pytest-of-jay/pytest-3/test_longmemeval_run_benchmark0/models/custom-arm",
+    "binary_quant": true,
+    "mrl_dim": null,
+    "rescore_oversample": null,
+    "fusion": "boost",
+    "late_interaction": false,
+    "reranker": "off"
+  },
+  "provenance": {
+    "git_commit": "690ceb203433b1054402d4dbbbf73849a890d984",
+    "git_dirty": true,
+    "hostname": "claude",
+    "platform": "Linux-7.0.14-11-pve-x86_64-with-glibc2.41",
+    "machine": "x86_64",
+    "python": "3.14.7",
+    "onnxruntime_version": null,
+    "env_prefixes": {
+      "TAOSMD_ONNX_QUERY_PREFIX": null,
+      "TAOSMD_ONNX_DOC_PREFIX": null
+    },
+    "model_files": {
+      "model.onnx": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tokenizer.json": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    "dataset_sha256": "3a0168a582dd2b5ed659c6e3bee9284fb9a7deace2fc166a7adf0b7adee06e43",
+    "config_hash": "900760412ebd3a7887522005653ee13604d4ad2a325a00a496f00f9fc7c604aa"
+  },
+  "timestamp": "2026-11-17 16:52:33"
+}

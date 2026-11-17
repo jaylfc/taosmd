@@ -85,8 +85,8 @@ def test_nightly_cron_shape_queues_enabled_tenant(tmp_path, monkeypatch):
         f"#636 regression: nightly-cron shape disabled an enabled tenant: {statuses}")
 
 
-def test_crystallize_skips_only_disabled_tenants(tmp_path, monkeypatch):
-    """A tenant with crystallise OFF is skipped; the reason names the gate,
+def test_crystallize_skips_disabled_tenant(tmp_path, monkeypatch):
+    """A single tenant with crystallise OFF is skipped; the reason names the gate,
     not skip_crystallize=True (#636 + #637)."""
     _write_archive(tmp_path / "archive", [{
         "timestamp": BASE_TS, "event_type": "conversation",
@@ -116,6 +116,45 @@ def test_crystallize_skips_only_disabled_tenants(tmp_path, monkeypatch):
     assert cry.get("skipped") is True
     assert "gate" in cry["reason"], (
         f"#637 regression: reason should name the gate, got {cry['reason']!r}")
+
+
+def test_index_day_falls_back_to_pipeline_agent_when_session_owner_missing(tmp_path, monkeypatch):
+    """When a session has no agent_name, index_day falls back to the pipeline's
+    agent_name for the crystallise gate (the #636 resolution strategy)."""
+    _write_archive(tmp_path / "archive", [{
+        "timestamp": BASE_TS, "event_type": "conversation",
+        "summary": "carol fixed the images", "data": {},
+    }])
+    monkeypatch.setenv("TAOSMD_DATA_DIR", str(tmp_path / "reg"))
+    reg = A._registry()
+    reg.register_agent("carol")
+    reg.set_librarian("carol", enabled=True, tasks={
+        "intake_classification": True,
+        "catalog_enrichment": False,
+        "crystallise": True,
+    })
+
+    pipeline = _make_pipeline(tmp_path)
+    _hermetic_model(monkeypatch)
+
+    async def run():
+        await pipeline.init()
+        # Pass carol as the pipeline-level agent_name so the fallback
+        # picks it up when the session owner is missing
+        with patch.object(pipeline, "detect_best_tier",
+                          new=AsyncMock(return_value=(2, "test-model"))):
+            return await pipeline.index_day("2025-04-13", agent_name="carol")
+    result = asyncio.run(run())
+    asyncio.run(pipeline.close())
+
+    # Should NOT be skipped because the pipeline-level agent_name "carol" is used
+    # (the gate falls back to pipeline agent_name when session owner is missing)
+    cry = result["crystallize"]
+    assert cry.get("skipped") is not True, (
+        f"crystallize should not be skipped when falling back to pipeline agent_name, got {cry}")
+    # Verify the crystallize stage ran (not skipped due to gate being off)
+    assert "reason" not in cry, (
+        f"crystallize should not have a skip reason, got {cry.get('reason')}")
 
 
 def test_enrichment_gated_per_owner(tmp_path, monkeypatch):

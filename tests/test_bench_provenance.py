@@ -219,6 +219,78 @@ def test_longmemeval_results_carry_provenance(tmp_path):
     assert written["provenance"] == SENTINEL
 
 
+def test_longmemeval_run_benchmark_writes_provenance(tmp_path, monkeypatch):
+    """Provenance wiring in run_benchmark: a successful run writes the provenance block into results."""
+    from benchmarks import longmemeval_enhanced
+    import json
+    import asyncio
+
+    data_file = tmp_path / "test_data.json"
+    test_question = {
+        "question": "When did Alice move to Paris?",
+        "question_type": "single-session-user",
+        "answer_session_ids": ["s0"],
+        "haystack_sessions": [[{"role": "user", "content": "Alice moved to Paris in 2020"}]],
+        "haystack_session_ids": ["s0"],
+    }
+    data_file.write_text(json.dumps([test_question]))
+
+    # Monkey-patch DATA_PATH so run_benchmark uses our test data
+    monkeypatch.setattr(longmemeval_enhanced, "DATA_PATH", str(data_file))
+
+    # Create a model directory so bench_provenance.collect finds model files
+    arm_dir = tmp_path / "models" / "custom-arm"
+    arm_dir.mkdir(parents=True)
+    (arm_dir / "model.onnx").write_text("")
+    (arm_dir / "tokenizer.json").write_text("{}")
+
+    # Monkey-patch VectorMemory to avoid ONNX dependency
+    captured_kwargs = {}
+
+    def make_fake_vmem(**kwargs):
+        captured_kwargs.update(kwargs)
+        class FakeVMem:
+            async def init(self): pass
+            async def add(self, text, metadata=None): return 1
+            async def embed(self, text, task="search_document"): return [1.0]*384
+            async def search(self, query, limit=5, hybrid=True, fusion="boost"): return []
+            async def close(self): pass
+        return FakeVMem()
+
+    monkeypatch.setattr(longmemeval_enhanced, "VectorMemory", make_fake_vmem)
+    monkeypatch.setattr(longmemeval_enhanced, "collect", lambda *a, **kw: SENTINEL)
+    # Monkeypatch __file__ so _write_results writes to tmp_path instead of benchmarks/
+    monkeypatch.setattr(longmemeval_enhanced, "__file__", str(tmp_path / "longmemeval_enhanced.py"))
+
+    # Set required env vars
+    import os
+    old_onnx_path = os.environ.get("TAOSMD_BENCH_ONNX_PATH")
+    os.environ["TAOSMD_BENCH_ONNX_PATH"] = str(arm_dir)
+    os.environ["TAOSMD_BENCH_BINARY_QUANT"] = "1"
+    old_cwd = os.getcwd()
+    os.chdir(str(tmp_path))
+
+    try:
+        asyncio.run(longmemeval_enhanced.run_benchmark(limit=1, top_k=5))
+    finally:
+        if old_onnx_path is not None:
+            os.environ["TAOSMD_BENCH_ONNX_PATH"] = old_onnx_path
+        elif "TAOSMD_BENCH_ONNX_PATH" in os.environ:
+            del os.environ["TAOSMD_BENCH_ONNX_PATH"]
+        os.chdir(old_cwd)
+
+    # Check that results were written with provenance
+    output_files = list((tmp_path / "results").glob("enhanced_*.json"))
+    assert len(output_files) == 1, f"Expected one output file, found {output_files}"
+
+    with open(output_files[0]) as f:
+        output = json.load(f)
+
+    assert "provenance" in output, "provenance block missing from run_benchmark output"
+    assert output["arm_config"]["onnx_path"] == str(arm_dir)
+    assert output["arm_config"]["binary_quant"] is True
+
+
 def test_retrieval_probe_results_carry_provenance(tmp_path, monkeypatch):
     from benchmarks import retrieval_latency_probe
     seen = {}

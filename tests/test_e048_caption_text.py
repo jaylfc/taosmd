@@ -462,6 +462,47 @@ def test_onnx_fallback_raises_runtime_error(monkeypatch, tmp_path):
         )
 
 
+def test_onnx_session_none_raises_runtime_error(monkeypatch, tmp_path):
+    """Constructing the embedder must raise RuntimeError when _onnx_session is None
+    even if _embed_mode is 'onnx' (the session-half of the guard has no test yet)."""
+    from benchmarks.e048 import caption_text
+
+    onnx_dir = tmp_path / "models" / "minilm-onnx"
+    _write_minilm_files(onnx_dir)
+    cache_path = tmp_path / "cache.jsonl"
+
+    fake_client = FakeHttpxClient(
+        get_responses=[
+            FakeResponse({"models": [{"name": "llava:7b", "digest": "abc123"}]}),
+        ],
+    )
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: fake_client)
+
+    class SessionNoneVM:
+        def __init__(self, *args, **kwargs):
+            self._embed_mode = "onnx"
+            self._onnx_session = None
+
+        async def init(self):
+            return None
+
+        async def embed(self, text, task="search_document"):
+            return _det_vec_from_text(text, task)
+
+    monkeypatch.setattr(caption_text, "VectorMemory", SessionNoneVM)
+
+    with pytest.raises(RuntimeError, match="MiniLM ONNX model did not load"):
+        caption_text.CaptionTextImageEmbedder(
+            captioner_url="http://127.0.0.1:11434",
+            captioner_model="llava:7b",
+            onnx_dir=str(onnx_dir),
+            cache_path=str(cache_path),
+        )
+
+
 def test_provenance_missing_tokenizer_raises(monkeypatch, tmp_path):
     """provenance() must raise FileNotFoundError if tokenizer.json is missing
     from the onnx_dir, rather than silently passing."""

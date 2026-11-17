@@ -277,6 +277,82 @@ class TestRunWiring:
         assert top_r_at["5"] == pytest.approx(1.0)
         assert top_r_at["10"] == pytest.approx(1.0)
 
+    @pytest.mark.asyncio
+    @patch("benchmarks.retrieval_latency_probe.VectorMemory")
+    @patch("benchmarks.retrieval_latency_probe._retrieve")
+    @patch("benchmarks.retrieval_latency_probe._load_reranker")
+    @patch("benchmarks.retrieval_latency_probe._ingest_conversation")
+    @patch("benchmarks.retrieval_latency_probe.httpx.AsyncClient")
+    async def test_run_writes_provenance(
+        self,
+        mock_async_client,
+        mock_ingest_conversation,
+        mock_load_reranker,
+        mock_retrieve,
+        mock_vector_memory_class,
+        fake_args: MagicMock,
+        tmp_path: Path,
+    ):
+        """Drive run() with fakes and assert provenance is recorded in results."""
+        # Setup mocks
+        mock_client = AsyncMock()
+        mock_async_client.return_value.__aenter__.return_value = mock_client
+
+        mock_vmem = AsyncMock()
+        mock_vector_memory_class.return_value = mock_vmem
+        mock_vmem.init = AsyncMock()
+        mock_vmem.embed = AsyncMock(return_value=[0.1] * 384)  # canary succeeds
+        mock_vmem.close = AsyncMock()
+
+        mock_ingest_conversation.return_value = (10, 0.5, {0: "turn0", 1: "turn1"})
+
+        mock_load_reranker.return_value = None
+
+        # Scripted hits for two QAs with known dia_ids
+        # QA 1 (category 1): evidence = ["conv_test:0"], hit at rank 1
+        # QA 2 (category 2): evidence = ["conv_test:1"], hit at rank 3
+        hits_qa1 = [
+            {"metadata": {"dia_id": "conv_test:0"}, "text": "Hello"},
+            {"metadata": {"dia_id": "conv_test:2"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:3"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:4"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:5"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:6"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:7"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:8"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:9"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:10"}, "text": "Other"},
+        ]
+        hits_qa2 = [
+            {"metadata": {"dia_id": "conv_test:2"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:3"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:1"}, "text": "Hi there"},
+            {"metadata": {"dia_id": "conv_test:4"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:5"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:6"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:7"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:8"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:9"}, "text": "Other"},
+            {"metadata": {"dia_id": "conv_test:10"}, "text": "Other"},
+        ]
+        mock_retrieve.side_effect = [hits_qa1, hits_qa2]
+
+        # Run the probe
+        exit_code = await run(fake_args)
+        assert exit_code == 0
+
+        # Read the output JSON
+        output_path = Path(fake_args.out)
+        assert output_path.exists()
+        data = json.loads(output_path.read_text())
+
+        # Assert provenance is recorded
+        assert "provenance" in data["config"], "provenance missing from config"
+        assert data["config"]["provenance"] is not None, "provenance is None"
+
+        results = data["results"]
+        summary = data["summary"]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

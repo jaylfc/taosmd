@@ -102,6 +102,15 @@ class TestExportRerankerOnnxScript:
         assert "BAAI/bge-reranker-v2-m3" in lines[0]
         assert "text-classification" in lines[0]
         assert "UV_RUN_CALLED" not in log
+        # The --help preflight must come before the --model export call
+        help_idx = next(i for i, l in enumerate(log.splitlines())
+                        if l.strip() == "export onnx --help")
+        model_idx = next(i for i, l in enumerate(log.splitlines())
+                         if l.startswith("export onnx") and "--model" in l)
+        assert help_idx < model_idx, (
+            f"--help preflight (line {help_idx}) must come before "
+            f"--model call (line {model_idx})"
+        )
 
 
 class TestExportRerankerOnnxPs1:
