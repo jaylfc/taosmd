@@ -71,3 +71,14 @@ def test_bullet_prose_keeps_fact():
     text = "- Sarah is a doctor."
     facts = extract_facts_from_text(text)
     assert [(f["subject"], f["predicate"], f["object"]) for f in facts] == [("Sarah", "is_a", "doctor")]
+
+
+def test_meta_phrase_not_matched_inside_sentence():
+    # "loaded below" inside a normal sentence should not trigger meta-text skip
+    facts = extract_facts_from_text("Jay manages the loaded below panel.")
+    subjects = [f["subject"] for f in facts]
+    assert "Jay" in subjects
+    # Should extract at least the manages fact
+    manages_facts = [f for f in facts if f["predicate"] == "manages"]
+    assert manages_facts
+    assert manages_facts[0]["subject"] == "Jay"
