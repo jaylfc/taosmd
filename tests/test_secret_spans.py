@@ -30,9 +30,12 @@ def _splice(text: str, spans: list[SecretSpan]) -> str:
     return "".join(parts)
 
 
-def _expected_found(spans: list[SecretSpan]) -> list[str]:
-    kinds = {span.kind for span in spans}
-    return [name for name, _, _ in SECRET_PATTERNS if name in kinds]
+def _expected_found(text: str) -> list[str]:
+    return [
+        name
+        for name, pattern, _ in SECRET_PATTERNS
+        if any(m.end() > m.start() for m in pattern.finditer(text))
+    ]
 
 
 def test_spans_index_original():
@@ -79,7 +82,7 @@ def test_redact_matches_spans(name, sample, _type):
     redacted, found = redact_secrets(sample)
     spans = find_secret_spans(sample)
     assert redacted == _splice(sample, spans)
-    assert found == _expected_found(spans)
+    assert found == _expected_found(sample)
 
 
 def test_no_match_inside_placeholder():
@@ -127,3 +130,15 @@ def test_merged_spans_disjoint():
         redacted, found = redact_secrets(text)
         for kind in found:
             assert kind in pattern_names
+
+
+def test_redact_found_lists_merged_kinds():
+    text = (
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ."
+        "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    )
+    redacted, found = redact_secrets(text)
+    assert found == _expected_found(text)
+    assert found == ["bearer_token", "jwt"]
+    assert redacted == "Authorization: [REDACTED:bearer]"
