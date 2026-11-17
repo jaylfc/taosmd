@@ -230,6 +230,7 @@ Respond with ONLY the insight in one sentence. Be specific and actionable."""
                 insight_text = (await llm_complete(
                     client, llm_url, model, prompt,
                     temperature=0.4, max_tokens=100,
+                    thinking_fallback=False,
                 )).strip()
                 if not insight_text or len(insight_text) < 10:
                     return None
