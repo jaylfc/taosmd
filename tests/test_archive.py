@@ -260,6 +260,8 @@ async def test_compress_dir_os_open_raises_on_windows(tmp_path, monkeypatch):
     import os
     import time
 
+    THREE_DAYS = 3 * 86400
+
     arc = ArchiveStore(archive_dir=str(tmp_path / "a"), index_path=str(tmp_path / "idx.db"))
     await arc.init()
 
@@ -268,7 +270,7 @@ async def test_compress_dir_os_open_raises_on_windows(tmp_path, monkeypatch):
     payload = '{"text": "windows dir open fails"}\n'
     jsonl.write_text(payload, encoding="utf-8")
     original_bytes = jsonl.read_bytes()
-    os.utime(jsonl, (time.time() - 3 * 86400, time.time() - 3 * 86400))
+    os.utime(jsonl, (time.time() - THREE_DAYS, time.time() - THREE_DAYS))
 
     real_open = os.open
 

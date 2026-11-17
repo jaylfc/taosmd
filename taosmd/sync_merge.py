@@ -327,8 +327,13 @@ def _insert_peer_triple(conn: sqlite3.Connection, prow: sqlite3.Row, predicate: 
     return tid
 
 
+_InsertedWithSupersededBy = tuple[str, str | None, str, str, str, float]
+
+
 def _remap_superseded_by(
-    local_conn: sqlite3.Connection, peer_conn: sqlite3.Connection, inserted: list[tuple]
+    local_conn: sqlite3.Connection,
+    peer_conn: sqlite3.Connection,
+    inserted: list[_InsertedWithSupersededBy],
 ) -> None:
     """Remap superseded_by from peer ids to local ids.
 
