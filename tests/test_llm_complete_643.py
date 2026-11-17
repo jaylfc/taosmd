@@ -171,3 +171,95 @@ def test_ollama_thinking_fallback():
         await c.aclose()
         assert text == "abc"
     asyncio.run(run())
+
+
+def test_ollama_temperature_max_tokens_timeout_passed_through():
+    """Ollama dialect receives temperature, max_tokens (as num_predict), and timeout."""
+    async def run():
+        captured = {}
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content) if request.content else {}
+            captured["body"] = body
+            # timeout is passed as **kw to client.post; httpx stores it in
+            # request.extensions["timeout"] as a dict when a float is given
+            timeout_obj = request.extensions.get("timeout")
+            captured["timeout"] = timeout_obj
+            return httpx.Response(200, json={"response": "OK"})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        await llm_complete(
+            client, OLLAMA_BASE, "m", "p",
+            api="ollama", temperature=0.7, max_tokens=123, timeout=45.0,
+        )
+        await client.aclose()
+
+        assert captured["body"]["options"]["temperature"] == 0.7
+        assert captured["body"]["options"]["num_predict"] == 123
+        # timeout is passed via httpx request extensions as a dict
+        assert captured["timeout"] is not None
+        assert captured["timeout"]["connect"] == 45.0
+    asyncio.run(run())
+
+
+def test_openai_temperature_max_tokens_timeout_passed_through():
+    """OpenAI dialect receives temperature, max_tokens, and timeout."""
+    async def run():
+        captured = {}
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content) if request.content else {}
+            captured["body"] = body
+            timeout_obj = request.extensions.get("timeout")
+            captured["timeout"] = timeout_obj
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "OK"}}]})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        await llm_complete(
+            client, OPENAI_BASE, "m", "p",
+            api="openai", temperature=0.5, max_tokens=456, timeout=30.0,
+        )
+        await client.aclose()
+
+        assert captured["body"]["temperature"] == 0.5
+        assert captured["body"]["max_tokens"] == 456
+        assert captured["timeout"] is not None
+        assert captured["timeout"]["connect"] == 30.0
+    asyncio.run(run())
+
+
+def test_crystallize_fallback_on_router_non_200(tmp_path):
+    """CrystalStore._llm_crystallize returns its own fallback when llm_complete raises on non-200."""
+    import asyncio
+    from taosmd.crystallize import CrystalStore
+
+    async def run():
+        cs = CrystalStore(db_path=tmp_path / "crystals.db")
+        await cs.init()
+        try:
+            # Stub llm_complete to raise HTTPStatusError (non-200)
+            import taosmd.llm_complete as lc
+            original = lc.llm_complete
+
+            async def raising_llm_complete(*args, **kwargs):
+                raise httpx.HTTPStatusError(
+                    "Server error", request=httpx.Request("POST", "http://test"),
+                    response=httpx.Response(500, json={"error": "boom"})
+                )
+
+            lc.llm_complete = raising_llm_complete
+            try:
+                narrative, outcomes, lessons, files = await cs._llm_crystallize(
+                    "test conversation", "http://fake", "model"
+                )
+                # Should return fallback, not raise
+                assert narrative.startswith("test conversation")
+                assert outcomes == []
+                assert lessons == []
+                assert files == []
+            finally:
+                lc.llm_complete = original
+        finally:
+            await cs.close()
+    asyncio.run(run())

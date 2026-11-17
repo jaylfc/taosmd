@@ -84,8 +84,9 @@ class ClaimStore:
         transaction so it is atomic across connections/processes: a second
         writer can't slip a same-norm insert between our miss and our insert
         (idx_claims_norm is non-unique, so nothing else stops the duplicate).
-        With commit=False the caller must already hold a BEGIN IMMEDIATE
-        transaction, otherwise the dedup is not atomic.
+        Mirrors knowledge_graph.add_entity; busy_timeout makes the competing
+        writer wait rather than race. With commit=False the caller must already
+        hold a BEGIN IMMEDIATE transaction, otherwise the dedup is not atomic.
         """
         norm = _normalize(text)
         if commit:

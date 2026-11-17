@@ -431,8 +431,9 @@ _RERANKER_DOWNLOADS: dict[str, str] = {}  # onnx_path -> "downloading"|"ready"|"
 
 
 def _reranker_present(onnx_path: str) -> bool:
+    from .api import _is_lfs_pointer
     for c in (Path(onnx_path) / "model.onnx", Path(onnx_path) / "onnx" / "model.onnx"):
-        if c.exists():
+        if c.exists() and not _is_lfs_pointer(c):
             return True
     return False
 

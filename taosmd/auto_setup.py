@@ -385,11 +385,15 @@ def _embedder_model_present(model_dir: str) -> bool:
     """True if an ONNX model.onnx exists at the dir root or under onnx/.
 
     Matches VectorMemory's own resolution order so the preflight checks the
-    exact files the loader will look for at serve time.
+    exact files the loader will look for at serve time. Git LFS pointer files
+    (which are small text files, not real models) are explicitly rejected.
     """
+    from .api import _is_lfs_pointer
+    root_model = Path(f"{model_dir}/model.onnx")
+    onnx_model = Path(f"{model_dir}/onnx/model.onnx")
     return (
-        Path(f"{model_dir}/model.onnx").exists()
-        or Path(f"{model_dir}/onnx/model.onnx").exists()
+        (root_model.exists() and not _is_lfs_pointer(root_model))
+        or (onnx_model.exists() and not _is_lfs_pointer(onnx_model))
     )
 
 
