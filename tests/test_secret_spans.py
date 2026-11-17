@@ -7,6 +7,8 @@ of it by splicing replacements over those spans.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from taosmd.secret_filter import (
@@ -127,3 +129,55 @@ def test_merged_spans_disjoint():
         redacted, found = redact_secrets(text)
         for kind in found:
             assert kind in pattern_names
+
+
+def test_spans_cover_every_raw_match():
+    overlap_texts = [
+        "password=abc-----BEGIN PRIVATE KEY-----\nMIIsecretbody\n-----END PRIVATE KEY-----",
+        "pwd:abcdefgh<private>top secret words</private>",
+    ]
+    gcp_json = json.dumps(
+        {
+            "private_key": (
+                "-----BEGIN PRIVATE KEY-----\n"
+                "MIIEvQIBADANBgkqSECRETBODYxyz\n"
+                "-----END PRIVATE KEY-----\n"
+            )
+        }
+    )
+    texts = (
+        overlap_texts
+        + [gcp_json, "api_key=sk-ABCDEFGHIJKLMNOPQRSTUVWX more"]
+        + [sample for _, sample, _ in SECRET_CASES]
+    )
+    for text in texts:
+        spans = find_secret_spans(text)
+        starts = [span.start for span in spans]
+        assert starts == sorted(starts)
+        for first, second in zip(spans, spans[1:]):
+            assert first.end <= second.start
+        for _name, pattern, _ in SECRET_PATTERNS:
+            for m in pattern.finditer(text):
+                if m.end() == m.start():
+                    continue
+                assert any(
+                    s.start <= m.start() and m.end() <= s.end for s in spans
+                ), f"no span covers match {m.group()!r} in {text!r}"
+
+
+def test_gcp_json_private_key_body_redacted():
+    text = json.dumps(
+        {
+            "type": "service_account",
+            "private_key": (
+                "-----BEGIN PRIVATE KEY-----\n"
+                "MIIEvQIBADANBgkqSECRETBODYxyz\n"
+                "-----END PRIVATE KEY-----\n"
+            ),
+        }
+    )
+    redacted, found = redact_secrets(text)
+    assert "SECRETBODY" not in redacted
+    assert "END PRIVATE KEY" not in redacted
+    assert "private_key_block" in found
+    assert "gcp_private_key" in found
