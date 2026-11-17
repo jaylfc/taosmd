@@ -43,6 +43,8 @@ SECRET_CASES = [
     ("aws_access_key", "AKIAIOSFODNN7EXAMPLE", "aws_key"),
     ("aws_secret", "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "aws_secret"),
     ("bearer", "Authorization: Bearer abc.def-ghi_jkl+mno/pqr=", "bearer"),
+    ("bearer_jwt", "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "bearer"),
+    ("bearer_sk_live", "Authorization: Bearer sk_live_51HxyzABCDEF0123", "bearer"),
     (
         "jwt",
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
@@ -144,6 +146,22 @@ def test_clean_text_unchanged_by_redact(sample):
     redacted, found = redact_secrets(sample)
     assert redacted == sample
     assert found == []
+
+
+# --- bearer_token must not redact prose ---
+
+BEARER_PROSE_CASES = [
+    "Device bearer tokens (taosdev_)",
+    "the bearer of bad news",
+    "bearer authentication-mechanisms here",
+]
+
+
+@pytest.mark.parametrize("sample", BEARER_PROSE_CASES)
+def test_bearer_prose_not_redacted(sample):
+    redacted, found = redact_secrets(sample)
+    assert redacted == sample, f"prose was redacted: {redacted!r}"
+    assert found == [], f"prose reported matches: {found}"
 
 
 # --- filter_text modes ---
