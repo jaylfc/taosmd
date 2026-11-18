@@ -75,6 +75,62 @@ SAMPLE_SEED = os.environ.get("TAOSMD_SAMPLE_SEED")
 # context is roughly 4500-5000 tokens, so Ollama's 4096 default already
 # truncates some prompts; raising this changes what is measured, which is why it
 # is opt-in rather than silently bumped here.
+VALID_STREAMS = {"assembler", "fts", "vector"}
+
+
+def _parse_streams_env() -> list[str]:
+    """Parse TAOSMD_LME_STREAMS env var into a sorted list of stream names.
+
+    Value is a comma-separated, non-empty subset of {assembler, fts, vector},
+    order-insensitive, whitespace-tolerant.
+
+    - unset: returns all three streams (default behavior)
+    - unknown token, duplicate, empty token, or empty list: prints error to stderr and exits 2
+    """
+    raw = os.environ.get("TAOSMD_LME_STREAMS")
+    if raw is None:
+        return ["assembler", "fts", "vector"]
+
+    tokens = [t.strip() for t in raw.split(",")]
+    # Check for empty tokens (from leading/trailing/comma-only)
+    if any(not t for t in tokens):
+        print(
+            f"ERROR: TAOSMD_LME_STREAMS={raw!r} contains empty token; valid tokens are: "
+            "assembler, fts, vector",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    if not tokens:
+        print(
+            f"ERROR: TAOSMD_LME_STREAMS={raw!r} is empty; valid tokens are: "
+            "assembler, fts, vector",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    seen = set()
+    for token in tokens:
+        if token not in VALID_STREAMS:
+            print(
+                f"ERROR: TAOSMD_LME_STREAMS={raw!r} contains unknown token {token!r}; "
+                "valid tokens are: assembler, fts, vector",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        if token in seen:
+            print(
+                f"ERROR: TAOSMD_LME_STREAMS={raw!r} contains duplicate token {token!r}; "
+                "valid tokens are: assembler, fts, vector",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        seen.add(token)
+
+    # Return sorted for deterministic order (assembler, fts, vector)
+    return sorted(seen)
+
+
 def _num_ctx_from_env(raw: str | None) -> int:
     """Parse TAOSMD_LME_NUM_CTX, falling back to the default on a bad value.
 
@@ -447,6 +503,7 @@ async def retrieve_context(
     llm_client=None,
     graph_expansion: int = 0,
     retrieval_path: str = "retrieve",
+    streams: list[str] | None = None,
 ) -> str:
     """Assemble the generator context for one question.
 
@@ -463,35 +520,51 @@ async def retrieve_context(
             through ``taosmd.retrieval.retrieve`` so runtime controls apply.
             ``"legacy"`` reproduces the pre-wiring hand-rolled stage so the
             published anchors can be re-measured side by side.
+        streams: Subset of {"assembler", "fts", "vector"} to enable.
+            Defaults to all three. Order is fixed: assembler, fts, vector.
+            Disabled streams are not called and contribute nothing.
     """
-    assembler = ContextAssembler(kg=kg, archive=archive)
-    ctx = await assembler.assemble(
-        query=question,
-        depth="auto",
-        max_total_tokens=ASSEMBLE_TOKENS,
-    )
+    if streams is None:
+        streams = ["assembler", "fts", "vector"]
+
+    parts = []
+
+    if "assembler" in streams:
+        assembler = ContextAssembler(kg=kg, archive=archive)
+        ctx = await assembler.assemble(
+            query=question,
+            depth="auto",
+            max_total_tokens=ASSEMBLE_TOKENS,
+        )
+        parts.append(ctx["context"])
 
     # FTS search over raw archive (the MemPalace approach -- verbatim recall).
     # Search for key words from the question.
-    archive_text = ""
-    for term in question.split()[:5]:
-        if len(term) > 3:  # Skip short words
-            try:
-                fts_results = await archive.search_fts(term, limit=FTS_LIMIT)
-                for r in fts_results:
-                    archive_text += " " + r.get("data_json", "") + " " + r.get("summary", "")
-            except Exception:
-                pass
+    if "fts" in streams:
+        archive_text = ""
+        for term in question.split()[:5]:
+            if len(term) > 3:  # Skip short words
+                try:
+                    fts_results = await archive.search_fts(term, limit=FTS_LIMIT)
+                    for r in fts_results:
+                        archive_text += " " + r.get("data_json", "") + " " + r.get("summary", "")
+                except Exception:
+                    pass
+        if archive_text:
+            parts.append(archive_text.strip())
 
-    vector_results = await retrieve_vector_results(
-        question, kg, vmem,
-        llm_client=llm_client,
-        graph_expansion=graph_expansion,
-        retrieval_path=retrieval_path,
-    )
-    vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+    if "vector" in streams:
+        vector_results = await retrieve_vector_results(
+            question, kg, vmem,
+            llm_client=llm_client,
+            graph_expansion=graph_expansion,
+            retrieval_path=retrieval_path,
+        )
+        vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+        if vector_text:
+            parts.append(vector_text)
 
-    return ctx["context"] + " " + archive_text + " " + vector_text
+    return " ".join(parts)
 
 
 def summarize_retrieval_delta(results: list[dict]) -> dict | None:
@@ -576,12 +649,15 @@ async def run_benchmark(
         writer_url = getattr(args, "writer_url", None)
         writer_model = getattr(args, "writer_model", None)
 
+    # Parse TAOSMD_LME_STREAMS (exits on invalid value)
+    streams = _parse_streams_env()
+
     print("=" * 70)
     print("LongMemEval Benchmark -- taOSmd")
     print("=" * 70)
     print(
         f"  retrieval_path={retrieval_path}  graph_expansion={graph_expansion}  "
-        f"num_ctx={NUM_CTX or 'ollama-default'}"
+        f"num_ctx={NUM_CTX or 'ollama-default'}  streams={streams}"
     )
 
     # Refuse rather than silently run two identical arms. Exits non-zero on
@@ -735,6 +811,7 @@ async def run_benchmark(
             llm_client=llm_client,
             graph_expansion=graph_expansion,
             retrieval_path=retrieval_path,
+            streams=streams,
         )
         query_time = time.time() - t1
 
@@ -747,6 +824,7 @@ async def run_benchmark(
                 question, kg, archive, vmem,
                 llm_client=llm_client,
                 retrieval_path="legacy",
+                streams=streams,
             )
             delta = {
                 "legacy_chars": len(legacy_ctx),
@@ -794,6 +872,7 @@ async def run_benchmark(
             "question": question,
             "correct": bool(correct),
             "retrieved_chars": len(full_context),
+            "context_chars": len(full_context),
             "retrieval_delta": delta,
         })
 
@@ -863,6 +942,7 @@ async def run_benchmark(
             "num_ctx": NUM_CTX,
             "retrieval_path": retrieval_path,
             "graph_expansion": graph_expansion,
+            "streams": streams,
             "retrieval_delta": delta_summary,
             "metrics": {
                 "n": total_questions,
