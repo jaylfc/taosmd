@@ -191,6 +191,15 @@ def test_k_negative_raises():
         recall_at_k_qrels(ranked_doc_ids, qrels, ks=(-1,))
 
 
+def test_k_bool_true_raises():
+    """k=True (which is 1) must raise ValueError because bool is not an int for our purposes."""
+    ranked_doc_ids = {"q1": ["d1", "d2"]}
+    qrels = {"q1": {"d1"}}
+
+    with pytest.raises(ValueError, match="k=True"):
+        recall_at_k_qrels(ranked_doc_ids, qrels, ks=(True,))
+
+
 def test_empty_ks_raises():
     """An empty ks tuple must raise ValueError."""
     ranked_doc_ids = {"q1": ["d1", "d2"]}

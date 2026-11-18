@@ -234,9 +234,12 @@ def _install_cron(data_dir: str):
         "kg_db=j(d, 'knowledge-graph.db')); "
         "asyncio.run(p.init()); asyncio.run(p.index_yesterday()); asyncio.run(p.close())"
     )
+    q_logfile = shlex.quote(os.path.join(data_dir, "logs", "librarian-cron.log"))
+    os.makedirs(os.path.join(data_dir, "logs"), exist_ok=True)
+
     cron_cmd = (
         f"0 3 * * * cd {q_dir} && TAOSMD_DATA_DIR={q_dir} "
-        f"python3 -c {shlex.quote(py_snippet)} 2>/dev/null"
+        f"python3 -c {shlex.quote(py_snippet)} >> {q_logfile} 2>&1"
     )
 
     try:
@@ -248,7 +251,7 @@ def _install_cron(data_dir: str):
         new_cron = existing.stdout.rstrip() + f"\n# taOSmd nightly librarian (catalog + crystallize + KG + compress)\n{cron_cmd}\n"
         proc = subprocess.run(["crontab", "-"], input=new_cron, capture_output=True, text=True)
         if proc.returncode == 0:
-            print("  ✓ Daily librarian cron installed (3 AM nightly)")
+            print(f"  ✓ Daily librarian cron installed (3 AM nightly, log at {q_logfile})")
         else:
             print(f"  ⚠ Cron install failed: {proc.stderr.strip()}")
     except FileNotFoundError:
@@ -385,11 +388,15 @@ def _embedder_model_present(model_dir: str) -> bool:
     """True if an ONNX model.onnx exists at the dir root or under onnx/.
 
     Matches VectorMemory's own resolution order so the preflight checks the
-    exact files the loader will look for at serve time.
+    exact files the loader will look for at serve time. Git LFS pointer files
+    (which are small text files, not real models) are explicitly rejected.
     """
+    from .api import _is_lfs_pointer
+    root_model = Path(f"{model_dir}/model.onnx")
+    onnx_model = Path(f"{model_dir}/onnx/model.onnx")
     return (
-        Path(f"{model_dir}/model.onnx").exists()
-        or Path(f"{model_dir}/onnx/model.onnx").exists()
+        (root_model.exists() and not _is_lfs_pointer(root_model))
+        or (onnx_model.exists() and not _is_lfs_pointer(onnx_model))
     )
 
 

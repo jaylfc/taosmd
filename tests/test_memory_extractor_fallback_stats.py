@@ -334,3 +334,59 @@ def test_consecutive_regex_fallback_alerts_loud_once_then_resets(
     )
     assert all(r.levelno == logging.WARNING for r in alerts)
     me._reset_extraction_stats()
+
+
+def test_llm_fell_back_reset_before_extract_with_llm_status(tmp_path):
+    """_llm_fell_back is reset before _extract_with_llm_status runs.
+
+    Set the ContextVar to True, run a successful LLM extraction with a stub
+    http client, and assert the returned fell_back is False (not the stale
+    True from before the call).
+    """
+    from taosmd.memory_extractor import _extract_with_llm_status, _llm_fell_back
+    from taosmd.knowledge_graph import TemporalKnowledgeGraph
+
+    class _SuccessResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": (
+                            '[{"subject": "Alice", "predicate": "prefers", '
+                            '"object": "green tea"}]'
+                        )
+                    }
+                }]
+            }
+
+    class _SuccessClient:
+        async def post(self, url, json=None, timeout=None):
+            return _SuccessResponse()
+
+    async def inner():
+        # Prime the ContextVar with True (stale value from a previous call)
+        _llm_fell_back.set(True)
+        assert _llm_fell_back.get() is True
+
+        kg = TemporalKnowledgeGraph(db_path=tmp_path / "kg.db")
+        await kg.init()
+        try:
+            facts, fell_back = await _extract_with_llm_status(
+                text="Alice prefers green tea.",
+                llm_url="http://localhost:11434",
+                http_client=_SuccessClient(),
+                agent_name="test",
+                model="qwen3.5:9b",
+            )
+            # The fell_back flag must be False because the LLM call succeeded
+            assert fell_back is False, f"expected fell_back=False, got {fell_back}"
+            # The ContextVar must also be reset to False after the call
+            assert _llm_fell_back.get() is False
+            # Facts should be the LLM-extracted ones
+            assert facts == [{"subject": "Alice", "predicate": "prefers", "object": "green tea"}]
+        finally:
+            await kg.close()
+
+    _run(inner())

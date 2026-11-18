@@ -860,7 +860,7 @@ async def retrieve(
         from taosmd.agents import effective_fanout as _effective_fanout  # noqa: PLC0415
         limit = _effective_fanout(agent, worker_capabilities)
 
-    fetch_limit = limit * 3
+    fetch_limit = max(limit * 3, result_limit)
 
     if strategy == "thorough":
         strategy_info = get_search_strategy(query)

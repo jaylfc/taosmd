@@ -483,13 +483,13 @@ def test_rescore_reorders_via_float_cosine(monkeypatch):
         "TAOSMD_BENCH_BINARY_QUANT": "1",
         "TAOSMD_BENCH_RESCORE_OVERSAMPLE": "2",
     })
-    hit_rescore = asyncio.run(module.run_question(item, 1, "hybrid_baseline", cfg_rescore))
+    hit_rescore = asyncio.run(module.run_question(item, 1, "hybrid_baseline", cfg_rescore))[0]
     assert hit_rescore is True, "With rescore, C should be top-1 and hit"
 
     # rescore OFF: binary order keeps A on top; A != answer sC
     monkeypatch.setattr(module, "VectorMemory", lambda **kw: _make_fake())
     cfg_no_rescore = arm_config_from_env({})
-    hit_no_rescore = asyncio.run(module.run_question(item, 1, "hybrid_baseline", cfg_no_rescore))
+    hit_no_rescore = asyncio.run(module.run_question(item, 1, "hybrid_baseline", cfg_no_rescore))[0]
     assert hit_no_rescore is False, "Without rescore, A stays top-1 and misses"
 
 
@@ -606,3 +606,182 @@ def test_mrl_dim_vector_length(monkeypatch):
     assert len(fake_vmem.embed_lengths) > 0
     for length in fake_vmem.embed_lengths:
         assert length == 64, f"Expected vector length 64, got {length}"
+
+
+class _DistractorRecordingVM:
+    """Fake VectorMemory recording adds and embed calls for distractor tests."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.adds = []
+        self.embed_calls = []
+        self._search_results = []
+        self._id = 1
+
+    async def init(self):
+        return None
+
+    async def add(self, text, metadata=None):
+        await self.embed(text)
+        self.adds.append((text, dict(metadata or {})))
+        rid = self._id
+        self._id += 1
+        return rid
+
+    async def embed(self, text, task="search_document"):
+        self.embed_calls.append((text, task))
+        return [1.0, 0.0, 0.0, 0.0]
+
+    async def search(self, query, limit=5, hybrid=True, fusion="boost"):
+        return [dict(r) for r in self._search_results[:limit]]
+
+    async def close(self):
+        return None
+
+    def set_search_results(self, results):
+        self._search_results = results
+
+
+def test_arm_config_from_env_distractor_texts_unset():
+    result = arm_config_from_env({})
+    assert result["distractor_texts"] is None
+    result2 = arm_config_from_env({"TAOSMD_BENCH_DISTRACTOR_TEXTS": ""})
+    assert result2["distractor_texts"] is None
+
+
+def test_arm_config_from_env_distractor_texts_set(tmp_path):
+    import hashlib
+    f = tmp_path / "d.jsonl"
+    f.write_text('{"id":"d1","text":"hello"}\n{"id":"d2","text":"world"}\n')
+    cfg = arm_config_from_env({"TAOSMD_BENCH_DISTRACTOR_TEXTS": str(f)})
+    assert cfg["distractor_texts"] == {
+        "path": str(f),
+        "sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
+        "count": 2,
+    }
+
+
+def test_arm_config_from_env_distractor_texts_missing_file(tmp_path):
+    import pytest
+    with pytest.raises(ValueError):
+        arm_config_from_env({"TAOSMD_BENCH_DISTRACTOR_TEXTS": str(tmp_path / "nope.jsonl")})
+
+
+def test_arm_config_from_env_distractor_texts_missing_key(tmp_path):
+    import pytest
+    f = tmp_path / "d.jsonl"
+    f.write_text('{"id":"d1"}\n')
+    with pytest.raises(ValueError):
+        arm_config_from_env({"TAOSMD_BENCH_DISTRACTOR_TEXTS": str(f)})
+
+
+def test_arm_config_from_env_distractor_texts_duplicate_id(tmp_path):
+    import pytest
+    f = tmp_path / "d.jsonl"
+    f.write_text('{"id":"d1","text":"a"}\n{"id":"d1","text":"b"}\n')
+    with pytest.raises(ValueError):
+        arm_config_from_env({"TAOSMD_BENCH_DISTRACTOR_TEXTS": str(f)})
+
+
+def test_run_question_distractors_added(monkeypatch, tmp_path):
+    import asyncio
+    f = tmp_path / "d.jsonl"
+    f.write_text('{"id":"dx","text":"distractor text"}\n')
+    cfg = arm_config_from_env({"TAOSMD_BENCH_DISTRACTOR_TEXTS": str(f)})
+
+    fake = _DistractorRecordingVM()
+    monkeypatch.setattr(module, "VectorMemory", lambda **kw: fake)
+
+    item = {
+        "question": "q",
+        "answer_session_ids": [],
+        "haystack_sessions": [],
+        "haystack_session_ids": [],
+    }
+    recall_hit, dcount = asyncio.run(module.run_question(item, 5, "hybrid_baseline", cfg))
+    assert any(m.get("distractor_id") == "dx" for _, m in fake.adds)
+    assert ("distractor text"[:512], {"distractor_id": "dx"}) in fake.adds
+
+
+def test_run_question_distractors_topk_all_distractors(monkeypatch, tmp_path):
+    import asyncio
+    f = tmp_path / "d.jsonl"
+    f.write_text('{"id":"dx","text":"distractor text"}\n')
+    cfg = arm_config_from_env({"TAOSMD_BENCH_DISTRACTOR_TEXTS": str(f)})
+
+    fake = _DistractorRecordingVM()
+    fake.set_search_results([
+        {"text": "distractor text", "id": 99, "metadata": {"distractor_id": "dx"}}
+        for _ in range(5)
+    ])
+    monkeypatch.setattr(module, "VectorMemory", lambda **kw: fake)
+
+    item = {
+        "question": "q",
+        "answer_session_ids": ["answer_1"],
+        "haystack_sessions": [],
+        "haystack_session_ids": [],
+    }
+    recall_hit, dcount = asyncio.run(module.run_question(item, 5, "hybrid_baseline", cfg))
+    assert recall_hit is False
+    assert dcount == 5
+
+
+def test_run_question_distractor_id_equals_answer_session(monkeypatch, tmp_path):
+    import asyncio
+    f = tmp_path / "d.jsonl"
+    f.write_text('{"id":"answer_1","text":"distractor text"}\n')
+    cfg = arm_config_from_env({"TAOSMD_BENCH_DISTRACTOR_TEXTS": str(f)})
+
+    fake = _DistractorRecordingVM()
+    fake.set_search_results([
+        {"text": "distractor text", "id": 99, "metadata": {"distractor_id": "answer_1"}}
+    ])
+    monkeypatch.setattr(module, "VectorMemory", lambda **kw: fake)
+
+    item = {
+        "question": "q",
+        "answer_session_ids": ["answer_1"],
+        "haystack_sessions": [],
+        "haystack_session_ids": [],
+    }
+    recall_hit, dcount = asyncio.run(module.run_question(item, 5, "hybrid_baseline", cfg))
+    assert recall_hit is False
+
+
+def test_run_question_distractor_embed_cache(monkeypatch, tmp_path):
+    import asyncio
+    f = tmp_path / "d.jsonl"
+    f.write_text('{"id":"dx","text":"distractor text"}\n')
+    cfg = arm_config_from_env({"TAOSMD_BENCH_DISTRACTOR_TEXTS": str(f)})
+
+    fake = _DistractorRecordingVM()
+    monkeypatch.setattr(module, "VectorMemory", lambda **kw: fake)
+
+    item = {
+        "question": "q",
+        "answer_session_ids": [],
+        "haystack_sessions": [],
+        "haystack_session_ids": [],
+    }
+    asyncio.run(module.run_question(item, 5, "hybrid_baseline", cfg))
+    asyncio.run(module.run_question(item, 5, "hybrid_baseline", cfg))
+
+    distractor_embed_calls = [c for c in fake.embed_calls if c[0] == "distractor text"[:512]]
+    assert len(distractor_embed_calls) == 1
+
+
+def test_run_question_no_distractors_when_unset(monkeypatch):
+    import asyncio
+    fake = _DistractorRecordingVM()
+    monkeypatch.setattr(module, "VectorMemory", lambda **kw: fake)
+
+    item = {
+        "question": "q",
+        "answer_session_ids": [],
+        "haystack_sessions": [],
+        "haystack_session_ids": [],
+    }
+    cfg = arm_config_from_env({})
+    asyncio.run(module.run_question(item, 5, "hybrid_baseline", cfg))
+    assert fake.adds == []

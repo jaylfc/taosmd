@@ -26,13 +26,18 @@ class CrossEncoderReranker:
         self.min_confidence = min_confidence
 
     def _find_model_file(self) -> str | None:
-        """Find the ONNX model file (handles different download layouts)."""
+        """Find the ONNX model file (handles different download layouts).
+
+        Git LFS pointer files (which are small text files, not real models)
+        are explicitly rejected.
+        """
+        from .api import _is_lfs_pointer
         candidates = [
             Path(self._onnx_path) / "model.onnx",
             Path(self._onnx_path) / "onnx" / "model.onnx",
         ]
         for c in candidates:
-            if c.exists():
+            if c.exists() and not _is_lfs_pointer(c):
                 return str(c)
         return None
 

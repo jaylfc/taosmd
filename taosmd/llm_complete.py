@@ -62,13 +62,15 @@ async def llm_complete(
     max_tokens: int = 400,
     no_think: bool = False,
     timeout: float | None = None,
+    thinking_fallback: bool = True,
 ) -> str:
     """One completion, either dialect. Raises on HTTP/network failure.
 
     Returns the response text. For reasoning backends that answer with
     content=null (some llama.cpp patches / thinking modes), falls back to
     the reasoning field so the caller still gets usable text rather than
-    an empty parse.
+    an empty parse. When thinking_fallback is False, the response/content
+    field is returned directly (empty string if empty) at both dialects.
     """
     base = llm_url.rstrip("/")
     fam = api if api in ("ollama", "openai") else await _family(base, client)
@@ -86,7 +88,10 @@ async def llm_complete(
         resp = await client.post(f"{base}/api/generate", json=payload, **kw)
         resp.raise_for_status()
         data = resp.json()
-        text = data.get("response") or data.get("thinking") or ""
+        if thinking_fallback:
+            text = data.get("response") or data.get("thinking") or ""
+        else:
+            text = data.get("response") or ""
     else:
         resp = await client.post(
             f"{base}/v1/chat/completions",
@@ -100,7 +105,10 @@ async def llm_complete(
         )
         resp.raise_for_status()
         choice = resp.json()["choices"][0]["message"]
-        text = choice.get("content") or choice.get("reasoning") or ""
+        if thinking_fallback:
+            text = choice.get("content") or choice.get("reasoning") or ""
+        else:
+            text = choice.get("content") or ""
     return text
 
 

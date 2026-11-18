@@ -59,14 +59,20 @@ def _is_lfs_pointer(p: Path) -> bool:
     """True if ``p`` is a Git LFS pointer file.
 
     LFS pointers are small (< 1024 bytes) text files starting with
-    ``version https://git-lfs.github.com/spec/``.
+    ``version https://git-lfs.github.com/spec/``. A 0-byte file is also
+    treated as a pointer (no model present). A leading UTF-8 BOM is stripped
+    before the prefix check.
     """
     try:
         if not p.exists():
             return False
+        if p.stat().st_size == 0:
+            return True
         if p.stat().st_size >= 1024:
             return False
         first_bytes = p.read_bytes()[:64]
+        if first_bytes.startswith(b"\xef\xbb\xbf"):
+            first_bytes = first_bytes[3:]
         return first_bytes.startswith(b"version https://git-lfs.github.com/spec/")
     except OSError:
         return False
@@ -393,7 +399,15 @@ async def ingest_batch(
             span_id = None
 
         text = raw_text.strip()
-        if not text or (sid and sid in seen):
+        if not text:
+            # Empty/whitespace items: add sid to seen so they won't be
+            # re-archived on resend, then skip indexing.
+            if sid:
+                seen.add(sid)
+            skipped += 1
+            continue
+        if sid and sid in seen:
+            # Duplicate non-empty item in the same batch.
             skipped += 1
             continue
 

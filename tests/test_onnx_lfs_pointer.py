@@ -67,11 +67,88 @@ def test_is_lfs_pointer_false_for_missing_file(tmp_path):
 
 
 def test_is_lfs_pointer_false_for_large_file(tmp_path):
-    """_is_lfs_pointer returns False for a file >= 1024 bytes even if it starts with 'version'."""
+    """_is_lfs_pointer returns False for a file >= 1024 bytes even if it starts with the real LFS prefix."""
     large = tmp_path / "model.onnx"
-    # 1024 bytes starting with "version" but not an LFS pointer
-    large.write_bytes(b"version " + b"x" * 1016)
+    # 1024 bytes starting with the real LFS prefix, padded past the size bound
+    prefix = b"version https://git-lfs.github.com/spec/v1\n"
+    large.write_bytes(prefix + b"x" * (1024 - len(prefix)))
     assert _is_lfs_pointer(large) is False
+
+
+def test_is_lfs_pointer_true_for_zero_byte_file(tmp_path):
+    """_is_lfs_pointer returns True for a 0-byte file (no model present)."""
+    zero = tmp_path / "model.onnx"
+    zero.write_bytes(b"")
+    assert _is_lfs_pointer(zero) is True
+
+
+def test_is_lfs_pointer_true_for_bom_prefixed_pointer(tmp_path):
+    """_is_lfs_pointer returns True for a BOM-prefixed LFS pointer."""
+    bom_ptr = tmp_path / "model.onnx"
+    bom_ptr.write_bytes(b"\xef\xbb\xbf" + LFS_POINTER_CONTENT)
+    assert _is_lfs_pointer(bom_ptr) is True
+
+
+# --- Sibling site checks: pointer-only dirs are reported as absent ---
+
+
+def test_embedder_model_present_false_for_pointer_at_root(tmp_path):
+    """_embedder_model_present returns False when only an LFS pointer exists at root."""
+    from taosmd.auto_setup import _embedder_model_present
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "model.onnx").write_bytes(LFS_POINTER_CONTENT)
+    assert _embedder_model_present(str(model_dir)) is False
+
+
+def test_embedder_model_present_false_for_pointer_in_onnx_subdir(tmp_path):
+    """_embedder_model_present returns False when only an LFS pointer exists in onnx/."""
+    from taosmd.auto_setup import _embedder_model_present
+    model_dir = tmp_path / "model"
+    onnx_dir = model_dir / "onnx"
+    onnx_dir.mkdir(parents=True)
+    (onnx_dir / "model.onnx").write_bytes(LFS_POINTER_CONTENT)
+    assert _embedder_model_present(str(model_dir)) is False
+
+
+def test_cross_encoder_available_false_for_pointer_at_root(tmp_path):
+    """CrossEncoderReranker.available returns False when only an LFS pointer exists at root."""
+    from taosmd.cross_encoder import CrossEncoderReranker
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "model.onnx").write_bytes(LFS_POINTER_CONTENT)
+    ce = CrossEncoderReranker(onnx_path=str(model_dir))
+    assert ce.available is False
+
+
+def test_cross_encoder_available_false_for_pointer_in_onnx_subdir(tmp_path):
+    """CrossEncoderReranker.available returns False when only an LFS pointer exists in onnx/."""
+    from taosmd.cross_encoder import CrossEncoderReranker
+    model_dir = tmp_path / "model"
+    onnx_dir = model_dir / "onnx"
+    onnx_dir.mkdir(parents=True)
+    (onnx_dir / "model.onnx").write_bytes(LFS_POINTER_CONTENT)
+    ce = CrossEncoderReranker(onnx_path=str(model_dir))
+    assert ce.available is False
+
+
+def test_reranker_present_false_for_pointer_at_root(tmp_path):
+    """_reranker_present returns False when only an LFS pointer exists at root."""
+    from taosmd.recipes import _reranker_present
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "model.onnx").write_bytes(LFS_POINTER_CONTENT)
+    assert _reranker_present(str(model_dir)) is False
+
+
+def test_reranker_present_false_for_pointer_in_onnx_subdir(tmp_path):
+    """_reranker_present returns False when only an LFS pointer exists in onnx/."""
+    from taosmd.recipes import _reranker_present
+    model_dir = tmp_path / "model"
+    onnx_dir = model_dir / "onnx"
+    onnx_dir.mkdir(parents=True)
+    (onnx_dir / "model.onnx").write_bytes(LFS_POINTER_CONTENT)
+    assert _reranker_present(str(model_dir)) is False
 
 
 # VectorMemory integration test
