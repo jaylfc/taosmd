@@ -262,6 +262,7 @@ def test_crystallize_fallback_on_router_non_200(tmp_path):
                 lc.llm_complete = original
         finally:
             await cs.close()
+    asyncio.run(run())
 
 
 def test_ollama_thinking_fallback_disabled():
