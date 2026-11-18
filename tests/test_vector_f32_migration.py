@@ -130,6 +130,84 @@ def _free_space(path: str) -> int:
     return stat.free
 
 
+def _get_rows_and_marker(db_path: str):
+    """Get all embeddings and marker from store for byte-identical checks."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT id, embedding FROM vector_memory ORDER BY id").fetchall()
+    marker_row = conn.execute("SELECT value FROM store_meta WHERE key='mode'").fetchone()
+    conn.close()
+    return [(r["id"], r["embedding"]) for r in rows], marker_row["value"] if marker_row else None
+
+
+def _build_conflicting_store(db_path: str, marker: str, embeddings_json: bool) -> None:
+    """Build a store with a specific marker and embedding format using raw sqlite3."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS vector_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            embedding TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at REAL NOT NULL,
+            valid_to REAL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vm_created ON vector_memory(created_at DESC)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS store_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+
+    # Add 3 rows with consistent embeddings
+    for i in range(3):
+        text = f"document {i}"
+        if embeddings_json:
+            vec = [0.1] * 384
+            emb = json.dumps(vec)
+        else:
+            # base64 f32 (dense format) or base64 f16 (late interaction) or packed bits (binary quant)
+            arr = np.array([0.1] * 384, dtype="<f4")
+            emb = base64.b64encode(arr.tobytes()).decode("ascii")
+        conn.execute(
+            "INSERT INTO vector_memory (text, embedding, metadata_json, created_at) VALUES (?, ?, '{}', ?)",
+            (text, emb, float(i)),
+        )
+
+    conn.execute(
+        "INSERT INTO store_meta (key, value) VALUES ('mode', ?)",
+        (marker,),
+    )
+    conn.commit()
+    conn.close()
+
+
+# Parametrized conflicting store test cases from the guard-bypass fix
+CONFLICTING_STORES = [
+    # (marker, embeddings_json, test_id, vm_kwargs)
+    (
+        "late_interaction=0;binary_quant=0;embedder=some-other-model",
+        True,  # JSON embeddings
+        "wrong_embedder_json",
+        {"embed_mode": "qmd"},  # default dense qmd
+    ),
+    (
+        "late_interaction=0;binary_quant=1;embedder=qmd:qmd",
+        False,  # base64 f32 embeddings (binary quant stores packed bits, but we use f32 for test)
+        "binary_quant_store",
+        {"embed_mode": "qmd", "binary_quant": False},  # opening as dense
+    ),
+    (
+        "late_interaction=1;binary_quant=0;embedder=qmd:qmd",
+        False,  # base64 f32 embeddings (late interaction stores token matrices)
+        "late_interaction_store",
+        {"embed_mode": "qmd", "late_interaction": False},  # opening as dense
+    ),
+]
+
+
 class TestF32Migration:
     """Test suite for dense embedding f32 base64 migration."""
 
@@ -375,6 +453,55 @@ class TestF32Migration:
         print(f"Size before: {size_before}, after: {size_after}, ratio: {size_before/size_after:.2f}x")
 
         assert size_after * 2 <= size_before, f"Expected at least 2x reduction, got {size_before/size_after:.2f}x"
+
+    # (h) guard-bypass fix: conflicting recorded markers must raise StoreModeMismatch
+    # and leave the database byte-identical
+    @pytest.mark.parametrize("marker,embeddings_json,test_id,vm_kwargs", CONFLICTING_STORES, ids=[c[2] for c in CONFLICTING_STORES])
+    def test_conflicting_store_raises_mismatch_and_unchanged(self, tmp_path, marker, embeddings_json, test_id, vm_kwargs):
+        """A store with a conflicting recorded marker must raise StoreModeMismatch
+        and leave the database byte-identical (marker and all embeddings unchanged)."""
+        db_path = str(tmp_path / f"{test_id}.db")
+        _build_conflicting_store(db_path, marker, embeddings_json)
+
+        # Capture pre-state
+        rows_before, marker_before = _get_rows_and_marker(db_path)
+
+        # Opening with conflicting mode must raise StoreModeMismatch
+        vm = VectorMemory(db_path=db_path, **vm_kwargs)
+        with pytest.raises(StoreModeMismatch):
+            asyncio.run(vm.init())
+
+        # Capture post-state
+        rows_after, marker_after = _get_rows_and_marker(db_path)
+
+        # Database must be byte-identical
+        assert marker_after == marker_before, f"Marker changed: {marker_before} -> {marker_after}"
+        assert rows_after == rows_before, f"Embeddings changed: {rows_before} -> {rows_after}"
+
+    # (i) positive control: conflict-free legacy marker (lacks dense_format) still migrates
+    def test_conflict_free_marker_still_migrates(self, tmp_path):
+        """A conflict-free legacy marker (lacks dense_format) must still migrate."""
+        db_path = str(tmp_path / "conflict_free.db")
+        # Marker matches current instance except lacks dense_format
+        marker = "late_interaction=0;binary_quant=0;embedder=qmd:qmd"
+        _build_conflicting_store(db_path, marker, embeddings_json=True)
+
+        rows_before, marker_before = _get_rows_and_marker(db_path)
+
+        vm = VectorMemory(db_path=db_path, embed_mode="qmd")
+        asyncio.run(vm.init())  # Should NOT raise
+        asyncio.run(vm.close())
+
+        rows_after, marker_after = _get_rows_and_marker(db_path)
+
+        # Marker should be upgraded to include dense_format=f32
+        assert "dense_format=f32" in marker_after
+        assert marker_after != marker_before
+        # All rows should be migrated to f32 base64
+        for _, emb in rows_after:
+            assert not emb.startswith("["), f"Row still has JSON embedding: {emb[:50]}"
+        # Row count unchanged
+        assert len(rows_after) == len(rows_before) == 3
 
 
 if __name__ == "__main__":

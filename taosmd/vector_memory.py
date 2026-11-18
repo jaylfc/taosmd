@@ -519,6 +519,18 @@ class VectorMemory:
         ).fetchone()
         recorded = row["value"] if row else None
 
+        # If a marker is recorded, check for conflicts with current signature
+        # BEFORE migrating. Component-wise comparison over keys the recorded
+        # marker carries, exactly as _check_store_mode does. Any conflict means
+        # the store is incompatible; return without migrating so _check_store_mode
+        # raises StoreModeMismatch and the store is left byte-identical.
+        if recorded is not None:
+            rec = self._parse_mode(recorded)
+            cur = self._parse_mode(self._store_mode_signature())
+            conflict = {k: v for k, v in rec.items() if cur.get(k) != v}
+            if conflict:
+                return
+
         # Check if migration is needed
         needs_migration = False
         if recorded is not None:
