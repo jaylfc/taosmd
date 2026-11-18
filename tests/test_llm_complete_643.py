@@ -171,3 +171,27 @@ def test_ollama_thinking_fallback():
         await c.aclose()
         assert text == "abc"
     asyncio.run(run())
+
+
+def test_ollama_thinking_fallback_disabled():
+    async def run():
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"response": "", "thinking": "long reasoning text"})
+
+        c = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        text = await llm_complete(c, OLLAMA_BASE, "m", "p", api="ollama", thinking_fallback=False)
+        await c.aclose()
+        assert text == ""
+    asyncio.run(run())
+
+
+def test_openai_reasoning_fallback_disabled():
+    async def run():
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": None, "reasoning": "long reasoning text"}}]})
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        text = await llm_complete(client, "http://r.test", "m", "p", api="openai", thinking_fallback=False)
+        await client.aclose()
+        assert text == ""
+    asyncio.run(run())

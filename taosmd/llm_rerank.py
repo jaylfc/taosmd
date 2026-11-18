@@ -114,6 +114,7 @@ async def llm_listwise_rerank(
             temperature=0.0, max_tokens=200,
             no_think=not no_think_prefix,
             timeout=timeout,
+            thinking_fallback=False,
         )).strip()
     except Exception as e:
         logger.debug("LLM listwise rerank failed: %s; trusting upstream order", e)
