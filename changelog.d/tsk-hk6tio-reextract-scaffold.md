@@ -1,4 +1,3 @@
-### Fixed
+### Added
 
-- Pin regex pattern hash to a literal so a pattern edit fails CI (the shipped pin test was tautological).
-- Restore add_claim dedup docstring and BEGIN IMMEDIATE rationale on add_claim_ex (issue #653).
+- Add versioned claim extractor ids, claims reextract coverage log migration, and ClaimStore reextract primitives.

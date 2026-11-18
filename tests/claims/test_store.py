@@ -60,11 +60,12 @@ def test_rate(tmp_path):
 
 
 def test_rate_by_extractor_breakdown(tmp_path):
-    """rate() carries a by_extractor count so a permanent regex fallback is loud.
+    """rate() returns a by_extractor breakdown of claim counts per source_extractor.
 
     Issue #653 item 4: the shadow deployment produced 10,063/10,063 claims with
-    source_extractor=regex and nothing surfaced it. The persistent counter lives
-    here (survives restarts, unlike the in-process extraction_stats counters).
+    source_extractor=regex and nothing surfaced it. The by_extractor tally in
+    rate() makes the extractor split visible per claim row (survives restarts,
+    unlike the in-process extraction_stats counters).
     """
     s = _store(tmp_path)
     asyncio.run(s.add_claim("a b", [1], source_extractor="regex"))
@@ -72,6 +73,15 @@ def test_rate_by_extractor_breakdown(tmp_path):
     asyncio.run(s.add_claim("e f", [3], source_extractor="llm"))
     r = asyncio.run(s.rate())
     assert r["by_extractor"] == {"regex": 2, "llm": 1}
+
+
+def test_rate_by_extractor_unknown_label(tmp_path):
+    """A claim stored with an empty source_extractor is counted under 'unknown'."""
+    s = _store(tmp_path)
+    asyncio.run(s.add_claim("a b", [1], source_extractor=""))
+    asyncio.run(s.add_claim("c d", [2], source_extractor=""))
+    r = asyncio.run(s.rate())
+    assert r["by_extractor"] == {"unknown": 2}
 
 
 def test_status_set_constant():

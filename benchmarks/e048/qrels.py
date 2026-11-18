@@ -35,7 +35,7 @@ def recall_at_k_qrels(
         raise ValueError("ks is empty")
 
     for k in ks:
-        if not isinstance(k, int) or k <= 0:
+        if isinstance(k, bool) or not isinstance(k, int) or k <= 0:
             raise ValueError(f"k={k} is not a positive int")
 
     # Initialize hit counters for each K
