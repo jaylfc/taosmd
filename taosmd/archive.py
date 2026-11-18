@@ -776,13 +776,15 @@ class ArchiveStore:
                                 "decompressed bytes differ from source"
                             )
                     os.replace(tmp_path, gz_path)
-                    dir_fd = os.open(str(jsonl.parent), os.O_RDONLY)
+                    dir_fd = None
                     try:
+                        dir_fd = os.open(str(jsonl.parent), os.O_RDONLY)
                         os.fsync(dir_fd)
                     except OSError:
                         pass
                     finally:
-                        os.close(dir_fd)
+                        if dir_fd is not None:
+                            os.close(dir_fd)
                     jsonl.unlink()
                     compressed += 1
                 except Exception:

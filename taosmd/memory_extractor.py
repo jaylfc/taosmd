@@ -90,6 +90,16 @@ _BAD_OBJ_LAST = {
     "below", "above", "here", "there", "now", "then", "today", "yesterday",
     "tomorrow", "away", "back", "out",
 }
+# Lone object words that are participles/adverbs/adjectives, not entities.
+# After trailing-word trim (e.g. "loaded below" -> "loaded", "up now" -> "up"),
+# a single remaining word from this set means the object carries no entity.
+# Extends the existing junk-object filter; do not add a parallel filter.
+_BAD_OBJ_LONE = {
+    "loaded", "up", "ready", "done", "finished", "complete", "available",
+    "online", "offline", "active", "inactive", "enabled", "disabled",
+    "running", "stopped", "started", "pending", "failed", "success",
+    "open", "closed", "true", "false", "yes", "no", "on", "off",
+}
 # Vague head nouns -- a subject whose head is one of these carries no entity
 # ("Your job", "that message", "the content", "the full skill content").
 _VAGUE_HEAD = {
@@ -143,6 +153,9 @@ def _clean_entity(text: str, role: str = "entity") -> str | None:
             words = words[:-1]
         if not words:
             return None
+        # After trailing-word trim, reject a lone participle/adverb/adjective
+        if len(words) == 1 and words[0].lower().strip(".,;:!?") in _BAD_OBJ_LONE:
+            return None
         text = " ".join(words)
     elif role == "subject":
         if words[0].lower().strip(".,;:!?") in _CLAUSE_INITIAL:
@@ -192,7 +205,24 @@ def _is_meta_text(sentence: str) -> bool:
     low = s.lower()
     if any(tok in low for tok in _META_TOKENS):
         return True
-    return any(phrase in low for phrase in _META_PHRASES)
+    # Meta phrases must match agent boilerplate (whole sentence or line),
+    # not a phrase inside an ordinary sentence. A phrase followed by a
+    # word character is a modifier (e.g. "loaded below panel"), not scaffolding.
+    for phrase in _META_PHRASES:
+        idx = low.find(phrase)
+        if idx == -1:
+            continue
+        after = idx + len(phrase)
+        # Phrase at end of sentence (punctuation or end) -> boilerplate
+        if after >= len(low) or low[after] in ".!?,;:\n":
+            return True
+        # Phrase at start of sentence -> boilerplate (e.g. "Your final response...")
+        if idx == 0:
+            return True
+        # Short sentence mostly consisting of the phrase -> boilerplate
+        if len(low.split()) <= 12 and len(phrase) * 2 >= len(low):
+            return True
+    return False
 
 
 def _split_sentences(text: str) -> list[str]:

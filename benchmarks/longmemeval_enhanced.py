@@ -17,6 +17,7 @@ Configs:
 """
 
 import asyncio
+import hashlib
 import json
 import math
 import os
@@ -35,6 +36,17 @@ from benchmarks.bench_provenance import collect
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "longmemeval_s_full.json")
 ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx")
 
+# Module-level store of loaded distractor texts, keyed by file path (E-048 mixed store arm).
+_DISTRACTOR_TEXTS = {}
+_DISTRACTOR_TEXTS_BY_PATH = _DISTRACTOR_TEXTS
+_DISTRACTOR_STORE = _DISTRACTOR_TEXTS
+DISTRACTOR_TEXTS = _DISTRACTOR_TEXTS
+
+# Module-level embed cache, keyed by (text, task), used only for distractor texts.
+_EMBED_CACHE = {}
+EMBED_CACHE = _EMBED_CACHE
+_embed_cache = _EMBED_CACHE
+
 
 def arm_config_from_env(env: dict) -> dict:
     """Read arm configuration from environment variables.
@@ -42,6 +54,9 @@ def arm_config_from_env(env: dict) -> dict:
     Returns dict with keys: onnx_path, binary_quant, mrl_dim, rescore_oversample,
     fusion, late_interaction.
     """
+    # Reset the per-run embed cache for a fresh arm configuration.
+    _EMBED_CACHE.clear()
+
     # Default onnx path is the existing hard-coded one
     default_onnx_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -101,6 +116,34 @@ def arm_config_from_env(env: dict) -> dict:
     late_interaction_str = env.get("TAOSMD_BENCH_LATE_INTERACTION")
     late_interaction = late_interaction_str is not None and late_interaction_str != '' and late_interaction_str == "1"
 
+    # Distractor texts (mixed store arm)
+    distractor_str = env.get("TAOSMD_BENCH_DISTRACTOR_TEXTS")
+    if distractor_str is None or distractor_str == '':
+        distractor_texts = None
+    else:
+        if not os.path.isfile(distractor_str):
+            raise ValueError(f"TAOSMD_BENCH_DISTRACTOR_TEXTS file not found: {distractor_str}")
+        with open(distractor_str, "rb") as _f:
+            raw = _f.read()
+        sha = hashlib.sha256(raw).hexdigest()
+        ids = set()
+        items = []
+        for line in raw.decode("utf-8").splitlines():
+            if line.strip() == "":
+                continue
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, ValueError) as e:
+                raise ValueError(f"TAOSMD_BENCH_DISTRACTOR_TEXTS invalid JSONL: {e}") from e
+            if not isinstance(obj, dict) or "id" not in obj or "text" not in obj:
+                raise ValueError("TAOSMD_BENCH_DISTRACTOR_TEXTS line missing 'id' or 'text'")
+            if obj["id"] in ids:
+                raise ValueError(f"TAOSMD_BENCH_DISTRACTOR_TEXTS duplicate id: {obj['id']}")
+            ids.add(obj["id"])
+            items.append({"id": obj["id"], "text": obj["text"]})
+        _DISTRACTOR_TEXTS[distractor_str] = items
+        distractor_texts = {"path": distractor_str, "sha256": sha, "count": len(items)}
+
     return {
         "onnx_path": onnx_path,
         "binary_quant": binary_quant,
@@ -109,6 +152,7 @@ def arm_config_from_env(env: dict) -> dict:
         "fusion": fusion,
         "late_interaction": late_interaction,
         "reranker": reranker,
+        "distractor_texts": distractor_texts,
     }
 
 
@@ -154,6 +198,26 @@ def make_embed_wrapper(original_embed, mrl_dim, floats_by_text):
             floats_by_text[text] = vec
         return vec
     return wrapped_embed
+
+
+def make_embed_cache_wrapper(original_embed, distractor_texts):
+    """Wrap an embed function with a module-level cache used only for distractor texts."""
+    distractor_set = set(distractor_texts or [])
+
+    async def wrapped_embed(text: str, task: str = "search_document"):
+        if text in distractor_set:
+            key = (text, task)
+            if key not in _EMBED_CACHE:
+                _EMBED_CACHE[key] = await original_embed(text, task)
+            return _EMBED_CACHE[key]
+        return await original_embed(text, task)
+
+    return wrapped_embed
+
+
+# Aliases for compatibility with alternate naming
+make_embed_cache = make_embed_cache_wrapper
+make_distractor_embed_wrapper = make_embed_cache_wrapper
 
 
 def rescore(query_vec: list[float], candidates: list[dict], floats_by_text: dict, k: int) -> list[dict]:
@@ -237,6 +301,18 @@ async def run_question(item, top_k, config_name, config, reranker=None):
         if vmem_id > 0:
             session_map[vmem_id] = sid
 
+    # Distractor texts (mixed store arm): add after session ingest, before search.
+    distractor_cfg = config.get("distractor_texts") if isinstance(config, dict) else None
+    distractors = _DISTRACTOR_TEXTS.get(distractor_cfg["path"]) if distractor_cfg else None
+    if distractors:
+        distractor_text_set = set()
+        for d in distractors:
+            distractor_text_set.add(d["text"])
+            distractor_text_set.add(d["text"][:512])
+        vmem.embed = make_embed_cache_wrapper(vmem.embed, distractor_text_set)
+        for d in distractors:
+            await vmem.add(d["text"][:512], metadata={"distractor_id": d["id"]})
+
     # Build search query based on config
     search_query = question
     retrieve_k = top_k
@@ -304,9 +380,11 @@ async def run_question(item, top_k, config_name, config, reranker=None):
         if vmem_id in session_map:
             retrieved_session_ids.add(session_map[vmem_id])
 
+    distractor_in_topk = sum(1 for r in results if "distractor_id" in (r.get("metadata") or {}))
+
     recall_hit = any(aid in retrieved_session_ids for aid in answer_session_ids)
     await vmem.close()
-    return recall_hit
+    return recall_hit, distractor_in_topk
 
 
 async def run_benchmark(limit: int = 500, top_k: int = 5):
@@ -375,11 +453,13 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
         results_by_type = {}
         total_recall = 0
         total_questions = 0
+        total_distractor_in_topk = 0
         t_start = time.time()
 
         for i, item in enumerate(dataset):
             qtype = item["question_type"]
-            recall_hit = await run_question(item, top_k, config_name, cfg, reranker=reranker)
+            recall_hit, distractor_count = await run_question(item, top_k, config_name, cfg, reranker=reranker)
+            total_distractor_in_topk += distractor_count
 
             total_questions += 1
             if recall_hit:
@@ -398,6 +478,8 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
 
         total_time = time.time() - t_start
         overall = total_recall / total_questions * 100
+        distractor_mean = (total_distractor_in_topk / total_questions) if total_questions else 0.0
+
 
         print(f"\n  Result: {total_recall}/{total_questions} ({overall:.1f}%) in {total_time:.0f}s")
         print("  By category:")
@@ -409,6 +491,7 @@ async def run_benchmark(limit: int = 500, top_k: int = 5):
             "overall": overall, "total": total_recall,
             "questions": total_questions, "time": total_time,
             "by_type": results_by_type,
+            "distractor_in_topk_mean": distractor_mean,
         }
 
     # Summary
@@ -443,6 +526,7 @@ def _write_results(output_path: str, top_k: int, all_results: dict, cfg: dict, p
             "results": all_results,
             "arm_config": cfg,
             "provenance": prov,
+            "distractor_in_topk_mean": all_results.get("hybrid_baseline", {}).get("distractor_in_topk_mean", 0.0),
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }, f, indent=2)
 

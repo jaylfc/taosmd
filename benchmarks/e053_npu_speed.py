@@ -431,7 +431,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 tokens_qwen = p["tokens_qwen"]
                 tokens_granite = p["tokens_granite"]
                 prompt_tokens_arm = tokens_granite if arm == "G" else tokens_qwen
-                max_new = 512
+                max_new = LOOP_CAP_TOKENS
 
                 if ctx_limit is not None and prompt_tokens_arm + max_new > ctx_limit:
                     row = {
