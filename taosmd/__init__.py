@@ -1,4 +1,47 @@
-__version__ = "0.4.0"
+from __future__ import annotations
+
+import importlib.metadata
+import tomllib
+from pathlib import Path
+
+
+# Allow tests to override the pyproject.toml location
+_PYPROJECT_PATH = Path(__file__).resolve().parent.parent / "pyproject.toml"
+
+
+def _resolve_version() -> str:
+    """Resolve the package version at import time.
+
+    Priority:
+    1. pyproject.toml next to the package (editable checkout) -- describes the
+       code that is actually running; wins over stale metadata
+    2. importlib.metadata.version("taosmd") -- installed distribution metadata
+    3. "0+unknown" -- neither source available
+
+    Never raises.
+    """
+    # First check pyproject.toml in the parent directory of this package
+    # This wins over installed metadata because it describes the code actually running
+    pyproject_path = _PYPROJECT_PATH
+    if pyproject_path.is_file():
+        try:
+            data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+            version = data.get("project", {}).get("version")
+            if isinstance(version, str) and version:
+                return version
+        except Exception:
+            pass
+
+    # Fall back to installed package metadata
+    try:
+        return importlib.metadata.version("taosmd")
+    except importlib.metadata.PackageNotFoundError:
+        pass
+
+    return "0+unknown"
+
+
+__version__ = _resolve_version()
 
 from .knowledge_graph import TemporalKnowledgeGraph as KnowledgeGraph
 from .vector_memory import VectorMemory

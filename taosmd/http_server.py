@@ -62,9 +62,11 @@ Endpoints
 ---------
 ``GET  /``                 -> the read-only inspection UI (``text/html``)
 ``GET  /ui``               -> alias of ``GET /``
-``GET  /health``           -> ``{"status": "ok", "version": <str>, "capabilities": [<str>]}``
+``GET  /health``           -> ``{"status": "ok", "version": <str>, "commit": <str|null>,
+                           "commit_source": <str|null>, "capabilities": [<str>]}``
                            ``status`` and ``version`` are the long-standing contract
-                           (taOS and the dashboard consume both); ``capabilities`` is
+                           (taOS and the dashboard consume both); ``commit`` and
+                           ``commit_source`` mirror ``GET /version``; ``capabilities`` is
                            additive, the same list ``GET /version`` returns.
 ``GET  /version``          -> ``{"version", "commit", "commit_source", "built_at",
                            "built_at_source", "capabilities"}``
@@ -1294,10 +1296,14 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                         self._send_json(404, {"error": "dashboard disabled (managed_by=taos)"})
                 elif method == "GET" and path == "/health":
                     # "status" and "version" are the existing contract (taOS and
-                    # the dashboard consume both); "capabilities" is additive.
+                    # the dashboard consume both); "commit" and "commit_source"
+                    # mirror GET /version; "capabilities" is additive.
+                    build = capabilities.build_info()
                     self._send_json(200, {
                         "status": "ok",
                         "version": __version__,
+                        "commit": build["commit"],
+                        "commit_source": build["commit_source"],
                         "capabilities": capabilities.capabilities(),
                     })
                 elif method == "GET" and path == "/version":
