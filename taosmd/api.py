@@ -393,7 +393,15 @@ async def ingest_batch(
             span_id = None
 
         text = raw_text.strip()
-        if not text or (sid and sid in seen):
+        if not text:
+            # Empty/whitespace items: add sid to seen so they won't be
+            # re-archived on resend, then skip indexing.
+            if sid:
+                seen.add(sid)
+            skipped += 1
+            continue
+        if sid and sid in seen:
+            # Duplicate non-empty item in the same batch.
             skipped += 1
             continue
 
