@@ -527,6 +527,43 @@ async def retrieve_context(
     if streams is None:
         streams = ["assembler", "fts", "vector"]
 
+    # Byte-identical fallback for the default all-three-streams case:
+    # the original code always returned
+    #   ctx["context"] + " " + archive_text + " " + vector_text
+    # with two trailing spaces if both archive_text and vector_text are empty,
+    # and archive_text preserving its leading spaces per FTS result.
+    # Replicate that exact behaviour when all three streams are enabled.
+    all_three = streams == ["assembler", "fts", "vector"]
+
+    if all_three:
+        assembler = ContextAssembler(kg=kg, archive=archive)
+        ctx = await assembler.assemble(
+            query=question,
+            depth="auto",
+            max_total_tokens=ASSEMBLE_TOKENS,
+        )
+        assembler_ctx = ctx["context"]
+
+        archive_text = ""
+        for term in question.split()[:5]:
+            if len(term) > 3:
+                try:
+                    fts_results = await archive.search_fts(term, limit=FTS_LIMIT)
+                    for r in fts_results:
+                        archive_text += " " + r.get("data_json", "") + " " + r.get("summary", "")
+                except Exception:
+                    pass
+
+        vector_results = await retrieve_vector_results(
+            question, kg, vmem,
+            llm_client=llm_client,
+            graph_expansion=graph_expansion,
+            retrieval_path=retrieval_path,
+        )
+        vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+
+        return assembler_ctx + " " + archive_text + " " + vector_text
+
     parts = []
 
     if "assembler" in streams:
@@ -538,12 +575,10 @@ async def retrieve_context(
         )
         parts.append(ctx["context"])
 
-    # FTS search over raw archive (the MemPalace approach -- verbatim recall).
-    # Search for key words from the question.
     if "fts" in streams:
         archive_text = ""
         for term in question.split()[:5]:
-            if len(term) > 3:  # Skip short words
+            if len(term) > 3:
                 try:
                     fts_results = await archive.search_fts(term, limit=FTS_LIMIT)
                     for r in fts_results:

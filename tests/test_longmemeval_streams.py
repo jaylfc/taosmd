@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -244,8 +245,10 @@ async def test_join_order_is_assembler_fts_vector(runner, monkeypatch):
     ctx, assembler, archive, vmem = await _call_retrieve_context(
         runner, streams=["assembler", "fts", "vector"]
     )
-    # FTS returns empty, so assembler then vector
-    assert ctx == "ASSEMBLER_TEXT VECTOR_TEXT"
+    # FTS returns empty in our fake; original logic produces two spaces
+    # between assembler and vector when archive_text is empty:
+    # assembler_ctx + " " + "" + " " + vector_text
+    assert ctx == "ASSEMBLER_TEXT  VECTOR_TEXT"
 
 
 # ---------------------------------------------------------------------------
@@ -332,9 +335,6 @@ async def test_run_benchmark_records_streams_and_context_chars(runner, monkeypat
         assert "context_chars" in r
         assert r["context_chars"] == r["retrieved_chars"]
 
-
-# Need json import for the last test
-import json
 
 # ---------------------------------------------------------------------------
 # 7. The _parse_streams_env function exists and is called from run_benchmark
