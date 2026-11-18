@@ -2006,6 +2006,9 @@ def main(argv: list[str] | None = None) -> int:
         except mcp_server.MissingMCPDependencyError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
+        except mcp_server.IncompatibleMCPVersionError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
     if args.cmd == "supersede":
         import asyncio  # noqa: PLC0415

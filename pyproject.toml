@@ -31,8 +31,11 @@ local = ["sentence-transformers"]
 onnx = ["onnxruntime"]
 benchmarks = ["mem0ai>=0.1.0", "mempalace"]
 # MCP server surface (#84) — optional so the core install stays lean.
+# Pinned below mcp 2.x: 2.x renamed and moved FastMCP, so
+# `from mcp.server.fastmcp import FastMCP` raises ModuleNotFoundError and the
+# server is dead on arrival. mcp 2.x support is tracked separately.
 # Install with: pip install taosmd[mcp]
-mcp = ["mcp"]
+mcp = ["mcp>=1,<2"]
 # Opt-in A2A bus authentication against a taOS agent registry (EdDSA-JWT).
 # Only needed when a registry URL is configured; core stays lean for Pi tiers.
 # Install with: pip install taosmd[registry]

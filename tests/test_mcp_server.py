@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 
 import pytest
 
@@ -170,3 +171,80 @@ def test_a2a_send_with_refs_and_blocks(server):
     assert len(msgs) == 1
     assert msgs[0]["refs"] == refs
     assert msgs[0]["blocks"] == blocks
+
+
+class TestMCPDependencyErrors:
+    """The optional ``mcp`` SDK is imported lazily; when it is absent or the
+    wrong major version, the server must surface a clear, one-line error
+    instead of a traceback (tsk-od3z2g)."""
+
+    @staticmethod
+    def _break_fastmcp_import(monkeypatch):
+        """Make ``from mcp.server.fastmcp import FastMCP`` raise ImportError.
+
+        This is how mcp 2.x actually fails: the class was renamed and moved,
+        so the import line raises ModuleNotFoundError. Setting the module to
+        ``None`` in ``sys.modules`` reproduces that exactly.
+        """
+        monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", None)
+
+    def test_incompatible_mcp_version_is_reported(self, tmp_path, monkeypatch):
+        from taosmd.mcp_server import IncompatibleMCPVersionError
+
+        self._break_fastmcp_import(monkeypatch)
+        import importlib.metadata as md
+
+        monkeypatch.setattr(md, "version", lambda name: "2.3.0")
+
+        with pytest.raises(IncompatibleMCPVersionError) as exc_info:
+            mcp_server.build_server(data_dir=str(tmp_path / "data"))
+
+        msg = str(exc_info.value)
+        assert "2.3.0" in msg
+        assert "mcp>=1,<2" in msg
+        assert "pip install taosmd[mcp]" not in msg
+
+    def test_missing_mcp_is_still_reported_as_missing(self, tmp_path, monkeypatch):
+        from taosmd.mcp_server import MissingMCPDependencyError
+
+        self._break_fastmcp_import(monkeypatch)
+        import importlib.metadata as md
+
+        def _missing(name):
+            raise md.PackageNotFoundError(name)
+
+        monkeypatch.setattr(md, "version", _missing)
+
+        with pytest.raises(MissingMCPDependencyError) as exc_info:
+            mcp_server.build_server(data_dir=str(tmp_path / "data"))
+
+        assert "pip install taosmd[mcp]" in str(exc_info.value)
+
+    def test_cli_prints_one_line_for_incompatible_version(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from taosmd.cli import main
+
+        self._break_fastmcp_import(monkeypatch)
+        import importlib.metadata as md
+
+        monkeypatch.setattr(md, "version", lambda name: "2.3.0")
+
+        rc = main(["mcp", "--mcp-data-dir", str(tmp_path / "data")])
+
+        assert rc != 0
+        out = capsys.readouterr()
+        combined = (out.err or "") + (out.out or "")
+        assert "mcp>=1,<2" in combined
+        assert "Traceback" not in combined
+
+
+def test_mcp_extra_is_pinned_below_2():
+    """The ``mcp`` extra must pin below 2.x so a fresh install gets a working
+    FastMCP (tsk-od3z2g)."""
+    import tomllib
+
+    with open("pyproject.toml", "rb") as f:
+        data = tomllib.load(f)
+
+    assert data["project"]["optional-dependencies"]["mcp"] == ["mcp>=1,<2"]

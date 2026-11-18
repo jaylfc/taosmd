@@ -53,12 +53,41 @@ class MissingMCPDependencyError(RuntimeError):
         )
 
 
+class IncompatibleMCPVersionError(RuntimeError):
+    """Raised when ``mcp`` is installed but is the wrong major version.
+
+    mcp 2.x renamed and moved ``FastMCP`` (``from mcp.server.fastmcp import
+    FastMCP`` raises ModuleNotFoundError), so taosmd requires mcp>=1,<2. The
+    fix is a one-line extra pin, not a code change.
+    """
+
+    def __init__(self, version: str) -> None:
+        super().__init__(
+            f"the installed 'mcp' SDK is version {version}, but taosmd needs "
+            "mcp>=1,<2 (mcp 2.x renamed FastMCP). "
+            'Fix it with: pip install "mcp>=1,<2"'
+        )
+
+
 def _require_fastmcp():
-    """Import :class:`FastMCP` lazily, with a clear error if mcp is absent."""
+    """Import :class:`FastMCP` lazily, with a clear error if mcp is absent.
+
+    An ``ImportError`` from the fastmcp import means either that the ``mcp``
+    SDK is not installed at all (raise :class:`MissingMCPDependencyError`) or
+    that an incompatible version is installed (raise
+    :class:`IncompatibleMCPVersionError`). The original exception is chained
+    with ``from`` in both cases.
+    """
     try:
         from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover - exercised when mcp absent
-        raise MissingMCPDependencyError() from exc
+        import importlib.metadata  # noqa: PLC0415
+
+        try:
+            version = importlib.metadata.version("mcp")
+        except importlib.metadata.PackageNotFoundError:
+            raise MissingMCPDependencyError() from exc
+        raise IncompatibleMCPVersionError(version) from exc
     return FastMCP
 
 
@@ -73,7 +102,8 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
     existing loop (e.g. tests); otherwise one is created here.
 
     Raises :class:`MissingMCPDependencyError` if the ``mcp`` SDK is not
-    installed.
+    installed, or :class:`IncompatibleMCPVersionError` if it is installed but
+    is mcp 2.x.
     """
     FastMCP = _require_fastmcp()
 
@@ -387,7 +417,8 @@ def serve_stdio(data_dir=None) -> int:
     clean shutdown.
 
     Raises :class:`MissingMCPDependencyError` if the ``mcp`` SDK is not
-    installed (the CLI turns this into a friendly message + non-zero exit).
+    installed, or :class:`IncompatibleMCPVersionError` if it is installed but
+    is mcp 2.x (the CLI turns this into a friendly message + non-zero exit).
     """
     mcp = build_server(data_dir)
     try:
@@ -397,4 +428,9 @@ def serve_stdio(data_dir=None) -> int:
     return 0
 
 
-__all__ = ["build_server", "serve_stdio", "MissingMCPDependencyError"]
+__all__ = [
+    "build_server",
+    "serve_stdio",
+    "MissingMCPDependencyError",
+    "IncompatibleMCPVersionError",
+]
