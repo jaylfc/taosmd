@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import sys
 from io import StringIO
-from pathlib import Path
 
 import pytest
 
