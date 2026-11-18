@@ -180,7 +180,7 @@ class _CapturingHTTPClient:
         pass
 
 
-def _make_args(**overrides):
+def _make_args(tmp_path=None, **overrides):
     base = dict(
         limit=1,
         type="temporal",
@@ -188,7 +188,7 @@ def _make_args(**overrides):
         graph_expansion=0,
         retrieval_path="retrieve",
         report_retrieval_delta=False,
-        out="",
+        out=str(tmp_path / "results.json") if tmp_path else "",
         writer_url=None,
         writer_model="default",
     )
@@ -241,7 +241,7 @@ def test_date_frame_from_env_invalid_exits_2(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_ingest_prefixes_archive_and_vmem_for_sessions_arm(monkeypatch):
+async def test_ingest_prefixes_archive_and_vmem_for_sessions_arm(monkeypatch, tmp_path):
     """sessions/both/labelled: every archive.record and vmem.add gets [Session date: <d>] prefix."""
     mod = _runner_with_fakes(monkeypatch, "sessions")
     item = _sample_item()
@@ -253,7 +253,7 @@ async def test_ingest_prefixes_archive_and_vmem_for_sessions_arm(monkeypatch):
     monkeypatch.setattr(mod, "ArchiveStore", lambda **kw: archive)
     monkeypatch.setattr(mod, "TemporalKnowledgeGraph", lambda **kw: kg)
 
-    await mod.run_benchmark(args=_make_args())
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path))
 
     # Check archive records
     for _, data, _ in archive.records:
@@ -270,7 +270,7 @@ async def test_ingest_prefixes_archive_and_vmem_for_sessions_arm(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ingest_no_prefix_for_off_arm(monkeypatch):
+async def test_ingest_no_prefix_for_off_arm(monkeypatch, tmp_path):
     """off: no date prefixes on archive records or vmem adds."""
     mod = _runner_with_fakes(monkeypatch, "off")
     vmem = _FakeVectorMemory()
@@ -281,7 +281,7 @@ async def test_ingest_no_prefix_for_off_arm(monkeypatch):
     monkeypatch.setattr(mod, "ArchiveStore", lambda **kw: archive)
     monkeypatch.setattr(mod, "TemporalKnowledgeGraph", lambda **kw: kg)
 
-    await mod.run_benchmark(args=_make_args())
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path))
 
     for _, data, _ in archive.records:
         content = data.get("content", "")
@@ -293,7 +293,7 @@ async def test_ingest_no_prefix_for_off_arm(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ingest_question_arm_no_prefix(monkeypatch):
+async def test_ingest_question_arm_no_prefix(monkeypatch, tmp_path):
     """question: no ingest-time prefixes (only affects answer prompt)."""
     mod = _runner_with_fakes(monkeypatch, "question")
     vmem = _FakeVectorMemory()
@@ -304,7 +304,7 @@ async def test_ingest_question_arm_no_prefix(monkeypatch):
     monkeypatch.setattr(mod, "ArchiveStore", lambda **kw: archive)
     monkeypatch.setattr(mod, "TemporalKnowledgeGraph", lambda **kw: kg)
 
-    await mod.run_benchmark(args=_make_args())
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path))
 
     for _, data, _ in archive.records:
         content = data.get("content", "")
@@ -320,7 +320,7 @@ async def test_ingest_question_arm_no_prefix(monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_question_arm_adds_today_line_to_prompt(monkeypatch):
+async def test_question_arm_adds_today_line_to_prompt(monkeypatch, tmp_path):
     """question/both/labelled: answer prompt contains 'Today is <question_date>.' before Context:"""
     mod = _runner_with_fakes(monkeypatch, "question")
 
@@ -334,7 +334,7 @@ async def test_question_arm_adds_today_line_to_prompt(monkeypatch):
     monkeypatch.setattr(mod, "process_conversation_turn", AsyncMock(return_value={"method": "regex"}))
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client)
 
-    await mod.run_benchmark(args=_make_args(llm=True))
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path, llm=True))
 
     payload = client.last_payload
     assert payload is not None
@@ -347,7 +347,7 @@ async def test_question_arm_adds_today_line_to_prompt(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_both_arm_adds_today_line_to_prompt(monkeypatch):
+async def test_both_arm_adds_today_line_to_prompt(monkeypatch, tmp_path):
     """both: answer prompt contains 'Today is <question_date>.' before Context:"""
     mod = _runner_with_fakes(monkeypatch, "both")
 
@@ -361,7 +361,7 @@ async def test_both_arm_adds_today_line_to_prompt(monkeypatch):
     monkeypatch.setattr(mod, "process_conversation_turn", AsyncMock(return_value={"method": "regex"}))
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client)
 
-    await mod.run_benchmark(args=_make_args(llm=True))
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path, llm=True))
 
     payload = client.last_payload
     assert payload is not None
@@ -373,7 +373,7 @@ async def test_both_arm_adds_today_line_to_prompt(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_labelled_arm_adds_today_line_to_prompt(monkeypatch):
+async def test_labelled_arm_adds_today_line_to_prompt(monkeypatch, tmp_path):
     """labelled: answer prompt contains 'Today is <question_date>.' before Context:"""
     mod = _runner_with_fakes(monkeypatch, "labelled")
 
@@ -387,7 +387,7 @@ async def test_labelled_arm_adds_today_line_to_prompt(monkeypatch):
     monkeypatch.setattr(mod, "process_conversation_turn", AsyncMock(return_value={"method": "regex"}))
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client)
 
-    await mod.run_benchmark(args=_make_args(llm=True))
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path, llm=True))
 
     payload = client.last_payload
     assert payload is not None
@@ -399,7 +399,7 @@ async def test_labelled_arm_adds_today_line_to_prompt(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_off_arm_no_today_line(monkeypatch):
+async def test_off_arm_no_today_line(monkeypatch, tmp_path):
     """off: answer prompt does NOT contain 'Today is' line."""
     mod = _runner_with_fakes(monkeypatch, "off")
 
@@ -413,7 +413,7 @@ async def test_off_arm_no_today_line(monkeypatch):
     monkeypatch.setattr(mod, "process_conversation_turn", AsyncMock(return_value={"method": "regex"}))
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client)
 
-    await mod.run_benchmark(args=_make_args(llm=True))
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path, llm=True))
 
     payload = client.last_payload
     assert payload is not None
@@ -422,7 +422,7 @@ async def test_off_arm_no_today_line(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sessions_arm_no_today_line(monkeypatch):
+async def test_sessions_arm_no_today_line(monkeypatch, tmp_path):
     """sessions: answer prompt does NOT contain 'Today is' line."""
     mod = _runner_with_fakes(monkeypatch, "sessions")
 
@@ -436,7 +436,7 @@ async def test_sessions_arm_no_today_line(monkeypatch):
     monkeypatch.setattr(mod, "process_conversation_turn", AsyncMock(return_value={"method": "regex"}))
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client)
 
-    await mod.run_benchmark(args=_make_args(llm=True))
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path, llm=True))
 
     payload = client.last_payload
     assert payload is not None
@@ -668,7 +668,7 @@ async def test_both_arm_no_rewrite(monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_missing_question_date_exits_1(monkeypatch):
+async def test_missing_question_date_exits_1(monkeypatch, tmp_path):
     """Missing question_date with non-off arm -> exit 1 with question_id and value."""
     mod = _load_runner()
     monkeypatch.setenv("TAOSMD_LME_DATE_FRAME", "question")
@@ -682,12 +682,12 @@ async def test_missing_question_date_exits_1(monkeypatch):
     monkeypatch.setattr(mod, "load_dataset", lambda: [item])
 
     with pytest.raises(SystemExit) as exc:
-        await mod.run_benchmark(args=_make_args())
+        await mod.run_benchmark(args=_make_args(tmp_path=tmp_path))
     assert exc.value.code == 1
 
 
 @pytest.mark.asyncio
-async def test_mismatched_haystack_dates_length_exits_1(monkeypatch):
+async def test_mismatched_haystack_dates_length_exits_1(monkeypatch, tmp_path):
     """haystack_dates length != haystack_sessions length -> exit 1."""
     mod = _load_runner()
     monkeypatch.setenv("TAOSMD_LME_DATE_FRAME", "sessions")
@@ -700,12 +700,12 @@ async def test_mismatched_haystack_dates_length_exits_1(monkeypatch):
     monkeypatch.setattr(mod, "load_dataset", lambda: [item])
 
     with pytest.raises(SystemExit) as exc:
-        await mod.run_benchmark(args=_make_args())
+        await mod.run_benchmark(args=_make_args(tmp_path=tmp_path))
     assert exc.value.code == 1
 
 
 @pytest.mark.asyncio
-async def test_unparseable_date_exits_1(monkeypatch):
+async def test_unparseable_date_exits_1(monkeypatch, tmp_path):
     """Unparseable date in haystack_dates -> exit 1."""
     mod = _load_runner()
     monkeypatch.setenv("TAOSMD_LME_DATE_FRAME", "sessions")
@@ -718,12 +718,12 @@ async def test_unparseable_date_exits_1(monkeypatch):
     monkeypatch.setattr(mod, "load_dataset", lambda: [item])
 
     with pytest.raises(SystemExit) as exc:
-        await mod.run_benchmark(args=_make_args())
+        await mod.run_benchmark(args=_make_args(tmp_path=tmp_path))
     assert exc.value.code == 1
 
 
 @pytest.mark.asyncio
-async def test_off_arm_ignores_missing_dates(monkeypatch):
+async def test_off_arm_ignores_missing_dates(monkeypatch, tmp_path):
     """off arm: missing/invalid dates do not cause exit."""
     mod = _load_runner()
     monkeypatch.setenv("TAOSMD_LME_DATE_FRAME", "off")
@@ -737,7 +737,7 @@ async def test_off_arm_ignores_missing_dates(monkeypatch):
     item["haystack_dates"] = ["not a date"] * 3
     monkeypatch.setattr(mod, "load_dataset", lambda: [item])
 
-    await mod.run_benchmark(args=_make_args())
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path))
 
 
 # ---------------------------------------------------------------------------
@@ -757,7 +757,7 @@ async def test_results_json_includes_date_frame(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "load_dataset", lambda: [_sample_item()])
 
     out_file = tmp_path / "results.json"
-    await mod.run_benchmark(args=_make_args(out=str(out_file)))
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path, out=str(out_file)))
 
     with open(out_file) as f:
         result = json.load(f)
@@ -775,7 +775,7 @@ async def test_results_json_includes_date_frame(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_off_arm_prompt_matches_original(monkeypatch):
+async def test_off_arm_prompt_matches_original(monkeypatch, tmp_path):
     """off arm: captured llm_answer prompt equals master's ANSWER_PROMPT.format output for same inputs."""
     mod = _load_runner()
     monkeypatch.delenv("TAOSMD_LME_DATE_FRAME", raising=False)
@@ -791,15 +791,23 @@ async def test_off_arm_prompt_matches_original(monkeypatch):
     monkeypatch.setattr(mod, "load_dataset", lambda: [_sample_item()])
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client)
 
-    await mod.run_benchmark(args=_make_args(llm=True))
+    await mod.run_benchmark(args=_make_args(tmp_path=tmp_path, llm=True))
 
     payload = client.last_payload
     assert payload is not None
     content = payload["messages"][0]["content"]
     # With all three streams enabled and empty FTS/vector results, the context
     # is "ASSEMBLER_CONTEXT  " (two trailing spaces from the join).
-    expected_context = "ASSEMBLER_CONTEXT  "
-    expected = mod.ANSWER_PROMPT.format(context=expected_context, question="When did Alice move to Paris?")
+    # Hard-coded expected from master's output for these exact inputs.
+    expected = (
+        "Based on the following context from past conversations, answer the question.\n"
+        'If the answer is not in the context, say "I don\'t know."\n'
+        "Answer concisely in 1-2 sentences. /no_think\n\n"
+        "Context:\n"
+        "ASSEMBLER_CONTEXT  \n\n"
+        "Question: When did Alice move to Paris?\n\n"
+        "Answer:"
+    )
     assert content == expected
 
 
@@ -1003,13 +1011,46 @@ def test_no_results_written_to_source_tree(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # Mutation tests (M1, M2, M3) - these will fail initially on the broken code
 # ---------------------------------------------------------------------------
-
+#
 # M1: make _hit_session_date read only the flat level
 # M2: emit the note line unconditionally
 # M3: make 'labelled' behave like 'both'
-
+#
 # These are documented here for the PR body; the actual mutations are applied
 # manually during verification by editing benchmarks/longmemeval_runner.py
+#
+# RED-FIRST verification (run on origin/master before this fix):
+# $ git stash
+# $ python3 -m pytest tests/test_longmemeval_date_frame.py -v
+# Expected failures on origin/master (without the fix):
+#   - test_retrieve_context_chronological_order_with_note: note line not emitted, no reordering
+#   - test_labelled_rewrites_latest_to_most_recent: prefixes not rewritten, wrong note line
+#   - test_date_order_on_default_retrieve_path[sessions]: uses real _adapt_vector, fails without helper
+#   - test_date_order_on_default_retrieve_path[labelled]: same
+#   - test_hits_without_session_date_no_note_line: note line incorrectly emitted
+#   - test_off_arm_prompt_matches_original: tautological comparison (passes but invalid)
+#   - test_no_results_written_to_source_tree: results written to benchmarks/results/
+#
+# Mutation testing (M1/M2/M3 applied manually, tests must fail):
+# M1: Edit _hit_session_date in taosmd/retrieval.py to only check flat metadata:
+#     def _hit_session_date(hit): return hit.get("metadata", {}).get("session_date")
+#     -> test_retrieve_context_chronological_order_with_note FAILS (nested session_date not read)
+#     -> test_date_order_on_default_retrieve_path[sessions] FAILS
+#     -> test_date_order_on_default_retrieve_path[labelled] FAILS
+#     -> test_labelled_rewrites_latest_to_most_recent FAILS
+#
+# M2: Edit _apply_date_framing to emit note_line unconditionally:
+#     Remove the `has_parseable_date` check, always prepend note_line
+#     -> test_hits_without_session_date_no_note_line FAILS (note line emitted for undated hits)
+#     -> test_retrieve_context_no_ordering_for_off FAILS
+#     -> test_retrieve_context_no_ordering_for_question FAILS
+#
+# M3: Edit _apply_date_framing to make 'labelled' skip prefix rewrite:
+#     Change `if date_frame == "labelled":` to `if False:`
+#     -> test_labelled_rewrites_latest_to_most_recent FAILS (prefixes not rewritten)
+#     -> test_labelled_two_chunks_same_latest_date_both_most_recent FAILS
+#     -> test_date_order_on_default_retrieve_path[labelled] FAILS
+#     -> test_both_arm_no_rewrite still PASSES (both arm unchanged)
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

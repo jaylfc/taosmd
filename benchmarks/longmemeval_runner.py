@@ -594,6 +594,91 @@ async def retrieve_vector_results(
     return vector_results
 
 
+def _apply_date_framing(
+    vector_results: list[dict],
+    date_frame: str,
+    haystack_dates: list[str] | None,
+) -> tuple[list[dict], str]:
+    """Apply date framing to vector results.
+
+    Returns (updated_vector_results, vector_text) where vector_text includes
+    the note line if applicable, or empty string if no vector results.
+
+    The logic is shared between the all-three-streams path and the subset-streams
+    path in retrieve_context().
+    """
+    if not (date_frame in ("sessions", "both", "labelled") and haystack_dates):
+        vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+        return vector_results, vector_text
+
+    dated_results = []
+    for r in vector_results:
+        sd = _hit_session_date(r)
+        if sd:
+            try:
+                dt = datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M")
+                meta = r.get("metadata", {}) or {}
+                inner = meta.get("metadata") if isinstance(meta, dict) else None
+                user_md = inner if isinstance(inner, dict) else meta
+                si = user_md.get("session", 0)
+                dated_results.append((dt, si, r))
+            except ValueError:
+                dated_results.append((datetime.max, 0, r))
+        else:
+            dated_results.append((datetime.max, 0, r))
+
+    has_parseable_date = any(dt != datetime.max for dt, _, _ in dated_results)
+    if not has_parseable_date:
+        vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+        return vector_results, vector_text
+
+    dated_results.sort(key=lambda x: (x[0], x[1]))
+    vector_results = [r for _, _, r in dated_results]
+
+    if date_frame == "labelled":
+        served_dates = []
+        for _, _, r in dated_results:
+            sd = _hit_session_date(r)
+            if sd:
+                try:
+                    dt = datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M")
+                    served_dates.append(dt)
+                except ValueError:
+                    pass
+        if served_dates:
+            latest_dt = max(served_dates)
+            latest_str = latest_dt.strftime("%Y/%m/%d (%a) %H:%M")
+            new_results = []
+            for _, _, r in dated_results:
+                text = r.get("text", "")
+                sd = _hit_session_date(r)
+                if sd == latest_str:
+                    text = text.replace(
+                        f"[Session date: {sd}]",
+                        f"[Session date: {sd}, most recent]",
+                        1
+                    )
+                elif sd:
+                    text = text.replace(
+                        f"[Session date: {sd}]",
+                        f"[Session date: {sd}, historical]",
+                        1
+                    )
+                new_r = dict(r)
+                new_r["text"] = text
+                new_results.append(new_r)
+            vector_results = new_results
+            note_line = ("Memories below are in chronological order, oldest first. "
+                         "Where memories disagree, the most recent one is current and the earlier ones are historical.")
+        else:
+            note_line = "Memories below are in chronological order, oldest first."
+    else:
+        note_line = "Memories below are in chronological order, oldest first."
+
+    vector_text = note_line + " " + " ".join(r["text"] for r in vector_results if r.get("text"))
+    return vector_results, vector_text
+
+
 async def retrieve_context(
     question: str,
     kg,
@@ -666,81 +751,7 @@ async def retrieve_context(
 
         # Date framing: sessions/both/labelled reorder vector results chronologically
         # and add a note line. labelled also rewrites prefixes at read time.
-        if date_frame in ("sessions", "both", "labelled") and haystack_dates:
-            dated_results = []
-            for r in vector_results:
-                sd = _hit_session_date(r)
-                if sd:
-                    try:
-                        dt = datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M")
-                        # Use session index from metadata if available
-                        meta = r.get("metadata", {}) or {}
-                        inner = meta.get("metadata") if isinstance(meta, dict) else None
-                        user_md = inner if isinstance(inner, dict) else meta
-                        si = user_md.get("session", 0)
-                        dated_results.append((dt, si, r))
-                    except ValueError:
-                        dated_results.append((datetime.max, 0, r))
-                else:
-                    dated_results.append((datetime.max, 0, r))
-            # Check if any hit had a parseable date
-            has_parseable_date = any(dt != datetime.max for dt, _, _ in dated_results)
-            if has_parseable_date:
-                # Sort by date ascending, then by session index
-                dated_results.sort(key=lambda x: (x[0], x[1]))
-                vector_results = [r for _, _, r in dated_results]
-
-                # labelled: rewrite prefixes for latest session date
-                if date_frame == "labelled":
-                    # Find the latest date among served results
-                    served_dates = []
-                    for _, _, r in dated_results:
-                        sd = _hit_session_date(r)
-                        if sd:
-                            try:
-                                dt = datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M")
-                                served_dates.append(dt)
-                            except ValueError:
-                                pass
-                    if served_dates:
-                        latest_dt = max(served_dates)
-                        latest_str = latest_dt.strftime("%Y/%m/%d (%a) %H:%M")
-                        # Rewrite prefixes in the text
-                        new_results = []
-                        for _, _, r in dated_results:
-                            text = r.get("text", "")
-                            sd = _hit_session_date(r)
-                            if sd == latest_str:
-                                # Replace [Session date: <d>] with [Session date: <d>, most recent]
-                                text = text.replace(
-                                    f"[Session date: {sd}]",
-                                    f"[Session date: {sd}, most recent]",
-                                    1
-                                )
-                            elif sd:
-                                text = text.replace(
-                                    f"[Session date: {sd}]",
-                                    f"[Session date: {sd}, historical]",
-                                    1
-                                )
-                            new_r = dict(r)
-                            new_r["text"] = text
-                            new_results.append(new_r)
-                        vector_results = new_results
-                        note_line = ("Memories below are in chronological order, oldest first. "
-                                     "Where memories disagree, the most recent one is current and the earlier ones are historical.")
-                    else:
-                        note_line = "Memories below are in chronological order, oldest first."
-                else:
-                    note_line = "Memories below are in chronological order, oldest first."
-
-                # Prepend note line to vector text
-                vector_text = note_line + " " + " ".join(r["text"] for r in vector_results if r.get("text"))
-            else:
-                # No parseable dates: keep original order, no note line
-                vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
-        else:
-            vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+        _, vector_text = _apply_date_framing(vector_results, date_frame, haystack_dates)
 
         return assembler_ctx + " " + archive_text + " " + vector_text
 
@@ -777,74 +788,7 @@ async def retrieve_context(
         )
 
         # Date framing applies to vector stream in BOTH paths (all-three and subset)
-        if date_frame in ("sessions", "both", "labelled") and haystack_dates:
-            dated_results = []
-            for r in vector_results:
-                sd = _hit_session_date(r)
-                if sd:
-                    try:
-                        dt = datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M")
-                        meta = r.get("metadata", {}) or {}
-                        inner = meta.get("metadata") if isinstance(meta, dict) else None
-                        user_md = inner if isinstance(inner, dict) else meta
-                        si = user_md.get("session", 0)
-                        dated_results.append((dt, si, r))
-                    except ValueError:
-                        dated_results.append((datetime.max, 0, r))
-                else:
-                    dated_results.append((datetime.max, 0, r))
-            # Check if any hit had a parseable date
-            has_parseable_date = any(dt != datetime.max for dt, _, _ in dated_results)
-            if has_parseable_date:
-                dated_results.sort(key=lambda x: (x[0], x[1]))
-                vector_results = [r for _, _, r in dated_results]
-
-                if date_frame == "labelled":
-                    served_dates = []
-                    for _, _, r in dated_results:
-                        sd = _hit_session_date(r)
-                        if sd:
-                            try:
-                                dt = datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M")
-                                served_dates.append(dt)
-                            except ValueError:
-                                pass
-                    if served_dates:
-                        latest_dt = max(served_dates)
-                        latest_str = latest_dt.strftime("%Y/%m/%d (%a) %H:%M")
-                        new_results = []
-                        for _, _, r in dated_results:
-                            text = r.get("text", "")
-                            sd = _hit_session_date(r)
-                            if sd == latest_str:
-                                text = text.replace(
-                                    f"[Session date: {sd}]",
-                                    f"[Session date: {sd}, most recent]",
-                                    1
-                                )
-                            elif sd:
-                                text = text.replace(
-                                    f"[Session date: {sd}]",
-                                    f"[Session date: {sd}, historical]",
-                                    1
-                                )
-                            new_r = dict(r)
-                            new_r["text"] = text
-                            new_results.append(new_r)
-                        vector_results = new_results
-                        note_line = ("Memories below are in chronological order, oldest first. "
-                                     "Where memories disagree, the most recent one is current and the earlier ones are historical.")
-                    else:
-                        note_line = "Memories below are in chronological order, oldest first."
-                else:
-                    note_line = "Memories below are in chronological order, oldest first."
-
-                vector_text = note_line + " " + " ".join(r["text"] for r in vector_results if r.get("text"))
-            else:
-                # No parseable dates: keep original order, no note line
-                vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
-        else:
-            vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+        _, vector_text = _apply_date_framing(vector_results, date_frame, haystack_dates)
 
         if vector_text:
             parts.append(vector_text)
