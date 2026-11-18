@@ -1,0 +1,46 @@
+{
+  "question_type": "temporal",
+  "limit": 1,
+  "generator": "qwen2.5:3b",
+  "judge": "qwen2.5:3b",
+  "rerank": false,
+  "decompose": false,
+  "self_verify": false,
+  "assemble_tokens": 4000,
+  "retrieve_limit": 12,
+  "fts_limit": 5,
+  "context_chars": 16000,
+  "num_ctx": 0,
+  "retrieval_path": "retrieve",
+  "graph_expansion": 0,
+  "date_frame": "off",
+  "retrieval_delta": null,
+  "metrics": {
+    "n": 1,
+    "correct": 0,
+    "accuracy": 0.0,
+    "by_type": {
+      "temporal": {
+        "correct": 0,
+        "total": 1
+      }
+    }
+  },
+  "results": [
+    {
+      "idx": 0,
+      "question_type": "temporal",
+      "question": "When did Alice move to Paris?",
+      "correct": false,
+      "retrieved_chars": 19,
+      "retrieval_delta": null
+    }
+  ],
+  "writer": {
+    "url_set": false,
+    "model": null,
+    "turns": 3,
+    "method_llm": 0,
+    "method_regex": 3
+  }
+}

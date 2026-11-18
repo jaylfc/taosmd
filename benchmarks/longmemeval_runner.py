@@ -100,6 +100,95 @@ NUM_CTX = _num_ctx_from_env(os.environ.get("TAOSMD_LME_NUM_CTX"))
 _reranker = None
 
 
+def _date_frame_from_env() -> str:
+    """Parse TAOSMD_LME_DATE_FRAME, exiting 2 on invalid values.
+
+    Valid values: off, question, sessions, both, labelled.
+    Unset or empty-after-strip -> 'off'.
+    Any other value -> print error naming the bad value and the five valid ones,
+    then sys.exit(2). No silent fallback.
+    """
+    raw = os.environ.get("TAOSMD_LME_DATE_FRAME")
+    if not raw or not raw.strip():
+        return "off"
+    val = raw.strip()
+    valid = ("off", "question", "sessions", "both", "labelled")
+    if val not in valid:
+        print(
+            f"  ERROR: TAOSMD_LME_DATE_FRAME={val!r} is not valid. "
+            f"Valid values: {', '.join(valid)}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return val
+
+
+def _parse_haystack_date(value: str):
+    """Parse a LongMemEval haystack date string.
+
+    Format: '2023/05/20 (Sat) 02:21'
+    Returns datetime or raises ValueError.
+    """
+    from datetime import datetime
+    return datetime.strptime(value, "%Y/%m/%d (%a) %H:%M")
+
+
+def _validate_dates(item: dict, date_frame: str, question_id: str | None = None):
+    """Validate that required dates are present and parseable for non-off arms.
+
+    Exits 1 with question_id and offending value on failure.
+    """
+    if date_frame == "off":
+        return
+
+    qid = question_id or item.get("question", "unknown")[:50]
+
+    # question_date required for question/both/labelled
+    if date_frame in ("question", "both", "labelled"):
+        qdate = item.get("question_date")
+        if not qdate:
+            print(
+                f"  ERROR: question {qid!r} missing question_date (required for date_frame={date_frame})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            _parse_haystack_date(qdate)
+        except ValueError:
+            print(
+                f"  ERROR: question {qid!r} has unparseable question_date: {qdate!r}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # haystack_dates required for sessions/both/labelled
+    if date_frame in ("sessions", "both", "labelled"):
+        haystack_dates = item.get("haystack_dates")
+        haystack_sessions = item.get("haystack_sessions", [])
+        if haystack_dates is None:
+            print(
+                f"  ERROR: question {qid!r} missing haystack_dates (required for date_frame={date_frame})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if len(haystack_dates) != len(haystack_sessions):
+            print(
+                f"  ERROR: question {qid!r} haystack_dates length ({len(haystack_dates)}) "
+                f"!= haystack_sessions length ({len(haystack_sessions)})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        for d in haystack_dates:
+            try:
+                _parse_haystack_date(d)
+            except ValueError:
+                print(
+                    f"  ERROR: question {qid!r} has unparseable haystack_date: {d!r}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+
 def _gen_options(**extra):
     """Ollama options dict, carrying num_ctx only when it was explicitly set."""
     opts = dict(extra)
@@ -204,14 +293,23 @@ def score_answer(predicted: str, gold: str) -> bool:
     return score_answer_substring(predicted, gold)
 
 
-async def llm_answer(client, context: str, question: str) -> str:
-    """Use remote LLM to generate answer from recalled context."""
+async def llm_answer(client, context: str, question: str, date_frame: str = "off", question_date: str | None = None) -> str:
+    """Use remote LLM to generate answer from recalled context.
+
+    Args:
+        date_frame: Date framing arm ("off", "question", "sessions", "both", "labelled").
+        question_date: The question's date string for the "Today is" line (question/both/labelled).
+    """
+    prompt = ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)
+    if date_frame in ("question", "both", "labelled") and question_date:
+        # Insert "Today is <date>." immediately before "Context:" line
+        prompt = prompt.replace("Context:", f"Today is {question_date}.\n\nContext:", 1)
     try:
         resp = await client.post(
             f"{REMOTE_LLM_URL}/api/chat",
             json={
                 "model": REMOTE_LLM_MODEL,
-                "messages": [{"role": "user", "content": ANSWER_PROMPT.format(context=context[:CONTEXT_CHARS], question=question)}],
+                "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "think": False,
                 "options": _gen_options(temperature=0, num_predict=100),
@@ -447,6 +545,8 @@ async def retrieve_context(
     llm_client=None,
     graph_expansion: int = 0,
     retrieval_path: str = "retrieve",
+    date_frame: str = "off",
+    haystack_dates: list[str] | None = None,
 ) -> str:
     """Assemble the generator context for one question.
 
@@ -463,6 +563,8 @@ async def retrieve_context(
             through ``taosmd.retrieval.retrieve`` so runtime controls apply.
             ``"legacy"`` reproduces the pre-wiring hand-rolled stage so the
             published anchors can be re-measured side by side.
+        date_frame: Date framing arm ("off", "question", "sessions", "both", "labelled").
+        haystack_dates: List of session dates for chronological ordering (sessions/both/labelled).
     """
     assembler = ContextAssembler(kg=kg, archive=archive)
     ctx = await assembler.assemble(
@@ -489,7 +591,78 @@ async def retrieve_context(
         graph_expansion=graph_expansion,
         retrieval_path=retrieval_path,
     )
-    vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
+
+    # Date framing: sessions/both/labelled reorder vector results chronologically
+    # and add a note line. labelled also rewrites prefixes at read time.
+    if date_frame in ("sessions", "both", "labelled") and haystack_dates:
+        # Parse dates for sorting
+        from datetime import datetime
+        dated_results = []
+        for r in vector_results:
+            meta = r.get("metadata", {})
+            sd = meta.get("session_date")
+            if sd:
+                try:
+                    dt = datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M")
+                    dated_results.append((dt, meta.get("session", 0), r))
+                except ValueError:
+                    dated_results.append((datetime.max, meta.get("session", 0), r))
+            else:
+                dated_results.append((datetime.max, meta.get("session", 0), r))
+        # Sort by date ascending, then by session index
+        dated_results.sort(key=lambda x: (x[0], x[1]))
+        vector_results = [r for _, _, r in dated_results]
+
+        # labelled: rewrite prefixes for latest session date
+        if date_frame == "labelled":
+            # Find the latest date among served results
+            served_dates = []
+            for _, _, r in dated_results:
+                meta = r.get("metadata", {})
+                sd = meta.get("session_date")
+                if sd:
+                    try:
+                        dt = datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M")
+                        served_dates.append(dt)
+                    except ValueError:
+                        pass
+            if served_dates:
+                latest_dt = max(served_dates)
+                latest_str = latest_dt.strftime("%Y/%m/%d (%a) %H:%M")
+                # Rewrite prefixes in the text
+                new_results = []
+                for _, _, r in dated_results:
+                    text = r.get("text", "")
+                    meta = r.get("metadata", {})
+                    sd = meta.get("session_date")
+                    if sd == latest_str:
+                        # Replace [Session date: <d>] with [Session date: <d>, most recent]
+                        text = text.replace(
+                            f"[Session date: {sd}]",
+                            f"[Session date: {sd}, most recent]",
+                            1
+                        )
+                    elif sd:
+                        text = text.replace(
+                            f"[Session date: {sd}]",
+                            f"[Session date: {sd}, historical]",
+                            1
+                        )
+                    new_r = dict(r)
+                    new_r["text"] = text
+                    new_results.append(new_r)
+                vector_results = new_results
+                note_line = ("Memories below are in chronological order, oldest first. "
+                             "Where memories disagree, the most recent one is current and the earlier ones are historical.")
+            else:
+                note_line = "Memories below are in chronological order, oldest first."
+        else:
+            note_line = "Memories below are in chronological order, oldest first."
+
+        # Prepend note line to vector text
+        vector_text = note_line + " " + " ".join(r["text"] for r in vector_results if r.get("text"))
+    else:
+        vector_text = " ".join(r["text"] for r in vector_results if r.get("text"))
 
     return ctx["context"] + " " + archive_text + " " + vector_text
 
@@ -579,9 +752,12 @@ async def run_benchmark(
     print("=" * 70)
     print("LongMemEval Benchmark -- taOSmd")
     print("=" * 70)
+
+    # Date framing arm (E-036)
+    date_frame = _date_frame_from_env()
     print(
         f"  retrieval_path={retrieval_path}  graph_expansion={graph_expansion}  "
-        f"num_ctx={NUM_CTX or 'ollama-default'}"
+        f"num_ctx={NUM_CTX or 'ollama-default'}  date_frame={date_frame}"
     )
 
     # Refuse rather than silently run two identical arms. Exits non-zero on
@@ -652,6 +828,11 @@ async def run_benchmark(
         question = item["question"]
         gold_answer = item["answer"]
         sessions = item.get("haystack_sessions", [])
+        haystack_dates = item.get("haystack_dates", [])
+        question_date = item.get("question_date")
+
+        # Validate dates for non-off arms (exits 1 on failure)
+        _validate_dates(item, date_frame, question_id=question[:50])
 
         # Create fresh KG + archive + vector memory per question (isolated test)
         tmp = tempfile.mkdtemp()
@@ -675,6 +856,8 @@ async def run_benchmark(
         # Ingest conversation sessions
         t0 = time.time()
         for si, session in enumerate(sessions):
+            session_date = haystack_dates[si] if si < len(haystack_dates) else ""
+            date_prefix = f"[Session date: {session_date}]\n" if (date_frame in ("sessions", "both", "labelled") and session_date) else ""
             # Build session-level text blocks for embedding
             session_text = ""
             for turn in session:
@@ -703,11 +886,12 @@ async def run_benchmark(
                         )
                         total_turns += 1
                         method_regex_count += 1
-                    # Archive raw content
+                    # Archive raw content (with date prefix for sessions/both/labelled)
+                    archived_content = date_prefix + content if date_prefix else content
                     await archive.record(
                         "conversation",
-                        {"role": role, "content": content},
-                        summary=content[:80],
+                        {"role": role, "content": archived_content},
+                        summary=archived_content[:80],
                     )
                     session_text += f"\n[{role}]: {content}"
 
@@ -723,7 +907,12 @@ async def run_benchmark(
                     if chunk.strip():
                         chunks.append(chunk)
                 for chunk in chunks:
-                    await vmem.add(chunk, metadata={"session": si})
+                    # Add date prefix to each chunk for sessions/both/labelled
+                    prefixed_chunk = date_prefix + chunk if date_prefix else chunk
+                    metadata = {"session": si}
+                    if date_frame in ("sessions", "both", "labelled") and session_date:
+                        metadata["session_date"] = session_date
+                    await vmem.add(prefixed_chunk, metadata=metadata)
 
         ingest_time = time.time() - t0
 
@@ -735,6 +924,8 @@ async def run_benchmark(
             llm_client=llm_client,
             graph_expansion=graph_expansion,
             retrieval_path=retrieval_path,
+            date_frame=date_frame,
+            haystack_dates=haystack_dates,
         )
         query_time = time.time() - t1
 
@@ -747,6 +938,8 @@ async def run_benchmark(
                 question, kg, archive, vmem,
                 llm_client=llm_client,
                 retrieval_path="legacy",
+                date_frame="off",  # legacy path always uses off for comparison
+                haystack_dates=None,
             )
             delta = {
                 "legacy_chars": len(legacy_ctx),
@@ -761,7 +954,7 @@ async def run_benchmark(
         if use_llm and llm_client is not None:
             t_llm = time.time()
             # Step 1: LLM generates answer from recalled context
-            answer = await llm_answer(llm_client, full_context, question)
+            answer = await llm_answer(llm_client, full_context, question, date_frame=date_frame, question_date=question_date)
             if SELF_VERIFY:
                 answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
@@ -863,6 +1056,7 @@ async def run_benchmark(
             "num_ctx": NUM_CTX,
             "retrieval_path": retrieval_path,
             "graph_expansion": graph_expansion,
+            "date_frame": date_frame,
             "retrieval_delta": delta_summary,
             "metrics": {
                 "n": total_questions,
