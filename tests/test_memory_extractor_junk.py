@@ -75,3 +75,21 @@ def test_good_facts_still_extracted():
 )
 def test_trim_trailing_time_and_keep_proper_subject(text, expected):
     assert _objects(text) == expected
+
+
+def test_lone_participle_object_is_rejected():
+    # "Content is loaded." -> object "loaded" is a bare participle, not an entity
+    facts = extract_facts_from_text("Content is loaded.")
+    assert facts == []
+
+
+def test_lone_adverb_object_is_rejected():
+    # "The server is up now." -> time-word trim leaves "up", a bare adverb
+    facts = extract_facts_from_text("The server is up now.")
+    assert facts == []
+
+
+def test_lone_adjective_object_is_rejected():
+    # "Content is ready now." -> time-word trim leaves "ready", a bare adjective
+    facts = extract_facts_from_text("Content is ready now.")
+    assert facts == []
