@@ -110,8 +110,8 @@ def agent_rules(
     Args:
         mode: One of None, "taosmd", "both", "framework".
             None returns the original `docs/agent-rules.md` (backward compatible).
-            "taosmd" returns the base rules plus the taosmd-only supplement.
-            "both" returns the base rules plus the both-mode supplement.
+            "taosmd" returns the lead line, then the base rules, then the taosmd-only supplement.
+            "both" returns the lead line, then the base rules, then the both-mode supplement.
             "framework" returns an empty string (no rules).
         search_tool: Name of the search tool (default: "taosmd_search").
         write_tool: Name of the write/ingest tool (default: "taosmd_remember").
@@ -136,15 +136,19 @@ def agent_rules(
     if mode == "framework":
         return ""
 
+    # Read and prepare the lead line for 'taosmd' and 'both' modes
+    lead = files("taosmd").joinpath("docs/agent-rules-lead.md").read_text(encoding="utf-8")
+    lead = lead.replace("{search_tool}", search_tool).replace("{write_tool}", write_tool).rstrip("\n")
+
     if mode == "taosmd":
         supplement = files("taosmd").joinpath("docs/agent-rules-mode-taosmd.md").read_text(encoding="utf-8")
         supplement = supplement.replace("{search_tool}", search_tool).replace("{write_tool}", write_tool)
-        return base + "\n\n" + supplement
+        return lead + "\n\n" + base + "\n\n" + supplement
 
     if mode == "both":
         supplement = files("taosmd").joinpath("docs/agent-rules-mode-both.md").read_text(encoding="utf-8")
         supplement = supplement.replace("{search_tool}", search_tool).replace("{write_tool}", write_tool)
-        return base + "\n\n" + supplement
+        return lead + "\n\n" + base + "\n\n" + supplement
 
     raise ValueError(f"Unknown mode: {mode!r}. Expected None, 'taosmd', 'both', or 'framework'.")
 

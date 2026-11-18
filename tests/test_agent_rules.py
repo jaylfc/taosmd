@@ -1,4 +1,5 @@
 import taosmd
+import pytest
 
 
 def test_agent_rules_loads_bundled_markdown() -> None:
@@ -69,3 +70,35 @@ def test_agent_rules_supplements_do_not_repeat_the_base_contract() -> None:
 def test_agent_rules_have_no_em_dashes() -> None:
     for mode in (None, "taosmd", "both"):
         assert "\u2014" not in taosmd.agent_rules(mode), mode
+
+
+@pytest.mark.parametrize("mode", ["taosmd", "both"])
+def test_lead_line_is_first_for_taosmd_and_both(mode: str) -> None:
+    out = taosmd.agent_rules(mode=mode, search_tool="my_search", write_tool="my_write")
+    expected_first_line = (
+        "First rule: for anything about this system, the user's own setup, its local docs, "
+        "or something the user told you before, call `my_search` first. Use web search only for things outside it."
+    )
+    assert out.splitlines()[0] == expected_first_line
+    assert "{search_tool}" not in out
+    assert out.count("First rule:") == 1
+    # The base text (taosmd.agent_rules()) appears in out AFTER the first line
+    base = taosmd.agent_rules()
+    # Find the base text starting after the first line
+    first_newline = out.find("\n")
+    rest = out[first_newline + 1 :]
+    assert base in rest
+
+
+def test_lead_absent_for_default_and_framework() -> None:
+    # default (None) mode is byte-identical to docs/agent-rules.md and does not contain 'First rule:'
+    base = taosmd.agent_rules()
+    assert "First rule:" not in base
+    # framework mode returns empty string
+    assert taosmd.agent_rules(mode="framework") == ""
+
+
+def test_lead_is_short() -> None:
+    out = taosmd.agent_rules(mode="both")
+    first_line = out.splitlines()[0]
+    assert len(first_line) <= 220
