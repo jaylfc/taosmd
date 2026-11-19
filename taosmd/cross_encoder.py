@@ -21,8 +21,9 @@ class CrossEncoderReranker:
     def __init__(
         self,
         onnx_path: str | None = None,
-        provider: str | None = None,
         min_confidence: float | None = None,
+        *,
+        provider: str | None = None,
         data_dir: str | Path | None = None,
     ):
         from . import generator_profiles as _gp

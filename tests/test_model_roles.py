@@ -9,6 +9,7 @@ Validates that:
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -368,3 +369,92 @@ def test_resolve_model_function(tmp_path):
 
     # Explicit None fallback
     assert gp.resolve_model("crystallize", fallback=None, data_dir=str(data_dir)) is None
+
+
+def test_reranker_uses_served_data_dir_path(tmp_path, monkeypatch):
+    """Through the REAL api.search with a recipe whose reranker is on,
+    config cross_encoder_path set in the SERVED data dir (not HOME) ->
+    the reranker is constructed with that path (record via monkeypatch of CrossEncoderReranker.__init__ or the session creation)."""
+    from taosmd import api as taosmd_api
+    from taosmd.cross_encoder import CrossEncoderReranker
+    from taosmd import recipes as recipes_module
+
+    # Create served data dir with config
+    served_data_dir = tmp_path / "served-data"
+    served_data_dir.mkdir()
+    home_data_dir = tmp_path / "home-data"
+    home_data_dir.mkdir()
+
+    # Put cross-encoder model in served data dir
+    served_model_dir = served_data_dir / "models" / "cross-encoder-onnx"
+    served_model_dir.mkdir(parents=True)
+    (served_model_dir / "model.onnx").write_bytes(b"placeholder")
+
+    # Put a DIFFERENT model in home data dir (should NOT be used)
+    home_model_dir = home_data_dir / "models" / "cross-encoder-onnx"
+    home_model_dir.mkdir(parents=True)
+    (home_model_dir / "model.onnx").write_bytes(b"home-placeholder")
+
+    # Config in served data dir points to served model
+    config_path = served_data_dir / "config.json"
+    config_path.write_text(json.dumps({
+        "models": {
+            "cross_encoder_path": "models/cross-encoder-onnx",
+            "cross_encoder_provider": "CPUExecutionProvider"
+        }
+    }))
+
+    # No config in home data dir
+
+    # Monkeypatch CrossEncoderReranker.__init__ to capture the resolved _onnx_path
+    captured_path = {}
+    original_init = CrossEncoderReranker.__init__
+
+    def capturing_init(self, onnx_path=None, min_confidence=None, *, provider=None, data_dir=None):
+        # Call original to let it resolve the path
+        original_init(self, onnx_path=onnx_path, min_confidence=min_confidence, provider=provider, data_dir=data_dir)
+        # Capture the resolved path
+        captured_path["onnx_path"] = self._onnx_path
+        captured_path["data_dir"] = data_dir
+
+    monkeypatch.setattr(CrossEncoderReranker, "__init__", capturing_init)
+
+    # Also patch available to True and _load to no-op for the dummy instance
+    monkeypatch.setattr(CrossEncoderReranker, "available", property(lambda self: True))
+    monkeypatch.setattr(CrossEncoderReranker, "_load", lambda self: None)
+    monkeypatch.setattr(CrossEncoderReranker, "_score", lambda self, q, r: [0.5] * len(r))
+
+    # Clear stores cache
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+
+    # Create a recipe with reranker enabled (using bge-v2-m3 which triggers CrossEncoderReranker)
+    from taosmd.recipes import Recipe
+    test_recipe = Recipe(
+        id="test-rerank",
+        name="test-rerank",
+        retrieval={"reranker": "bge-v2-m3", "strategy": "thorough", "limit": 5, "candidate_top_k": 20, "fusion": "boost", "adjacent_neighbors": 0, "graph_expansion": 0, "llm_reranker": False, "late_interaction": False, "colbert_model": "", "embed_model": "minilm-onnx"},
+        ingest={},
+        generator={},
+        librarian={},
+    )
+
+    # Mock resolve_recipe to return our test recipe
+    def mock_resolve_recipe(agent, data_dir=None):
+        return test_recipe
+    monkeypatch.setattr(recipes_module, "resolve_recipe", mock_resolve_recipe)
+
+    # Run search through the real API with served data dir
+    import asyncio
+    asyncio.run(taosmd_api.search(
+        query="test",
+        agent="test-agent",
+        data_dir=str(served_data_dir),
+        limit=5
+    ))
+
+    # The reranker should have been constructed with the served data dir's model path
+    # The config value is used as-is (relative path)
+    assert captured_path["onnx_path"] == "models/cross-encoder-onnx", \
+        f"Expected onnx_path='models/cross-encoder-onnx', got {captured_path['onnx_path']}"
+    assert captured_path["data_dir"] == str(served_data_dir), \
+        f"Expected data_dir={served_data_dir}, got {captured_path['data_dir']}"
