@@ -1,4 +1,81 @@
-__version__ = "0.4.0"
+from __future__ import annotations
+
+import importlib.metadata
+import re
+from pathlib import Path
+
+
+# Allow tests to override the pyproject.toml location
+_PYPROJECT_PATH = Path(__file__).resolve().parent.parent / "pyproject.toml"
+
+
+def _resolve_version() -> str:
+    """Resolve the package version at import time.
+
+    Priority:
+    1. pyproject.toml next to the package (editable checkout) -- describes the
+       code that is actually running; wins over stale metadata. Only honoured
+       when the [project] name is taosmd.
+    2. importlib.metadata.version("taosmd") -- installed distribution metadata
+    3. "0+unknown" -- neither source available
+
+    Never raises.
+    """
+    pyproject_path = _PYPROJECT_PATH
+    if pyproject_path.is_file():
+        text = pyproject_path.read_text(encoding="utf-8")
+        project: dict = {}
+        try:
+            import tomllib
+        except ImportError:
+            tomllib = None
+        if tomllib is not None:
+            try:
+                data = tomllib.loads(text)
+                table = data.get("project") if isinstance(data, dict) else None
+                project = table if isinstance(table, dict) else {}
+            except Exception:
+                project = {}
+        else:
+            # stdlib-only line reader: parse the [project] table without tomllib
+            in_project = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("["):
+                    in_project = stripped == "[project]"
+                    continue
+                if not in_project:
+                    continue
+                if "name" not in project:
+                    match = re.match(r'^\s*name\s*=\s*"([^"]+)"', line)
+                    if match:
+                        project["name"] = match.group(1)
+                if "version" not in project:
+                    match = re.match(r'^\s*version\s*=\s*"([^"]+)"', line)
+                    if match:
+                        project["version"] = match.group(1)
+                if "name" in project and "version" in project:
+                    break
+        name = project.get("name")
+        version = project.get("version")
+        if (
+            isinstance(name, str)
+            and isinstance(version, str)
+            and version
+            and name.strip().lower().replace("_", "-") == "taosmd"
+        ):
+            return version
+
+    # Fall back to installed package metadata
+    try:
+        return importlib.metadata.version("taosmd")
+    except Exception:
+        pass
+
+    return "0+unknown"
+
+
+__version__ = _resolve_version()
 
 from .knowledge_graph import TemporalKnowledgeGraph as KnowledgeGraph
 from .vector_memory import VectorMemory

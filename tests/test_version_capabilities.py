@@ -9,6 +9,7 @@ answer, and the tests below exist to make sure the answer cannot be a lie.
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import threading
 import urllib.error
@@ -108,7 +109,8 @@ def test_capability_is_dropped_when_its_backing_symbol_is_missing(monkeypatch):
     """A capability cannot be advertised by a build that lacks the code.
 
     This is the anti-drift property: the list is derived by probing the real
-    implementation, so deleting the code deletes the claim.
+    implementation, so deleting the code deletes the claim rather than leaving
+    a stale boast.
     """
     from taosmd import service
 
@@ -317,13 +319,107 @@ def test_version_and_health_leak_nothing_sensitive(live_server):
     _, version_body = _get(f"{live_server}/version")
     _, health_body = _get(f"{live_server}/health")
     assert set(version_body) <= allowed_version
-    assert set(health_body) <= {"status", "version", "capabilities"}
+    assert set(health_body) <= {"status", "version", "commit", "commit_source", "capabilities"}
 
     for body in (version_body, health_body):
         blob = json.dumps(body)
         assert "/" not in blob.replace("\\/", ""), f"looks like a path leaked: {blob}"
         for banned in ("token", "data_dir", "home", "secret", "password"):
             assert banned not in blob.lower(), f"{banned!r} leaked in {blob}"
+
+
+# ---------------------------------------------------------------------------
+# NEW TESTS for tsk-jgen4d
+# ---------------------------------------------------------------------------
+
+
+def test_health_reports_commit_matching_version_route(live_server):
+    """GET /health and GET /version must report identical commit and commit_source."""
+    _, health_body = _get(f"{live_server}/health")
+    _, version_body = _get(f"{live_server}/version")
+
+    # Both must have commit and commit_source
+    assert "commit" in health_body, "health missing commit"
+    assert "commit_source" in health_body, "health missing commit_source"
+    assert health_body["commit"] == version_body["commit"]
+    assert health_body["commit_source"] == version_body["commit_source"]
+
+    # Existing fields must still be present with old types
+    assert "status" in health_body
+    assert health_body["status"] == "ok"
+    assert isinstance(health_body["version"], str) and health_body["version"]
+    assert isinstance(health_body["capabilities"], list)
+
+
+def test_version_matches_pyproject(live_server):
+    """taosmd.__version__ equals the version line parsed from the repo's pyproject.toml,
+    and GET /health 'version' equals it too."""
+    # Parse version from pyproject.toml at repo root
+    repo_root = Path(__file__).parent.parent
+    pyproject = repo_root / "pyproject.toml"
+    content = pyproject.read_text(encoding="utf-8")
+    pyproject_version = None
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith("version = "):
+            # version = "0.4.1"
+            pyproject_version = line.split("=", 1)[1].strip().strip('"')
+            break
+    assert pyproject_version is not None, "could not parse version from pyproject.toml"
+
+    # Module version must match pyproject
+    assert __version__ == pyproject_version, f"{__version__} != {pyproject_version}"
+
+    # GET /health version must also match
+    _, health_body = _get(f"{live_server}/health")
+    assert health_body["version"] == pyproject_version
+
+
+def test_version_never_raises_without_metadata(monkeypatch, tmp_path):
+    """Monkeypatch importlib.metadata.version to raise PackageNotFoundError,
+    reload the resolution (factor it into a small private function _resolve_version()
+    that __init__ calls, and test that function), and assert it returns the pyproject
+    version; with the pyproject path also pointed at a missing file it returns '0+unknown'."""
+    import taosmd
+
+    # Test that _resolve_version returns pyproject version when metadata raises
+    monkeypatch.setattr(
+        "importlib.metadata.version",
+        lambda _: (_ for _ in ()).throw(importlib.metadata.PackageNotFoundError),
+    )
+    # Point pyproject to the real one
+    repo_root = Path(__file__).parent.parent
+    pyproject_path = repo_root / "pyproject.toml"
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", pyproject_path)
+
+    # Reload the resolution
+    version = taosmd._resolve_version()
+    # Should get the pyproject version (0.4.1)
+    assert version == "0.4.1"
+
+    # Now point at a missing pyproject
+    missing_path = tmp_path / "missing" / "pyproject.toml"
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", missing_path)
+    version = taosmd._resolve_version()
+    assert version == "0+unknown"
+
+
+def test_checkout_pyproject_wins_over_stale_metadata(monkeypatch, tmp_path):
+    """Metadata says '0.0.1', pyproject says '9.9.9' in a tmp dir -> '9.9.9'."""
+    import taosmd
+
+    # Create a fake pyproject with version 9.9.9
+    fake_pkg = tmp_path / "taosmd"
+    fake_pkg.mkdir()
+    fake_pyproject = fake_pkg.parent / "pyproject.toml"
+    fake_pyproject.write_text('[project]\nname = "taosmd"\nversion = "9.9.9"\n')
+
+    # Monkeypatch metadata to return 0.0.1
+    monkeypatch.setattr("importlib.metadata.version", lambda _: "0.0.1")
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", fake_pyproject)
+
+    version = taosmd._resolve_version()
+    assert version == "9.9.9", f"expected 9.9.9, got {version}"
 
 
 # ---------------------------------------------------------------------------
@@ -386,3 +482,85 @@ def test_data_plane_is_still_gated_alongside_the_public_version(token_server):
     base_url, _ = token_server
     status, _ = _raw_get(f"{base_url}/projects")
     assert status == 401
+
+
+# ---------------------------------------------------------------------------
+# NEW TESTS for tsk-zsd75a (version source)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_version_without_tomllib(monkeypatch, tmp_path):
+    """tomllib unavailable (as on Python 3.10) must not break pyproject resolution."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+
+    fake_pkg = tmp_path / "taosmd"
+    fake_pkg.mkdir()
+    fake_pyproject = fake_pkg.parent / "pyproject.toml"
+    fake_pyproject.write_text('[project]\nname = "taosmd"\nversion = "7.7.7"\n')
+
+    import taosmd
+
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", fake_pyproject)
+    assert taosmd._resolve_version() == "7.7.7"
+
+
+def test_import_taosmd_without_tomllib():
+    """`import taosmd` must succeed with tomllib blocked (the Python 3.10 case)."""
+    import os
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).parent.parent
+    code = "import sys; sys.modules['tomllib'] = None; import taosmd; print(taosmd.__version__)"
+    env = dict(os.environ, PYTHONPATH=str(repo_root))
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip(), proc.stderr
+
+
+def test_foreign_pyproject_is_ignored(monkeypatch, tmp_path):
+    """A foreign project's pyproject must not override installed metadata."""
+    import taosmd
+
+    fake_pkg = tmp_path / "taosmd"
+    fake_pkg.mkdir()
+    fake_pyproject = fake_pkg.parent / "pyproject.toml"
+    fake_pyproject.write_text('[project]\nname = "someone-else"\nversion = "9.9.9"\n')
+
+    monkeypatch.setattr("importlib.metadata.version", lambda _: "1.2.3")
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", fake_pyproject)
+
+    assert taosmd._resolve_version() == "1.2.3"
+
+
+def test_line_reader_matches_tomllib_on_repo_pyproject(monkeypatch):
+    """tomllib and the stdlib line reader must agree on the real pyproject."""
+    import sys
+
+    import taosmd
+
+    repo_root = Path(__file__).parent.parent
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", repo_root / "pyproject.toml")
+
+    with_tomllib = taosmd._resolve_version()
+    assert with_tomllib == "0.4.1"
+
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+    without_tomllib = taosmd._resolve_version()
+    assert without_tomllib == with_tomllib == "0.4.1"
+
+
+def test_metadata_error_never_raises(monkeypatch, tmp_path):
+    """Any metadata error degrades to 0+unknown, never propagates at import."""
+    import taosmd
+
+    monkeypatch.setattr(
+        "importlib.metadata.version",
+        lambda _: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    missing = tmp_path / "missing" / "pyproject.toml"
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", missing)
+
+    assert taosmd._resolve_version() == "0+unknown"
