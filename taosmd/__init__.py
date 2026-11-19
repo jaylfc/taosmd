@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
-import tomllib
+import re
 from pathlib import Path
 
 
@@ -14,28 +14,62 @@ def _resolve_version() -> str:
 
     Priority:
     1. pyproject.toml next to the package (editable checkout) -- describes the
-       code that is actually running; wins over stale metadata
+       code that is actually running; wins over stale metadata. Only honoured
+       when the [project] name is taosmd.
     2. importlib.metadata.version("taosmd") -- installed distribution metadata
     3. "0+unknown" -- neither source available
 
     Never raises.
     """
-    # First check pyproject.toml in the parent directory of this package
-    # This wins over installed metadata because it describes the code actually running
     pyproject_path = _PYPROJECT_PATH
     if pyproject_path.is_file():
+        text = pyproject_path.read_text(encoding="utf-8")
+        project: dict = {}
         try:
-            data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-            version = data.get("project", {}).get("version")
-            if isinstance(version, str) and version:
-                return version
-        except Exception:
-            pass
+            import tomllib
+        except ImportError:
+            tomllib = None
+        if tomllib is not None:
+            try:
+                data = tomllib.loads(text)
+                table = data.get("project") if isinstance(data, dict) else None
+                project = table if isinstance(table, dict) else {}
+            except Exception:
+                project = {}
+        else:
+            # stdlib-only line reader: parse the [project] table without tomllib
+            in_project = False
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("["):
+                    in_project = stripped == "[project]"
+                    continue
+                if not in_project:
+                    continue
+                if "name" not in project:
+                    match = re.match(r'^\s*name\s*=\s*"([^"]+)"', line)
+                    if match:
+                        project["name"] = match.group(1)
+                if "version" not in project:
+                    match = re.match(r'^\s*version\s*=\s*"([^"]+)"', line)
+                    if match:
+                        project["version"] = match.group(1)
+                if "name" in project and "version" in project:
+                    break
+        name = project.get("name")
+        version = project.get("version")
+        if (
+            isinstance(name, str)
+            and isinstance(version, str)
+            and version
+            and name.strip().lower().replace("_", "-") == "taosmd"
+        ):
+            return version
 
     # Fall back to installed package metadata
     try:
         return importlib.metadata.version("taosmd")
-    except importlib.metadata.PackageNotFoundError:
+    except Exception:
         pass
 
     return "0+unknown"

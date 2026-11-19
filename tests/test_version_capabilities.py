@@ -482,3 +482,85 @@ def test_data_plane_is_still_gated_alongside_the_public_version(token_server):
     base_url, _ = token_server
     status, _ = _raw_get(f"{base_url}/projects")
     assert status == 401
+
+
+# ---------------------------------------------------------------------------
+# NEW TESTS for tsk-zsd75a (version source)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_version_without_tomllib(monkeypatch, tmp_path):
+    """tomllib unavailable (as on Python 3.10) must not break pyproject resolution."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+
+    fake_pkg = tmp_path / "taosmd"
+    fake_pkg.mkdir()
+    fake_pyproject = fake_pkg.parent / "pyproject.toml"
+    fake_pyproject.write_text('[project]\nname = "taosmd"\nversion = "7.7.7"\n')
+
+    import taosmd
+
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", fake_pyproject)
+    assert taosmd._resolve_version() == "7.7.7"
+
+
+def test_import_taosmd_without_tomllib():
+    """`import taosmd` must succeed with tomllib blocked (the Python 3.10 case)."""
+    import os
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).parent.parent
+    code = "import sys; sys.modules['tomllib'] = None; import taosmd; print(taosmd.__version__)"
+    env = dict(os.environ, PYTHONPATH=str(repo_root))
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip(), proc.stderr
+
+
+def test_foreign_pyproject_is_ignored(monkeypatch, tmp_path):
+    """A foreign project's pyproject must not override installed metadata."""
+    import taosmd
+
+    fake_pkg = tmp_path / "taosmd"
+    fake_pkg.mkdir()
+    fake_pyproject = fake_pkg.parent / "pyproject.toml"
+    fake_pyproject.write_text('[project]\nname = "someone-else"\nversion = "9.9.9"\n')
+
+    monkeypatch.setattr("importlib.metadata.version", lambda _: "1.2.3")
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", fake_pyproject)
+
+    assert taosmd._resolve_version() == "1.2.3"
+
+
+def test_line_reader_matches_tomllib_on_repo_pyproject(monkeypatch):
+    """tomllib and the stdlib line reader must agree on the real pyproject."""
+    import sys
+
+    import taosmd
+
+    repo_root = Path(__file__).parent.parent
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", repo_root / "pyproject.toml")
+
+    with_tomllib = taosmd._resolve_version()
+    assert with_tomllib == "0.4.1"
+
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+    without_tomllib = taosmd._resolve_version()
+    assert without_tomllib == with_tomllib == "0.4.1"
+
+
+def test_metadata_error_never_raises(monkeypatch, tmp_path):
+    """Any metadata error degrades to 0+unknown, never propagates at import."""
+    import taosmd
+
+    monkeypatch.setattr(
+        "importlib.metadata.version",
+        lambda _: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    missing = tmp_path / "missing" / "pyproject.toml"
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", missing)
+
+    assert taosmd._resolve_version() == "0+unknown"
