@@ -268,6 +268,81 @@ class TestCollect:
         assert result.returncode == 0
         assert "one_way_migration=false" in result.stdout
 
+    def test_inline_backticks_do_not_open_a_fence(self, tmp_path):
+        """(a) inline backticks do not open a fence: fragment lines 'use ```x``` here' then
+        'Migration: one-way' -> exit 0, one_way_migration true."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, "inline-backticks.md", "### Changed\n\nuse ```x``` here\n\nMigration: one-way\n")
+        _commit_all(repo, "add inline backticks fragment")
+
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(repo / "release.json")])
+
+        assert result.returncode == 0
+        assert "one_way_migration=true" in result.stdout
+
+    def test_real_fence_still_ignored(self, tmp_path):
+        """(b) real fence lines are ignored: '```' line, 'Migration: one-way', '```' line
+        -> exit 0, flag false."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, "real-fence.md", "### Changed\n\n```\nMigration: one-way\n```\n")
+        _commit_all(repo, "add real fence fragment")
+
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(repo / "release.json")])
+
+        assert result.returncode == 0
+        assert "one_way_migration=false" in result.stdout
+
+    def test_fence_with_info_string(self, tmp_path):
+        """(c) fence with info string is ignored: '```python' ... '```' around a trailer
+        -> ignored."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, "fence-with-info.md", "### Changed\n\n```python\nMigration: one-way\n```\n")
+        _commit_all(repo, "add fence with info fragment")
+
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(repo / "release.json")])
+
+        assert result.returncode == 0
+        assert "one_way_migration=false" in result.stdout
+
+    def test_unclosed_fence_refused(self, tmp_path):
+        """(d) unclosed fence is refused: a '```' line with no closing fence -> exit 2,
+        stderr names the file and 'unclosed', no output file."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, "unclosed-fence.md", "### Changed\n\n```\nMigration: one-way\n")
+        _commit_all(repo, "add unclosed fence fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        assert result.returncode == 2
+        assert "unclosed-fence.md" in result.stderr
+        assert "unclosed" in result.stderr.lower()
+        assert not out_file.exists()
+
     def test_output_json_keys_order_and_newline(self, tmp_path):
         """(g) the written file is valid JSON whose keys appear in the
         specified order and which ends in exactly one newline."""

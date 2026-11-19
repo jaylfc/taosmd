@@ -117,8 +117,9 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
     in_code_block = False
 
     for line_num, line in enumerate(content.splitlines(), start=1):
-        # Check for fenced code block boundaries
-        if "```" in line:
+        # Check for fenced code block boundaries - only toggle on lines that start with ```
+        stripped_line = line.lstrip()
+        if stripped_line.startswith("```"):
             in_code_block = not in_code_block
             continue
 
@@ -127,7 +128,7 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
 
         stripped = _strip_trailer_markers(line)
 
-# Check if stripped line matches pattern case-insensitively
+        # Check if stripped line matches pattern case-insensitively
         if re.match(r'^(migration|manual[-_ ]?step)\s*:', stripped, re.IGNORECASE):
             # Check for canonical Migration: form (case-sensitive key, exact value)
             if re.match(r'^Migration:\s+one-way$', stripped):
@@ -152,6 +153,12 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
                     f"{fragment_path}:{line_num} - unknown trailer format; "
                     f"use one of: {canonical}"
                 )
+
+    # Check for unclosed fence at end of file
+    if in_code_block:
+        raise ReleaseMetaError(
+            f"{fragment_path}: - unclosed code fence"
+        )
 
     return migrations, manual_steps
 
