@@ -1295,10 +1295,29 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 elif method == "GET" and path == "/health":
                     # "status" and "version" are the existing contract (taOS and
                     # the dashboard consume both); "capabilities" is additive.
+                    # "stores" reports per-store health for the server's data dir.
+                    runner = self.server.service_loop
+                    stores = runner.run(_api._ensure_stores(data_dir))
+                    resolved = _api._resolve_data_dir(data_dir)
+                    store_status = {}
+                    any_error = False
+                    for name in ("archive", "vector", "kg"):
+                        store = stores.get(name)
+                        if store is not None:
+                            store_status[name] = "ok"
+                        else:
+                            err = _api._store_errors.get(resolved, {}).get(name)
+                            if err:
+                                store_status[name] = f"error: {err}"
+                            else:
+                                store_status[name] = "not_opened"
+                            any_error = True
+                    status = "degraded" if any_error else "ok"
                     self._send_json(200, {
-                        "status": "ok",
+                        "status": status,
                         "version": __version__,
                         "capabilities": capabilities.capabilities(),
+                        "stores": store_status,
                     })
                 elif method == "GET" and path == "/version":
                     self._send_json(200, capabilities.version_payload())

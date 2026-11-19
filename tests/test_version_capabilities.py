@@ -317,7 +317,7 @@ def test_version_and_health_leak_nothing_sensitive(live_server):
     _, version_body = _get(f"{live_server}/version")
     _, health_body = _get(f"{live_server}/health")
     assert set(version_body) <= allowed_version
-    assert set(health_body) <= {"status", "version", "capabilities"}
+    assert set(health_body) <= {"status", "version", "capabilities", "stores"}
 
     for body in (version_body, health_body):
         blob = json.dumps(body)
