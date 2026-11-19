@@ -141,83 +141,174 @@ async def _ensure_stores(data_dir=None) -> dict:
     resolved = _resolve_data_dir(data_dir)
     cached = _stores_cache.get(resolved)
     if cached is not None:
-        # Check if any derived store entry (vector, kg) is None and needs retry
-        needs_retry = False
-        if cached.get("vector") is None:
-            now = time.time()
-            last_vec = _last_attempt.get(resolved, {}).get("vector", 0)
-            if now - last_vec >= _RETRY_COOLDOWN:
-                needs_retry = True
-        if cached.get("kg") is None:
-            now = time.time()
-            last_kg = _last_attempt.get(resolved, {}).get("kg", 0)
-            if now - last_kg >= _RETRY_COOLDOWN:
-                needs_retry = True
-
-        if needs_retry:
-            async with _stores_lock:
-                # Re-read cache under lock (another thread may have fixed it)
-                cached = _stores_cache.get(resolved)
-                if cached is not None:
-                    # Retry vector store if still None and cooldown passed
-                    if cached.get("vector") is None:
-                        now = time.time()
-                        last_vec = _last_attempt.get(resolved, {}).get("vector", 0)
-                        if now - last_vec >= _RETRY_COOLDOWN:
-                            vm_cfg = _load_config(resolved)
-                            embed_mode = vm_cfg.get("vector_memory", {}).get("embed_mode", "onnx")
-                            embed_model = vm_cfg.get("vector_memory", {}).get("embed_model", "minilm-onnx")
-                            onnx_path = _resolve_onnx_path(resolved, embed_model) if embed_mode == "onnx" else ""
-                            try:
-                                from taosmd.vector_memory import VectorMemory
-                                vmem = VectorMemory(
-                                    db_path=str(Path(resolved) / "vector-memory.db"),
-                                    embed_mode=embed_mode,
-                                    onnx_path=onnx_path or "",
-                                    late_interaction=bool(vm_cfg.get("late_interaction", False)),
-                                    colbert_model=vm_cfg.get("colbert_model", "") or "",
-                                )
-                                await vmem.init()
-                                # Success: clear any recorded error
-                                if resolved in _store_errors and "vector" in _store_errors[resolved]:
-                                    del _store_errors[resolved]["vector"]
-                                cached["vector"] = vmem
-                            except Exception as e:
-                                logger.error(
-                                    "taosmd: failed to open vector store at %s: %s: %s",
-                                    resolved, type(e).__name__, e
-                                )
-                                _store_errors.setdefault(resolved, {})["vector"] = f"{type(e).__name__}: {e}"
-                                _last_attempt.setdefault(resolved, {})["vector"] = now
-                                cached["vector"] = None
-
-                    # Retry kg store if still None and cooldown passed
-                    if cached.get("kg") is None:
-                        now = time.time()
-                        last_kg = _last_attempt.get(resolved, {}).get("kg", 0)
-                        if now - last_kg >= _RETRY_COOLDOWN:
-                            try:
-                                from taosmd.knowledge_graph import TemporalKnowledgeGraph
-                                kg = TemporalKnowledgeGraph(db_path=str(Path(resolved) / "knowledge-graph.db"))
-                                await kg.init()
-                                # Success: clear any recorded error
-                                if resolved in _store_errors and "kg" in _store_errors[resolved]:
-                                    del _store_errors[resolved]["kg"]
-                                cached["kg"] = kg
-                            except Exception as e:
-                                logger.error(
-                                    "taosmd: failed to open kg store at %s: %s: %s",
-                                    resolved, type(e).__name__, e
-                                )
-                                _store_errors.setdefault(resolved, {})["kg"] = f"{type(e).__name__}: {e}"
-                                _last_attempt.setdefault(resolved, {})["kg"] = now
-                                cached["kg"] = None
-
-                _stores_cache[resolved] = cached
-                return cached
-
         # Fast path: no None entries, return immediately (no lock, no I/O)
-        return cached
+        if cached.get("vector") is not None and cached.get("kg") is not None:
+            return cached
+
+        async with _stores_lock:
+            # Re-read cache under lock (another thread may have fixed it)
+            cached = _stores_cache.get(resolved)
+            if cached is not None:
+                # Retry vector store if still None and cooldown passed
+                if cached.get("vector") is None:
+                    now = time.time()
+                    last_vec = _last_attempt.get(resolved, {}).get("vector", 0)
+                    if now - last_vec >= _RETRY_COOLDOWN:
+                        vm_cfg = _load_config(resolved)
+                        embed_mode = vm_cfg.get("vector_memory", {}).get("embed_mode", "onnx")
+                        embed_model = vm_cfg.get("vector_memory", {}).get("embed_model", "minilm-onnx")
+                        onnx_path = _resolve_onnx_path(resolved, embed_model) if embed_mode == "onnx" else ""
+                        try:
+                            from taosmd.vector_memory import VectorMemory
+                            vmem = VectorMemory(
+                                db_path=str(Path(resolved) / "vector-memory.db"),
+                                embed_mode=embed_mode,
+                                onnx_path=onnx_path or "",
+                                late_interaction=bool(vm_cfg.get("late_interaction", False)),
+                                colbert_model=vm_cfg.get("colbert_model", "") or "",
+                            )
+                            await vmem.init()
+                            # Success: clear any recorded error
+                            if resolved in _store_errors and "vector" in _store_errors[resolved]:
+                                del _store_errors[resolved]["vector"]
+                            cached["vector"] = vmem
+                        except Exception as e:
+                            logger.error(
+                                "taosmd: failed to open vector store at %s: %s: %s",
+                                resolved, type(e).__name__, e
+                            )
+                            _store_errors.setdefault(resolved, {})["vector"] = f"{type(e).__name__}: {e}"
+                            _last_attempt.setdefault(resolved, {})["vector"] = now
+                            cached["vector"] = None
+
+                # Retry kg store if still None and cooldown passed
+                if cached.get("kg") is None:
+                    now = time.time()
+                    last_kg = _last_attempt.get(resolved, {}).get("kg", 0)
+                    if now - last_kg >= _RETRY_COOLDOWN:
+                        try:
+                            from taosmd.knowledge_graph import TemporalKnowledgeGraph
+                            kg = TemporalKnowledgeGraph(db_path=str(Path(resolved) / "knowledge-graph.db"))
+                            await kg.init()
+                            # Success: clear any recorded error
+                            if resolved in _store_errors and "kg" in _store_errors[resolved]:
+                                del _store_errors[resolved]["kg"]
+                            cached["kg"] = kg
+                        except Exception as e:
+                            logger.error(
+                                "taosmd: failed to open kg store at %s: %s: %s",
+                                resolved, type(e).__name__, e
+                            )
+                            _store_errors.setdefault(resolved, {})["kg"] = f"{type(e).__name__}: {e}"
+                            _last_attempt.setdefault(resolved, {})["kg"] = now
+                            cached["kg"] = None
+
+            _stores_cache[resolved] = cached
+            return cached
+
+    async with _stores_lock:
+        cached = _stores_cache.get(resolved)
+        if cached is not None:
+            return cached
+
+        from taosmd.archive import ArchiveStore
+        from taosmd.knowledge_graph import TemporalKnowledgeGraph
+        from taosmd.vector_memory import VectorMemory
+
+        path = Path(resolved)
+        path.mkdir(parents=True, exist_ok=True)
+        config = _load_config(resolved)
+        embed_mode = config.get("vector_memory", {}).get("embed_mode", "onnx")
+        embed_model = config.get("vector_memory", {}).get("embed_model", "minilm-onnx")
+        onnx_path = _resolve_onnx_path(resolved, embed_model) if embed_mode == "onnx" else ""
+        if embed_mode == "onnx" and onnx_path is None:
+            logger.warning(
+                "taosmd: ONNX model not found under %s/models or $TAOSMD_DIR; "
+                "falling back to qmd embed mode (set TAOSMD_ONNX_PATH or run setup.sh).",
+                resolved,
+            )
+            embed_mode = "qmd"
+
+        # Archive first: must succeed (raw-first law)
+        archive = ArchiveStore(
+            archive_dir=str(path / "archive"),
+            index_path=str(path / "archive-index.db"),
+        )
+        await archive.init()
+
+        # Vector store: independent try/except
+        vm_cfg = config.get("vector_memory", {})
+        vmem = None
+        now = time.time()
+        last_vec_attempt = _last_attempt.get(resolved, {}).get("vector", 0)
+        if now - last_vec_attempt >= _RETRY_COOLDOWN:
+            try:
+                vmem = VectorMemory(
+                    db_path=str(path / "vector-memory.db"),
+                    embed_mode=embed_mode,
+                    onnx_path=onnx_path or "",
+                    late_interaction=bool(vm_cfg.get("late_interaction", False)),
+                    colbert_model=vm_cfg.get("colbert_model", "") or "",
+                )
+                await vmem.init()
+                # Success: clear any recorded error
+                if resolved in _store_errors and "vector" in _store_errors[resolved]:
+                    del _store_errors[resolved]["vector"]
+            except Exception as e:
+                logger.error(
+                    "taosmd: failed to open vector store at %s: %s: %s",
+                    resolved, type(e).__name__, e
+                )
+                _store_errors.setdefault(resolved, {})["vector"] = f"{type(e).__name__}: {e}"
+                _last_attempt.setdefault(resolved, {})["vector"] = now
+                vmem = None
+        else:
+            # Within cooldown, keep recorded error (do not overwrite)
+            pass
+
+        # KG store: independent try/except
+        kg = None
+        last_kg_attempt = _last_attempt.get(resolved, {}).get("kg", 0)
+        if now - last_kg_attempt >= _RETRY_COOLDOWN:
+            try:
+                kg = TemporalKnowledgeGraph(db_path=str(path / "knowledge-graph.db"))
+                await kg.init()
+                # Success: clear any recorded error
+                if resolved in _store_errors and "kg" in _store_errors[resolved]:
+                    del _store_errors[resolved]["kg"]
+            except Exception as e:
+                logger.error(
+                    "taosmd: failed to open kg store at %s: %s: %s",
+                    resolved, type(e).__name__, e
+                )
+                _store_errors.setdefault(resolved, {})["kg"] = f"{type(e).__name__}: {e}"
+                _last_attempt.setdefault(resolved, {})["kg"] = now
+                kg = None
+        else:
+            # Within cooldown, keep recorded error (do not overwrite)
+            pass
+
+        from taosmd.claims.store import ClaimStore  # noqa: PLC0415
+        claims = ClaimStore(db_path=str(path / "claims.db"))
+        await claims.init()
+        from taosmd.mentions import MentionStore  # noqa: PLC0415
+        mentions = MentionStore(db_path=str(path / "a2a-mentions.db"))
+        await mentions.init()
+        from taosmd.receipts import ReceiptStore  # noqa: PLC0415
+        receipts = ReceiptStore(db_path=str(path / "a2a-receipts.db"))
+        await receipts.init()
+
+        stores = {
+            "archive": archive,
+            "vector": vmem,
+            "kg": kg,
+            "claims": claims,
+            "mentions": mentions,
+            "receipts": receipts,
+            "data_dir": str(path),
+        }
+        _stores_cache[resolved] = stores
+        return stores
 
     async with _stores_lock:
         cached = _stores_cache.get(resolved)
