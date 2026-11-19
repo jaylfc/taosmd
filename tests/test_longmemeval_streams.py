@@ -354,7 +354,7 @@ async def test_run_benchmark_passes_streams_to_retrieve_context(runner, monkeypa
 
     async def fake_retrieve_context(question, kg, archive, vmem, llm_client=None,
                                      graph_expansion=0, retrieval_path="retrieve",
-                                     streams=None):
+                                     streams=None, date_frame="off", haystack_dates=None):
         captured_streams["streams"] = streams
         return "CONTEXT"
 

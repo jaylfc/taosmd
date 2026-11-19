@@ -469,6 +469,25 @@ def _user_metadata(hit: dict) -> dict:
     return inner if isinstance(inner, dict) else meta
 
 
+def _hit_session_date(hit: dict) -> str | None:
+    """Extract session_date from a hit, tolerating flat or nested metadata.
+
+    The normalised hit wraps the source row under "metadata", and the vector
+    source row in turn carries its user metadata under a nested "metadata" key.
+    This helper checks both levels and returns the first session_date found.
+    """
+    meta = hit.get("metadata", {}) or {}
+    # Try flat level first (non-vector sources)
+    sd = meta.get("session_date")
+    if sd:
+        return sd
+    # Try nested level (vector source)
+    inner = meta.get("metadata")
+    if isinstance(inner, dict):
+        return inner.get("session_date")
+    return None
+
+
 async def _apply_llm_rerank(
     query: str,
     results: list[dict],
