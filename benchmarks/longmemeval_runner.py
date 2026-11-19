@@ -288,6 +288,45 @@ Question: {question}
 
 Answer:"""
 
+# LLM-as-judge prompts for scoring. JUDGE_PROMPT is master's prompt byte for
+# byte (non-abstention questions are unchanged). ABSTENTION_JUDGE_PROMPT is used
+# for abstention questions (question_id ending "_abs"), where the correct
+# behaviour is to say the information is not available: the prediction is
+# CORRECT when it says so and INCORRECT when it asserts a specific answer.
+JUDGE_PROMPT = """You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
+
+Rules:
+- "I don't know" or similar non-answers are ALWAYS incorrect
+- The predicted answer must contain the key facts from the reference answer
+- Paraphrasing is fine, but the core information must match
+- If the predicted answer is vague or generic while the reference is specific, that is INCORRECT
+
+Reply with exactly one word: CORRECT or INCORRECT
+
+Question: {question}
+Reference answer: {gold}
+Predicted answer: {predicted}
+
+Verdict: /no_think"""
+
+ABSTENTION_JUDGE_PROMPT = """You are a strict answer evaluator judging an abstention question, where the
+correct behaviour is to say the information is not available.
+
+Rules:
+- The predicted answer is CORRECT if it says the information is not available
+  / was not mentioned / cannot be determined (it may add that only part was
+  mentioned).
+- The predicted answer is INCORRECT if it asserts a specific answer to the
+  question.
+
+Reply with exactly one word: CORRECT or INCORRECT
+
+Question: {question}
+Reference answer: {gold}
+Predicted answer: {predicted}
+
+Verdict: /no_think"""
+
 
 def score_answer_substring(predicted: str, gold: str) -> bool:
     """Score using substring matching (fast, lower bound)."""
@@ -308,23 +347,18 @@ def _parse_verdict(content: str) -> bool:
     return "CORRECT" in j
 
 
-async def score_answer_llm(client, predicted: str, gold: str, question: str) -> bool:
-    """Score using LLM-as-judge (official LongMemEval approach)."""
-    prompt = f"""You are a strict answer evaluator. Determine if the predicted answer contains the same factual information as the reference answer.
+async def score_answer_llm(client, predicted: str, gold: str, question: str, question_id: str = "") -> bool:
+    """Score using LLM-as-judge (official LongMemEval approach).
 
-Rules:
-- "I don't know" or similar non-answers are ALWAYS incorrect
-- The predicted answer must contain the key facts from the reference answer
-- Paraphrasing is fine, but the core information must match
-- If the predicted answer is vague or generic while the reference is specific, that is INCORRECT
-
-Reply with exactly one word: CORRECT or INCORRECT
-
-Question: {question}
-Reference answer: {gold}
-Predicted answer: {predicted}
-
-Verdict: /no_think"""
+    For abstention questions (question_id ending in "_abs") the string filter is
+    skipped and ABSTENTION_JUDGE_PROMPT is used instead of JUDGE_PROMPT: the
+    prediction is CORRECT when it says the information is not available / was not
+    mentioned / cannot be determined, and INCORRECT when it asserts a specific
+    answer. Non-abstention questions use JUDGE_PROMPT, byte-identical to master.
+    """
+    is_abs = question_id.endswith("_abs")
+    template = ABSTENTION_JUDGE_PROMPT if is_abs else JUDGE_PROMPT
+    prompt = template.format(question=question, gold=gold, predicted=predicted)
     try:
         resp = await client.post(
             f"{REMOTE_LLM_URL}/api/chat",
@@ -942,6 +976,8 @@ async def run_benchmark(
     method_llm_count = 0
     method_regex_count = 0
     total_turns = 0
+    abstention_correct = 0
+    abstention_total = 0
 
     # Create LLM client if needed
     llm_client = None
@@ -1085,6 +1121,9 @@ async def run_benchmark(
                 f"wired={delta['wired_chars']} identical={delta['identical']}"
             )
 
+        question_id = item.get("question_id", "")
+        is_abstention = question_id.endswith("_abs")
+
         if use_llm and llm_client is not None:
             t_llm = time.time()
             # Step 1: LLM generates answer from recalled context
@@ -1092,8 +1131,14 @@ async def run_benchmark(
             if SELF_VERIFY:
                 answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
-            if answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
-                correct = await score_answer_llm(llm_client, answer, gold_answer, question)
+            if is_abstention:
+                # Abstention questions: never apply the "I don't know" string
+                # filter, because the correct behaviour IS to say the information
+                # is unavailable. Always send to the judge with the abstention
+                # prompt so a correct abstention is scored correct.
+                correct = await score_answer_llm(llm_client, answer, gold_answer, question, question_id=question_id)
+            elif answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
+                correct = await score_answer_llm(llm_client, answer, gold_answer, question, question_id=question_id)
             else:
                 correct = False
             llm_time = time.time() - t_llm
@@ -1106,6 +1151,11 @@ async def run_benchmark(
         total_questions += 1
         if correct:
             total_correct += 1
+
+        if is_abstention:
+            abstention_total += 1
+            if correct:
+                abstention_correct += 1
 
         if qtype not in results_by_type:
             results_by_type[qtype] = {"correct": 0, "total": 0}
@@ -1199,6 +1249,8 @@ async def run_benchmark(
                 "correct": total_correct,
                 "accuracy": overall,
                 "by_type": results_by_type,
+                "abstention_correct": abstention_correct,
+                "abstention_total": abstention_total,
             },
             "results": all_results,
             "writer": {
