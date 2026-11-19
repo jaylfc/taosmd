@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from collections import OrderedDict
@@ -67,31 +68,97 @@ def _read_fragment_at_rev(repo_dir: Path, fragment: Path, rev: str) -> str:
     return _run_git(["show", f"{rev}:{fragment}"], repo_dir)
 
 
+def _strip_trailer_markers(line: str) -> str:
+    """Strip leading whitespace, list markers and emphasis from a line."""
+    # Strip leading whitespace
+    stripped = line.strip()
+
+    # Strip emphasis FIRST: **bold**, *italic*, _underline_, ```inline code```
+    # Bold: **text** -> text
+    stripped = re.sub(r'\*\*([^*]*)\*\*', r'\1', stripped)
+    # Italic: *text* -> text (but not if part of ** already handled)
+    stripped = re.sub(r'(?<!\*)\*([^*]*)\*(?!\*)', r'\1', stripped)
+    # Underline: _text_ -> text
+    stripped = re.sub(r'_+([^_]*)_+', r'\1', stripped)
+    # Inline code: `code` -> code
+    stripped = re.sub(r'`([^`]*)`', r'\1', stripped)
+
+    # Strip ONE leading list marker (-, *, +, >) if present
+    if stripped and stripped[0] in '-*+>':
+        stripped = stripped[1:].strip()
+
+    # Strip trailing whitespace
+    stripped = stripped.strip()
+    return stripped
+
+
 def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInfo], list[str]]:
     """Parse trailer lines from fragment content.
 
     Returns:
         Tuple of (migrations, manual_steps).
+
+    A line is a trailer candidate when, after stripping leading whitespace,
+    list markers (-, *, +, >), and emphasis characters (*, _, backticks),
+    it matches case-insensitively ^(migration|manual[-_ ]?step)\s*:.
+    If a candidate is EXACTLY a canonical trailer line
+    (Migration: one-way, Migration: reversible, Manual-Step: <non-empty text>),
+    it is used. Any other candidate that matches the pattern but is not
+    canonical raises ReleaseMetaError naming the file, line number and the
+    canonical form to use (CLI exit 2, no file written).
+    Prose that merely mentions a migration (no key: shape at the line start
+    after stripping) is still ignored.
+    Lines inside fenced code blocks (between ``` lines) are ignored entirely,
+    neither used nor refused.
     """
     migrations: list[MigrationInfo] = []
     manual_steps: list[str] = []
 
-    for line in content.splitlines():
-        line = line.strip()
-        if line.startswith("Migration:"):
-            value = line[len("Migration:"):].strip()
-            if value not in ("one-way", "reversible"):
+    in_code_block = False
+
+    for line_num, line in enumerate(content.splitlines(), start=1):
+        # Check for fenced code block boundaries
+        if "```" in line:
+            in_code_block = not in_code_block
+            continue
+
+        if in_code_block:
+            continue
+
+        stripped = _strip_trailer_markers(line)
+
+        # Check if stripped line matches pattern case-insensitively
+        if re.match(r'^(migration|manual[-_ ]?step)\s*:', stripped, re.IGNORECASE):
+            # Determine key and extract value
+            lower = stripped.lower()
+
+            if lower.startswith("migration:"):
+                value = stripped[len("migration:"):].strip()
+                if value.lower() == "one-way":
+                    migrations.append(MigrationInfo(fragment=fragment_path, kind="one-way"))
+                elif value.lower() == "reversible":
+                    migrations.append(MigrationInfo(fragment=fragment_path, kind="reversible"))
+                else:
+                    canonical = "Migration: one-way or Migration: reversible"
+                    raise ReleaseMetaError(
+                        f"{fragment_path}:{line_num} - invalid Migration value '{value}' "
+                        f"(must be one of: {canonical})"
+                    )
+            elif lower.startswith("manual-step:") or re.match(r'^manual[-_ ]?step:', lower):
+                value = re.sub(r'^manual[-_ ]?step\s*:', '', stripped, flags=re.IGNORECASE).strip()
+                if value:
+                    manual_steps.append(value)
+                else:
+                    canonical = "Manual-Step: <non-empty text>"
+                    raise ReleaseMetaError(
+                        f"{fragment_path}:{line_num} - invalid Manual-Step value '{value}' "
+                        f"(must be one of: {canonical})"
+                    )
+            else:
+                canonical = "Migration: one-way or Migration: reversible, Manual-Step: <non-empty text>"
                 raise ReleaseMetaError(
-                    f"{fragment_path}: invalid Migration value '{value}' (must be 'one-way' or 'reversible')"
+                    f"{fragment_path}:{line_num} - unknown trailer format"
                 )
-            migrations.append(MigrationInfo(fragment=fragment_path, kind=value))
-        elif line.startswith("Manual-Step:"):
-            value = line[len("Manual-Step:"):].strip()
-            if not value:
-                raise ReleaseMetaError(
-                    f"{fragment_path}: empty Manual-Step value"
-                )
-            manual_steps.append(value)
 
     return migrations, manual_steps
 
@@ -127,12 +194,15 @@ def collect(repo_dir: str | Path, previous_ref: str | None, rev: str = "HEAD") -
     one_way_migration = any(m.kind == "one-way" for m in all_migrations)
     manual_step = len(all_manual_steps) > 0
 
+    # Strip leading 'v' from previous_ref for cleaner version output
+    previous_version = previous_ref[1:] if previous_ref and previous_ref.startswith("v") else previous_ref
+
     # Use OrderedDict to ensure key order
     result = OrderedDict()
     result["schema"] = 1
     result["version"] = "0.0.0"  # placeholder, overridden by CLI
     result["commit"] = commit_sha
-    result["previous_version"] = previous_ref
+    result["previous_version"] = previous_version
     result["one_way_migration"] = one_way_migration
     result["manual_step"] = manual_step
     result["manual_steps"] = all_manual_steps

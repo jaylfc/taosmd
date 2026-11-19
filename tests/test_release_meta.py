@@ -84,7 +84,7 @@ class TestCollect:
         assert result["schema"] == 1
         # version is a placeholder in collect(); CLI overrides it
         assert result["version"] == "0.0.0"
-        assert result["previous_version"] == "v0.5.0"
+        assert result["previous_version"] == "0.5.0"
         assert result["one_way_migration"] is False
         assert result["manual_step"] is False
         assert result["manual_steps"] == []
@@ -234,6 +234,40 @@ class TestCollect:
             "changelog.d/fragment-2.md",
         ])
 
+    def test_prose_ignored(self, tmp_path):
+        """(c) a fragment whose prose says 'this is not a one-way migration'
+        is ignored (both flags false, exit 0)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+        _write_fragment(repo, "prose.md", "### Changed\n\nThis is not a one-way migration\n")
+        _commit_all(repo, "add prose fragment")
+
+        result = _run_collect(repo, "v0.5.0")
+
+        assert result["one_way_migration"] is False
+        assert result["manual_step"] is False
+
+    def test_fenced_code_block_ignored(self, tmp_path):
+        """(d) Migration: one-way inside a fenced code block is ignored
+        (exit 0, flag false) and does not refuse."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+        _write_fragment(repo, "fenced.md", "### Changed\n\n```\nMigration: one-way\n```\n")
+        _commit_all(repo, "add fenced fragment")
+
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(repo / "release.json")])
+
+        assert result.returncode == 0
+        assert "one_way_migration=false" in result.stdout
+
     def test_output_json_keys_order_and_newline(self, tmp_path):
         """(g) the written file is valid JSON whose keys appear in the
         specified order and which ends in exactly one newline."""
@@ -303,6 +337,64 @@ class TestCLI:
         assert result.returncode == 0
         assert "one_way_migration=true" in result.stdout
         assert "manual_step=true" in result.stdout
+
+    @pytest.mark.parametrize(
+        "fragment_name, fragment_content",
+        [
+            ("near-miss-lowercase.md", "### Changed\n\nmigration: one-way\n"),
+            ("near-miss-dash.md", "### Changed\n\n- Migration: one-way\n"),
+            ("near-miss-bold.md", "### Changed\n\n**Migration: one-way**\n"),
+            ("near-miss-space.md", "### Changed\n\nMigration : one-way\n"),
+            ("near-miss-manual.md", "### Changed\n\nmanual-step: stop the service\n"),
+        ],
+    )
+    def test_near_miss_lines(self, tmp_path, fragment_name, fragment_content):
+        """(a) parametrize the five near-miss lines.
+
+        Previously these were silently ignored (exit 0, no migration).
+        After the fix, non-canonical near-misses raise ReleaseMetaError
+        (exit 2, stderr names the fragment and the canonical form),
+        while canonical near-misses are accepted exactly as before.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+        _write_fragment(repo, fragment_name, fragment_content)
+        _commit_all(repo, "add near-miss fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        if fragment_name == "near-miss-space.md":
+            # Migration : one-way has a space before the colon, not canonical
+            assert result.returncode == 2, (
+                f"Expected exit 2 for {fragment_name}, got {result.returncode}"
+            )
+            assert fragment_name in result.stderr
+            assert "migration" in result.stderr
+            assert not out_file.exists()
+        else:
+            # Other near-miss lines are canonical after stripping
+            assert result.returncode == 0, (
+                f"Expected exit 0 for {fragment_name}, got {result.returncode}"
+            )
+            # Output file should exist with valid JSON
+            assert out_file.exists()
+            content = out_file.read_text(encoding="utf-8")
+            data = json.loads(content)
+            # Fragments that have canonical Migration: should have one_way_migration=true
+            # Fragments that have canonical Manual-Step: should have manual_step=true
+            if fragment_name == "near-miss-manual.md":
+                assert "manual_step=true" in result.stdout, (
+                    f"Expected manual_step=true for {fragment_name}"
+                )
+            else:
+                assert "one_way_migration=true" in result.stdout, (
+                    f"Expected one_way_migration=true for {fragment_name}"
+                )
 
 
 if __name__ == "__main__":
