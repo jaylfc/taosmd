@@ -113,7 +113,7 @@ def test_defaults_unchanged_without_config(tmp_path):
     # We don't have a model, so available=False, but we can check the constructor defaults
     reranker = CrossEncoderReranker(data_dir=str(data_dir))
     assert reranker._onnx_path == "models/cross-encoder-onnx", f"reranker path: {reranker._onnx_path}"
-    # Provider is hardcoded in _load to CPUExecutionProvider
+    assert reranker._provider == "CPUExecutionProvider", f"reranker provider: {reranker._provider}"
 
 
 def test_config_role_overrides_default(tmp_path):
@@ -212,7 +212,7 @@ def test_config_role_overrides_default(tmp_path):
     # Test CrossEncoderReranker config
     reranker = CrossEncoderReranker(data_dir=str(data_dir))
     assert reranker._onnx_path == "/custom/path", f"reranker path: {reranker._onnx_path}"
-    # Note: provider is used in _load, we can't easily test without patching
+    assert reranker._provider == "CUDAExecutionProvider", f"reranker provider: {reranker._provider}"
 
 
 def test_explicit_argument_beats_config(tmp_path):
