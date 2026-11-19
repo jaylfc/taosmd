@@ -141,6 +141,82 @@ async def _ensure_stores(data_dir=None) -> dict:
     resolved = _resolve_data_dir(data_dir)
     cached = _stores_cache.get(resolved)
     if cached is not None:
+        # Check if any derived store entry (vector, kg) is None and needs retry
+        needs_retry = False
+        if cached.get("vector") is None:
+            now = time.time()
+            last_vec = _last_attempt.get(resolved, {}).get("vector", 0)
+            if now - last_vec >= _RETRY_COOLDOWN:
+                needs_retry = True
+        if cached.get("kg") is None:
+            now = time.time()
+            last_kg = _last_attempt.get(resolved, {}).get("kg", 0)
+            if now - last_kg >= _RETRY_COOLDOWN:
+                needs_retry = True
+
+        if needs_retry:
+            async with _stores_lock:
+                # Re-read cache under lock (another thread may have fixed it)
+                cached = _stores_cache.get(resolved)
+                if cached is not None:
+                    # Retry vector store if still None and cooldown passed
+                    if cached.get("vector") is None:
+                        now = time.time()
+                        last_vec = _last_attempt.get(resolved, {}).get("vector", 0)
+                        if now - last_vec >= _RETRY_COOLDOWN:
+                            vm_cfg = _load_config(resolved)
+                            embed_mode = vm_cfg.get("vector_memory", {}).get("embed_mode", "onnx")
+                            embed_model = vm_cfg.get("vector_memory", {}).get("embed_model", "minilm-onnx")
+                            onnx_path = _resolve_onnx_path(resolved, embed_model) if embed_mode == "onnx" else ""
+                            try:
+                                from taosmd.vector_memory import VectorMemory
+                                vmem = VectorMemory(
+                                    db_path=str(Path(resolved) / "vector-memory.db"),
+                                    embed_mode=embed_mode,
+                                    onnx_path=onnx_path or "",
+                                    late_interaction=bool(vm_cfg.get("late_interaction", False)),
+                                    colbert_model=vm_cfg.get("colbert_model", "") or "",
+                                )
+                                await vmem.init()
+                                # Success: clear any recorded error
+                                if resolved in _store_errors and "vector" in _store_errors[resolved]:
+                                    del _store_errors[resolved]["vector"]
+                                cached["vector"] = vmem
+                            except Exception as e:
+                                logger.error(
+                                    "taosmd: failed to open vector store at %s: %s: %s",
+                                    resolved, type(e).__name__, e
+                                )
+                                _store_errors.setdefault(resolved, {})["vector"] = f"{type(e).__name__}: {e}"
+                                _last_attempt.setdefault(resolved, {})["vector"] = now
+                                cached["vector"] = None
+
+                    # Retry kg store if still None and cooldown passed
+                    if cached.get("kg") is None:
+                        now = time.time()
+                        last_kg = _last_attempt.get(resolved, {}).get("kg", 0)
+                        if now - last_kg >= _RETRY_COOLDOWN:
+                            try:
+                                from taosmd.knowledge_graph import TemporalKnowledgeGraph
+                                kg = TemporalKnowledgeGraph(db_path=str(Path(resolved) / "knowledge-graph.db"))
+                                await kg.init()
+                                # Success: clear any recorded error
+                                if resolved in _store_errors and "kg" in _store_errors[resolved]:
+                                    del _store_errors[resolved]["kg"]
+                                cached["kg"] = kg
+                            except Exception as e:
+                                logger.error(
+                                    "taosmd: failed to open kg store at %s: %s: %s",
+                                    resolved, type(e).__name__, e
+                                )
+                                _store_errors.setdefault(resolved, {})["kg"] = f"{type(e).__name__}: {e}"
+                                _last_attempt.setdefault(resolved, {})["kg"] = now
+                                cached["kg"] = None
+
+                _stores_cache[resolved] = cached
+                return cached
+
+        # Fast path: no None entries, return immediately (no lock, no I/O)
         return cached
 
     async with _stores_lock:
@@ -793,6 +869,12 @@ async def search(
         vector_error = _store_errors.get(resolved, {}).get("vector", "vector store unavailable")
         raise StoreUnavailableError(f"vector store unavailable: {vector_error}")
 
+    # Check for kg store availability
+    if stores["kg"] is None:
+        resolved = _resolve_data_dir(data_dir)
+        kg_error = _store_errors.get(resolved, {}).get("kg", "kg store unavailable")
+        raise StoreUnavailableError(f"kg store unavailable: {kg_error}")
+
     from taosmd.agents import ensure_agent
     from taosmd.retrieval import retrieve as _retrieve
     from taosmd import recipes as _recipes  # noqa: PLC0415
@@ -1032,6 +1114,10 @@ async def graph(*, limit: int = 300, as_of: float | None = None, data_dir=None) 
     for the time-travel scrubber; ``None`` (default) returns the current graph.
     """
     stores = await _ensure_stores(data_dir)
+    if stores["kg"] is None:
+        resolved = _resolve_data_dir(data_dir)
+        kg_error = _store_errors.get(resolved, {}).get("kg", "kg store unavailable")
+        raise StoreUnavailableError(f"kg store unavailable: {kg_error}")
     return await stores["kg"].graph(limit=limit, as_of=as_of)
 
 
@@ -1044,6 +1130,10 @@ async def graph_activations(*, since: float | None = None, window: float = 60.0,
     client can poll forward. Read-only.
     """
     stores = await _ensure_stores(data_dir)
+    if stores["kg"] is None:
+        resolved = _resolve_data_dir(data_dir)
+        kg_error = _store_errors.get(resolved, {}).get("kg", "kg store unavailable")
+        raise StoreUnavailableError(f"kg store unavailable: {kg_error}")
     cutoff = since if since is not None else (time.time() - window)
     items = await stores["kg"].activations(since=cutoff, limit=limit)
     return {"activations": items, "now": time.time()}

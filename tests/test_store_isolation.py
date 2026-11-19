@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -225,29 +226,58 @@ class TestStoreIsolation:
         assert "vector" in str(body).lower()
         assert "StoreModeMismatch" in str(body) or "unavailable" in str(body).lower()
 
-    def test_vector_store_recovers_without_restart(self, broken_vector_server):
-        """After repairing the store and waiting past 30s, /health shows ok."""
-        base_url, data_dir, httpd = broken_vector_server
+    def test_vector_store_recovers_without_restart(self, tmp_path, monkeypatch):
+        """After repairing the store and advancing cooldown, /health shows ok."""
+        data_dir = tmp_path / "taosmd-recovery"
+        data_dir.mkdir()
+        _make_broken_vector_store(data_dir)
 
-        # First request: health shows degraded
-        status, body = _get(f"{base_url}/health")
-        assert status == 200
-        assert body["status"] == "degraded"
-        assert body["stores"]["vector"].startswith("error:")
+        # Don't clear _stores_cache - let it cache the broken state so the
+        # cache-hit retry path (Finding 1) is exercised through the real HTTP server.
+        httpd = http_server.make_server("127.0.0.1", 0, data_dir=str(data_dir))
+        host, port = httpd.server_address[:2]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
 
-        # Repair the store: delete the conflicting mode marker
-        db_path = data_dir / "vector-memory.db"
-        conn = sqlite3.connect(db_path)
-        conn.execute("DELETE FROM store_meta WHERE key='mode'")
-        conn.commit()
-        conn.close()
+        try:
+            # First request: health shows degraded
+            status, body = _get(f"http://{host}:{port}/health")
+            assert status == 200
+            assert body["status"] == "degraded"
+            assert body["stores"]["vector"].startswith("error:")
 
-        # Need to advance the retry clock past 30s. We can't easily monkeypatch
-        # time.time() in the server thread from here, so this test documents
-        # the expected behavior. The actual retry logic is tested at unit level.
-        # For integration test, we just verify the store can be reopened after
-        # the cache is invalidated (which would happen after 30s in real use).
-        # This is a placeholder - the real test would need clock control.
+            # Repair the store: delete the conflicting mode marker
+            db_path = data_dir / "vector-memory.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute("DELETE FROM store_meta WHERE key='mode'")
+            conn.commit()
+            conn.close()
+
+            # Advance the retry clock past 30s so _ensure_stores retries the vector store
+            import time
+            base_time = time.time()
+
+            def mock_time():
+                return base_time + 31
+
+            with patch("taosmd.api.time.time", side_effect=mock_time):
+                # Second request: should recover without restart
+                status, body = _get(f"http://{host}:{port}/health")
+                assert status == 200
+                assert body["status"] == "ok"
+                assert body["stores"]["vector"] == "ok"
+
+                # Search should also succeed
+                status, body = _post(f"http://{host}:{port}/search", {
+                    "query": "anything",
+                    "agent": "test-agent",
+                })
+                assert status < 400, f"expected success, got {status}: {body}"
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            t.join(timeout=5)
+            httpd.service_loop.close()
 
     def test_archive_failure_still_raises(self, broken_archive_server):
         """Broken archive must fail loudly (5xx), not silently skip raw write."""
