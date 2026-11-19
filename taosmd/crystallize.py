@@ -85,8 +85,9 @@ class CrystalStore:
         turns: list[dict],
         agent_name: str | None = None,
         llm_url: str = "http://localhost:11434",
-        model: str = "qwen3:4b",
+        model: str | None = None,
         kg: TemporalKnowledgeGraph | None = None,
+        data_dir: str | Path | None = None,
     ) -> dict:
         """Crystallize a session into a compact digest.
 
@@ -95,14 +96,21 @@ class CrystalStore:
             turns: List of {role, content} dicts from the conversation.
             agent_name: Agent that ran this session.
             llm_url: Ollama-compatible LLM endpoint.
-            model: Model name for summarisation.
+            model: Model name for summarisation. When None, resolves from
+                config (role "crystallize") with fallback "qwen3:4b".
             kg: Optional KG to store extracted lessons as triples.
+            data_dir: Optional taosmd data dir for config resolution.
 
         Returns:
             Crystal dict with narrative, outcomes, lessons, files_affected.
         """
         if not turns:
             return {"error": "no turns to crystallize"}
+
+        # Resolve model from config if not explicitly provided
+        if model is None:
+            from . import generator_profiles as _gp
+            model = _gp.resolve_model("crystallize", fallback="qwen3:4b", data_dir=data_dir)
 
         from .agents import is_task_enabled  # noqa: PLC0415
 

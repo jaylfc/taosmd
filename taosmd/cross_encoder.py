@@ -18,8 +18,20 @@ logger = logging.getLogger(__name__)
 class CrossEncoderReranker:
     """ONNX-based cross-encoder for reranking retrieval results."""
 
-    def __init__(self, onnx_path: str = "models/cross-encoder-onnx", min_confidence: float | None = None):
-        self._onnx_path = onnx_path
+    def __init__(
+        self,
+        onnx_path: str | None = None,
+        provider: str | None = None,
+        min_confidence: float | None = None,
+        data_dir: str | Path | None = None,
+    ):
+        from . import generator_profiles as _gp
+        self._onnx_path = onnx_path or _gp.resolve_model(
+            "cross_encoder_path", fallback="models/cross-encoder-onnx", data_dir=data_dir
+        )
+        self._provider = provider or _gp.resolve_model(
+            "cross_encoder_provider", fallback="CPUExecutionProvider", data_dir=data_dir
+        )
         self._session = None
         self._tokenizer = None
         self._model_file = self._find_model_file()
@@ -72,7 +84,7 @@ class CrossEncoderReranker:
 
         self._session = ort.InferenceSession(
             self._model_file,
-            providers=["CPUExecutionProvider"],
+            providers=[self._provider],
         )
         self._tokenizer = AutoTokenizer.from_pretrained(self._onnx_path)
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -139,13 +140,19 @@ def expand_query_fast(query: str) -> dict:
 async def expand_query_llm(
     query: str,
     llm_url: str = "http://localhost:11434",
-    model: str = "qwen3:4b",
+    model: str | None = None,
+    data_dir: str | Path | None = None,
 ) -> dict:
     """Full LLM-powered query expansion.
 
     Generates 3-5 reformulations, extracts entities, resolves temporal refs.
     Falls back to fast expansion on LLM failure.
     """
+    # Resolve model from config if not explicitly provided
+    if model is None:
+        from . import generator_profiles as _gp
+        model = _gp.resolve_model("query_expansion", fallback="qwen3:4b", data_dir=data_dir)
+
     fast = expand_query_fast(query)
 
     try:
