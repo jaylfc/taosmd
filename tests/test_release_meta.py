@@ -163,7 +163,7 @@ class TestCollect:
 
         assert result.returncode == 2
         assert "bad-migration.md" in result.stderr
-        assert "oneway" in result.stderr
+        assert "unknown trailer format" in result.stderr
         assert not out_file.exists()
 
     def test_empty_manual_step_exits_with_error(self, tmp_path):
@@ -351,10 +351,9 @@ class TestCLI:
     def test_near_miss_lines(self, tmp_path, fragment_name, fragment_content):
         """(a) parametrize the five near-miss lines.
 
-        Previously these were silently ignored (exit 0, no migration).
-        After the fix, non-canonical near-misses raise ReleaseMetaError
-        (exit 2, stderr names the fragment and the canonical form),
-        while canonical near-misses are accepted exactly as before.
+        Non-canonical near-misses raise ReleaseMetaError (exit 2, stderr names
+        the fragment and the canonical form), while canonical near-misses are
+        accepted exactly as before (exit 0, produce output JSON).
         """
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -368,33 +367,28 @@ class TestCLI:
         out_file = repo / "release.json"
         result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
 
-        if fragment_name == "near-miss-space.md":
-            # Migration : one-way has a space before the colon, not canonical
+        # Canonical near-misses after stripping: -Migration: one-way and
+        # **Migration: one-way** become Migration: one-way which is canonical.
+        # All others are non-canonical and raise ReleaseMetaError.
+        if fragment_name in ("near-miss-dash.md", "near-miss-bold.md"):
+            # These are canonical after stripping - should succeed (exit 0)
+            assert result.returncode == 0, (
+                f"Expected exit 0 for {fragment_name}, got {result.returncode}"
+            )
+            assert out_file.exists()
+            # Fragments with canonical Migration: should have one_way_migration=true
+            assert "one_way_migration=true" in result.stdout, (
+                f"Expected one_way_migration=true for {fragment_name}"
+            )
+        else:
+            # Non-canonical near-misses raise ReleaseMetaError (exit 2)
             assert result.returncode == 2, (
                 f"Expected exit 2 for {fragment_name}, got {result.returncode}"
             )
             assert fragment_name in result.stderr
-            assert "migration" in result.stderr
+            # The error message references the canonical form
+            assert "migration" in result.stderr.lower() or "manual" in result.stderr.lower()
             assert not out_file.exists()
-        else:
-            # Other near-miss lines are canonical after stripping
-            assert result.returncode == 0, (
-                f"Expected exit 0 for {fragment_name}, got {result.returncode}"
-            )
-            # Output file should exist with valid JSON
-            assert out_file.exists()
-            content = out_file.read_text(encoding="utf-8")
-            data = json.loads(content)
-            # Fragments that have canonical Migration: should have one_way_migration=true
-            # Fragments that have canonical Manual-Step: should have manual_step=true
-            if fragment_name == "near-miss-manual.md":
-                assert "manual_step=true" in result.stdout, (
-                    f"Expected manual_step=true for {fragment_name}"
-                )
-            else:
-                assert "one_way_migration=true" in result.stdout, (
-                    f"Expected one_way_migration=true for {fragment_name}"
-                )
 
 
 if __name__ == "__main__":

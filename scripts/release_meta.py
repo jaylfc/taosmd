@@ -100,7 +100,7 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
 
     A line is a trailer candidate when, after stripping leading whitespace,
     list markers (-, *, +, >), and emphasis characters (*, _, backticks),
-    it matches case-insensitively ^(migration|manual[-_ ]?step)\s*:.
+    it matches case-insensitively the pattern ^(migration|manual[-_ ]?step):.
     If a candidate is EXACTLY a canonical trailer line
     (Migration: one-way, Migration: reversible, Manual-Step: <non-empty text>),
     it is used. Any other candidate that matches the pattern but is not
@@ -127,25 +127,16 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
 
         stripped = _strip_trailer_markers(line)
 
-        # Check if stripped line matches pattern case-insensitively
+# Check if stripped line matches pattern case-insensitively
         if re.match(r'^(migration|manual[-_ ]?step)\s*:', stripped, re.IGNORECASE):
-            # Determine key and extract value
-            lower = stripped.lower()
-
-            if lower.startswith("migration:"):
-                value = stripped[len("migration:"):].strip()
-                if value.lower() == "one-way":
-                    migrations.append(MigrationInfo(fragment=fragment_path, kind="one-way"))
-                elif value.lower() == "reversible":
-                    migrations.append(MigrationInfo(fragment=fragment_path, kind="reversible"))
-                else:
-                    canonical = "Migration: one-way or Migration: reversible"
-                    raise ReleaseMetaError(
-                        f"{fragment_path}:{line_num} - invalid Migration value '{value}' "
-                        f"(must be one of: {canonical})"
-                    )
-            elif lower.startswith("manual-step:") or re.match(r'^manual[-_ ]?step:', lower):
-                value = re.sub(r'^manual[-_ ]?step\s*:', '', stripped, flags=re.IGNORECASE).strip()
+            # Check for canonical Migration: form (case-sensitive key, exact value)
+            if re.match(r'^Migration:\s+one-way$', stripped):
+                migrations.append(MigrationInfo(fragment=fragment_path, kind="one-way"))
+            elif re.match(r'^Migration:\s+reversible$', stripped):
+                migrations.append(MigrationInfo(fragment=fragment_path, kind="reversible"))
+            # Check for canonical Manual-Step: form (case-sensitive, exact case with hyphen)
+            elif re.match(r'^Manual-Step:\s+.+$', stripped):
+                value = stripped[len("Manual-Step:"):].strip()
                 if value:
                     manual_steps.append(value)
                 else:
@@ -155,9 +146,11 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
                         f"(must be one of: {canonical})"
                     )
             else:
+                # Candidate matches the pattern but is not canonical - raise loud refusal
                 canonical = "Migration: one-way or Migration: reversible, Manual-Step: <non-empty text>"
                 raise ReleaseMetaError(
-                    f"{fragment_path}:{line_num} - unknown trailer format"
+                    f"{fragment_path}:{line_num} - unknown trailer format; "
+                    f"use one of: {canonical}"
                 )
 
     return migrations, manual_steps
