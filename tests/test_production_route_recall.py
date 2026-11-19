@@ -2,9 +2,9 @@
 recipe and strategy, using the same code path agents call.
 
 This test guards against regressions where a recipe's strategy (e.g. fast/minimal)
-skips the vector store for question-form queries, which happened on lite-pi
-(card tsk-rmebxw). It runs the full HTTP stack: make_server -> POST /ingest ->
-apply_recipe -> POST /search with limit=5.
+skips the vector store for queries where the intent primary is not 'qmd', which
+happened on lite-pi (card tsk-rmebxw). It runs the full HTTP stack:
+make_server -> POST /ingest -> apply_recipe -> POST /search with limit=5.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import pytest
 from taosmd import api as taosmd_api
 from taosmd import http_server
 from taosmd import recipes as recipes_mod
+from taosmd.intent_classifier import get_search_strategy
 
 
 # ---------------------------------------------------------------------------
@@ -73,10 +74,11 @@ def _patch_embedder(stores: dict) -> None:
 
 
 class _ServerCtx:
-    def __init__(self, url, httpd, stores):
+    def __init__(self, url, httpd, stores, data_dir):
         self.url = url
         self.httpd = httpd
         self.stores = stores
+        self.data_dir = data_dir
 
     def run(self, coro):
         return self.httpd.service_loop.run(coro)
@@ -98,7 +100,7 @@ def live_server_ctx(tmp_path, monkeypatch):
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
-        yield _ServerCtx(f"http://{host}:{port}", httpd, stores)
+        yield _ServerCtx(f"http://{host}:{port}", httpd, stores, str(data_dir))
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -149,29 +151,30 @@ FACTS = [
     "Our staging database password rotates on the first Monday of each month.",
 ]
 
-# (fact_index, query_form, query_text)
+# (fact_index, query_form, query_text, fact_label)
 # query_form: "question" | "keyword" | "paraphrase"
+# fact_label: short descriptor for test ids (e.g. "nas", "deploy", "darkmode", "busbox", "staging")
 QUERIES = [
     # NAS backup
-    (0, "question", "When does my NAS backup run?"),
-    (0, "keyword", "NAS backup schedule"),
-    (0, "paraphrase", "which day is the NAS backup"),
+    (0, "question", "When does my NAS backup run?", "nas"),
+    (0, "keyword", "NAS backup schedule", "nas"),
+    (0, "paraphrase", "which day is the NAS backup", "nas"),
     # Deploy phrase
-    (1, "question", "What is the deploy check phrase?"),
-    (1, "keyword", "deploy check phrase"),
-    (1, "paraphrase", "deploy phrase"),
+    (1, "question", "What is the deploy check phrase?", "deploy"),
+    (1, "keyword", "deploy check phrase", "deploy"),
+    (1, "paraphrase", "deploy phrase", "deploy"),
     # Jay dark mode
-    (2, "question", "What does Jay prefer for app themes?"),
-    (2, "keyword", "Jay dark mode"),
-    (2, "paraphrase", "theme preference Jay"),
+    (2, "question", "What does Jay prefer for app themes?", "darkmode"),
+    (2, "keyword", "Jay dark mode", "darkmode"),
+    (2, "paraphrase", "theme preference Jay", "darkmode"),
     # Bus box hardware
-    (3, "question", "What hardware is the taOS bus box?"),
-    (3, "keyword", "bus box hardware"),
-    (3, "paraphrase", "what board runs the bus"),
+    (3, "question", "What hardware is the taOS bus box?", "busbox"),
+    (3, "keyword", "bus box hardware", "busbox"),
+    (3, "paraphrase", "what board runs the bus", "busbox"),
     # Staging password rotation
-    (4, "question", "When does the staging database password rotate?"),
-    (4, "keyword", "staging password rotation"),
-    (4, "paraphrase", "password change schedule staging"),
+    (4, "question", "When does the staging database password rotate?", "staging"),
+    (4, "keyword", "staging password rotation", "staging"),
+    (4, "paraphrase", "password change schedule staging", "staging"),
 ]
 
 
@@ -180,15 +183,44 @@ QUERIES = [
 # ---------------------------------------------------------------------------
 
 
-def _iter_test_cases():
-    """Yield (recipe_id, strategy, fact_idx, query_form, query_text, fact_text)."""
+def _build_test_cases():
+    """Build list of test cases with pytest.param for xfail marking.
+
+    Xfail condition: queries on fast/minimal strategies where the intent
+    classifier routes to a primary source other than 'qmd' (vector store).
+    This matches the tsk-rmebxw bug: fast/minimal only queries the intent
+    primary source, so factual/preference/recent/relational/timeline queries
+    (primary != qmd) skip the vector store.
+    """
     all_recipes = recipes_mod.list_recipes()
+    cases = []
     for recipe in all_recipes:
         strategy = recipe.retrieval.get("strategy", "thorough")
         for fact_idx, fact_text in enumerate(FACTS):
-            for q_fact_idx, query_form, query_text in QUERIES:
+            for q_fact_idx, query_form, query_text, fact_label in QUERIES:
                 if q_fact_idx == fact_idx:
-                    yield (recipe.id, strategy, fact_idx, query_form, query_text, fact_text)
+                    # Determine if this case should be xfail
+                    marks = []
+                    if strategy in ("fast", "minimal"):
+                        intent_primary = get_search_strategy(query_text).get("primary")
+                        if intent_primary != "qmd":
+                            marks.append(pytest.mark.xfail(strict=True, reason="tsk-rmebxw"))
+                    cases.append(
+                        pytest.param(
+                            recipe.id,
+                            strategy,
+                            fact_idx,
+                            query_form,
+                            query_text,
+                            fact_text,
+                            fact_label,
+                            marks=marks,
+                        )
+                    )
+    return cases
+
+
+TEST_CASES = _build_test_cases()
 
 
 # ---------------------------------------------------------------------------
@@ -197,24 +229,21 @@ def _iter_test_cases():
 
 
 @pytest.mark.parametrize(
-    "recipe_id,strategy,fact_idx,query_form,query_text,fact_text",
-    list(_iter_test_cases()),
-    ids=[
-        f"[{recipe_id}-{query_form}-fact{fact_idx}]"
-        for recipe_id, _, fact_idx, query_form, _, _ in _iter_test_cases()
-    ],
+    "recipe_id,strategy,fact_idx,query_form,query_text,fact_text,fact_label",
+    TEST_CASES,
+    ids=[f"[{case.values[0]}-{case.values[3]}-{case.values[6]}]" for case in TEST_CASES],
 )
 def test_production_route_recall(
-    live_server_ctx, recipe_id, strategy, fact_idx, query_form, query_text, fact_text
+    live_server_ctx, recipe_id, strategy, fact_idx, query_form, query_text, fact_text, fact_label
 ):
     """For each recipe, seed facts via /ingest, apply recipe, search via /search.
 
     Asserts the seeded fact text appears in the returned hits (limit=5).
-    Fast/minimal strategy question-form cases are xfail (tsk-rmebxw).
+    Fast/minimal strategy cases with primary != qmd are xfail (tsk-rmebxw).
     """
     url = live_server_ctx.url
     agent = "recall-ci"
-    data_dir = live_server_ctx.stores["data_dir"]
+    data_dir = live_server_ctx.data_dir
 
     # Ensure agent exists (synchronous, operates on shared data_dir)
     from taosmd.agents import ensure_agent as _ensure_agent  # noqa: PLC0415
@@ -240,15 +269,6 @@ def test_production_route_recall(
     # Check if the seeded fact is in the returned hits
     found = any(fact_text in hit for hit in hit_texts)
 
-    # xfail for fast/minimal strategy when intent primary is not vector (qmd)
-    # This covers question-form and paraphrase cases where intent classifier
-    # routes to KG first, and fast/minimal strategy doesn't fall back to vector.
-    # Bug: tsk-rmebxw - fast/minimal skips vector store for non-exploratory intents.
-    from taosmd.intent_classifier import get_search_strategy as _get_search_strategy  # noqa: PLC0415
-    intent_primary = _get_search_strategy(query_text).get("primary")
-    if strategy in ("fast", "minimal") and intent_primary != "qmd":
-        pytest.xfail("tsk-rmebxw: fast/minimal strategy skips vector store for non-qmd primary")
-
     assert found, (
         f"Fact not found in hits for recipe={recipe_id} strategy={strategy} "
         f"query_form={query_form} query={query_text!r}\n"
@@ -265,12 +285,10 @@ def test_production_route_recall(
 def test_recipe_coverage_meta():
     """Ensure the test iterates all recipes in the registry."""
     all_recipes = recipes_mod.list_recipes()
-    tested_recipe_ids = {case[0] for case in _iter_test_cases()}
+    tested_recipe_ids = {case.values[0] for case in TEST_CASES}
     registry_ids = {r.id for r in all_recipes}
 
     # Every recipe in registry must appear in test cases
     assert tested_recipe_ids == registry_ids, (
         f"Test misses recipes: {registry_ids - tested_recipe_ids}"
     )
-    # And we test at least as many as the registry has (prevents silent escape)
-    assert len(tested_recipe_ids) >= len(registry_ids)
