@@ -1,0 +1,2 @@
+### Added
+- Embedder ONNX provider configurable via config `models` section: new roles `embedder_provider` (ONNX provider name, default `CPUExecutionProvider`) and `embedder_gpu_mem_mb` (GPU memory limit in MB). VectorMemory resolves them via `generator_profiles.resolve_model`, checks provider availability, and falls back to CPU with a single warning if unavailable. The store mode marker is unchanged by provider choice (it is a transport, not part of vector space).
