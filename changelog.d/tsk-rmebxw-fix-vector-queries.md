@@ -5,3 +5,4 @@
 - Added 'qmd' as an alias to 'vector' in retrieve() for backward compatibility
 - Modified fast and minimal strategies to always query vector source when present, even if it's the tertiary source
 - Added tests in tests/test_fast_strategy_sources.py to verify vector is always queried
+- Minimal strategy now falls back to vector only when the primary source returns no results after filtering

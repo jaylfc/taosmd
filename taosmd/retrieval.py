@@ -1007,14 +1007,12 @@ async def retrieve(
                                           fusion=fusion, candidate_limit=candidate_top_k)
 
         results = _filter_project_scope(results, project, search_agents)
-        # Always query vector if it's in sources but not the primary
-        if "vector" in sources and primary != "vector":
-            vector_results = await _query_source("vector", sources["vector"], query, fetch_limit,
-                                               project=project, search_agents=search_agents,
-                                               fusion=fusion, candidate_limit=candidate_top_k)
-            vector_results = _filter_project_scope(vector_results, project, search_agents)
-            merged = _rrf_merge([results, vector_results])
-            results = _filter_project_scope(_deduplicate(merged), project, search_agents)
+        # Fall back to vector only when primary returned no results after filtering
+        if not results and "vector" in sources and primary != "vector":
+            results = await _query_source("vector", sources["vector"], query, fetch_limit,
+                                          project=project, search_agents=search_agents,
+                                          fusion=fusion, candidate_limit=candidate_top_k)
+            results = _filter_project_scope(results, project, search_agents)
 
         if temporal:
             from taosmd.temporal import apply_temporal_stage  # noqa: PLC0415
