@@ -221,9 +221,9 @@ def run(base_url: str, write_probe: bool = False, timeout: int = 10) -> dict[str
 
     # 5. Write probe if requested
     if write_probe:
-        agent = f"contract-probe-{secrets.token_hex(8)}"
-        thread = f"contract-probe-{secrets.token_hex(8)}"
-        marker_word = f"probe-marker-{secrets.token_hex(8)}"
+        agent = f"contract-probe-{secrets.token_hex(4)}"
+        thread = f"contract-probe-{secrets.token_hex(4)}"
+        marker_word = f"probe-marker-{secrets.token_hex(4)}"
 
         # POST /ingest
         try:
@@ -307,17 +307,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     # Check --require
-    server_caps_set = set()
-    # Extract server capabilities from health check
-    try:
-        status, health, ct = _get_json(args.base_url, "/health", args.timeout)
-        if status == 200 and isinstance(health, dict):
-            server_caps_set = set(health.get("capabilities", []))
-    except Exception:
-        pass
-    
     for req in args.require:
-        if req not in server_caps_set:
+        if req in result["missing_on_server"]:
             result["ok"] = False
             result["checks"].append({"name": f"require:{req}", "ok": False, "detail": "required capability missing on server"})
 

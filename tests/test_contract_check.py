@@ -244,20 +244,39 @@ def test_version_capabilities_differ_from_health(live_server_ctx, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_require_missing_capability_exits_1(live_server):
-    """--require for a capability not advertised by server -> exit 1."""
-    code, stdout, stderr = _run_cli(["--base-url", live_server, "--require", "nonexistent.v1"])
+def test_require_missing_capability_exits_1(live_server_ctx, monkeypatch):
+    """--require for a capability declared by package but not advertised by server -> exit 1."""
+    # Make the server not advertise 'tasks.v1' (a real declared capability)
+    # by monkeypatching the server's handler to remove it from /health
+    original_dispatch = live_server_ctx.httpd.RequestHandlerClass._dispatch
+
+    def patched_dispatch(self, method: str) -> None:
+        parts = self.path.split("?", 1)
+        path = parts[0].rstrip("/") or "/"
+        if method == "GET" and path == "/health":
+            # Return capabilities without tasks.v1
+            self._send_json(200, {
+                "status": "ok",
+                "version": "0.5.1",
+                "capabilities": ["collections.v1", "a2a.v1", "grants.v1", "graph.v1", "ingest.v1", "search.v1", "shelves.v1", "temporal.v1"],
+            })
+            return
+        return original_dispatch(self, method)
+
+    live_server_ctx.httpd.RequestHandlerClass._dispatch = patched_dispatch
+
+    # Now --require tasks.v1 should fail because it's declared but not advertised
+    code, stdout, stderr = _run_cli(["--base-url", live_server_ctx.url, "--require", "tasks.v1"])
     assert code == 1, f"exit code {code}, stdout={stdout}, stderr={stderr}"
-    assert "FAIL require:nonexistent.v1" in stdout
+    assert "FAIL require:tasks.v1" in stdout
 
 
-def test_require_missing_capability_run(live_server):
-    """run() with --require equivalent (missing_on_server) reports missing."""
-    result = contract_check.run(live_server, write_probe=False, timeout=10)
-    # The capability "nonexistent.v1" is not in all_probes, so it won't be in missing_on_server
-    # But we can test with a real capability that the server might not have
-    # (all current capabilities should be present on a clean server)
-    assert "nonexistent.v1" not in result["missing_on_server"]
+def test_require_undeclared_capability_does_not_fail(live_server):
+    """--require for a capability NOT declared by package should not fail (not in missing_on_server)."""
+    code, stdout, stderr = _run_cli(["--base-url", live_server, "--require", "nonexistent.v1"])
+    assert code == 0, f"exit code {code}, stdout={stdout}, stderr={stderr}"
+    # Should not have a FAIL for require:nonexistent.v1
+    assert "FAIL require:nonexistent.v1" not in stdout
 
 
 # ---------------------------------------------------------------------------
