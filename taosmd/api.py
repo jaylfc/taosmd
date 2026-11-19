@@ -783,7 +783,7 @@ async def search(
     degraded = None
     if rc.get("reranker") == "bge-v2-m3":
         from taosmd.cross_encoder import CrossEncoderReranker  # noqa: PLC0415
-        ce = CrossEncoderReranker()
+        ce = CrossEncoderReranker(data_dir=stores["data_dir"])
         if ce.available:
             reranker = ce
         else:

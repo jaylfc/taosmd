@@ -50,6 +50,16 @@ _MANAGED_BY_KEY = "managed_by"
 _SERVE_DASHBOARD_KEY = "serve_dashboard"
 # Key under which the active global generator-profile id is stored.
 _GENERATOR_PROFILE_KEY = "generator_profile"
+# Section under which model role overrides live.
+_MODELS_SECTION_KEY = "models"
+# Recognised model roles (keys under the models section).
+_MODEL_ROLES: tuple[str, ...] = (
+    "crystallize",
+    "reflect",
+    "query_expansion",
+    "cross_encoder_path",
+    "cross_encoder_provider",
+)
 # Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
 _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
 # Maximum age (seconds) of a cached revocation set before refresh failures fail
@@ -168,6 +178,60 @@ def set_generator_profile(profile_id: str, *, clear: bool = False, data_dir=None
     if not isinstance(profile_id, str) or not profile_id.strip():
         raise ValueError("profile_id must be a non-empty string")
     data[_GENERATOR_PROFILE_KEY] = profile_id.strip()
+    _write(data, data_dir)
+
+
+def get_model_role(role: str, data_dir=None) -> str | None:
+    """Return the configured model for a role, or ``None`` if unset.
+
+    Args:
+        role: One of the recognised model roles.
+        data_dir: Optional taosmd data dir.
+
+    Raises:
+        ValueError: when role is not a recognised model role.
+    """
+    if role not in _MODEL_ROLES:
+        raise ValueError(
+            f"unknown model role: {role!r}; valid roles: {', '.join(_MODEL_ROLES)}"
+        )
+    section = _read(data_dir).get(_MODELS_SECTION_KEY)
+    if not isinstance(section, dict):
+        return None
+    val = section.get(role)
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return None
+
+
+def set_model_role(role: str, value: str, *, clear: bool = False, data_dir=None) -> None:
+    """Persist a model role override.
+
+    Args:
+        role: One of the recognised model roles.
+        value: Model string (e.g. ``"ollama:qwen3:4b"`` or a path). Ignored when ``clear`` is True.
+        clear: When True, remove the setting.
+        data_dir: Optional taosmd data dir.
+
+    Raises:
+        ValueError: when role is not recognised, or when ``clear`` is False
+            and ``value`` is not a non-empty string.
+    """
+    if role not in _MODEL_ROLES:
+        raise ValueError(
+            f"unknown model role: {role!r}; valid roles: {', '.join(_MODEL_ROLES)}"
+        )
+    data = _read(data_dir)
+    section = data.get(_MODELS_SECTION_KEY)
+    if not isinstance(section, dict):
+        section = {}
+    if clear:
+        section.pop(role, None)
+    else:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("value must be a non-empty string (or pass clear=True)")
+        section[role] = value.strip()
+    data[_MODELS_SECTION_KEY] = section
     _write(data, data_dir)
 
 
@@ -984,6 +1048,8 @@ __all__ = [
     "MANAGED_BY_TAOS",
     "get_generator_profile",
     "set_generator_profile",
+    "get_model_role",
+    "set_model_role",
     "get_collections_allowed_roots",
     "set_collections_allowed_roots",
 ]
