@@ -872,14 +872,6 @@ async def retrieve(
 
     if sources is None:
         sources = {}
-    # Accept 'qmd' as an alias for 'vector' for backward compatibility
-    # comment out: if 'qmd' in sources, add it as 'vector' if 'vector' not already present
-    if 'qmd' in sources and 'vector' not in sources:
-        sources['vector'] = sources.pop('qmd')
-    elif 'qmd' in sources:
-        # If both exist, prefer 'vector' and keep 'qmd' as a duplicate key
-        sources['vector'] = sources['qmd']  # This will overwrite, which is OK
-
     result_limit = limit
     # Resolve effective K from per-agent fanout config when an agent is given.
     if agent is not None:

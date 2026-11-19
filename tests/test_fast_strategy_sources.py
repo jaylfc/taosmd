@@ -147,32 +147,6 @@ def test_minimal_stays_on_primary_when_it_has_results():
         assert r["source"] == "kg", f"Expected source 'kg', got {r['source']}"
 
 
-def test_qmd_alias_still_accepted():
-    """Test that 'qmd' source key is still accepted as an alias for 'vector'."""
-    query = "what is the deploy check phrase"
-
-    vec = _FakeVector()
-
-    class FakeKG:
-        async def query_entity(self, word):
-            return []
-
-    class FakeArchive:
-        async def search_fts(self, query, limit=5):
-            return []
-
-    # Use 'qmd' as the source key (should be aliased to 'vector')
-    sources = {"qmd": vec, "kg": FakeKG(), "archive": FakeArchive()}
-
-    # Run retrieval with fast strategy
-    results = asyncio.run(retrieval.retrieve(query, sources=sources, strategy="fast"))
-
-    # The vector fake should have been called (via alias)
-    assert vec.calls, "vector source was not queried via 'qmd' alias"
-    assert len(results) == 1, f"Expected 1 result, got {len(results)}"
-    assert results[0]["text"] == "hit"
-
-
 def test_thorough_unchanged():
     """Test that thorough strategy calls all sources as before."""
     query = "what is the deploy check phrase"
@@ -205,3 +179,54 @@ def test_thorough_unchanged():
         assert len(results) == 1, f"Expected 1 result, got {len(results)}"
     finally:
         monkeypatch.undo()
+
+
+def test_vector_fact_survives_full_pages_from_other_sources():
+    """A lone vector hit must not be crowded out by full kg and archive pages."""
+    query = "what is the deploy check phrase"
+    assert intent_classifier.classify_intent(query) == "factual"
+    fact = "The deploy check phrase is heliotrope-lantern-42."
+
+    class FullKG:
+        """One full page of 5 hits in total (retrieve() calls this once per query word)."""
+        def __init__(self):
+            self.pages = 0
+
+        async def query_entity(self, word):
+            self.pages += 1
+            if self.pages > 1:
+                return []
+            return [
+                {"subject_id": f"s{i}", "predicate": "relates to", "object_id": f"o{i}",
+                 "subject_name": f"unrelated-subject-{i}", "object_name": f"unrelated-object-{i}",
+                 "direction": "outgoing", "confidence": 1.0}
+                for i in range(5)
+            ]
+
+    class FullArchive:
+        async def search_fts(self, query, limit=5):
+            return [
+                {"id": f"a{i}", "summary": f"unrelated archive note number {i}",
+                 "event_type": "conversation", "timestamp": 0.0, "score": 1.0}
+                for i in range(5)
+            ]
+
+    class OneHitVector:
+        def __init__(self):
+            self.calls = []
+
+        async def search(self, query, *, limit=5, hybrid=True, fusion="boost",
+                         project=None, search_agents=None):
+            self.calls.append({"limit": limit})
+            return [{"id": "v1", "text": fact, "similarity": 1.0, "metadata": {}}]
+
+    vec = OneHitVector()
+    sources = {"kg": FullKG(), "archive": FullArchive(), "vector": vec}
+    results = asyncio.run(
+        retrieval.retrieve(query, sources=sources, strategy="fast", limit=5)
+    )
+
+    assert vec.calls, "vector source was not queried"
+    assert fact in [r["text"] for r in results], (
+        f"vector fact was crowded out: {[r['text'] for r in results]}"
+    )

@@ -1,8 +1,5 @@
 ### Fixed
 
-- Fixed bug where "what is X?" questions never reached vector memory in fast and minimal strategies
-- Renamed all 'qmd' source names to 'vector' in SEARCH_STRATEGIES (intent_classifier.py)
-- Added 'qmd' as an alias to 'vector' in retrieve() for backward compatibility
-- Modified fast and minimal strategies to always query vector source when present, even if it's the tertiary source
-- Added tests in tests/test_fast_strategy_sources.py to verify vector is always queried
-- Minimal strategy now falls back to vector only when the primary source returns no results after filtering
+- Search strategies named the vector source "qmd" while every caller passes it as "vector", so the fast strategy skipped vector memory for question-shaped queries ("what is ...?", "where does ...?"). The strategies now use "vector".
+- The fast strategy always queries the vector store in addition to its primary and secondary sources.
+- The minimal strategy still queries one source by design; it falls back to the vector store only when its primary source returns nothing, so a question can still miss on minimal when the primary returns something irrelevant.
