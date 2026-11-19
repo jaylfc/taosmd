@@ -602,8 +602,8 @@ def agent_exists(name: str) -> bool:
     return _registry().agent_exists(name)
 
 
-def get_agent(name: str) -> dict:
-    return _registry().get_agent(name)
+def get_agent(name: str, data_dir: Path | str | None = None) -> dict:
+    return _registry(data_dir).get_agent(name)
 
 
 def delete_agent(name: str, *, drop_data: bool = False) -> None:

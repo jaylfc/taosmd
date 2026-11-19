@@ -1099,3 +1099,107 @@ def test_update_stats_lands_in_given_data_dir(tmp_path, monkeypatch):
     assert a3_rec["last_ingest_at"] == 12345, (
         f"expected last_ingest_at=12345, got {a3_rec.get('last_ingest_at')}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Fix-forward #725: data_dir routing for agent registry in service.stats
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_sets_last_ingest_at_in_served_dir(tmp_path, monkeypatch):
+    """ingest must update last_ingest_at in the registry in the given data_dir."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("TAOSMD_DATA_DIR", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    # Ingest into the served data dir
+    asyncio.run(taosmd.ingest("hello", agent="svc-agent-a", data_dir=str(data_dir)))
+
+    # Read back via get_agent with the same data_dir
+    from taosmd.agents import get_agent
+
+    record = get_agent("svc-agent-a", data_dir=str(data_dir))
+    assert record["last_ingest_at"] > 0, (
+        f"expected last_ingest_at > 0, got {record.get('last_ingest_at')}"
+    )
+
+    # HOME/.taosmd must not exist
+    home_taosmd = home / ".taosmd"
+    assert not home_taosmd.exists(), (
+        f"expected {home_taosmd} NOT to exist; agent registry split from data dir"
+    )
+
+
+def test_ingest_batch_sets_last_ingest_at_in_served_dir(tmp_path, monkeypatch):
+    """ingest_batch must update last_ingest_at in the registry in the given data_dir."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("TAOSMD_DATA_DIR", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    # Ingest batch into the served data dir
+    asyncio.run(
+        taosmd.ingest_batch(
+            [
+                {"text": "first item", "id": "h1"},
+                {"text": "second item", "id": "h2"},
+            ],
+            agent="svc-agent-b",
+            data_dir=str(data_dir),
+        )
+    )
+
+    # Read back via get_agent with the same data_dir
+    from taosmd.agents import get_agent
+
+    record = get_agent("svc-agent-b", data_dir=str(data_dir))
+    assert record["last_ingest_at"] > 0, (
+        f"expected last_ingest_at > 0, got {record.get('last_ingest_at')}"
+    )
+
+    # HOME/.taosmd must not exist
+    home_taosmd = home / ".taosmd"
+    assert not home_taosmd.exists(), (
+        f"expected {home_taosmd} NOT to exist; agent registry split from data dir"
+    )
+
+
+async def _service_stats_reads_served_dir_impl(tmp_path, monkeypatch):
+    """Helper for test_service_stats_reads_served_dir."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("TAOSMD_DATA_DIR", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    # Ingest into the served data dir
+    await taosmd.ingest("hello world", agent="svc-agent-c", data_dir=str(data_dir))
+
+    # Call the REAL service.stats with the same data_dir
+    from taosmd import service
+
+    stats = await service.stats(agent="svc-agent-c", data_dir=str(data_dir))
+
+    # Should find the agent in the served data dir
+    assert stats["registered"] is True, f"expected registered=True, got {stats['registered']}"
+    assert stats["last_ingest_at"] > 0, f"expected last_ingest_at > 0, got {stats['last_ingest_at']}"
+
+    # HOME/.taosmd must not exist
+    home_taosmd = home / ".taosmd"
+    assert not home_taosmd.exists(), (
+        f"expected {home_taosmd} NOT to exist; agent registry split from data dir"
+    )
+
+
+def test_service_stats_reads_served_dir(tmp_path, monkeypatch):
+    """service.stats must read the agent registry from the served data_dir."""
+    asyncio.run(_service_stats_reads_served_dir_impl(tmp_path, monkeypatch))
