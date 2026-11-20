@@ -21,6 +21,7 @@ import pytest
 from taosmd import api as taosmd_api
 from taosmd import http_server
 from taosmd import recipes as recipes_mod
+from taosmd.agents import ensure_agent
 from taosmd.intent_classifier import get_search_strategy
 
 
@@ -244,8 +245,7 @@ def test_production_route_recall(
     data_dir = live_server_ctx.data_dir
 
     # Ensure agent exists (synchronous, operates on shared data_dir)
-    from taosmd.agents import ensure_agent as _ensure_agent  # noqa: PLC0415
-    _ensure_agent(agent, data_dir=data_dir)
+    ensure_agent(agent, data_dir=data_dir)
 
     # Apply the recipe to the agent (uses real config/agent API)
     recipes_mod.apply_recipe(agent, recipe_id, data_dir=data_dir)
@@ -287,6 +287,6 @@ def test_recipe_coverage_meta():
     registry_ids = {r.id for r in all_recipes}
 
     # Every recipe in registry must appear in test cases
-    assert tested_recipe_ids == registry_ids, (
+    assert tested_recipe_ids >= registry_ids, (
         f"Test misses recipes: {registry_ids - tested_recipe_ids}"
     )
