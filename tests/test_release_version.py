@@ -147,15 +147,14 @@ class TestStamp:
         _write(
             repo,
             "pyproject.toml",
-            '[project]\nname = "taosmd"\nversion = "0.4.1"\n\n[tool.x]\nversion = "9.9.9"\n',
+            'version = "9.9.9"\n\n[project]\nname = "taosmd"\nversion = "0.4.1"\n',
         )
         result = _run_cli(repo, "--stamp")
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "0.5.1"
         pyproject = (repo / "pyproject.toml").read_text(encoding="utf-8")
         assert pyproject == (
-            '[project]\nname = "taosmd"\nversion = "0.5.1"\n\n[tool.x]\n'
-            'version = "9.9.9"\n'
+            'version = "9.9.9"\n\n[project]\nname = "taosmd"\nversion = "0.5.1"\n'
         ), pyproject
         build_info = (repo / "taosmd" / "_build_info.py").read_text(
             encoding="utf-8"
