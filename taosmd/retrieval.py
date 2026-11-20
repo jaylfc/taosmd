@@ -112,13 +112,14 @@ def _adapt_catalog(results: list[dict]) -> list[dict]:
         description = r.get("description", "")
         text = f"[{date} {start_str}-{end_str}] {topic}: {description}"
 
+        score = r.get("score")
         adapted.append(
             {
                 "text": text,
                 "source": "catalog",
                 "source_id": str(r["id"]),
                 "rank": rank,
-                "source_score": float(r["score"]) if r.get("score") is not None else None,
+                "source_score": float(score) if score is not None else None,
                 "metadata": r,
             }
         )
@@ -149,13 +150,14 @@ def _adapt_archive(results: list[dict]) -> list[dict]:
             else:
                 text = ""
 
+        score = r.get("score")
         adapted.append(
             {
                 "text": text,
                 "source": "archive",
                 "source_id": str(r["id"]),
                 "rank": rank,
-                "source_score": float(r["score"]) if r.get("score") is not None else None,
+                "source_score": float(score) if score is not None else None,
                 "metadata": r,
             }
         )
