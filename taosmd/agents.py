@@ -602,8 +602,8 @@ def agent_exists(name: str) -> bool:
     return _registry().agent_exists(name)
 
 
-def get_agent(name: str) -> dict:
-    return _registry().get_agent(name)
+def get_agent(name: str, data_dir: Path | str | None = None) -> dict:
+    return _registry(data_dir).get_agent(name)
 
 
 def delete_agent(name: str, *, drop_data: bool = False) -> None:
@@ -619,8 +619,9 @@ def update_stats(
     *,
     last_ingest_at: int | None = None,
     total_chunks: int | None = None,
+    data_dir: Path | str | None = None,
 ) -> dict:
-    return _registry().update_stats(name, last_ingest_at=last_ingest_at, total_chunks=total_chunks)
+    return _registry(data_dir).update_stats(name, last_ingest_at=last_ingest_at, total_chunks=total_chunks)
 
 
 def get_applied_recipe(name: str, data_dir: Path | str | None = None) -> str | None:
