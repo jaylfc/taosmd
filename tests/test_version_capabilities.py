@@ -564,3 +564,45 @@ def test_metadata_error_never_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", missing)
 
     assert taosmd._resolve_version() == "0+unknown"
+
+
+def test_resolve_version_handles_bad_pyproject(monkeypatch, tmp_path):
+    """A non-UTF-8 or unreadable pyproject.toml must not raise at import;
+    the resolver falls through to metadata or '0+unknown'."""
+    import taosmd
+
+    # Create a pyproject with invalid UTF-8 bytes
+    bad_pyproject = tmp_path / "pyproject.toml"
+    bad_pyproject.write_bytes(b"\xff\xfe")  # Invalid UTF-8
+
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", bad_pyproject)
+    monkeypatch.setattr(
+        "importlib.metadata.version",
+        lambda _: (_ for _ in ()).throw(importlib.metadata.PackageNotFoundError),
+    )
+
+    # Must not raise UnicodeDecodeError; falls through to '0+unknown'
+    version = taosmd._resolve_version()
+    assert version == "0+unknown"
+
+
+def test_resolve_version_name_normalisation(monkeypatch, tmp_path):
+    """Name variants that normalise to 'taosmd' are accepted; others ignored."""
+    import taosmd
+
+    for name in ("Taos_MD", "taos-md", "TAOSMD", "taosmd"):
+        fake_pyproject = tmp_path / f"pyproject_{name}.toml"
+        fake_pyproject.write_text(f'[project]\nname = "{name}"\nversion = "1.2.3"\n')
+        monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", fake_pyproject)
+        monkeypatch.setattr(
+            "importlib.metadata.version",
+            lambda _: (_ for _ in ()).throw(importlib.metadata.PackageNotFoundError),
+        )
+        assert taosmd._resolve_version() == "1.2.3", f"failed for name {name!r}"
+
+    # Non-matching name falls through
+    fake_pyproject = tmp_path / "pyproject_other.toml"
+    fake_pyproject.write_text('[project]\nname = "other"\nversion = "9.9.9"\n')
+    monkeypatch.setattr(taosmd, "_PYPROJECT_PATH", fake_pyproject)
+    monkeypatch.setattr("importlib.metadata.version", lambda _: "5.5.5")
+    assert taosmd._resolve_version() == "5.5.5"
