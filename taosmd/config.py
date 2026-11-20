@@ -59,6 +59,8 @@ _MODEL_ROLES: tuple[str, ...] = (
     "query_expansion",
     "cross_encoder_path",
     "cross_encoder_provider",
+    "embedder_provider",
+    "embedder_gpu_mem_mb",
 )
 # Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
 _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
