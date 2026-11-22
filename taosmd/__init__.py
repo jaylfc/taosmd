@@ -22,9 +22,14 @@ def _resolve_version() -> str:
     Never raises.
     """
     pyproject_path = _PYPROJECT_PATH
+    text = ""
     if pyproject_path.is_file():
-        text = pyproject_path.read_text(encoding="utf-8")
-        project: dict = {}
+        try:
+            text = pyproject_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = ""
+    project: dict = {}
+    if text:
         try:
             import tomllib
         except ImportError:
@@ -62,7 +67,7 @@ def _resolve_version() -> str:
             isinstance(name, str)
             and isinstance(version, str)
             and version
-            and name.strip().lower().replace("_", "-") == "taosmd"
+            and name.strip().lower().replace("_", "").replace("-", "") == "taosmd"
         ):
             return version
 
