@@ -578,24 +578,26 @@ def _format_hit(hit: dict) -> dict:
     confidence = (
         md.get("similarity")
         if isinstance(md, dict) and md.get("similarity") is not None
-        else hit.get("source_score", 0.0)
+        else hit.get("source_score")
     )
-    if confidence is None:
-        confidence = 0.0
 
     # Cross-encoder reranking (see taosmd.cross_encoder) attaches a
     # ``cross_encoder_score`` to each hit inside retrieve(). It lives on the
     # hit envelope, not in row metadata, so the reshape below would silently
     # drop it (issue #645): consumers could not tell whether reranking ran.
     # The score is a relevance LOGIT (unbounded, not 0-1), so it is exposed
-    # as its own field rather than folded into ``confidence`` — confidence
+    # as its own field rather than folded into ``confidence`` -- confidence
     # deliberately stays the pre-rerank cosine similarity that the
     # agent-rules ``< 0.6`` threshold reads in the 0-1 range.
+    if confidence is None:
+        confidence_out = None
+    else:
+        confidence_out = round(float(confidence), 4)
     out = {
         "text": hit.get("text", ""),
         "source": hit.get("source", "unknown"),
         "timestamp": timestamp,
-        "confidence": round(float(confidence), 4),
+        "confidence": confidence_out,
         "metadata": user_md if isinstance(user_md, dict) else {},
     }
     ces = hit.get("cross_encoder_score")

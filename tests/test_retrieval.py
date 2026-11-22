@@ -41,19 +41,19 @@ class MockKG:
 class MockCatalog:
     async def search_topic(self, query, limit=5):
         return [{"id": 1, "topic": "Working on taOS", "description": "Building memory system",
-                 "date": "2026-04-13", "start_str": "09:00", "end_str": "11:30", "category": "coding"}]
+                 "date": "2026-04-13", "start_str": "09:00", "end_str": "11:30", "category": "coding", "score": 0.8}]
 
 
 class MockArchive:
     async def search_fts(self, query, limit=20):
         return [{"id": 1, "summary": "Discussed taOS architecture", "data_json": "{}",
-                 "event_type": "conversation", "timestamp": 1744531200.0}]
+                 "event_type": "conversation", "timestamp": 1744531200.0, "score": 0.7}]
 
 
 class MockCrystals:
     async def search(self, query, limit=10):
         return [{"id": "c1", "narrative": "Built the memory pipeline", "session_id": "s1",
-                 "outcomes": "[]", "lessons": "[]"}]
+                 "outcomes": "[]", "lessons": "[]", "score": 0.6}]
 
 
 ALL_SOURCES = {
