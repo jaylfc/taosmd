@@ -203,6 +203,8 @@ def get_model_role(role: str, data_dir=None) -> str | None:
     val = section.get(role)
     if isinstance(val, str) and val.strip():
         return val.strip()
+    if isinstance(val, int) and not isinstance(val, bool):
+        return str(val)
     return None
 
 

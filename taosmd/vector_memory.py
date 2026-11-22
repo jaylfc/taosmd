@@ -425,6 +425,12 @@ class VectorMemory:
                         )
                         gpu_mem_mb = None
 
+                if gpu_mem_mb is not None and gpu_mem_mb <= 0:
+                    logger.warning(
+                        "Invalid embedder_gpu_mem_mb value %r, ignoring", gpu_mem_mb
+                    )
+                    gpu_mem_mb = None
+
                 # Build providers list: if provider is not CPU and is available,
                 # use it with GPU memory limit (if set) and fall back to CPU.
                 # Otherwise use CPU only. Never raise for unavailable provider.

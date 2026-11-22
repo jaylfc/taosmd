@@ -6,9 +6,10 @@ fallback when the configured provider is unavailable.
 """
 
 import asyncio
+import json
 import logging
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # onnxruntime is an optional extra; import lazily in mock helper
 ort = None
@@ -247,3 +248,147 @@ def test_provider_not_in_store_marker(tmp_path):
 
     # The mode strings must be identical (provider is a transport, not part of vector space)
     assert mode1 == mode2, f"Mode mismatch: {mode1!r} != {mode2!r}"
+
+
+def test_ensure_stores_passes_data_dir(tmp_path, caplog):
+    """Ensure _ensure_stores passes data_dir to VectorMemory so provider
+    config from a non-default data dir is respected.
+
+    After the fix, data_dir=str(path) is passed to VectorMemory, so
+    VectorMemory._data_dir is set to the served data dir. Without the fix,
+    _data_dir would be None and provider config would be read from the
+    default location.
+    """
+    import taosmd.api as api_mod
+
+    data_dir = tmp_path / "taosmd"
+    data_dir.mkdir()
+
+    # Write config.json with embedder_provider set into the served data dir
+    (data_dir / "config.json").write_text(
+        json.dumps({"models": {"embedder_provider": "CUDAExecutionProvider"}})
+    )
+
+    # Call _ensure_stores - data_dir should be passed to VectorMemory
+    stores = _run(api_mod._ensure_stores(data_dir=str(data_dir)))
+
+    # Verify data_dir was stored in the result
+    assert stores["data_dir"] == str(data_dir), (
+        f"Expected data_dir={str(data_dir)}, got {stores['data_dir']}"
+    )
+
+    # Verify VectorMemory received data_dir by checking _data_dir
+    vm = stores["vector"]
+    assert vm._data_dir == str(data_dir), (
+        f"Expected VectorMemory._data_dir={str(data_dir)}, got {vm._data_dir!r}"
+    )
+
+
+def test_gpu_mem_limit_json_int(tmp_path, caplog):
+    """JSON int embedder_gpu_mem_mb=2048 should produce gpu_mem_limit 2048*1024*1024.
+
+    Finding 2: embedder_gpu_mem_mb as a JSON integer is silently ignored
+    because config.get_model_role returns only non-empty strings. The fix
+    adds int acceptance; without it, JSON int 2048 produces no gpu_mem_limit.
+    """
+    from taosmd.vector_memory import VectorMemory
+
+    data_dir = tmp_path / "taosmd"
+    data_dir.mkdir()
+
+    # Write config.json with embedder_gpu_mem_mb as JSON integer (not string),
+    # WITHOUT calling set_model_role so the raw JSON int is what get_model_role sees.
+    config_path = data_dir / "config.json"
+    config_path.write_text(
+        json.dumps({"models": {"embedder_provider": "CUDAExecutionProvider", "embedder_gpu_mem_mb": 2048}})
+    )
+
+    # Mock onnxruntime to capture providers
+    mock_ort = _ORTMock()
+    with patch("sys.modules", {"onnxruntime": mock_ort}, create=True):
+        original_ort = _patch_onnxruntime(mock_ort)
+        original_tokenizer, _ = _patch_tokenizer()
+        try:
+            vm = VectorMemory(
+                db_path=str(data_dir / "vm.db"),
+                embed_mode="onnx",
+                onnx_path="models/minilm-onnx",
+                data_dir=str(data_dir),
+            )
+            _run(vm.init())
+
+            # Check the provider was set with gpu_mem_limit
+            providers_arg = mock_ort.last_providers
+            assert providers_arg is not None, "InferenceSession not called"
+            # gpu_mem_limit should be 2048 * 1024 * 1024 = 2147483648
+            # Without the fix, get_model_role only accepts str, so JSON int 2048
+            # returns None → no gpu_mem_limit → this assertion FAILS.
+            assert any(
+                isinstance(p, tuple) and p[0] == "CUDAExecutionProvider"
+                and p[1]["gpu_mem_limit"] == 2048 * 1024 * 1024
+                for p in providers_arg
+            ), f"Expected CUDAExecutionProvider with gpu_mem_limit={2048*1024*1024}, got {providers_arg}"
+
+            _run(vm.close())
+        finally:
+            _unpatch_onnxruntime(original_ort)
+            _unpatch_tokenizer(original_tokenizer)
+
+
+def test_gpu_mem_limit_rejects_nonpositive(tmp_path, caplog):
+    """Parameterized: 0 and negative embedder_gpu_mem_mb values are rejected (no gpu_mem_limit).
+
+    Finding 3: '0' and '-5' are accepted and give gpu_mem_limit 0 / -5242880.
+    The fix makes <= 0 values log a warning and be ignored (same as unparseable).
+    Without the fix, non-positive values pass through and set gpu_mem_limit.
+    """
+    from taosmd.vector_memory import VectorMemory
+    from taosmd import config as cfg
+
+    for val in ["0", "-5", 0, -5]:
+        data_dir = tmp_path / "taosmd"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write config.json with embedder_gpu_mem_mb as the test value
+        # Also set embedder_provider so the gpu_mem_limit code path is exercised
+        config_path = data_dir / "config.json"
+        config_path.write_text(
+            json.dumps({"models": {"embedder_provider": "CUDAExecutionProvider", "embedder_gpu_mem_mb": val}})
+        )
+
+        # Set config role
+        cfg.set_model_role("embedder_provider", "CUDAExecutionProvider", data_dir=str(data_dir))
+        cfg.set_model_role("embedder_gpu_mem_mb", str(val) if isinstance(val, int) else val, data_dir=str(data_dir))
+
+        # Mock onnxruntime
+        mock_ort = _ORTMock()
+        with patch("sys.modules", {"onnxruntime": mock_ort}, create=True):
+            original_ort = _patch_onnxruntime(mock_ort)
+            original_tokenizer, _ = _patch_tokenizer()
+            try:
+                vm = VectorMemory(
+                    db_path=str(data_dir / "vm.db"),
+                    embed_mode="onnx",
+                    onnx_path="models/minilm-onnx",
+                    data_dir=str(data_dir),
+                )
+                _run(vm.init())
+
+                providers_arg = mock_ort.last_providers
+                assert providers_arg is not None, "InferenceSession not called"
+
+                # No gpu_mem_limit should be present for non-positive values
+                has_gpu_limit = any(
+                    isinstance(p, tuple) and p[0] == "CUDAExecutionProvider"
+                    and "gpu_mem_limit" in p[1]
+                    for p in providers_arg
+                )
+                assert not has_gpu_limit, (
+                    f"Expected no gpu_mem_limit for val={val!r}, "
+                    f"but got providers: {providers_arg}"
+                )
+
+                _run(vm.close())
+            finally:
+                _unpatch_onnxruntime(original_ort)
+                _unpatch_tokenizer(original_tokenizer)
