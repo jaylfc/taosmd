@@ -25,7 +25,7 @@ SEARCH_STRATEGIES = {
     INTENT_FACTUAL: {
         "primary": "kg",        # Search KG first, structured facts
         "secondary": "archive", # Then archive for context
-        "tertiary": "qmd",     # QMD last
+        "tertiary": "vector",  # Vector last
         "catalog_weight": 0.0,
         "kg_weight": 1.0,
         "archive_weight": 0.3,
@@ -34,7 +34,7 @@ SEARCH_STRATEGIES = {
     INTENT_RECENT: {
         "primary": "archive",   # Search archive first, recent events
         "secondary": "kg",
-        "tertiary": "qmd",
+        "tertiary": "vector",
         "catalog_weight": 0.0,
         "kg_weight": 0.3,
         "archive_weight": 1.0,
@@ -43,14 +43,14 @@ SEARCH_STRATEGIES = {
     INTENT_PREFERENCE: {
         "primary": "kg",        # Preferences are structured in KG
         "secondary": "archive",
-        "tertiary": "qmd",
+        "tertiary": "vector",
         "catalog_weight": 0.0,
         "kg_weight": 1.0,
         "archive_weight": 0.5,
         "qmd_weight": 0.1,
     },
     INTENT_TECHNICAL: {
-        "primary": "qmd",       # Technical docs are in vector store
+        "primary": "vector",       # Technical docs are in vector store
         "secondary": "kg",
         "tertiary": "archive",
         "catalog_weight": 0.0,
@@ -59,7 +59,7 @@ SEARCH_STRATEGIES = {
         "qmd_weight": 1.0,
     },
     INTENT_EXPLORATORY: {
-        "primary": "qmd",       # Broad search needs semantic matching
+        "primary": "vector",       # Broad search needs semantic matching
         "secondary": "kg",
         "tertiary": "archive",
         "catalog_weight": 0.0,
@@ -70,7 +70,7 @@ SEARCH_STRATEGIES = {
     INTENT_RELATIONAL: {
         "primary": "kg",        # Relationships are in the KG
         "secondary": "archive",
-        "tertiary": "qmd",
+        "tertiary": "vector",
         "catalog_weight": 0.0,
         "kg_weight": 1.0,
         "archive_weight": 0.2,
@@ -79,7 +79,7 @@ SEARCH_STRATEGIES = {
     INTENT_TIMELINE: {
         "primary": "catalog",   # Session catalog for activity timeline
         "secondary": "archive",
-        "tertiary": "qmd",
+        "tertiary": "vector",
         "catalog_weight": 1.0,
         "archive_weight": 0.7,
         "kg_weight": 0.3,

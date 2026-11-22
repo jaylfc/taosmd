@@ -237,3 +237,70 @@ def test_case_d(tmp_path, monkeypatch):
     assert sorted_output[1]["text"] == "A"
     assert sorted_output[0]["rerank_applied"] is True
     assert sorted_output[1]["rerank_applied"] is True
+
+
+def test_cross_encoder_signature_min_confidence_positional(tmp_path):
+    """CrossEncoderReranker('path', 0.5) must set min_confidence=0.5 (2nd positional),
+    not provider. Provider must be keyword-only."""
+    onnx_dir = tmp_path / "cross-encoder-onnx"
+    onnx_dir.mkdir()
+    (onnx_dir / "model.onnx").write_bytes(b"placeholder")
+
+    # Positional: onnx_path, min_confidence
+    reranker = CrossEncoderReranker(str(onnx_dir), 0.5)
+    assert reranker.min_confidence == 0.5, f"min_confidence should be 0.5, got {reranker.min_confidence}"
+    assert reranker._provider == "CPUExecutionProvider", f"provider should be default, got {reranker._provider}"
+
+    # Keyword-only provider
+    reranker2 = CrossEncoderReranker(str(onnx_dir), min_confidence=0.3, provider="CUDAExecutionProvider")
+    assert reranker2.min_confidence == 0.3
+    assert reranker2._provider == "CUDAExecutionProvider"
+
+
+def test_cross_encoder_provider_config_respected(tmp_path, monkeypatch):
+    """When cross_encoder_provider='CUDAExecutionProvider' and CUDA is available,
+    the recorded providers passed to InferenceSession must start with CUDA."""
+    import sys
+
+    onnx_dir = tmp_path / "cross-encoder-onnx"
+    onnx_dir.mkdir()
+    (onnx_dir / "model.onnx").write_bytes(b"placeholder")
+
+    recorded_providers = {}
+
+    # Create a mock onnxruntime module
+    class MockInferenceSession:
+        def __init__(self, model_path, providers=None, **kwargs):
+            recorded_providers["providers"] = providers
+        def get_inputs(self):
+            return []
+        def run(self, *args, **kwargs):
+            import numpy as np
+            return [np.array([[0.5]])]
+
+    mock_ort = type(sys)("onnxruntime")
+    mock_ort.InferenceSession = MockInferenceSession
+    monkeypatch.setitem(sys.modules, "onnxruntime", mock_ort)
+
+    # Patch transformers AutoTokenizer
+    import transformers
+    def mock_tokenizer(*args, **kwargs):
+        class MockTokenizer:
+            def __call__(self, *args, **kwargs):
+                import numpy as np
+                return {"input_ids": np.array([[1, 2, 3]]), "attention_mask": np.array([[1, 1, 1]])}
+        return MockTokenizer()
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", mock_tokenizer)
+
+    # Patch available and _find_model_file
+    monkeypatch.setattr(CrossEncoderReranker, "available", property(lambda self: True))
+    monkeypatch.setattr(CrossEncoderReranker, "_find_model_file", lambda self: str(onnx_dir / "model.onnx"))
+
+    # Create reranker with CUDA provider config
+    reranker = CrossEncoderReranker(onnx_path=str(onnx_dir), provider="CUDAExecutionProvider")
+    reranker._load()
+
+    assert "providers" in recorded_providers, "providers not recorded"
+    providers = recorded_providers["providers"]
+    assert providers is not None, "providers is None"
+    assert providers[0] == "CUDAExecutionProvider", f"expected CUDAExecutionProvider first, got {providers}"
