@@ -151,14 +151,20 @@ class InsightStore:
         kg: TemporalKnowledgeGraph,
         entity: str | None = None,
         llm_url: str = "http://localhost:11434",
-        model: str = "qwen3:4b",
+        model: str | None = None,
         agent_name: str = "",
+        data_dir: str | Path | None = None,
     ) -> list[dict]:
         """Run reflection over KG triples, synthesizing insights.
 
         If entity is provided, reflects only on that entity's neighbourhood.
         Otherwise reflects on all active triples.
         """
+        # Resolve model from config if not explicitly provided
+        if model is None:
+            from . import generator_profiles as _gp
+            model = _gp.resolve_model("reflect", fallback="qwen3:4b", data_dir=data_dir)
+
         from .agents import is_task_enabled  # noqa: PLC0415
 
         # Gate: named agents with reflect disabled return early.

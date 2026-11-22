@@ -140,3 +140,26 @@ def resolve_generator(agent: str | None = None, *, fallback: str | None = None,
         if tier in prof.models:
             return prof.models[tier]
     return fallback or ""
+
+
+def resolve_model(role: str, *, fallback: str | None = None, data_dir=None) -> str | None:
+    """Resolve a model role from config, with a fallback.
+
+    This is deliberately simple: it does NOT consult the generator profile.
+    An install without a `models` section gets exactly `fallback`, i.e.
+    today's hard-coded value.
+
+    Args:
+        role: One of the recognised model roles (crystallize, reflect,
+            query_expansion, cross_encoder_path, cross_encoder_provider).
+        fallback: Value to return when config has no entry for the role.
+        data_dir: Optional taosmd data dir.
+
+    Returns:
+        The configured model string, or `fallback` if unset/empty.
+    """
+    from . import config as _config  # local import to avoid cycle
+    configured = _config.get_model_role(role, data_dir=data_dir)
+    if configured is not None:
+        return configured
+    return fallback

@@ -47,12 +47,13 @@ class _FakeVectorMemory:
 class _FakeArchive:
     """Minimal archive that records FTS calls."""
 
-    def __init__(self):
+    def __init__(self, fts_rows=None):
+        self.fts_rows = fts_rows or []
         self.fts_calls = []
 
     async def search_fts(self, term, limit=5):
         self.fts_calls.append({"term": term, "limit": limit})
-        return []
+        return list(self.fts_rows)
 
 
 class _FakeKG:
@@ -90,10 +91,10 @@ def _make_env_runner(monkeypatch, env_value=None):
     return _load_runner()
 
 
-async def _call_retrieve_context(mod, streams=None, **kwargs):
+async def _call_retrieve_context(mod, streams=None, fts_rows=None, **kwargs):
     """Helper to call retrieve_context with fakes."""
     kg = _FakeKG()
-    archive = _FakeArchive()
+    archive = _FakeArchive(fts_rows)
     vmem = _FakeVectorMemory(["VECTOR_TEXT"])
     assembler = _RecordingAssembler(kg, archive)
     mod.ContextAssembler = lambda kg, archive: assembler
@@ -353,7 +354,7 @@ async def test_run_benchmark_passes_streams_to_retrieve_context(runner, monkeypa
 
     async def fake_retrieve_context(question, kg, archive, vmem, llm_client=None,
                                      graph_expansion=0, retrieval_path="retrieve",
-                                     streams=None):
+                                     streams=None, date_frame="off", haystack_dates=None):
         captured_streams["streams"] = streams
         return "CONTEXT"
 
@@ -373,3 +374,157 @@ async def test_run_benchmark_passes_streams_to_retrieve_context(runner, monkeypa
     ))
 
     assert captured_streams["streams"] == ["assembler", "vector"]
+
+
+# ---------------------------------------------------------------------------
+# 8. FTS text flows through the enabled stream
+# ---------------------------------------------------------------------------
+
+_FTS_ROWS = [
+    {"data_json": "FTS-ALPHA", "summary": ""},
+    {"data_json": "FTS-BETA", "summary": ""},
+]
+
+
+@pytest.mark.asyncio
+async def test_fts_only_context_contains_fts_text(runner, monkeypatch):
+    """streams=['fts'] puts canned FTS text in the context and nothing else."""
+    ctx, assembler, archive, vmem = await _call_retrieve_context(
+        runner, streams=["fts"], fts_rows=_FTS_ROWS
+    )
+    assert "FTS-ALPHA" in ctx
+    assert "FTS-BETA" in ctx
+    assert "ASSEMBLER_TEXT" not in ctx
+    assert "VECTOR_TEXT" not in ctx
+
+
+@pytest.mark.asyncio
+async def test_all_streams_context_contains_fts_text(runner, monkeypatch):
+    """All three streams join in fixed order: assembler, fts, vector."""
+
+    async def fake_retrieve_vector_results(*args, **kwargs):
+        return [{"text": "VECTOR_TEXT"}]
+
+    monkeypatch.setattr(runner, "retrieve_vector_results", fake_retrieve_vector_results)
+
+    ctx, assembler, archive, vmem = await _call_retrieve_context(
+        runner,
+        streams=["assembler", "fts", "vector"],
+        fts_rows=_FTS_ROWS,
+    )
+    assert "ASSEMBLER_TEXT" in ctx
+    assert "FTS-ALPHA" in ctx
+    assert "VECTOR_TEXT" in ctx
+    assert (
+        ctx.index("ASSEMBLER_TEXT")
+        < ctx.index("FTS-ALPHA")
+        < ctx.index("VECTOR_TEXT")
+    )
+
+
+@pytest.mark.asyncio
+async def test_fts_disabled_omits_fts_text(runner, monkeypatch):
+    """streams without 'fts' never calls search_fts and omits FTS text."""
+
+    async def fake_retrieve_vector_results(*args, **kwargs):
+        return [{"text": "VECTOR_TEXT"}]
+
+    monkeypatch.setattr(runner, "retrieve_vector_results", fake_retrieve_vector_results)
+
+    ctx, assembler, archive, vmem = await _call_retrieve_context(
+        runner, streams=["assembler", "vector"], fts_rows=_FTS_ROWS
+    )
+    assert "FTS-ALPHA" not in ctx
+    assert "FTS-BETA" not in ctx
+    assert archive.fts_calls == []
+    assert "ASSEMBLER_TEXT" in ctx
+    assert "VECTOR_TEXT" in ctx
+
+
+@pytest.mark.asyncio
+async def test_retrieval_delta_call_gets_streams(monkeypatch, tmp_path):
+    """--report-retrieval-delta with TAOSMD_LME_STREAMS='vector' keeps the
+    legacy/delta retrieve_context call on the vector stream only: no assembler
+    call and no search_fts call."""
+    mod = _make_env_runner(monkeypatch, "vector")
+    monkeypatch.setattr(mod, "ContextAssembler", _RecordingAssembler)
+
+    archive_instances = []
+
+    class _FakeKG:
+        def __init__(self, *a, **k):
+            pass
+
+        async def init(self):
+            pass
+
+        async def close(self):
+            pass
+
+    class _FakeArchiveStore:
+        def __init__(self, *a, **k):
+            archive_instances.append(self)
+            self.fts_calls = []
+            self.records = []
+
+        async def init(self):
+            pass
+
+        async def search_fts(self, term, limit=5):
+            self.fts_calls.append({"term": term, "limit": limit})
+            return []
+
+        async def record(self, *a, **k):
+            self.records.append((a, k))
+
+        async def close(self):
+            pass
+
+    class _FakeVmem:
+        def __init__(self, *a, **k):
+            pass
+
+        async def init(self, http_client=None):
+            pass
+
+        async def add(self, *a, **k):
+            pass
+
+        async def close(self):
+            pass
+
+    assembler = _RecordingAssembler()
+    mod.ContextAssembler = lambda kg, archive: assembler
+
+    async def fake_retrieve_vector_results(*args, **kwargs):
+        return [{"text": "VECTOR_TEXT"}]
+
+    monkeypatch.setattr(mod, "retrieve_vector_results", fake_retrieve_vector_results)
+    monkeypatch.setattr(mod, "TemporalKnowledgeGraph", _FakeKG)
+    monkeypatch.setattr(mod, "ArchiveStore", _FakeArchiveStore)
+    monkeypatch.setattr(mod, "VectorMemory", _FakeVmem)
+    monkeypatch.setattr(
+        mod,
+        "load_dataset",
+        lambda: [
+            {
+                "question_type": "temporal",
+                "question": "test question",
+                "answer": "ans",
+                "haystack_sessions": [],
+            }
+        ],
+    )
+
+    out_file = str(tmp_path / "results.json")
+    await mod.run_benchmark(
+        args=_args(
+            out=out_file,
+            report_retrieval_delta=True,
+            limit=1,
+        )
+    )
+
+    assert assembler.assemble_calls == []
+    for inst in archive_instances:
+        assert inst.fts_calls == []
