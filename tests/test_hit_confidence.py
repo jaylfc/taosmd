@@ -83,6 +83,7 @@ class _FakeCrystals:
 
 # ---------------------------------------------------------------------------
 # Test (a): same vector hit (similarity 0.6) reports confidence 0.6 on every path
+# Kept per FINDING 3: _rrf_merge mutation setting source_score=rrf_score fails it.
 # ---------------------------------------------------------------------------
 
 def test_vector_confidence_same_on_every_path():
