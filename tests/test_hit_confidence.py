@@ -18,19 +18,24 @@ from taosmd import api as taosmd_api
 
 class _FakeVector:
     """Vector fake that returns a hit with a specific similarity."""
-    def __init__(self, similarity: float = 0.6):
+
+    def __init__(self, similarity: float = 0.6, return_hits=None):
         self.calls = []
         self.similarity = similarity
+        self.return_hits = return_hits
 
     async def search(self, query, *, limit=5, hybrid=True, fusion="boost",
                      project=None, search_agents=None):
         self.calls.append({"limit": limit, "fusion": fusion})
+        if self.return_hits is not None:
+            return self.return_hits
         return [{"id": "v1", "text": "The deploy check phrase is heliotrope-lantern-42.",
                  "similarity": self.similarity, "metadata": {}}]
 
 
 class _FakeKG:
     """KG fake that returns empty results by default."""
+
     def __init__(self, return_hits=None):
         self.calls = []
         self.return_hits = return_hits or []
@@ -42,6 +47,7 @@ class _FakeKG:
 
 class _FakeArchive:
     """Archive fake that returns empty results by default."""
+
     def __init__(self, return_hits=None):
         self.calls = []
         self.return_hits = return_hits or []
@@ -53,6 +59,7 @@ class _FakeArchive:
 
 class _FakeCatalog:
     """Catalog fake that returns empty results by default."""
+
     def __init__(self, return_hits=None):
         self.calls = []
         self.return_hits = return_hits or []
@@ -64,6 +71,7 @@ class _FakeCatalog:
 
 class _FakeCrystals:
     """Crystals fake that returns empty results by default."""
+
     def __init__(self, return_hits=None):
         self.calls = []
         self.return_hits = return_hits or []
@@ -175,46 +183,77 @@ def test_vector_confidence_same_on_every_path():
 
 
 # ---------------------------------------------------------------------------
-# Test (b): kg hit with no confidence field reports confidence None
+# Test (b): score-less adapter hits report confidence null
 # ---------------------------------------------------------------------------
 
-def test_scoreless_hit_reports_null_confidence():
-    """A kg row with no 'confidence' field must produce a hit with
-    source_score == None, and _format_hit must emit confidence: null.
+@pytest.mark.parametrize(
+    "source_name,fake_kwargs,query",
+    [
+        (
+            "kg",
+            {"return_hits": [{
+                "subject_id": "s1", "predicate": "is", "object_id": "o1",
+                "subject_name": "deploy check", "object_name": "phrase",
+                "direction": "outgoing",
+            }]},
+            "deploy check phrase",
+        ),
+        (
+            "catalog",
+            {"return_hits": [{
+                "id": "c1", "topic": "deploy", "description": "check phrase",
+                "date": "2026-01-01", "start_str": "00:00", "end_str": "01:00",
+                "category": "test",
+            }]},
+            "deploy check phrase",
+        ),
+        (
+            "archive",
+            {"return_hits": [{
+                "id": "a1", "summary": "deploy check phrase", "data_json": "{}",
+                "event_type": "conversation", "timestamp": 0.0,
+            }]},
+            "deploy check phrase",
+        ),
+        (
+            "crystals",
+            {"return_hits": [{
+                "id": "x1", "narrative": "deploy check phrase", "session_id": "s1",
+                "outcomes": "[]", "lessons": "[]",
+            }]},
+            "deploy check phrase",
+        ),
+    ],
+)
+def test_scoreless_adapter_hit_reports_null_confidence(source_name, fake_kwargs, query):
+    """A score-less row from any of the four adapters must produce a hit with
+    source_score == None through the real retrieve(), and _format_hit must emit
+    confidence: null.
     """
-    # KG hit without confidence field
-    kg = _FakeKG(return_hits=[
-        {"subject_id": "s1", "predicate": "is", "object_id": "o1",
-         "subject_name": "deploy check", "object_name": "phrase",
-         "direction": "outgoing"}  # No 'confidence' key
-    ])
-    vec = _FakeVector(similarity=0.9)  # Different similarity to distinguish
-    archive = _FakeArchive()
-    catalog = _FakeCatalog()
-    crystals = _FakeCrystals()
+    vec = _FakeVector(return_hits=[])
+    kg = _FakeKG(**(fake_kwargs if source_name == "kg" else {}))
+    archive = _FakeArchive(**(fake_kwargs if source_name == "archive" else {}))
+    catalog = _FakeCatalog(**(fake_kwargs if source_name == "catalog" else {}))
+    crystals = _FakeCrystals(**(fake_kwargs if source_name == "crystals" else {}))
 
     sources = {"vector": vec, "kg": kg, "archive": archive, "catalog": catalog, "crystals": crystals}
 
-    # Use minimal strategy with kg as primary (factual query)
     results = asyncio.run(retrieval.retrieve(
-        "what is the deploy check phrase",
+        query,
         sources=sources,
-        strategy="minimal",
+        strategy="custom",
+        memory_layers=[source_name],
         limit=5,
     ))
-    assert len(results) >= 1, f"Expected at least 1 result, got {len(results)}"
-    kg_hits = [r for r in results if r["source"] == "kg"]
-    # KG adapter is called per query word, so we may get multiple hits
-    # All should have source_score == None
-    assert len(kg_hits) >= 1, f"Expected at least 1 kg hit, got {len(kg_hits)}"
-    for hit in kg_hits:
+    hits = [r for r in results if r["source"] == source_name]
+    assert hits, f"Expected at least one {source_name} hit, got {results}"
+    for hit in hits:
         assert hit["source_score"] is None, (
-            f"Expected source_score None for scoreless kg hit, got {hit['source_score']}"
+            f"{source_name}: expected source_score None, got {hit['source_score']!r}"
         )
-        # Now test through _format_hit (the API layer)
         formatted = taosmd_api._format_hit(hit)
         assert formatted["confidence"] is None, (
-            f"_format_hit should emit confidence: null for scoreless hit, got {formatted['confidence']}"
+            f"{source_name}: _format_hit should emit confidence null, got {formatted['confidence']!r}"
         )
 
 
