@@ -343,6 +343,304 @@ class TestCollect:
         assert "unclosed" in result.stderr.lower()
         assert not out_file.exists()
 
+    # RED tests for tsk-v7rly2 - these should FAIL before the fix
+
+    def test_bom_before_trailer(self, tmp_path):
+        """(1) UTF-8 BOM before the trailer: strip the BOM and parse correctly."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # Write fragment with UTF-8 BOM on the trailer line itself
+        content = "### Changed\n\nSchema change\n\n\ufeffMigration: one-way\n"
+        path = repo / "changelog.d" / "bom-fragment.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        _commit_all(repo, "add BOM fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Should succeed (exit 0) and parse the trailer correctly
+        assert result.returncode == 0, f"Expected exit 0, got {result.returncode}: {result.stderr}"
+        assert "one_way_migration=true" in result.stdout
+
+    def test_subdir_readme_trailer_parsed(self, tmp_path):
+        """(2) Trailer in changelog.d/<subdir>/README.md must be parsed (only top-level README.md skipped)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # Create subdir with README.md containing a trailer
+        subdir_readme = repo / "changelog.d" / "subdir" / "README.md"
+        subdir_readme.parent.mkdir(parents=True, exist_ok=True)
+        subdir_readme.write_text("# Subdir\n\nMigration: one-way\n", encoding="utf-8")
+        _commit_all(repo, "add subdir README with trailer")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Should succeed (exit 0) and parse the trailer correctly
+        assert result.returncode == 0, f"Expected exit 0, got {result.returncode}: {result.stderr}"
+        assert "one_way_migration=true" in result.stdout
+
+    def test_inline_backticks_not_fence(self, tmp_path):
+        """(3) Inline ``` span does not toggle fence state: two inline ```a``` ```b``` should not hide content between them."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # Two inline backtick spans with a trailer between them
+        # Current bug: inline ``` toggles fence, so trailer is hidden
+        content = "### Changed\n\n```a```\nMigration: one-way\n```b```\n"
+        _write_fragment(repo, "inline-fence.md", content)
+        _commit_all(repo, "add inline fence fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Should parse the trailer (exit 0, one_way_migration=true)
+        # Current bug: returns one_way_migration=false
+        assert result.returncode == 0, f"Expected exit 0, got {result.returncode}: {result.stderr}"
+        assert "one_way_migration=true" in result.stdout, f"Expected one_way_migration=true, got stdout: {result.stdout}"
+
+    @pytest.mark.parametrize("fragment_name, fragment_content", [
+        ("near-miss-gt-dash.md", "### Changed\n\n> - Migration: one-way\n"),
+        ("near-miss-numbered.md", "### Changed\n\n1. Migration: one-way\n"),
+        ("near-miss-checkbox.md", "### Changed\n\n- [ ] Migration: one-way\n"),
+        ("near-miss-h2.md", "### Changed\n\n## Migration: one-way\n"),
+        ("near-miss-fullwidth-colon.md", "### Changed\n\nMigration： one-way\n"),  # full-width colon
+        ("near-miss-zwsp.md", "### Changed\n\n\u200bMigration: one-way\n"),  # zero-width space prefix
+        ("near-miss-plural-migrations.md", "### Changed\n\nMigrations: one-way\n"),
+        ("near-miss-plural-manual.md", "### Changed\n\nManual-Steps: do something\n"),
+    ])
+    def test_near_miss_prefixes_refused(self, tmp_path, fragment_name, fragment_content):
+        """(4) Near-miss prefixes must refuse: > -, 1., - [ ], ##, full-width colon, ZWSP, plurals."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, fragment_name, fragment_content)
+        _commit_all(repo, f"add near-miss fragment {fragment_name}")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # All should refuse (exit 2)
+        assert result.returncode == 2, f"Expected exit 2 for {fragment_name}, got {result.returncode}: {result.stdout}"
+        assert fragment_name in result.stderr
+        assert not out_file.exists()
+
+    def test_non_utf8_fragment_refused(self, tmp_path):
+        """(5) Non-UTF8 fragment gives exit-2 refusal, not uncaught traceback."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # Write fragment with invalid UTF-8 (latin-1 bytes)
+        path = repo / "changelog.d" / "non-utf8.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"### Changed\n\nMigration: one-way\n\xff\xfe")  # invalid UTF-8
+        _commit_all(repo, "add non-utf8 fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Should refuse with exit 2, not crash with traceback (exit 1)
+        assert result.returncode == 2, f"Expected exit 2, got {result.returncode}: {result.stderr}"
+        assert "non-utf8.md" in result.stderr
+        assert not out_file.exists()
+
+    def test_empty_manual_step_value_reachable(self, tmp_path):
+        """(6) Empty Manual-Step value branch (lines ~143-148) must be reachable and tested."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # Manual-Step: with only whitespace after colon (empty value after stripping)
+        _write_fragment(repo, "empty-manual.md", "### Added\n\nNew feature\n\nManual-Step:   \n")
+        _commit_all(repo, "add empty manual step fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Should refuse (exit 2) with proper error message
+        assert result.returncode == 2, f"Expected exit 2, got {result.returncode}: {result.stderr}"
+        assert "empty-manual.md" in result.stderr
+        assert "Manual-Step" in result.stderr
+        assert not out_file.exists()
+
+    # Mutant-killing tests (must fail if specific mutants are applied)
+
+    def test_one_way_anchor_required(self, tmp_path):
+        """Mutant killer: dropping `one-way$` anchor must fail.
+        `Migration: one-way extra` must refuse, not parse as one-way."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, "bad-one-way.md", "### Changed\n\nMigration: one-way extra\n")
+        _commit_all(repo, "add bad one-way fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Must refuse (exit 2) - if anchor dropped, this would incorrectly parse
+        assert result.returncode == 2, f"Expected exit 2, got {result.returncode}: {result.stdout}"
+        assert "bad-one-way.md" in result.stderr
+        assert not out_file.exists()
+
+    def test_reversible_anchor_required(self, tmp_path):
+        """Mutant killer: dropping `reversible$` anchor must fail.
+        `Migration: reversible extra` must refuse.
+        `Migration: reversible, but one-way for existing users` must NOT parse as reversible."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # Test 1: extra text after reversible
+        _write_fragment(repo, "bad-reversible.md", "### Changed\n\nMigration: reversible extra\n")
+        _commit_all(repo, "add bad reversible fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        assert result.returncode == 2, f"Expected exit 2, got {result.returncode}: {result.stdout}"
+        assert "bad-reversible.md" in result.stderr
+        assert not out_file.exists()
+
+        # Test 2: "reversible, but one-way for existing users" must NOT parse as reversible
+        repo2 = tmp_path / "repo2"
+        repo2.mkdir()
+        _init_repo(repo2)
+        (repo2 / "README.md").write_text("# Test\n")
+        _commit_all(repo2, "initial commit")
+        _tag(repo2, "v0.5.0")
+
+        _write_fragment(repo2, "reversible-but-one-way.md", "### Changed\n\nMigration: reversible, but one-way for existing users\n")
+        _commit_all(repo2, "add reversible-but-one-way fragment")
+
+        out_file2 = repo2 / "release.json"
+        result2 = _run_cli(repo2, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file2)])
+
+        # Must refuse (exit 2) - if anchor dropped, this would incorrectly parse as reversible
+        assert result2.returncode == 2, f"Expected exit 2, got {result2.returncode}: {result2.stdout}"
+        assert "reversible-but-one-way.md" in result2.stderr
+        assert not out_file2.exists()
+
+    def test_git_failure_returns_2(self, tmp_path):
+        """Mutant killer: git failure handler must return 2, not 0."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, "fragment.md", "### Added\n\nNew feature\n")
+        _commit_all(repo, "add fragment")
+
+        # Corrupt the git repo to cause a git failure
+        (repo / ".git").rename(repo / ".git.bak")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Must return 2 (git failure), not 0
+        assert result.returncode == 2, f"Expected exit 2, got {result.returncode}: {result.stdout}"
+        assert "git command failed" in result.stderr.lower()
+        assert not out_file.exists()
+
+    def test_top_level_readme_still_skipped(self, tmp_path):
+        """Mutant killer: removing README filter must fail.
+        Top-level changelog.d/README.md must still be skipped."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # Add top-level README.md with a trailer - should be skipped
+        (repo / "changelog.d").mkdir(exist_ok=True)
+        (repo / "changelog.d" / "README.md").write_text("# Changelog\n\nMigration: one-way\n", encoding="utf-8")
+        # Add a real fragment
+        _write_fragment(repo, "real-fragment.md", "### Added\n\nReal feature\n")
+        _commit_all(repo, "add README and real fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Should succeed but only process real-fragment.md (README.md skipped)
+        assert result.returncode == 0, f"Expected exit 0, got {result.returncode}: {result.stderr}"
+        assert "one_way_migration=false" in result.stdout
+        
+        # Verify fragments via collect()
+        result_collect = _run_collect(repo, "v0.5.0")
+        assert result_collect["fragments"] == ["changelog.d/real-fragment.md"]
+        assert "changelog.d/README.md" not in result_collect["fragments"]
+
+    def test_emphasis_stripping_required(self, tmp_path):
+        """Mutant killer: removing bold/inline-code stripping must fail.
+        `**Migration: one-way**` and `` `Migration: one-way` `` must still parse."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # Bold
+        _write_fragment(repo, "bold.md", "### Changed\n\n**Migration: one-way**\n")
+        _commit_all(repo, "add bold fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        assert result.returncode == 0, f"Expected exit 0, got {result.returncode}: {result.stderr}"
+        assert "one_way_migration=true" in result.stdout
+
+        # Inline code
+        repo2 = tmp_path / "repo2"
+        repo2.mkdir()
+        _init_repo(repo2)
+        (repo2 / "README.md").write_text("# Test\n")
+        _commit_all(repo2, "initial commit")
+        _tag(repo2, "v0.5.0")
+
+        _write_fragment(repo2, "inline.md", "### Changed\n\n`Migration: one-way`\n")
+        _commit_all(repo2, "add inline fragment")
+
+        out_file2 = repo2 / "release.json"
+        result2 = _run_cli(repo2, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file2)])
+
+        assert result2.returncode == 0, f"Expected exit 0, got {result2.returncode}: {result2.stderr}"
+        assert "one_way_migration=true" in result2.stdout
+
     def test_output_json_keys_order_and_newline(self, tmp_path):
         """(g) the written file is valid JSON whose keys appear in the
         specified order and which ends in exactly one newline."""
