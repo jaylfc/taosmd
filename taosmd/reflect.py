@@ -169,7 +169,8 @@ class InsightStore:
 
         # Gate: named agents with reflect disabled return early.
         # Anonymous callers (agent_name is "") always run.
-        if agent_name and not is_task_enabled(agent_name, "reflect"):
+        if agent_name and not is_task_enabled(agent_name, "reflect",
+                                              data_dir=data_dir):
             logger.debug(
                 "InsightStore.reflect: reflect disabled for agent=%r, skipping",
                 agent_name,

@@ -278,7 +278,7 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
     stores = await _ensure_stores(data_dir)
 
     from taosmd.agents import ensure_agent, update_stats
-    ensure_agent(agent)
+    ensure_agent(agent, data_dir=data_dir)
 
     archived = 0
     vector_failures = 0
@@ -324,7 +324,7 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
                 await stores["claims"].add_claim(
                     c["text"], c["archive_span_ids"], c["source_extractor"])
 
-    update_stats(agent, last_ingest_at=int(time.time()))
+    update_stats(agent, last_ingest_at=int(time.time()), data_dir=data_dir)
     result = {"archived": archived, "agent": agent, "project": project, "data_dir": stores["data_dir"]}
     if vector_failures:
         # Archive-first zero-loss: the archive writes stand and ingest does
@@ -399,7 +399,7 @@ async def ingest_batch(
     stores = await _ensure_stores(data_dir)
 
     from taosmd.agents import ensure_agent, update_stats
-    ensure_agent(agent)
+    ensure_agent(agent, data_dir=data_dir)
 
     seen = stores["vector"].existing_source_ids(agent=agent)
     ingested = 0
@@ -464,7 +464,7 @@ async def ingest_batch(
         ingested += 1
 
     if ingested:
-        update_stats(agent, last_ingest_at=int(time.time()))
+        update_stats(agent, last_ingest_at=int(time.time()), data_dir=data_dir)
     result = {
         "ingested": ingested,
         "skipped": skipped,
@@ -874,6 +874,7 @@ async def search(
         ),
         project=project,
         search_agents=search_agents,
+        data_dir=data_dir,
     )
     hits = [_format_hit(hit) for hit in raw]
     if degraded and hits:

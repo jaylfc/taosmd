@@ -45,6 +45,7 @@ class CatalogPipeline:
         crystals_db: str | Path,
         kg_db: str | Path,
         llm_url: str = "http://localhost:11434",
+        data_dir: str | Path | None = None,
     ):
         self._archive_dir = Path(archive_dir)
         self._sessions_dir = Path(sessions_dir)
@@ -52,6 +53,7 @@ class CatalogPipeline:
         self._crystals_db = Path(crystals_db)
         self._kg_db = Path(kg_db)
         self._llm_url = llm_url
+        self._data_dir = data_dir
 
         self.catalog = SessionCatalog(
             db_path=self._catalog_db,
@@ -137,6 +139,7 @@ class CatalogPipeline:
         force: bool = False,
         skip_crystallize: bool = False,
         agent_name: str = "",
+        data_dir: str | Path | None = None,
     ) -> dict[str, Any]:
         """Run all 3 stages for one day.
 
@@ -148,6 +151,7 @@ class CatalogPipeline:
         Returns:
             dict with keys date, split, enrich, crystallize, total_time
         """
+        data_dir = data_dir or self._data_dir
         t0 = time.time()
         result: dict[str, Any] = {
             "date": date,
@@ -188,7 +192,7 @@ class CatalogPipeline:
                 _owner = session.get("agent_name") or agent_name
                 enabled = (not _owner) or run_if_enabled(
                     _owner, "intake_classification",
-                    lambda: True, fallback=False
+                    lambda: True, fallback=False, data_dir=data_dir
                 )
                 # Anonymous callers (agent_name is None or "") always run.
                 if enabled:
@@ -213,7 +217,7 @@ class CatalogPipeline:
             if tier >= 2 and model:
                 _enrich_enabled = (not _owner) or run_if_enabled(
                     _owner, "catalog_enrichment",
-                    lambda: True, fallback=False
+                    lambda: True, fallback=False, data_dir=data_dir
                 )
                 # Anonymous callers (agent_name is None or "") always run.
                 if _enrich_enabled:
@@ -249,7 +253,8 @@ class CatalogPipeline:
         sessions_fresh_all = await self.catalog.lookup_date(date)
         for session in sessions_fresh_all:
             if run_if_enabled(session.get("agent_name") or agent_name,
-                              "crystallise", lambda: True, fallback=False):
+                              "crystallise", lambda: True, fallback=False,
+                              data_dir=data_dir):
                 _any_crystallize_enabled = True
                 break
         if tier >= 2 and not skip_crystallize and model and _any_crystallize_enabled:
@@ -265,7 +270,8 @@ class CatalogPipeline:
             for session in sessions_fresh:
                 sid = session["id"]
                 if not run_if_enabled(session.get("agent_name") or agent_name,
-                                      "crystallise", lambda: True, fallback=False):
+                                      "crystallise", lambda: True, fallback=False,
+                                      data_dir=data_dir):
                     continue
                 try:
                     ctx = await self.catalog.get_session_context(sid, agent_name=agent_name or None)
