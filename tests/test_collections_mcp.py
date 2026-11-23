@@ -4,6 +4,7 @@ SDK is absent, matching tests/test_mcp_server.py."""
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -56,11 +57,30 @@ def env(tmp_path, monkeypatch):
 
 async def _call(mcp, name: str, args: dict):
     result = await mcp.call_tool(name, args)
+    # mcp 2.x: CallToolResult with .content[0].text
+    if hasattr(result, "content") and result.content:
+        data = json.loads(result.content[0].text)
+        # mcp 2.x may wrap list results in structured_content["result"]
+        if hasattr(result, "structured_content") and result.structured_content is not None:
+            if isinstance(result.structured_content, dict):
+                result_data = result.structured_content.get("result")
+                if isinstance(result_data, list):
+                    return result_data
+        return data
+    # mcp 2.x: CallToolResult with .structured_content
+    if hasattr(result, "structured_content") and result.structured_content is not None:
+        if isinstance(result.structured_content, dict):
+            return result.structured_content.get("result", result.structured_content)
+        return json.loads(str(result.structured_content))
+    # mcp 1.x: tuple (content, {"result": ...})
     if isinstance(result, tuple):
         structured = result[1]
         if isinstance(structured, dict) and "result" in structured:
             return structured["result"]
-    import json
+        return structured
+    # mcp 1.x: list/other
+    if not result:
+        return []
     return json.loads(result[0].text)
 
 

@@ -53,13 +53,22 @@ class MissingMCPDependencyError(RuntimeError):
         )
 
 
-def _require_fastmcp():
-    """Import :class:`FastMCP` lazily, with a clear error if mcp is absent."""
+def _require_mcp():
+    """Import the MCP server class lazily, supporting mcp 1.x and 2.x.
+
+    In mcp 2.x, FastMCP was renamed to MCPServer (imported from
+    ``mcp.server.mcpserver``).  This function tries the mcp 2.x import first
+    and falls back to ``mcp.server.fastmcp.FastMCP`` for mcp 1.x.
+    """
     try:
-        from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
-    except ImportError as exc:  # pragma: no cover - exercised when mcp absent
-        raise MissingMCPDependencyError() from exc
-    return FastMCP
+        from mcp.server.mcpserver import MCPServer  # noqa: PLC0415
+        return MCPServer
+    except ImportError:
+        try:
+            from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
+            return FastMCP
+        except ImportError as exc:  # pragma: no cover - exercised when mcp absent
+            raise MissingMCPDependencyError() from exc
 
 
 def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
@@ -75,7 +84,7 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
     Raises :class:`MissingMCPDependencyError` if the ``mcp`` SDK is not
     installed.
     """
-    FastMCP = _require_fastmcp()
+    FastMCP = _require_mcp()
 
     loop = runner if runner is not None else _ServiceLoop()
     mcp = FastMCP("taosmd")

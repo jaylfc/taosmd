@@ -68,17 +68,34 @@ def server(tmp_path, monkeypatch):
 async def _call(mcp, name: str, args: dict):
     """Invoke a registered tool by name and return its decoded JSON result.
 
-    FastMCP returns either a list of content blocks (for dict results) or a
-    ``(content, {"result": ...})`` tuple (for list results) depending on the
-    return type. Prefer the structured tuple payload when present (clean list);
-    otherwise decode the JSON out of the single text content block (dict).
+    FastMCP (mcp 1.x) returns either a list of content blocks or a
+    ``(content, {"result": ...})`` tuple.  mcp 2.x returns a
+    ``CallToolResult`` with ``.content[0].text`` or
+    ``.structured_content`` holding the JSON string.
     """
     result = await mcp.call_tool(name, args)
+    # mcp 2.x: CallToolResult with .content[0].text
+    if hasattr(result, "content") and result.content:
+        data = json.loads(result.content[0].text)
+        # mcp 2.x may wrap list results in structured_content["result"]
+        if hasattr(result, "structured_content") and result.structured_content is not None:
+            if isinstance(result.structured_content, dict):
+                result_data = result.structured_content.get("result")
+                if isinstance(result_data, list):
+                    return result_data
+        return data
+    # mcp 2.x: CallToolResult with .structured_content
+    if hasattr(result, "structured_content") and result.structured_content is not None:
+        if isinstance(result.structured_content, dict):
+            return result.structured_content.get("result", result.structured_content)
+        return json.loads(str(result.structured_content))
+    # mcp 1.x: tuple (content, {"result": ...})
     if isinstance(result, tuple):
         structured = result[1]
         if isinstance(structured, dict) and "result" in structured:
             return structured["result"]
         return structured
+    # mcp 1.x: list of content blocks
     if not result:
         return []
     return json.loads(result[0].text)
