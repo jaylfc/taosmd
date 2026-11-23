@@ -11,6 +11,7 @@ import importlib.util
 import re
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -136,7 +137,62 @@ class TestCliRefusals:
 
 
 class TestStamp:
-    def test_stamp_changes_only_project_version(self, tmp_path):
+    @pytest.mark.parametrize("pyproject_content,description", [
+        (
+            '[project]\nname = "taosmd"\nversion = "0.4.1"\n\n[tool.x]\nversion = "9.9.9"\n',
+            "master layout: stray version in [tool.x] after [project]",
+        ),
+        (
+            'version = "9.9.9"\n\n[project]\nname = "taosmd"\nversion = "0.4.1"\n',
+            "#734 layout: stray version before [project]",
+        ),
+    ])
+    def test_stamp_changes_only_project_version(self, tmp_path, pyproject_content, description):
+        repo = _init_repo(tmp_path)
+        _seed(repo)
+        _git(repo, "tag", "v0.5.0")
+        _write(repo, "f.txt", "x\n")
+        _git(repo, "add", "f.txt")
+        _git(repo, "commit", "-m", "release commit")
+        head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        _write(repo, "pyproject.toml", pyproject_content)
+        result = _run_cli(repo, "--stamp")
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "0.5.1"
+        pyproject = (repo / "pyproject.toml").read_text(encoding="utf-8")
+        if "tool.x" in pyproject_content:
+            # master layout: stray version in [tool.x] should be untouched
+            assert pyproject == (
+                '[project]\nname = "taosmd"\nversion = "0.5.1"\n\n[tool.x]\nversion = "9.9.9"\n'
+            ), pyproject
+        else:
+            # #734 layout: stray version before [project] should be untouched
+            assert pyproject == (
+                'version = "9.9.9"\n\n[project]\nname = "taosmd"\nversion = "0.5.1"\n'
+            ), pyproject
+        build_info = (repo / "taosmd" / "_build_info.py").read_text(
+            encoding="utf-8"
+        )
+        assert f"COMMIT = '{head}'" in build_info, build_info
+        match = re.search(r"BUILT_AT = '([^']+)'", build_info)
+        assert match, build_info
+        built_at = match.group(1)
+        assert built_at.endswith("Z"), built_at
+        parsed = _dt.datetime.fromisoformat(built_at.replace("Z", "+00:00"))
+        assert parsed.tzinfo == _dt.timezone.utc, built_at
+
+
+# ----------------------------------------------------------------------
+# (d2) #734 fix: --stamp works from a subdirectory of the repo
+# ----------------------------------------------------------------------
+
+
+class TestStampSubdirectory:
+    def test_stamp_from_subdirectory(self, tmp_path):
+        """Running the CLI from a subdirectory of the repo works correctly.
+        This guards the #734 fix for the release_version subdirectory fix
+        in scripts/release_version.py (_resolve_repo_root uses git toplevel).
+        """
         repo = _init_repo(tmp_path)
         _seed(repo)
         _git(repo, "tag", "v0.5.0")
@@ -147,14 +203,21 @@ class TestStamp:
         _write(
             repo,
             "pyproject.toml",
-            'version = "9.9.9"\n\n[project]\nname = "taosmd"\nversion = "0.4.1"\n',
+            '[project]\nname = "taosmd"\nversion = "0.4.1"\n',
         )
-        result = _run_cli(repo, "--stamp")
+        # Create a subdirectory and run from there
+        subdir = repo / "subdir"
+        subdir.mkdir()
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--stamp", "--repo", str(subdir)],
+            capture_output=True,
+            text=True,
+        )
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "0.5.1"
         pyproject = (repo / "pyproject.toml").read_text(encoding="utf-8")
         assert pyproject == (
-            'version = "9.9.9"\n\n[project]\nname = "taosmd"\nversion = "0.5.1"\n'
+            '[project]\nname = "taosmd"\nversion = "0.5.1"\n'
         ), pyproject
         build_info = (repo / "taosmd" / "_build_info.py").read_text(
             encoding="utf-8"
@@ -166,6 +229,19 @@ class TestStamp:
         assert built_at.endswith("Z"), built_at
         parsed = _dt.datetime.fromisoformat(built_at.replace("Z", "+00:00"))
         assert parsed.tzinfo == _dt.timezone.utc, built_at
+
+    def test_compute_version_from_subdirectory(self, tmp_path):
+        """compute_version() works when called with a subdirectory path."""
+        repo = _init_repo(tmp_path)
+        _seed(repo)
+        _git(repo, "tag", "v0.5.0")
+        _write(repo, "f.txt", "x\n")
+        _git(repo, "add", "f.txt")
+        _git(repo, "commit", "-m", "release commit")
+        subdir = repo / "subdir"
+        subdir.mkdir()
+        version = rv.compute_version(subdir)
+        assert version == "0.5.1"
 
 
 # ----------------------------------------------------------------------
