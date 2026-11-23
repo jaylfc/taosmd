@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import sys
+import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,15 +43,15 @@ def _get_commit_sha(repo_dir: Path, rev: str) -> str:
 
 
 def _get_added_fragments(repo_dir: Path, previous_ref: str | None, rev: str) -> list[Path]:
-    """Get list of changelog fragments added between previous_ref and rev."""
+    """Get list of changelog fragments added or modified between previous_ref and rev."""
     if previous_ref is None:
         # First release: list all fragments at rev
         output = _run_git(["ls-tree", "-r", "--name-only", rev, "--", "changelog.d/"], repo_dir)
         fragments = [Path(line) for line in output.strip().splitlines() if line]
     else:
-        # Diff between previous_ref and rev, only added files (--diff-filter=A)
+        # Diff between previous_ref and rev, added or modified files (--diff-filter=AM)
         output = _run_git(
-            ["diff", "--name-only", "--diff-filter=A", previous_ref, rev, "--", "changelog.d/"],
+            ["diff", "--name-only", "--diff-filter=AM", previous_ref, rev, "--", "changelog.d/"],
             repo_dir,
         )
         fragments = [Path(line) for line in output.strip().splitlines() if line]
@@ -67,13 +68,24 @@ def _read_fragment_at_rev(repo_dir: Path, fragment: Path, rev: str) -> str:
     """Read fragment content at a specific revision."""
     try:
         return _run_git(["show", f"{rev}:{fragment}"], repo_dir)
-    except subprocess.CalledProcessError as e:
-        # Re-raise to be caught by main()
-        raise
     except UnicodeDecodeError as e:
         raise ReleaseMetaError(
             f"{fragment}: - non-UTF-8 content (invalid byte sequence)"
         ) from e
+
+
+def _normalize_line(line: str) -> str:
+    """Normalize a line for trailer detection.
+
+    Applies NFKC normalization, removes Unicode format (Cf) characters and soft hyphens,
+    then strips whitespace.
+    """
+    normalized = unicodedata.normalize('NFKC', line)
+    cleaned = ''.join(
+        ch for ch in normalized
+        if unicodedata.category(ch) != 'Cf' and ch != '\u00ad'
+    )
+    return cleaned.strip()
 
 
 def _strip_trailer_markers(line: str) -> str:
@@ -104,47 +116,50 @@ def _strip_trailer_markers(line: str) -> str:
 
 
 def _is_real_fence(line: str) -> bool:
-    """Check if a line is a real fence opener/closer (not inline code)."""
-    stripped = line.lstrip()
-    # Real fence: starts with ``` followed by whitespace, info string, or end of line
+    """Check if a line is a real fence opener/closer (not inline code).
+
+    A fence line must start with ``` or ~~~ after 0-3 spaces of indentation.
+    4 or more spaces of indentation means it's a code block continuation, not a fence.
+    Any info string is allowed after the fence markers.
+    """
+    # Check indentation: up to 3 spaces
+    indent = 0
+    for ch in line:
+        if ch == ' ':
+            indent += 1
+            if indent > 3:
+                return False
+        else:
+            break
+
+    stripped = line[indent:]
+    # Real fence: starts with ``` or ~~~ followed by whitespace, info string, or end of line
     # Not inline: ```text``` or ```text` (backticks appear again on same line)
-    if not stripped.startswith("```"):
+    if not (stripped.startswith("```") or stripped.startswith("~~~")):
         return False
     rest = stripped[3:]
-    # If there are more backticks on the line, it's inline code
-    if "```" in rest:
+    # If there are more fence chars on the line, it's inline code
+    if "```" in rest or "~~~" in rest:
         return False
-    # Empty, whitespace, or info string (alphanum/-/_ followed by whitespace or end)
-    return rest == "" or rest[0].isspace() or bool(re.match(r'^[\w-]+(?:\s|$)', rest))
+    # Empty, whitespace, or any info string (non-whitespace followed by whitespace or end)
+    return rest == "" or rest[0].isspace() or bool(re.match(r'^\S+(?:\s|$)', rest))
 
 
 def _looks_like_trailer(line: str) -> bool:
-    """Check if a line looks like a trailer candidate (broad detection)."""
-    s = line.strip()
-    # Strip UTF-8 BOM and zero-width spaces for detection
-    s = s.lstrip('\ufeff\u200b')
-    # Remove markdown headings
-    s = re.sub(r'^#+\s*', '', s)
-    # Remove blockquotes
-    s = re.sub(r'^>\s*', '', s)
-    # Remove numbered lists
-    s = re.sub(r'^\d+\.\s*', '', s)
-    # Remove checkboxes
-    s = re.sub(r'^-\s*\[\s*[x ]?\s*\]\s*', '', s)
-    # Remove multiple list markers
-    while s.startswith(('- ', '* ', '+ ', '> ')):
-        s = s[2:]
-    # Remove single leading list marker char (repeat)
-    while s and s[0] in '-*+>':
-        s = s[1:].lstrip()
-    # Strip emphasis for detection
-    s = re.sub(r'\*\*([^*]*)\*\*', r'\1', s)
-    s = re.sub(r'(?<!\*)\*([^*]*)\*(?!\*)', r'\1', s)
-    s = re.sub(r'_+([^_]*)_+', r'\1', s)
-    s = re.sub(r'`([^`]*)`', r'\1', s)
-    s = s.strip()
-    # Check for trailer key (including plurals and full-width colon)
-    return bool(re.match(r'^(migrations?|manual[-_ ]?steps?)\s*[:：]', s, re.IGNORECASE))
+    """Check if a line looks like a trailer candidate (broad detection).
+
+    Uses normalized, case-folded text to detect any mention of migration or manual steps.
+    """
+    normalized = _normalize_line(line)
+    folded = normalized.casefold()
+    # Check for migration mention
+    if 'migration' in folded:
+        return True
+    # Check for manual steps mention (manual step, manual steps, manual-step, manual_step, etc.)
+    # \W matches non-word chars; underscore is a word char, so also check for underscore explicitly
+    if re.search(r'manual[\W_]*steps?', folded):
+        return True
+    return False
 
 
 def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInfo], list[str]]:
@@ -153,17 +168,12 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
     Returns:
         Tuple of (migrations, manual_steps).
 
-    A line is a trailer candidate when, after stripping leading whitespace,
-    list markers (-, *, +, >), and emphasis characters (*, _, backticks),
-    it matches case-insensitively the pattern ^(migration|manual[-_ ]?step):.
-    If a candidate is EXACTLY a canonical trailer line
-    (Migration: one-way, Migration: reversible, Manual-Step: <non-empty text>),
-    it is used. Any other candidate that matches the pattern but is not
-    canonical raises ReleaseMetaError naming the file, line number and the
-    canonical form to use (CLI exit 2, no file written).
-    Prose that merely mentions a migration (no key: shape at the line start
-    after stripping) is still ignored.
-    Lines inside fenced code blocks (between ``` lines) are ignored entirely,
+    A line is a trailer candidate when its normalized, case-folded text contains
+    "migration" or matches "manual[\\W_]*steps?". If a candidate is EXACTLY a canonical
+    trailer line (Migration: one-way, Migration: reversible, Manual-Step: <non-empty text>),
+    after stripping markers, it is used. Any other candidate raises ReleaseMetaError
+    naming the file, line number and the canonical form to use (CLI exit 2, no file written).
+    Lines inside fenced code blocks (between ``` or ~~~ lines) are ignored entirely,
     neither used nor refused.
     """
     migrations: list[MigrationInfo] = []
@@ -197,7 +207,6 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
             value = stripped[len("Manual-Step:"):].strip()
             if value:
                 manual_steps.append(value)
-            # No else branch - regex ensures non-empty value after stripping
         else:
             # Candidate matches the pattern but is not canonical - raise loud refusal
             canonical = "Migration: one-way or Migration: reversible, Manual-Step: <non-empty text>"
@@ -289,9 +298,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except subprocess.CalledProcessError as e:
         print(f"git command failed: {e}", file=sys.stderr)
-        return 2
-    except UnicodeDecodeError as e:
-        print(f"non-UTF-8 content: {e}", file=sys.stderr)
         return 2
 
 

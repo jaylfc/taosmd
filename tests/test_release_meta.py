@@ -188,8 +188,8 @@ class TestCollect:
         assert "Manual-Step" in result.stderr
         assert not out_file.exists()
 
-    def test_modified_fragment_not_counted(self, tmp_path):
-        """(e) a fragment MODIFIED (not added) after the tag is not counted;
+    def test_modified_fragment_counted(self, tmp_path):
+        """(e) a fragment MODIFIED after the tag IS counted (--diff-filter=AM);
         changelog.d/README.md is ignored."""
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -201,18 +201,26 @@ class TestCollect:
         _commit_all(repo, "initial commit with existing fragment and readme")
         _tag(repo, "v0.5.0")
 
-        # MODIFY the existing fragment (not add new)
-        _write_fragment(repo, "existing.md", "### Fixed\n\nOld fix updated\n")
+        # MODIFY the existing fragment to add a trailer
+        _write_fragment(repo, "existing.md", "### Fixed\n\nOld fix updated\n\nMigration: one-way\n")
         # Add a NEW fragment
         _write_fragment(repo, "new-fragment.md", "### Added\n\nNew feature\n")
         _commit_all(repo, "modify existing and add new")
 
         result = _run_collect(repo, "v0.5.0")
 
-        # Only the newly added fragment should be listed
-        assert result["fragments"] == ["changelog.d/new-fragment.md"]
+        # Both modified and newly added fragments should be listed
+        assert sorted(result["fragments"]) == sorted([
+            "changelog.d/existing.md",
+            "changelog.d/new-fragment.md",
+        ])
         # README.md must never be listed
         assert "changelog.d/README.md" not in result["fragments"]
+        # The trailer in the modified fragment should be parsed
+        assert result["one_way_migration"] is True
+        assert len(result["migrations"]) == 1
+        assert result["migrations"][0]["fragment"] == "changelog.d/existing.md"
+        assert result["migrations"][0]["kind"] == "one-way"
 
     def test_no_previous_ref_first_release(self, tmp_path):
         """(f) no --previous-ref -> every fragment at HEAD is used and
@@ -234,9 +242,9 @@ class TestCollect:
             "changelog.d/fragment-2.md",
         ])
 
-    def test_prose_ignored(self, tmp_path):
-        """(c) a fragment whose prose says 'this is not a one-way migration'
-        is ignored (both flags false, exit 0)."""
+    def test_prose_refused(self, tmp_path):
+        """Prose mentioning migration is no longer ignored; it must refuse (exit 2)
+        because it matches the pattern but is not canonical."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
@@ -246,10 +254,13 @@ class TestCollect:
         _write_fragment(repo, "prose.md", "### Changed\n\nThis is not a one-way migration\n")
         _commit_all(repo, "add prose fragment")
 
-        result = _run_collect(repo, "v0.5.0")
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
 
-        assert result["one_way_migration"] is False
-        assert result["manual_step"] is False
+        # Must refuse (exit 2) - prose mentioning migration is ambiguous
+        assert result.returncode == 2, f"Expected exit 2, got {result.returncode}: {result.stdout}"
+        assert "prose.md" in result.stderr
+        assert not out_file.exists()
 
     def test_fenced_code_block_ignored(self, tmp_path):
         """(d) Migration: one-way inside a fenced code block is ignored
@@ -488,6 +499,70 @@ class TestCollect:
         assert "Manual-Step" in result.stderr
         assert not out_file.exists()
 
+    # Parametrised test for all variants from the WHY section (tsk-dtb6f6)
+    @pytest.mark.parametrize("fragment_name, fragment_content, should_parse", [
+        # Variants that should REFUSE (exit 2) - mention migration/manual but not canonical
+        ("numbered_list.md", "### Changed\n\n1) Migration: one-way\n", False),
+        ("blockquote_heading.md", "### Changed\n\n> ## Migration: one-way\n", False),
+        ("zwsp_prefix.md", "### Changed\n\n\u200bMigration: one-way\n", False),  # U+200B
+        ("word_joiner_prefix.md", "### Changed\n\n\u2060Migration: one-way\n", False),  # U+2060
+        ("zwnj_prefix.md", "### Changed\n\n\u200cMigration: one-way\n", False),  # U+200C
+        ("soft_hyphen_prefix.md", "### Changed\n\n\u00adMigration: one-way\n", False),  # U+00AD
+        ("dash_numbered.md", "### Changed\n\n- 1. Migration: one-way\n", False),
+        ("lettered_list.md", "### Changed\n\na. Migration: one-way\n", False),
+        ("table_row.md", "### Changed\n\n| Migration: one-way |\n", False),
+        ("html_comment.md", "### Changed\n\n<!-- Migration: one-way -->\n", False),
+        ("manual_step_space.md", "### Changed\n\nManual Step: do something\n", False),
+        ("manual_step_underscore.md", "### Changed\n\nManual_Step: do something\n", False),
+        ("manual_step_nospace.md", "### Changed\n\nManualStep: do something\n", False),
+        # Variants that should PARSE (exit 0) - canonical forms
+        ("canonical_one_way.md", "### Changed\n\nMigration: one-way\n", True),
+        ("canonical_reversible.md", "### Changed\n\nMigration: reversible\n", True),
+        ("canonical_manual_step.md", "### Changed\n\nManual-Step: do something\n", True),
+        # Trailers INSIDE valid fences should be IGNORED (exit 0, no migration)
+        ("fence_cpp_inside.md", "### Changed\n\n```c++\nMigration: one-way\n```\n", "ignore"),
+        ("fence_tilde_inside.md", "### Changed\n\n~~~cpp\nMigration: one-way\n~~~\n", "ignore"),
+        # 4-space-indented fence is NOT a fence, trailer exposed and canonical -> PARSE
+        ("fence_4space_indent.md", "### Changed\n\n    ```\nMigration: one-way\n    ```\n", True),
+        # Trailer BETWEEN two valid fences -> PARSE (canonical, outside fence)
+        ("fence_between_blocks.md", "### Changed\n\n```c++\n```\nMigration: one-way\n```python\n```\n", True),
+    ])
+    def test_allowlist_variants(self, tmp_path, fragment_name, fragment_content, should_parse):
+        """Parametrised test for all variants: canonical forms parse, non-canonical refuse,
+        trailers inside valid fences are ignored."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, fragment_name, fragment_content)
+        _commit_all(repo, f"add fragment {fragment_name}")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        if should_parse == "ignore":
+            # Trailer inside valid fence: exit 0, no migration detected
+            assert result.returncode == 0, f"Expected exit 0 for {fragment_name}, got {result.returncode}: {result.stderr}"
+            assert "one_way_migration=false" in result.stdout
+            assert "manual_step=false" in result.stdout
+        elif should_parse:
+            # Canonical form: exit 0, migration detected
+            assert result.returncode == 0, f"Expected exit 0 for {fragment_name}, got {result.returncode}: {result.stderr}"
+            if "one-way" in fragment_content:
+                assert "one_way_migration=true" in result.stdout
+            elif "reversible" in fragment_content:
+                assert "one_way_migration=false" in result.stdout
+            elif "Manual-Step" in fragment_content:
+                assert "manual_step=true" in result.stdout
+        else:
+            # Non-canonical mention: exit 2
+            assert result.returncode == 2, f"Expected exit 2 for {fragment_name}, got {result.returncode}: {result.stdout}"
+            assert fragment_name in result.stderr
+            assert not out_file.exists()
+
     # Mutant-killing tests (must fail if specific mutants are applied)
 
     def test_one_way_anchor_required(self, tmp_path):
@@ -687,6 +762,87 @@ class TestCollect:
         # CLI prints the flags
         assert "one_way_migration=false" in result.stdout
         assert "manual_step=false" in result.stdout
+
+    # Fence opener mutant-killing tests (L115, L118 cases)
+    def test_fence_a_space_not_a_fence(self, tmp_path):
+        """Mutant killer: ```a ``` (inline code on same line) must NOT be treated as a fence.
+        Trailer after it should be exposed and parsed if canonical."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # ```a ``` is inline code (backticks appear again on same line), not a fence
+        # Trailer after it is OUTSIDE any fence
+        _write_fragment(repo, "fence-a-space.md", "### Changed\n\n```a ```\nMigration: one-way\n")
+        _commit_all(repo, "add fence-a-space fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Should parse the canonical trailer (exit 0, one_way_migration=true)
+        # Note: file ends without closing fence, but ```a ``` was not a fence opener
+        assert result.returncode == 0, f"Expected exit 0, got {result.returncode}: {result.stderr}"
+        assert "one_way_migration=true" in result.stdout
+
+    def test_fence_js_is_a_fence(self, tmp_path):
+        """Mutant killer: ``` js (info string) MUST be treated as a fence.
+        Trailer inside it must be ignored."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        # ``` js is a valid fence opener with info string "js"
+        _write_fragment(repo, "fence-js.md", "### Changed\n\n``` js\nMigration: one-way\n```\n")
+        _commit_all(repo, "add fence-js fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        # Trailer inside fence must be ignored (exit 0, no migration)
+        assert result.returncode == 0, f"Expected exit 0, got {result.returncode}: {result.stderr}"
+        assert "one_way_migration=false" in result.stdout
+
+    def test_tilde_fence_works(self, tmp_path):
+        """Mutant killer: ~~~ fences must work the same as ``` fences."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, "tilde-fence.md", "### Changed\n\n~~~\nMigration: one-way\n~~~\n")
+        _commit_all(repo, "add tilde fence fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        assert result.returncode == 0
+        assert "one_way_migration=false" in result.stdout
+
+    def test_tilde_fence_with_info_string(self, tmp_path):
+        """Mutant killer: ~~~cpp fences must work."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        _write_fragment(repo, "tilde-fence-info.md", "### Changed\n\n~~~cpp\nMigration: one-way\n~~~\n")
+        _commit_all(repo, "add tilde fence with info fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        assert result.returncode == 0
+        assert "one_way_migration=false" in result.stdout
 
 
 class TestCLI:
