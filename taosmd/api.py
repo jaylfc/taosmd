@@ -310,110 +310,6 @@ async def _ensure_stores(data_dir=None) -> dict:
         _stores_cache[resolved] = stores
         return stores
 
-    async with _stores_lock:
-        cached = _stores_cache.get(resolved)
-        if cached is not None:
-            return cached
-
-        from taosmd.archive import ArchiveStore
-        from taosmd.knowledge_graph import TemporalKnowledgeGraph
-        from taosmd.vector_memory import VectorMemory
-
-        path = Path(resolved)
-        path.mkdir(parents=True, exist_ok=True)
-        config = _load_config(resolved)
-        embed_mode = config.get("vector_memory", {}).get("embed_mode", "onnx")
-        embed_model = config.get("vector_memory", {}).get("embed_model", "minilm-onnx")
-        onnx_path = _resolve_onnx_path(resolved, embed_model) if embed_mode == "onnx" else ""
-        if embed_mode == "onnx" and onnx_path is None:
-            logger.warning(
-                "taosmd: ONNX model not found under %s/models or $TAOSMD_DIR; "
-                "falling back to qmd embed mode (set TAOSMD_ONNX_PATH or run setup.sh).",
-                resolved,
-            )
-            embed_mode = "qmd"
-
-        # Archive first: must succeed (raw-first law)
-        archive = ArchiveStore(
-            archive_dir=str(path / "archive"),
-            index_path=str(path / "archive-index.db"),
-        )
-        await archive.init()
-
-        # Vector store: independent try/except
-        vm_cfg = config.get("vector_memory", {})
-        vmem = None
-        now = time.time()
-        last_vec_attempt = _last_attempt.get(resolved, {}).get("vector", 0)
-        if now - last_vec_attempt >= _RETRY_COOLDOWN:
-            try:
-                vmem = VectorMemory(
-                    db_path=str(path / "vector-memory.db"),
-                    embed_mode=embed_mode,
-                    onnx_path=onnx_path or "",
-                    late_interaction=bool(vm_cfg.get("late_interaction", False)),
-                    colbert_model=vm_cfg.get("colbert_model", "") or "",
-                )
-                await vmem.init()
-                # Success: clear any recorded error
-                if resolved in _store_errors and "vector" in _store_errors[resolved]:
-                    del _store_errors[resolved]["vector"]
-            except Exception as e:
-                logger.error(
-                    "taosmd: failed to open vector store at %s: %s: %s",
-                    resolved, type(e).__name__, e
-                )
-                _store_errors.setdefault(resolved, {})["vector"] = f"{type(e).__name__}: {e}"
-                _last_attempt.setdefault(resolved, {})["vector"] = now
-                vmem = None
-        else:
-            # Within cooldown, keep recorded error (do not overwrite)
-            pass
-
-        # KG store: independent try/except
-        kg = None
-        last_kg_attempt = _last_attempt.get(resolved, {}).get("kg", 0)
-        if now - last_kg_attempt >= _RETRY_COOLDOWN:
-            try:
-                kg = TemporalKnowledgeGraph(db_path=str(path / "knowledge-graph.db"))
-                await kg.init()
-                # Success: clear any recorded error
-                if resolved in _store_errors and "kg" in _store_errors[resolved]:
-                    del _store_errors[resolved]["kg"]
-            except Exception as e:
-                logger.error(
-                    "taosmd: failed to open kg store at %s: %s: %s",
-                    resolved, type(e).__name__, e
-                )
-                _store_errors.setdefault(resolved, {})["kg"] = f"{type(e).__name__}: {e}"
-                _last_attempt.setdefault(resolved, {})["kg"] = now
-                kg = None
-        else:
-            # Within cooldown, keep recorded error (do not overwrite)
-            pass
-
-        from taosmd.claims.store import ClaimStore  # noqa: PLC0415
-        claims = ClaimStore(db_path=str(path / "claims.db"))
-        await claims.init()
-        from taosmd.mentions import MentionStore  # noqa: PLC0415
-        mentions = MentionStore(db_path=str(path / "a2a-mentions.db"))
-        await mentions.init()
-        from taosmd.receipts import ReceiptStore  # noqa: PLC0415
-        receipts = ReceiptStore(db_path=str(path / "a2a-receipts.db"))
-        await receipts.init()
-
-        stores = {
-            "archive": archive,
-            "vector": vmem,
-            "kg": kg,
-            "claims": claims,
-            "mentions": mentions,
-            "receipts": receipts,
-            "data_dir": str(path),
-        }
-        _stores_cache[resolved] = stores
-        return stores
-
 
 def _normalize_transcript(transcript) -> list[dict]:
     """Coerce common shapes into a list of structured turn dicts.
@@ -1426,6 +1322,11 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
         vector_error = _store_errors.get(resolved, {}).get("vector", "vector store unavailable")
         raise StoreUnavailableError(f"vector store unavailable: {vector_error}")
 
+    if stores["kg"] is None:
+        resolved = _resolve_data_dir(data_dir)
+        kg_error = _store_errors.get(resolved, {}).get("kg", "kg store unavailable")
+        raise StoreUnavailableError(f"kg store unavailable: {kg_error}")
+
     from taosmd.archive import EVENT_CONVERSATION
 
     # --- Build archive multiset -----------------------------------------
@@ -1563,6 +1464,11 @@ async def reindex(*, agent: str, data_dir=None, check: bool = False) -> dict:
         vector_error = _store_errors.get(resolved, {}).get("vector", "vector store unavailable")
         raise StoreUnavailableError(f"vector store unavailable: {vector_error}")
 
+    if stores["kg"] is None:
+        resolved = _resolve_data_dir(data_dir)
+        kg_error = _store_errors.get(resolved, {}).get("kg", "kg store unavailable")
+        raise StoreUnavailableError(f"kg store unavailable: {kg_error}")
+
     from taosmd.archive import EVENT_CONVERSATION
 
     # --- Collect the agent's archive turns (source of truth) ------------
@@ -1665,6 +1571,12 @@ async def supersede_vectors(match: str, *, data_dir=None) -> int:
         resolved = _resolve_data_dir(data_dir)
         vector_error = _store_errors.get(resolved, {}).get("vector", "vector store unavailable")
         raise StoreUnavailableError(f"vector store unavailable: {vector_error}")
+
+    if stores["kg"] is None:
+        resolved = _resolve_data_dir(data_dir)
+        kg_error = _store_errors.get(resolved, {}).get("kg", "kg store unavailable")
+        raise StoreUnavailableError(f"kg store unavailable: {kg_error}")
+
     return await vmem.supersede_matching(match)
 
 

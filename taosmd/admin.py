@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from .agents import AgentRegistry, InvalidAgentNameError, NAME_RE
+from .api import StoreUnavailableError
 from .archive import EVENT_A2A
 
 logger = logging.getLogger(__name__)
@@ -212,6 +213,11 @@ async def shelf_archive(
         return {"archived": True, "rows_hidden": 0}
 
     vmem = stores["vector"]
+    if vmem is None:
+        from .api import _resolve_data_dir, _store_errors
+        resolved = _resolve_data_dir(data_dir)
+        vector_error = _store_errors.get(resolved, {}).get("vector", "vector store unavailable")
+        raise StoreUnavailableError(f"vector store unavailable: {vector_error}")
     archive = stores["archive"]
 
     # Count active rows for this shelf
@@ -280,6 +286,11 @@ async def shelf_unarchive(
         raise ShelfNotFoundError(f"shelf {shelf_id!r} not found")
 
     vmem = stores["vector"]
+    if vmem is None:
+        from .api import _resolve_data_dir, _store_errors
+        resolved = _resolve_data_dir(data_dir)
+        vector_error = _store_errors.get(resolved, {}).get("vector", "vector store unavailable")
+        raise StoreUnavailableError(f"vector store unavailable: {vector_error}")
     archive = stores["archive"]
 
     # Find rows hidden by this shelf's archive operation(s) and restore them

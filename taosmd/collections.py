@@ -883,6 +883,10 @@ async def ingest_folder(
 
             stores = await _api._ensure_stores(data_dir)
             vmem = stores["vector"]
+            if vmem is None:
+                resolved = _api._resolve_data_dir(data_dir)
+                vector_error = _api._store_errors.get(resolved, {}).get("vector", "vector store unavailable")
+                raise _api.StoreUnavailableError(f"vector store unavailable: {vector_error}")
 
             items: list[dict] = []
             indexed: list[tuple[str, str]] = []
