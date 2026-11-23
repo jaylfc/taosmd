@@ -415,14 +415,14 @@ class ArchiveStore:
         row = self._conn.execute(
             "SELECT value FROM archive_settings WHERE key = 'archive_seq_counter'"
         ).fetchone()
+        setting_value = 0
         if row is not None:
             try:
-                self._seq_counter = int(row["value"])
+                setting_value = int(row["value"])
             except (TypeError, ValueError):
-                self._seq_counter = 0
-            return
+                setting_value = 0
         max_id = self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM archive_index").fetchone()[0]
-        self._seq_counter = max(max_id, self._max_seq_in_files())
+        self._seq_counter = max(setting_value, max_id, self._max_seq_in_files())
 
     def _max_seq_in_files(self) -> int:
         """Highest ``seq`` stored in any raw .jsonl or .jsonl.gz file."""
@@ -531,37 +531,38 @@ class ArchiveStore:
         """
         if self._conn is None:
             raise RuntimeError("ArchiveStore is not initialised")
-        path = self._legacy_map_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        rows = self._conn.execute(
-            "SELECT id, file_path, line_number FROM archive_index ORDER BY id"
-        ).fetchall()
-        written = 0
-        with open(path, "a", encoding="utf-8") as fh:
-            for row in rows:
-                archive_path = self._archive_file_for(row["file_path"])
-                sha256 = ""
-                if archive_path is not None:
-                    try:
-                        lines = self._read_archive_lines(archive_path)
-                        if row["line_number"] <= len(lines):
-                            record = json.loads(lines[row["line_number"] - 1].strip())
-                            sha256 = record.get("sha256") or ""
-                    except (OSError, json.JSONDecodeError, TypeError, IndexError):
-                        sha256 = ""
-                fh.write(
-                    json.dumps(
-                        {
-                            "file_path": row["file_path"],
-                            "line_number": row["line_number"],
-                            "sha256": sha256,
-                            "id": row["id"],
-                        },
-                        default=str,
+        async with self._write_lock:
+            path = self._legacy_map_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            rows = self._conn.execute(
+                "SELECT id, file_path, line_number FROM archive_index ORDER BY id"
+            ).fetchall()
+            written = 0
+            with open(path, "a", encoding="utf-8") as fh:
+                for row in rows:
+                    archive_path = self._archive_file_for(row["file_path"])
+                    sha256 = ""
+                    if archive_path is not None:
+                        try:
+                            lines = self._read_archive_lines(archive_path)
+                            if row["line_number"] <= len(lines):
+                                record = json.loads(lines[row["line_number"] - 1].strip())
+                                sha256 = record.get("sha256") or ""
+                        except (OSError, json.JSONDecodeError, TypeError, IndexError):
+                            sha256 = ""
+                    fh.write(
+                        json.dumps(
+                            {
+                                "file_path": row["file_path"],
+                                "line_number": row["line_number"],
+                                "sha256": sha256,
+                                "id": row["id"],
+                            },
+                            default=str,
+                        )
+                        + "\n"
                     )
-                    + "\n"
-                )
-                written += 1
+                    written += 1
         return written
 
     def _sha256_of_line(self, file_path: str, line_number: int) -> str:
@@ -626,6 +627,8 @@ class ArchiveStore:
                     if row_id is None:
                         counter += 1
                         row_id = counter
+                if row_id > counter:
+                    counter = row_id
                 summary = record.get("summary") or ""
                 derived = _redact_leaves(
                     json.loads(json.dumps(record.get("data") or {}, default=str))
