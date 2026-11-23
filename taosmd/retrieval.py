@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +344,7 @@ def plan_retrieval(
     query: str,
     agent_name: str = "",
     llm_route_fn=None,
+    data_dir: Path | str | None = None,
 ) -> dict:
     """Choose which holdings to search and in what order.
 
@@ -362,7 +364,7 @@ def plan_retrieval(
     use_llm = (
         intent == EXPLORATORY
         or llm_route_fn is not None
-    ) and is_task_enabled(agent_name, "query_expansion")
+    ) and is_task_enabled(agent_name, "query_expansion", data_dir=data_dir)
 
     if use_llm and llm_route_fn is not None:
         try:
@@ -755,6 +757,7 @@ async def retrieve(
     search_agents: list[str] | None = None,
     temporal: dict | None = None,
     graph_expansion: int = 0,
+    data_dir: Path | str | None = None,
 ) -> list[dict]:
     """Retrieve relevant results from available memory sources.
 
@@ -877,7 +880,7 @@ async def retrieve(
     # Resolve effective K from per-agent fanout config when an agent is given.
     if agent is not None:
         from taosmd.agents import effective_fanout as _effective_fanout  # noqa: PLC0415
-        limit = _effective_fanout(agent, worker_capabilities)
+        limit = _effective_fanout(agent, worker_capabilities, data_dir=data_dir)
 
     fetch_limit = max(limit * 3, result_limit)
 
@@ -915,7 +918,7 @@ async def retrieve(
         if llm_reranker is not None:
             results = await _apply_llm_rerank(query, results, llm_reranker, result_limit)
 
-        if verify and is_task_enabled(agent_name, "verification"):
+        if verify and is_task_enabled(agent_name, "verification", data_dir=data_dir):
             results = await _apply_verification(query, results, agent_name)
 
         if temporal:

@@ -446,7 +446,8 @@ def test_fact_extraction_gate_disabled_skips_llm(registry, tmp_path):
     # Patch is_task_enabled to use our tmp registry so it sees "alice"
     import taosmd.memory_extractor as me
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         spy = AsyncMock(return_value=[])
         with patch.object(me, "extract_facts_with_llm", spy):
             # We need a minimal KG stub with add_triple_with_contradiction_check
@@ -477,7 +478,8 @@ def test_fact_extraction_gate_enabled_calls_llm(registry, tmp_path):
 
     import taosmd.memory_extractor as me
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         spy = AsyncMock(return_value=[])
         with patch.object(me, "extract_facts_with_llm", spy):
             kg_stub = AsyncMock()
@@ -497,7 +499,40 @@ def test_fact_extraction_gate_enabled_calls_llm(registry, tmp_path):
     spy.assert_called_once()
 
 
-def test_fact_extraction_gate_none_agent_runs_llm(registry, tmp_path):
+def test_fact_extraction_reads_registry_from_passed_data_dir(tmp_path):
+    """process_conversation_turn must resolve fact_extraction from the passed
+    data_dir, not the canonical registry, so an agent registered only in the
+    passed dir still gets LLM extraction. Mutating the data_dir pass-through
+    away makes the gate read the canonical dir, miss the agent, and skip the
+    LLM call."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import taosmd.memory_extractor as me
+    from taosmd import agents
+
+    data_dir = tmp_path / "served"
+    data_dir.mkdir()
+    agents.register_agent("alice", data_dir=str(data_dir))  # fact_extraction ON
+
+    spy = AsyncMock(return_value=[])
+    with patch.object(me, "extract_facts_with_llm", spy):
+        kg_stub = AsyncMock()
+        kg_stub.add_triple_with_contradiction_check = AsyncMock(
+            return_value={"triple_id": "t1", "contradictions_resolved": 0}
+        )
+        asyncio.run(
+            me.process_conversation_turn(
+                "Alice uses Postgres.",
+                agent_name="alice",
+                kg=kg_stub,
+                data_dir=str(data_dir),
+                llm_url="http://fake:11434",
+                http_client=AsyncMock(),
+                use_llm=True,
+            )
+        )
+    spy.assert_called_once()
     """agent_name=None → anonymous caller; LLM always runs regardless of registry."""
     import asyncio
     from unittest.mock import AsyncMock, patch
@@ -505,7 +540,8 @@ def test_fact_extraction_gate_none_agent_runs_llm(registry, tmp_path):
     import taosmd.memory_extractor as me
 
     # No agent registered at all — anonymous install
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         spy = AsyncMock(return_value=[])
         with patch.object(me, "extract_facts_with_llm", spy):
             kg_stub = AsyncMock()
@@ -542,7 +578,8 @@ def test_crystallize_gate_disabled_returns_skipped(registry, tmp_path):
 
     turns = [{"role": "user", "content": "hello", "timestamp": 1000.0}]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         cs = cr.CrystalStore(db_path=str(tmp_path / "crystals.db"))
         spy = AsyncMock(return_value=("narrative", [], [], []))
         with patch.object(cs, "_llm_crystallize", spy):
@@ -572,7 +609,8 @@ def test_crystallize_gate_enabled_calls_llm(registry, tmp_path):
     turns = [{"role": "user", "content": "hello", "timestamp": 1000.0},
              {"role": "assistant", "content": "world", "timestamp": 1005.0}]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         cs = cr.CrystalStore(db_path=str(tmp_path / "crystals.db"))
         spy = AsyncMock(return_value=("narrative", [], [], []))
         with patch.object(cs, "_llm_crystallize", spy):
@@ -599,7 +637,8 @@ def test_crystallize_gate_none_agent_runs_llm(registry, tmp_path):
     turns = [{"role": "user", "content": "hello", "timestamp": 1000.0},
              {"role": "assistant", "content": "world", "timestamp": 1005.0}]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         cs = cr.CrystalStore(db_path=str(tmp_path / "crystals.db"))
         spy = AsyncMock(return_value=("narrative", [], [], []))
         with patch.object(cs, "_llm_crystallize", spy):
@@ -631,7 +670,8 @@ def test_reflect_gate_disabled_returns_empty(registry, tmp_path):
 
     import taosmd.reflect as rf
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         store = rf.InsightStore(db_path=str(tmp_path / "insights.db"))
         kg_stub = AsyncMock()
         spy = AsyncMock(return_value=None)
@@ -658,7 +698,8 @@ def test_reflect_gate_enabled_calls_synthesize(registry, tmp_path):
         {"subject": "Alice", "predicate": "uses", "object": "Redis", "id": "t2"},
     ]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         store = rf.InsightStore(db_path=str(tmp_path / "insights.db"))
         kg_stub = AsyncMock()
         kg_stub.timeline = AsyncMock(return_value=triples)
@@ -683,7 +724,8 @@ def test_reflect_gate_anonymous_always_runs(registry, tmp_path):
         {"subject": "Alice", "predicate": "uses", "object": "Redis", "id": "t2"},
     ]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         store = rf.InsightStore(db_path=str(tmp_path / "insights.db"))
         kg_stub = AsyncMock()
         kg_stub.timeline = AsyncMock(return_value=triples)
@@ -693,4 +735,95 @@ def test_reflect_gate_anonymous_always_runs(registry, tmp_path):
             asyncio.run(
                 store.reflect(kg=kg_stub, agent_name="")
             )
+    spy.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: served data_dir gates crystallise/reflect (the #731 defect)
+# ---------------------------------------------------------------------------
+
+
+def test_crystallize_and_reflect_use_served_data_dir(tmp_path, monkeypatch):
+    """Ingest into a served dir, then crystallize/reflect with that data_dir:
+    the agent must be resolved from the served registry, not the canonical
+    HOME one, so neither task is skipped. Reproduces #731: before the fix,
+    is_task_enabled read the default registry, could not find the agent, and
+    the librarian gates flipped to disabled."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import taosmd
+    import taosmd.config as config_mod
+    from taosmd import agents
+    from taosmd.crystallize import CrystalStore
+    from taosmd.reflect import InsightStore
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("TAOSMD_DATA_DIR", raising=False)
+    # A default-resolved fallback write must land in the throwaway HOME, not
+    # the real one; this is what makes the assertion below non-vacuous.
+    monkeypatch.setattr(
+        config_mod, "_DEFAULT_DATA_DIR", str(home / ".taosmd"), raising=False
+    )
+
+    data_dir = tmp_path / "served"
+    data_dir.mkdir()
+
+    asyncio.run(
+        taosmd.ingest(
+            "hello world from the served install", agent="alice",
+            data_dir=str(data_dir),
+        )
+    )
+
+    agents_json = data_dir / "agents.json"
+    assert agents_json.exists(), f"expected {agents_json} to exist"
+    assert "alice" in agents_json.read_text(), "agent alice must be registered"
+
+    turns = [
+        {"role": "user", "content": "hello", "timestamp": 1000.0},
+        {"role": "assistant", "content": "world", "timestamp": 1005.0},
+    ]
+
+    # --- crystallise -------------------------------------------------------
+    cs = CrystalStore(db_path=str(data_dir / "crystals.db"))
+    spy = AsyncMock(return_value=("narrative", [], [], []))
+    with patch.object(cs, "_llm_crystallize", spy):
+        asyncio.run(cs.init())
+        result = asyncio.run(
+            cs.crystallize(
+                session_id="s1",
+                turns=turns,
+                agent_name="alice",
+                data_dir=str(data_dir),
+                llm_url="http://fake:11434",
+                model="test-model",
+            )
+        )
+    assert result.get("skipped") is not True, (
+        f"crystallise must not be skipped for a served-dir agent, got {result!r}"
+    )
+    spy.assert_called_once()
+
+    # --- reflect ----------------------------------------------------------
+    store = InsightStore(db_path=str(data_dir / "insights.db"))
+    kg_stub = AsyncMock()
+    kg_stub.timeline = AsyncMock(return_value=[
+        {"subject": "Alice", "predicate": "uses", "object": "Postgres", "id": "t1"},
+        {"subject": "Alice", "predicate": "uses", "object": "Redis", "id": "t2"},
+    ])
+    spy = AsyncMock(return_value={"insight_text": "pattern", "confidence": 0.9})
+    with patch.object(store, "_synthesize_cluster", spy):
+        asyncio.run(store.init())
+        result = asyncio.run(
+            store.reflect(
+                kg=kg_stub, agent_name="alice", data_dir=str(data_dir),
+                llm_url="http://fake:11434", model="test-model",
+            )
+        )
+    assert result != [], (
+        f"reflect must not be skipped for a served-dir agent, got {result!r}"
+    )
     spy.assert_called()

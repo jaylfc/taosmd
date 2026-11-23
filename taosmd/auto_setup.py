@@ -231,7 +231,7 @@ def _install_cron(data_dir: str):
         "asyncio.run(a.init()); asyncio.run(a.compress_old_files()); asyncio.run(a.close()); "
         "p = CatalogPipeline(archive_dir=j(d, 'archive'), sessions_dir=j(d, 'sessions'), "
         "catalog_db=j(d, 'session-catalog.db'), crystals_db=j(d, 'crystals.db'), "
-        "kg_db=j(d, 'knowledge-graph.db')); "
+        "kg_db=j(d, 'knowledge-graph.db'), data_dir=d); "
         "asyncio.run(p.init()); asyncio.run(p.index_yesterday()); asyncio.run(p.close())"
     )
     q_logfile = shlex.quote(os.path.join(data_dir, "logs", "librarian-cron.log"))

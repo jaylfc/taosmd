@@ -546,7 +546,8 @@ class AgentRegistry:
 
 
 
-def run_if_enabled(agent_name: str, task: str, fn, *args, fallback=None, **kw):
+def run_if_enabled(agent_name: str, task: str, fn, *args, fallback=None,
+                   data_dir: Path | str | None = None, **kw):
     """Invoke fn only when the task is enabled for this agent; else return fallback.
 
     Designed to be the single gate point in orchestrators (catalog_pipeline,
@@ -557,17 +558,19 @@ def run_if_enabled(agent_name: str, task: str, fn, *args, fallback=None, **kw):
                                  fallback=[])
 
     Args:
-        agent_name: Registered agent name (or "" for anonymous installs).
+        agent_name: Registered agent name.
         task: One of LIBRARIAN_TASKS.
         fn: Callable to invoke when enabled.
         *args: Positional args for fn.
         fallback: Value to return when task is disabled. Defaults to None.
+        data_dir: Optional data dir resolving the agent registry. Defaults to
+            the canonical dir (TAOSMD_DATA_DIR, then ~/.taosmd).
         **kw: Keyword args for fn.
 
     Returns:
         fn(*args, **kw) when enabled, else fallback.
     """
-    if not is_task_enabled(agent_name, task):
+    if not is_task_enabled(agent_name, task, data_dir=data_dir):
         logger.debug(
             "run_if_enabled: task=%r agent=%r disabled", task, agent_name
         )
@@ -590,24 +593,26 @@ def _registry(data_dir: Path | str | None = None) -> AgentRegistry:
     return AgentRegistry(data_dir)
 
 
-def register_agent(name: str, *, display_name: str = "", clobber: bool = False) -> dict:
-    return _registry().register_agent(name, display_name=display_name, clobber=clobber)
+def register_agent(name: str, *, display_name: str = "", clobber: bool = False,
+                   data_dir: Path | str | None = None) -> dict:
+    return _registry(data_dir).register_agent(name, display_name=display_name, clobber=clobber)
 
 
-def list_agents() -> list[dict]:
-    return _registry().list_agents()
+def list_agents(data_dir: Path | str | None = None) -> list[dict]:
+    return _registry(data_dir).list_agents()
 
 
-def agent_exists(name: str) -> bool:
-    return _registry().agent_exists(name)
+def agent_exists(name: str, data_dir: Path | str | None = None) -> bool:
+    return _registry(data_dir).agent_exists(name)
 
 
 def get_agent(name: str, data_dir: Path | str | None = None) -> dict:
     return _registry(data_dir).get_agent(name)
 
 
-def delete_agent(name: str, *, drop_data: bool = False) -> None:
-    _registry().delete_agent(name, drop_data=drop_data)
+def delete_agent(name: str, *, drop_data: bool = False,
+                 data_dir: Path | str | None = None) -> None:
+    _registry(data_dir).delete_agent(name, drop_data=drop_data)
 
 
 def ensure_agent(name: str, *, display_name: str = "", data_dir: Path | str | None = None) -> dict:
@@ -663,8 +668,8 @@ def set_agent_generator_profile(name: str, profile_id: str | None, data_dir=None
     return _registry(data_dir).set_agent_generator_profile(name, profile_id)
 
 
-def get_librarian(name: str) -> dict:
-    return _registry().get_librarian(name)
+def get_librarian(name: str, data_dir: Path | str | None = None) -> dict:
+    return _registry(data_dir).get_librarian(name)
 
 
 def set_librarian(
@@ -676,8 +681,9 @@ def set_librarian(
     clear_model: bool = False,
     fanout: str | None = None,
     fanout_auto_scale: bool | None = None,
+    data_dir: Path | str | None = None,
 ) -> dict:
-    return _registry().set_librarian(
+    return _registry(data_dir).set_librarian(
         name,
         enabled=enabled,
         model=model,
@@ -688,13 +694,17 @@ def set_librarian(
     )
 
 
-def is_task_enabled(name: str, task: str) -> bool:
-    return _registry().is_task_enabled(name, task)
+def is_task_enabled(
+    name: str, task: str,
+    data_dir: Path | str | None = None,
+) -> bool:
+    return _registry(data_dir).is_task_enabled(name, task)
 
 
 def effective_fanout(
     agent_name: str,
     worker_capabilities: dict | None = None,
+    data_dir: Path | str | None = None,
 ) -> int:
     """Resolve the retrieval fan-out K for an agent given its worker capabilities.
 

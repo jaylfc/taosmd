@@ -15,6 +15,7 @@ import pytest
 
 import taosmd
 from taosmd import api as taosmd_api
+from taosmd import config as taosmd_config
 from taosmd.agents import update_stats
 
 
@@ -1026,6 +1027,14 @@ def test_ingest_registers_agent_in_given_data_dir(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
+    # A default-resolved fallback write must land in the throwaway HOME
+    # (config._DEFAULT_DATA_DIR is frozen at import, so monkeypatching HOME
+    # alone cannot move it) -- this is what makes the assertion below
+    # non-vacuous.
+    monkeypatch.setattr(
+        taosmd_config, "_DEFAULT_DATA_DIR", str(home / ".taosmd"), raising=False
+    )
+
     asyncio.run(taosmd.ingest("hello", agent="a1", data_dir=str(data_dir)))
 
     # Registry must be in the given data dir
@@ -1049,6 +1058,14 @@ def test_ingest_batch_registers_agent_in_given_data_dir(tmp_path, monkeypatch):
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
+
+    # A default-resolved fallback write must land in the throwaway HOME
+    # (config._DEFAULT_DATA_DIR is frozen at import, so monkeypatching HOME
+    # alone cannot move it) -- this is what makes the assertion below
+    # non-vacuous.
+    monkeypatch.setattr(
+        taosmd_config, "_DEFAULT_DATA_DIR", str(home / ".taosmd"), raising=False
+    )
 
     asyncio.run(
         taosmd.ingest_batch(

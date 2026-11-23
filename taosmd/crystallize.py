@@ -87,6 +87,7 @@ class CrystalStore:
         llm_url: str = "http://localhost:11434",
         model: str = "qwen3:4b",
         kg: TemporalKnowledgeGraph | None = None,
+        data_dir: Path | str | None = None,
     ) -> dict:
         """Crystallize a session into a compact digest.
 
@@ -108,7 +109,8 @@ class CrystalStore:
 
         # Gate: named agents with crystallise disabled return early.
         # Anonymous callers (agent_name is None or "") always run.
-        if agent_name and not is_task_enabled(agent_name, "crystallise"):
+        if agent_name and not is_task_enabled(agent_name, "crystallise",
+                                              data_dir=data_dir):
             logger.debug(
                 "CrystalStore.crystallize: crystallise disabled for agent=%r, skipping",
                 agent_name,

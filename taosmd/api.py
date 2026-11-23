@@ -813,6 +813,7 @@ async def search(
         candidate_top_k=rc.get("candidate_top_k"),
         project=project,
         search_agents=search_agents,
+        data_dir=data_dir,
     )
     hits = [_format_hit(hit) for hit in raw]
     if degraded and hits:

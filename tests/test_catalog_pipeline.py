@@ -241,7 +241,7 @@ class TestEnrichModelResolution:
         # model string at the HTTP boundary, not task enablement.
         monkeypatch.setattr(
             "taosmd.catalog_pipeline.run_if_enabled",
-            lambda agent, task, fn, *a, fallback=None, **kw: fn(*a, **kw),
+            lambda agent, task, fn, *a, fallback=None, data_dir=None, **kw: fn(*a, **kw),
         )
 
         payloads: list[dict] = []
