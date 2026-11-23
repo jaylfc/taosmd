@@ -19,6 +19,7 @@ import logging
 import os
 import sqlite3
 import time
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,13 @@ class ArchiveStore:
         # daily file on every write. Seeded from disk the first time a path
         # is seen; reset naturally per path across daily rollover.
         self._line_counts: dict[str, int] = {}
+        # Write lock: serialises sequence allocation, the raw JSONL write and
+        # the index insert so a record's id is fixed before the line lands.
+        self._write_lock = asyncio.Lock()
+        # Monotonically increasing record sequence. Seeded on init (see
+        # _seed_seq_counter); every increment is durably persisted before the
+        # raw write so restarts never reuse a value.
+        self._seq_counter: int = 0
 
     async def init(self) -> None:
         self._archive_dir.mkdir(parents=True, exist_ok=True)
@@ -159,6 +167,8 @@ class ArchiveStore:
             "SELECT value FROM archive_settings WHERE key = 'user_tracking_enabled'"
         ).fetchone()
         self._user_tracking_enabled = bool(row and row["value"] == "true")
+        # Seed the record sequence counter so restarts never reuse an id.
+        self._seed_seq_counter()
 
     async def close(self) -> None:
         if self._current_file:
@@ -309,76 +319,356 @@ class ArchiveStore:
                 data[key], _ = redact_secrets(data[key])
 
         ts = time.time()
-        event = {
-            "timestamp": ts,
-            "event_type": event_type,
-            "agent_name": agent_name,
-            "app_id": app_id,
-            "project": project,
-            "summary": summary,
-            "data": data,
-        }
 
-        # Write to JSONL
-        f, file_path = self._ensure_file(ts)
-        line = json.dumps(event, default=str)
-        # Append a per-entry SHA-256 content hash so bit-rot and truncated
-        # writes are detectable later with verify_entry() / verify_day().
-        # The checksum covers the serialised event line (excluding the
-        # newline), stored as a separate ``sha256`` key so readers that
-        # don't know about checksums can ignore it transparently.
-        event["sha256"] = hashlib.sha256(line.encode()).hexdigest()
-        line = json.dumps(event, default=str)
-        f.write(line + "\n")
-        f.flush()
+        # Assign the record sequence id and persist it BEFORE the raw write,
+        # under the write lock. The index row is inserted with this id
+        # explicitly, never via lastrowid, so an index rebuild can never
+        # renumber records.
+        async with self._write_lock:
+            seq = self._next_seq()
+            event = {
+                "seq": seq,
+                "timestamp": ts,
+                "event_type": event_type,
+                "agent_name": agent_name,
+                "app_id": app_id,
+                "project": project,
+                "summary": summary,
+                "data": data,
+            }
 
-        # Count lines for line_number. Track in memory rather than re-reading
-        # the whole daily JSONL on every write: seed from disk the first time
-        # we see a path (handles daily rollover -> fresh path), then increment.
-        if file_path not in self._line_counts:
-            try:
-                with open(file_path, "r", encoding="utf-8") as existing:
-                    self._line_counts[file_path] = sum(1 for _ in existing)
-            except FileNotFoundError:
-                self._line_counts[file_path] = 0
-        else:
-            self._line_counts[file_path] += 1
-        line_count = self._line_counts[file_path]
+            # Write to JSONL
+            f, file_path = self._ensure_file(ts)
+            line = json.dumps(event, default=str)
+            # Append a per-entry SHA-256 content hash so bit-rot and truncated
+            # writes are detectable later with verify_entry() / verify_day().
+            # The checksum covers the serialised event line (excluding the
+            # newline), stored as a separate ``sha256`` key so readers that
+            # don't know about checksums can ignore it transparently.
+            event["sha256"] = hashlib.sha256(line.encode()).hexdigest()
+            line = json.dumps(event, default=str)
+            f.write(line + "\n")
+            f.flush()
 
-        # Fully redacted copy for index and FTS (all string leaves).
-        # Build the derived copy from a JSON-plain snapshot so every leaf that
-        # becomes a string (including str() of a non-JSON leaf) is scanned by
-        # _redact_leaves. A bare _redact_leaves(data) left non-str, non-container
-        # leaves unchanged, and the index INSERT serialised them with
-        # json.dumps(derived, default=str), so str(obj) landed in
-        # archive_index.data_json UNSCANNED.
-        derived = _redact_leaves(json.loads(json.dumps(data, default=str)))
+            # Count lines for line_number. Track in memory rather than re-reading
+            # the whole daily JSONL on every write: seed from disk the first time
+            # we see a path (handles daily rollover -> fresh path), then increment.
+            if file_path not in self._line_counts:
+                try:
+                    with open(file_path, "r", encoding="utf-8") as existing:
+                        self._line_counts[file_path] = sum(1 for _ in existing)
+                except FileNotFoundError:
+                    self._line_counts[file_path] = 0
+            else:
+                self._line_counts[file_path] += 1
+            line_count = self._line_counts[file_path]
 
-        # Index for fast lookup
-        cursor = self._conn.execute(
-            """INSERT INTO archive_index
-               (timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ts, event_type, agent_name, app_id, project, summary, file_path, line_count, json.dumps(derived, default=str)),
-        )
+            # Fully redacted copy for index and FTS (all string leaves).
+            # Build the derived copy from a JSON-plain snapshot so every leaf that
+            # becomes a string (including str() of a non-JSON leaf) is scanned by
+            # _redact_leaves. A bare _redact_leaves(data) left non-str, non-container
+            # leaves unchanged, and the index INSERT serialised them with
+            # json.dumps(derived, default=str), so str(obj) landed in
+            # archive_index.data_json UNSCANNED.
+            derived = _redact_leaves(json.loads(json.dumps(data, default=str)))
 
-        # Index in FTS for full-text search
-        row_id = cursor.lastrowid
-        # Build searchable content from data fields (use fully redacted derived)
-        content_parts = [summary]
-        for key in ("content", "text", "msg", "query", "tool", "result", "error"):
-            val = derived.get(key)
-            if val and isinstance(val, str):
-                content_parts.append(val)
-        content_text = " ".join(content_parts)
-        if content_text.strip():
+            # Index for fast lookup with the assigned id, never lastrowid.
             self._conn.execute(
-                "INSERT INTO archive_fts (rowid, summary, content) VALUES (?, ?, ?)",
-                (row_id, summary, content_text),
+                """INSERT INTO archive_index
+                   (id, timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (seq, ts, event_type, agent_name, app_id, project, summary, file_path, line_count, json.dumps(derived, default=str)),
             )
 
-        self._conn.commit()
+            # Index in FTS for full-text search
+            row_id = seq
+            # Build searchable content from data fields (use fully redacted derived)
+            content_parts = [summary]
+            for key in ("content", "text", "msg", "query", "tool", "result", "error"):
+                val = derived.get(key)
+                if val and isinstance(val, str):
+                    content_parts.append(val)
+            content_text = " ".join(content_parts)
+            if content_text.strip():
+                self._conn.execute(
+                    "INSERT INTO archive_fts (rowid, summary, content) VALUES (?, ?, ?)",
+                    (row_id, summary, content_text),
+                )
+
+            self._conn.commit()
         return row_id
+
+    # ------------------------------------------------------------------
+    # Record sequence: stable ids across index rebuilds
+    # ------------------------------------------------------------------
+
+    def _seed_seq_counter(self) -> None:
+        """Start the sequence counter above every id already in use.
+
+        The durable source is the ``archive_seq_counter`` setting, which
+        _next_seq() advances and commits before every raw write, so restarts
+        never reuse a value. On stores that predate the counter (no setting
+        yet) fall back to the highest index id and the highest ``seq`` found
+        in the raw files, so a crash between the seq assignment and the raw
+        write leaves a gap but never a duplicate.
+        """
+        row = self._conn.execute(
+            "SELECT value FROM archive_settings WHERE key = 'archive_seq_counter'"
+        ).fetchone()
+        if row is not None:
+            try:
+                self._seq_counter = int(row["value"])
+            except (TypeError, ValueError):
+                self._seq_counter = 0
+            return
+        max_id = self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM archive_index").fetchone()[0]
+        self._seq_counter = max(max_id, self._max_seq_in_files())
+
+    def _max_seq_in_files(self) -> int:
+        """Highest ``seq`` stored in any raw .jsonl or .jsonl.gz file."""
+        max_seq = 0
+        for path in self._iter_archive_files():
+            try:
+                lines = self._read_archive_lines(path)
+            except OSError:
+                continue
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                seq = record.get("seq")
+                if isinstance(seq, int) and not isinstance(seq, bool) and seq > max_seq:
+                    max_seq = seq
+        return max_seq
+
+    def _iter_archive_files(self) -> list[Path]:
+        """Every raw archive file (.jsonl and .jsonl.gz), oldest-first by path."""
+        files = (
+            list(self._archive_dir.rglob("*.jsonl"))
+            + list(self._archive_dir.rglob("*.jsonl.gz"))
+        )
+        return sorted(files, key=lambda path: str(path))
+
+    def _read_archive_lines(self, path: Path) -> list[str]:
+        """Read all lines of a raw archive file, transparently decompressing .gz."""
+        if path.suffix == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                return fh.readlines()
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.readlines()
+
+    def _archive_file_for(self, file_path: str) -> Path | None:
+        """Resolve an index file_path to the raw file on disk (.jsonl or .jsonl.gz)."""
+        path = Path(file_path)
+        if path.exists():
+            return path
+        gz_path = path.parent / (path.name + ".gz")
+        if gz_path.exists():
+            return gz_path
+        return None
+
+    def _next_seq(self) -> int:
+        """Allocate the next sequence id and durably persist it before the raw write.
+
+        The increment is committed to archive_settings before the JSONL line is
+        written: a crash anywhere after this point consumes the id (a gap) but
+        can never reuse it, so rebuilds never renumber or duplicate records.
+        """
+        self._seq_counter += 1
+        self._conn.execute(
+            """INSERT INTO archive_settings (key, value) VALUES ('archive_seq_counter', ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (str(self._seq_counter),),
+        )
+        self._conn.commit()
+        return self._seq_counter
+
+    # ------------------------------------------------------------------
+    # Legacy id map: freeze index -> raw-line identity before rebuilds
+    # ------------------------------------------------------------------
+
+    LEGACY_ID_MAP = "legacy-id-map"
+
+    def _legacy_map_path(self) -> Path:
+        return self._archive_dir / self.LEGACY_ID_MAP
+
+    def _load_legacy_map(self) -> dict[tuple[str, int, str], int]:
+        """Load the legacy-id-map sidecar, identity -> id.
+
+        Later entries override earlier ones so the most recent freeze wins;
+        the file is append-only and never truncated.
+        """
+        mapping: dict[tuple[str, int, str], int] = {}
+        path = self._legacy_map_path()
+        if not path.exists():
+            return mapping
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                mapping[
+                    (entry["file_path"], int(entry["line_number"]), entry.get("sha256") or "")
+                ] = int(entry["id"])
+        return mapping
+
+    async def freeze_legacy_id_map(self) -> int:
+        """Snapshot the current index -> raw-line mapping into the legacy-id-map.
+
+        Appends one entry per index row: ``file_path + line_number + the
+        line's existing SHA-256`` maps to its current id. Safe to repeat
+        (each freeze re-appends the full mapping); call before rebuilding
+        the index so legacy lines without ``seq`` keep their ids. Raw files
+        are only read, never rewritten. Returns entries appended.
+        """
+        if self._conn is None:
+            raise RuntimeError("ArchiveStore is not initialised")
+        path = self._legacy_map_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = self._conn.execute(
+            "SELECT id, file_path, line_number FROM archive_index ORDER BY id"
+        ).fetchall()
+        written = 0
+        with open(path, "a", encoding="utf-8") as fh:
+            for row in rows:
+                archive_path = self._archive_file_for(row["file_path"])
+                sha256 = ""
+                if archive_path is not None:
+                    try:
+                        lines = self._read_archive_lines(archive_path)
+                        if row["line_number"] <= len(lines):
+                            record = json.loads(lines[row["line_number"] - 1].strip())
+                            sha256 = record.get("sha256") or ""
+                    except (OSError, json.JSONDecodeError, TypeError, IndexError):
+                        sha256 = ""
+                fh.write(
+                    json.dumps(
+                        {
+                            "file_path": row["file_path"],
+                            "line_number": row["line_number"],
+                            "sha256": sha256,
+                            "id": row["id"],
+                        },
+                        default=str,
+                    )
+                    + "\n"
+                )
+                written += 1
+        return written
+
+    def _sha256_of_line(self, file_path: str, line_number: int) -> str:
+        """SHA-256 of the raw line at line_number, or blank when unreadable."""
+        archive_path = self._archive_file_for(file_path)
+        if archive_path is None:
+            return ""
+        try:
+            lines = self._read_archive_lines(archive_path)
+            if line_number < 1 or line_number > len(lines):
+                return ""
+            record = json.loads(lines[line_number - 1].strip())
+        except (OSError, json.JSONDecodeError, TypeError, IndexError):
+            return ""
+        return record.get("sha256") or ""
+
+    # ------------------------------------------------------------------
+    # Index rebuild from the raw files
+    # ------------------------------------------------------------------
+
+    async def rebuild(self) -> dict[str, int]:
+        """Rebuild ``archive_index`` and ``archive_fts`` from the raw files.
+
+        Row ids come from the ``seq`` stored in each JSONL line, so a rebuild
+        can never renumber records. Legacy lines without ``seq`` are assigned
+        the id frozen in the append-only ``legacy-id-map`` sidecar
+        (identity: file path + line number + the line's SHA-256); legacy
+        lines absent from the map take the next unused id. Raw .jsonl and
+        .jsonl.gz files are only ever read, never rewritten.
+
+        Returns ``{"indexed": N, "legacy": M}`` where ``legacy`` counts
+        lines restored from the legacy-id-map.
+        """
+        if self._conn is None:
+            raise RuntimeError("ArchiveStore is not initialised")
+        self._conn.execute("DELETE FROM archive_index")
+        self._conn.execute("DELETE FROM archive_fts")
+        legacy_map = self._load_legacy_map()
+        counter = self._seq_counter
+        indexed = legacy = 0
+        for path in self._iter_archive_files():
+            file_path = str(path)
+            for line_number, line in enumerate(self._read_archive_lines(path), start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                seq = record.get("seq")
+                if isinstance(seq, int) and not isinstance(seq, bool):
+                    row_id = seq
+                else:
+                    legacy += 1
+                    identity = (
+                        file_path,
+                        line_number,
+                        record.get("sha256") or "",
+                    )
+                    row_id = legacy_map.get(identity)
+                    if row_id is None:
+                        counter += 1
+                        row_id = counter
+                summary = record.get("summary") or ""
+                derived = _redact_leaves(
+                    json.loads(json.dumps(record.get("data") or {}, default=str))
+                )
+                self._conn.execute(
+                    """INSERT INTO archive_index
+                       (id, timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        row_id,
+                        record.get("timestamp") or 0.0,
+                        record.get("event_type") or "",
+                        record.get("agent_name"),
+                        record.get("app_id"),
+                        record.get("project"),
+                        summary,
+                        file_path,
+                        line_number,
+                        json.dumps(derived, default=str),
+                    ),
+                )
+                content_parts = [summary]
+                for key in ("content", "text", "msg", "query", "tool", "result", "error"):
+                    val = derived.get(key)
+                    if val and isinstance(val, str):
+                        content_parts.append(val)
+                content_text = " ".join(content_parts)
+                if content_text.strip():
+                    self._conn.execute(
+                        "INSERT INTO archive_fts (rowid, summary, content) VALUES (?, ?, ?)",
+                        (row_id, summary, content_text),
+                    )
+                indexed += 1
+        self._conn.commit()
+        if counter > self._seq_counter:
+            self._seq_counter = counter
+            self._conn.execute(
+                """INSERT INTO archive_settings (key, value) VALUES ('archive_seq_counter', ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+                (str(self._seq_counter),),
+            )
+            self._conn.commit()
+        return {"indexed": indexed, "legacy": legacy}
 
     # ------------------------------------------------------------------
     # Full-text search

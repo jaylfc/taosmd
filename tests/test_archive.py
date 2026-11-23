@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
+import json
 import logging
+import os
 import stat
 
 import pytest
@@ -290,3 +293,294 @@ async def test_compress_dir_os_open_raises_on_windows(tmp_path, monkeypatch):
     assert gz_path.exists(), "the .gz must exist"
     with gzip.open(gz_path, "rb") as fh:
         assert fh.read() == original_bytes, ".gz must decompress to the original bytes"
+
+
+@pytest.mark.asyncio
+async def test_rebuild_uses_seq_ids_never_renumbers(tmp_path):
+    """(a) Record N entries, delete the index db, rebuild: every id survives
+    and every line's seq equals its id."""
+    archive_dir = tmp_path / "archive"
+    index_path = tmp_path / "archive-index.db"
+
+    async def open_store():
+        arc = ArchiveStore(archive_dir=str(archive_dir), index_path=str(index_path))
+        await arc.init()
+        return arc
+
+    arc = await open_store()
+    ids = [
+        await arc.record("conversation", {"text": f"record {i}"}, agent_name="a")
+        for i in range(5)
+    ]
+    assert ids == [1, 2, 3, 4, 5]
+    await arc.close()
+
+    def raw_hashes():
+        return {
+            str(path): path.read_bytes()
+            for path in sorted(archive_dir.rglob("*"))
+            if path.is_file()
+        }
+
+    before = raw_hashes()
+    os.remove(index_path)
+
+    arc2 = await open_store()
+    report = await arc2.rebuild()
+    assert report == {"indexed": 5, "legacy": 0}
+    rows = {
+        (r["file_path"], r["line_number"]): r["id"]
+        for r in arc2._conn.execute(
+            "SELECT id, file_path, line_number FROM archive_index"
+        )
+    }
+    assert len(rows) == 5
+    for path in sorted(archive_dir.rglob("*.jsonl")):
+        with open(path, "r", encoding="utf-8") as fh:
+            for line_number, line in enumerate(fh, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                assert record["seq"] == rows[(str(path), line_number)]
+    assert {
+        r["id"] for r in arc2._conn.execute("SELECT id FROM archive_index")
+    } == {1, 2, 3, 4, 5}
+    await arc2.close()
+
+    after = raw_hashes()
+    assert before == after, "rebuild must not rewrite raw .jsonl files"
+
+
+@pytest.mark.asyncio
+async def test_rebuild_legacy_lines_keep_mapped_ids(tmp_path):
+    """(b) A legacy archive (lines without seq) plus an index: build the
+    legacy-id-map, delete the index, rebuild, ids unchanged."""
+    archive_dir = tmp_path / "archive"
+    index_path = tmp_path / "archive-index.db"
+    day = archive_dir / "2020" / "01" / "01.jsonl"
+    day.parent.mkdir(parents=True)
+
+    legacy_lines = [
+        {
+            "timestamp": 1_000_000.0,
+            "event_type": "conversation",
+            "agent_name": "a",
+            "app_id": None,
+            "project": None,
+            "summary": "legacy one",
+            "data": {"text": "one"},
+        },
+        {
+            "timestamp": 1_000_001.0,
+            "event_type": "conversation",
+            "agent_name": "a",
+            "app_id": None,
+            "project": None,
+            "summary": "legacy two",
+            "data": {"text": "two"},
+        },
+        {
+            "timestamp": 1_000_002.0,
+            "event_type": "conversation",
+            "agent_name": "a",
+            "app_id": None,
+            "project": None,
+            "summary": "legacy three",
+            "data": {"text": "three"},
+        },
+    ]
+    day.write_text(
+        "".join(json.dumps(line, default=str) + "\n" for line in legacy_lines),
+        encoding="utf-8",
+    )
+
+    arc = ArchiveStore(archive_dir=str(archive_dir), index_path=str(index_path))
+    await arc.init()
+    # Index the legacy lines with non-contiguous ids to prove the frozen map
+    # is honoured instead of renumbering from 1.
+    mapped_ids = [7, 8, 9]
+    for line_number, row_id in zip(range(1, 4), mapped_ids):
+        line = legacy_lines[line_number - 1]
+        arc._conn.execute(
+            """INSERT INTO archive_index
+               (id, timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                row_id,
+                line["timestamp"],
+                "conversation",
+                "a",
+                None,
+                None,
+                line["summary"],
+                str(day),
+                line_number,
+                json.dumps(line["data"], default=str),
+            ),
+        )
+        arc._conn.execute(
+            "INSERT INTO archive_fts (rowid, summary, content) VALUES (?, ?, ?)",
+            (row_id, line["summary"], line["summary"]),
+        )
+    arc._conn.commit()
+    frozen = await arc.freeze_legacy_id_map()
+    assert frozen == 3
+    await arc.close()
+
+    os.remove(index_path)
+
+    arc2 = ArchiveStore(archive_dir=str(archive_dir), index_path=str(index_path))
+    await arc2.init()
+    report = await arc2.rebuild()
+    assert report == {"indexed": 3, "legacy": 3}
+    rows = {
+        (r["file_path"], r["line_number"]): r["id"]
+        for r in arc2._conn.execute(
+            "SELECT id, file_path, line_number FROM archive_index"
+        )
+    }
+    for line_number, row_id in zip(range(1, 4), mapped_ids):
+        assert rows[(str(day), line_number)] == row_id
+    assert {
+        r["id"] for r in arc2._conn.execute("SELECT id FROM archive_index")
+    } == {7, 8, 9}
+    await arc2.close()
+
+
+@pytest.mark.asyncio
+async def test_crash_between_seq_and_raw_write_leaves_gap_never_duplicate(
+    tmp_path, monkeypatch
+):
+    """(c) A crash after the seq is assigned but before the raw write
+    consumes the id (a gap) but never reuses it."""
+    arc = ArchiveStore(
+        archive_dir=str(tmp_path / "archive"),
+        index_path=str(tmp_path / "archive-index.db"),
+    )
+    await arc.init()
+
+    real_ensure_file = arc._ensure_file
+    state = {"crashed": False}
+
+    def boom(*args, **kwargs):
+        if not state["crashed"]:
+            state["crashed"] = True
+            raise RuntimeError("crash before the raw write")
+        return real_ensure_file(*args, **kwargs)
+
+    monkeypatch.setattr(arc, "_ensure_file", boom)
+    with pytest.raises(RuntimeError, match="crash before the raw write"):
+        await arc.record("conversation", {"text": "lost"}, agent_name="a")
+
+    # The seq was durably persisted before the raw write: seq 1 is consumed.
+    counter = arc._conn.execute(
+        "SELECT value FROM archive_settings WHERE key = 'archive_seq_counter'"
+    ).fetchone()["value"]
+    assert counter == "1"
+    # Nothing was written to the raw files for the lost record.
+    assert not list(arc._archive_dir.rglob("*.jsonl"))
+
+    # Subsequent records continue above the consumed id: a gap at 1, no duplicates.
+    ids = [
+        await arc.record("conversation", {"text": f"ok {i}"}, agent_name="a")
+        for i in range(3)
+    ]
+    assert ids == [2, 3, 4]
+
+    seqs = []
+    for path in arc._archive_dir.rglob("*.jsonl"):
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    seqs.append(json.loads(line)["seq"])
+    assert seqs == [2, 3, 4]
+    assert len(seqs) == len(set(seqs))
+    await arc.close()
+
+
+@pytest.mark.asyncio
+async def test_rebuild_keeps_raw_files_byte_identical(tmp_path):
+    """(d) Existing .jsonl and .jsonl.gz files are byte-identical before and
+    after a rebuild (hash-compare); the rebuild only reads raw files."""
+    archive_dir = tmp_path / "archive"
+    index_path = tmp_path / "archive-index.db"
+
+    arc = ArchiveStore(archive_dir=str(archive_dir), index_path=str(index_path))
+    await arc.init()
+    await arc.record("conversation", {"text": "plain day"}, agent_name="a")
+    # A second day stored only as a .gz, as the nightly compress produces.
+    gz_day = archive_dir / "2020" / "02" / "02.jsonl.gz"
+    gz_day.parent.mkdir(parents=True)
+    payload = (
+        '{"timestamp": 2.0, "event_type": "conversation", "summary": "gz day", "data": {}}\n'
+    ).encode()
+    with gzip.open(gz_day, "wb") as fh:
+        fh.write(payload)
+    await arc.close()
+
+    def raw_hashes():
+        return {
+            str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(archive_dir.rglob("*"))
+            if path.is_file()
+        }
+
+    before = raw_hashes()
+    os.remove(index_path)
+
+    arc2 = ArchiveStore(archive_dir=str(archive_dir), index_path=str(index_path))
+    await arc2.init()
+    report = await arc2.rebuild()
+    assert report["indexed"] == 2
+    await arc2.close()
+
+    after = raw_hashes()
+    assert before == after, "rebuild must not rewrite raw .jsonl or .jsonl.gz files"
+
+
+@pytest.mark.asyncio
+async def test_rebuild_ids_unchanged_after_partial_index(tmp_path):
+    """Write 5 records, drop index rows 2 and 4 only (simulating a partial
+    index), rebuild: every id must be unchanged.
+
+    Fails on origin-master: there is no rebuild at all there, and a naive
+    rebuild that renumbers from 1 would also fail this assertion."""
+    arc = ArchiveStore(
+        archive_dir=str(tmp_path / "archive"),
+        index_path=str(tmp_path / "archive-index.db"),
+    )
+    await arc.init()
+    ids = [
+        await arc.record("conversation", {"text": f"record {i}"}, agent_name="a")
+        for i in range(5)
+    ]
+    assert ids == [1, 2, 3, 4, 5]
+    arc._conn.execute("DELETE FROM archive_index WHERE id IN (2, 4)")
+    arc._conn.execute("DELETE FROM archive_fts WHERE rowid IN (2, 4)")
+    arc._conn.commit()
+    await arc.close()
+
+    arc2 = ArchiveStore(
+        archive_dir=str(tmp_path / "archive"),
+        index_path=str(tmp_path / "archive-index.db"),
+    )
+    await arc2.init()
+    report = await arc2.rebuild()
+    assert report == {"indexed": 5, "legacy": 0}
+    remaining = {
+        r["id"] for r in arc2._conn.execute("SELECT id FROM archive_index ORDER BY id")
+    }
+    assert remaining == {1, 2, 3, 4, 5}
+    rows = {
+        (r["file_path"], r["line_number"]): r["id"]
+        for r in arc2._conn.execute(
+            "SELECT id, file_path, line_number FROM archive_index"
+        )
+    }
+    for path in sorted((tmp_path / "archive").rglob("*.jsonl")):
+        with open(path, "r", encoding="utf-8") as fh:
+            for line_number, line in enumerate(fh, start=1):
+                if line.strip():
+                    assert rows[(str(path), line_number)] == json.loads(line)["seq"]
+    await arc2.close()
