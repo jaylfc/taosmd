@@ -745,6 +745,41 @@ async def test_labelled_date_frame_label_compare_same_latest(monkeypatch):
     assert "[Session date: 2023/05/10 (Wed) 10:00, historical]" in ctx
 
 
+@pytest.mark.asyncio
+async def test_labelled_date_frame_label_compare_wrong_weekday(monkeypatch):
+    """labelled arm: date with wrong weekday should still be compared by date
+    not weekday. This guards against the fix for #743 where 2023/05/20 (Mon)
+    (20 May 2023 was a Saturday) should still be recognised as the latest date."""
+    mod = _load_runner()
+    monkeypatch.setenv("TAOSMD_LME_DATE_FRAME", "labelled")
+    monkeypatch.setattr(mod, "ContextAssembler", _FakeAssembler)
+
+    haystack_dates = [
+        "2023/05/10 (Wed) 10:00",  # earliest
+        "2023/05/20 (Mon) 02:21",  # latest (weekday MON is WRONG; actual SAT)
+    ]
+
+    fake_results = [
+        {"text": "[Session date: 2023/05/10 (Wed) 10:00]\nchunk A", "metadata": {"session_date": haystack_dates[0]}, "similarity": 0.9},
+        {"text": "[Session date: 2023/05/20 (Mon) 02:21]\nchunk B", "metadata": {"session_date": haystack_dates[1]}, "similarity": 0.8},
+    ]
+    monkeypatch.setattr(mod, "retrieve_vector_results", AsyncMock(return_value=fake_results))
+
+    archive = _FakeArchive()
+    kg = _FakeKG()
+
+    ctx = await mod.retrieve_context(
+        "test question", kg, archive, None,
+        llm_client=None, graph_expansion=0, retrieval_path="retrieve",
+        date_frame="labelled", haystack_dates=haystack_dates
+    )
+
+    # Despite wrong weekday label, should be identified as "most recent" by date
+    assert "[Session date: 2023/05/20 (Mon) 02:21, most recent]" in ctx
+    assert "[Session date: 2023/05/10 (Wed) 10:00, historical]" in ctx
+    assert "Where memories disagree, the most recent one is current and the earlier ones are historical." in ctx
+
+
 # ---------------------------------------------------------------------------
 # 5c. #734 fix: question_id in _validate_dates error messages
 # ---------------------------------------------------------------------------
@@ -873,6 +908,31 @@ async def test_validate_dates_unparseable_haystack_date_includes_question_id(mon
     err = capsys.readouterr().err
     assert "q111_temporal" in err, f"question_id not in error message: {err}"
     assert "unparseable haystack_date" in err
+
+
+@pytest.mark.asyncio
+async def test_validate_dates_no_question_id_fallback(monkeypatch, tmp_path, capsys):
+    """_validate_dates error message uses <no question_id> fallback when
+    no question_id is provided in item or as parameter.
+    This guards the #734 fix for question_id fallback in benchmarks/longmemeval_runner.py."""
+    mod = _load_runner()
+    monkeypatch.setenv("TAOSMD_LME_DATE_FRAME", "question")
+    monkeypatch.setattr(mod, "VectorMemory", lambda **kw: _FakeVectorMemory())
+    monkeypatch.setattr(mod, "ArchiveStore", lambda **kw: _FakeArchive())
+    monkeypatch.setattr(mod, "TemporalKnowledgeGraph", lambda **kw: _FakeKG())
+    monkeypatch.setattr(mod, "ContextAssembler", _FakeAssembler)
+    monkeypatch.setattr(mod, "process_conversation_turn", AsyncMock(return_value={"method": "regex"}))
+    item = _sample_item()
+    # Note: item has NO question_id set, and has unparseable question_date
+    item["question_date"] = "not a date"
+    monkeypatch.setattr(mod, "load_dataset", lambda: [item])
+
+    with pytest.raises(SystemExit) as exc:
+        await mod.run_benchmark(args=_make_args(tmp_path=tmp_path))
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "<no question_id>" in err, f"Expected <no question_id> fallback in error: {err}"
+    assert "question_date" in err
 
 
 # ---------------------------------------------------------------------------

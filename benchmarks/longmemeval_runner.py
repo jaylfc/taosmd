@@ -701,7 +701,7 @@ def _apply_date_framing(
                 is_latest = False
                 if sd:
                     try:
-                        if datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M") == latest_dt:
+                        if sd[:10] == latest_dt.strftime("%Y/%m/%d"):
                             is_latest = True
                     except ValueError:
                         pass

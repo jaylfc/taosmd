@@ -231,7 +231,8 @@ class TestStampSubdirectory:
         assert parsed.tzinfo == _dt.timezone.utc, built_at
 
     def test_compute_version_from_subdirectory(self, tmp_path):
-        """compute_version() works when called with a subdirectory path."""
+        """compute_version() works when called with a subdirectory path,
+        and _resolve_repo_root actually resolves to the repo root."""
         repo = _init_repo(tmp_path)
         _seed(repo)
         _git(repo, "tag", "v0.5.0")
@@ -240,8 +241,15 @@ class TestStampSubdirectory:
         _git(repo, "commit", "-m", "release commit")
         subdir = repo / "subdir"
         subdir.mkdir()
-        version = rv.compute_version(subdir)
-        assert version == "0.5.1"
+        version_subdir = rv.compute_version(subdir)
+        version_root = rv.compute_version(repo)
+        # Both should give the same version
+        assert version_subdir == version_root == "0.5.1"
+        # The resolved root must be the repo root, not the subdirectory
+        resolved_root = rv._resolve_repo_root(subdir)
+        assert resolved_root == repo, (
+            f"Expected resolved root to be {repo}, got {resolved_root}"
+        )
 
 
 # ----------------------------------------------------------------------
