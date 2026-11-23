@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 from taosmd import _db, migrations
+from taosmd.archive import EVENT_A2A
 
 Role = Literal["owner", "member"]
 
@@ -204,15 +205,14 @@ class MembershipStore:
         principal_id: str,
         role: Role,
         ts: float,
-        data_dir: str | Path,
+        archive: "ArchiveStore",
     ) -> None:
-        """Record a membership creation as an archive event."""
-        from taosmd.archive import ArchiveStore, EVENT_A2A
+        """Record a membership creation as an archive event.
 
-        archive = ArchiveStore(
-            archive_dir=str(Path(data_dir) / "archive"),
-            index_path=str(Path(data_dir) / "archive-index.db"),
-        )
+        The ``archive`` must already be initialised and opened by the caller
+        (the service).  This avoids two writers constructing independent
+        ArchiveStore instances on the same directory.
+        """
         await archive.init()
         await archive.record(
             event_type=EVENT_A2A,
@@ -227,22 +227,20 @@ class MembershipStore:
             app_id=thread,
             summary=f"Added {principal_id} as {role} to thread {thread}",
         )
-        await archive.close()
 
     async def archive_membership_removed(
         self,
         thread: str,
         principal_id: str,
         ts: float,
-        data_dir: str | Path,
+        archive: "ArchiveStore",
     ) -> None:
-        """Record a membership removal as an archive event."""
-        from taosmd.archive import ArchiveStore, EVENT_A2A
+        """Record a membership removal as an archive event.
 
-        archive = ArchiveStore(
-            archive_dir=str(Path(data_dir) / "archive"),
-            index_path=str(Path(data_dir) / "archive-index.db"),
-        )
+        The ``archive`` must already be initialised and opened by the caller
+        (the service).  This avoids two writers constructing independent
+        ArchiveStore instances on the same directory.
+        """
         await archive.init()
         await archive.record(
             event_type=EVENT_A2A,
@@ -256,4 +254,3 @@ class MembershipStore:
             app_id=thread,
             summary=f"Removed {principal_id} from thread {thread}",
         )
-        await archive.close()

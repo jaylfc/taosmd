@@ -2091,11 +2091,13 @@ async def a2a_create_thread(
                 await store.add_membership(thread, participant, role="member")
 
         ts = time.time()
-        await store.archive_membership_created(thread, agent, "owner", ts, resolved_dir)
+        stores = await _api._ensure_stores(data_dir)
+        archive = stores["archive"]
+        await store.archive_membership_created(thread, agent, "owner", ts, archive)
         for participant in participants:
             if participant != agent:
                 await store.archive_membership_created(
-                    thread, participant, "member", ts, resolved_dir,
+                    thread, participant, "member", ts, archive,
                 )
 
         members = await store.list_active_members(thread)
@@ -2165,9 +2167,13 @@ async def a2a_add_member(
             thread=thread, principal_id=principal_id, agent=agent, data_dir=data_dir,
         )
 
-    from .a2a_membership import MembershipStore
+    from taosmd import api as _api
 
     resolved_dir = _api._resolve_data_dir(data_dir)
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
+    from .a2a_membership import MembershipStore
+
     store = MembershipStore(resolved_dir)
     try:
         if not await store.is_principal_owner(thread, agent):
@@ -2188,7 +2194,7 @@ async def a2a_add_member(
 
         ts = time.time()
         await store.archive_membership_created(
-            thread, principal_id, "member", ts, resolved_dir,
+            thread, principal_id, "member", ts, archive,
         )
 
         return {
@@ -2222,6 +2228,8 @@ async def a2a_remove_member(
     from .a2a_membership import MembershipStore
 
     resolved_dir = _api._resolve_data_dir(data_dir)
+    stores = await _api._ensure_stores(data_dir)
+    archive = stores["archive"]
     store = MembershipStore(resolved_dir)
     try:
         if not await store.is_principal_owner(thread, agent):
@@ -2247,7 +2255,7 @@ async def a2a_remove_member(
             }
 
         ts = time.time()
-        await store.archive_membership_removed(thread, principal_id, ts, resolved_dir)
+        await store.archive_membership_removed(thread, principal_id, ts, archive)
 
         return {
             "thread": thread,
