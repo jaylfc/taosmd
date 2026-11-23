@@ -14,6 +14,7 @@ import contextvars
 import json
 import logging
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -497,6 +498,7 @@ async def process_conversation_turn(
     defer_below_confidence: float = 0.0,
     default_fact_confidence: float = 1.0,
     vmem=None,
+    data_dir: Path | str | None = None,
 ) -> dict:
     """Extract facts from a conversation turn and store in the KG.
 
@@ -533,7 +535,8 @@ async def process_conversation_turn(
     # Gate: named agents with fact_extraction disabled fall back to regex.
     # Anonymous callers (agent_name is None or "") always run as before.
     method = "regex"
-    if agent_name and not is_task_enabled(agent_name, "fact_extraction"):
+    if agent_name and not is_task_enabled(agent_name, "fact_extraction",
+                                          data_dir=data_dir):
         logger.debug(
             "process_conversation_turn: fact_extraction disabled for agent=%r, using regex",
             agent_name,
