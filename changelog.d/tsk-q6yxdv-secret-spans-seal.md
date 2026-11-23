@@ -1,0 +1,2 @@
+### Added
+- archive: seal secret spans in the raw line instead of stripping them -- each record with a secret span gets a per-record data key wrapped to the install X25519 key and logged to <keys_dir>/wraps/<recipient_kid>.jsonl, the raw JSONL line keeps the exact bytes encrypted and gains enc_spans plus secret_schema: 2, every readable view keeps the redacted form, and ArchiveStore.reveal() returns the original input byte for byte.

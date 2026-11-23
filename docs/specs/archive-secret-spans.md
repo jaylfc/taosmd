@@ -154,3 +154,40 @@ CLI `taosmd archive export --reveal` built on it). It is NOT exposed by
 - **D2 (standalone key):** a 0600 key file under `~/.taosmd/keys/` when taOS is
   absent (recommended), versus requiring taOS Secrets and so no encrypted spans
   in standalone.
+
+## 10. Per-record data keys and X25519 wrap (implemented by tsk-q6yxdv)
+
+This card wires sealing into `ArchiveStore.record()` so the raw line keeps the
+exact secret bytes, encrypted under a per-record data key:
+
+- Each record with at least one secret span gets a fresh random 32-byte data
+  key (DEK) with a 16-hex `dek_id`. The DEK encrypts the spans through the
+  existing AES-GCM codec (`encode_leaf` / `reveal_leaf`, unchanged) and the
+  stored leaf holds the redacted form. The record's `enc_spans` entries carry
+  `path`, `start`, `end`, `kind`, `kid` (the `dek_id`), `nonce` and `ct`; the
+  DEK itself is never written to the archive line.
+- Before the archive line is written, the DEK is wrapped to the install
+  X25519 public key: ephemeral X25519 key, ECDH shared secret, HKDF-SHA256 to
+  a wrapping key and a 12-byte nonce, AES-256-GCM. The entry
+  `{line_key, dek_id, recipient_kid, wrapped_dek, eph_pub}` is appended to the
+  install wrap log `<keys_dir>/wraps/<recipient_kid>.jsonl` and fsynced before
+  the archive line is written.
+- `keys_dir` is a new `ArchiveStore` constructor argument defaulting to
+  `<directory of index_path>/keys`. The install key pair lives there: directory
+  mode 0700, private key file mode 0600, created on first init if absent, never
+  under the archive directory. `recipient_kid` is SHA-256 of the install
+  public key's raw bytes. `init()` fails loud if a key exists but cannot be
+  read.
+- `ArchiveStore.reveal(event) -> event` decrypts each span and returns the
+  caller's original input byte for byte. A per-record provider returns the DEK
+  from `current()` and unwraps any `dek_id` from the wrap log via `get()`.
+  Python API only: no HTTP, MCP or bus route.
+- Re-wrap: `keywrap.rewrap(dek_ids, to_public_key, to_kid)` unwraps each DEK
+  with the install key, wraps it to the new key, verifies the new wrap opens,
+  appends the new wrap to `<to_keys_dir>/wraps/<to_kid>.jsonl` (fsynced), and
+  only then removes the install wrap entries for those DEKs (remaining entries
+  written to a temp file, fsynced, atomically replaced). It returns the list
+  re-wrapped. Archive lines are never rewritten, so a sealed record stays
+  byte-identical and becomes decryptable under the new key. No caller yet.
+- Lines written before this change (no `secret_schema`) are untouched and stay
+  as they are; their redaction is permanent.

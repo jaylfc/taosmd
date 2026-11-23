@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from . import _db, migrations
+from . import keywrap
+from .secret_spans import encode_leaf, reveal_leaf
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +135,18 @@ class ArchiveStore:
         self,
         archive_dir: str | Path = "data/archive",
         index_path: str | Path = "data/archive-index.db",
+        keys_dir: str | Path | None = None,
     ):
         self._archive_dir = Path(archive_dir)
         self._index_path = str(index_path)
+        self._keys_dir = (
+            Path(keys_dir) if keys_dir is not None else Path(self._index_path).parent / "keys"
+        )
         self._conn: sqlite3.Connection | None = None
         self._current_file: Any = None
         self._current_date: str = ""
         self._user_tracking_enabled: bool = False
+        self._install_key: keywrap.InstallKey | None = None
         # In-memory line counts per JSONL path, avoids re-reading the whole
         # daily file on every write. Seeded from disk the first time a path
         # is seen; reset naturally per path across daily rollover.
@@ -147,6 +155,9 @@ class ArchiveStore:
     async def init(self) -> None:
         self._archive_dir.mkdir(parents=True, exist_ok=True)
         Path(self._index_path).parent.mkdir(parents=True, exist_ok=True)
+        # The install key is loaded (or created) before the database so a
+        # store whose key cannot be read fails loud at init, never at record.
+        self._install_key = keywrap.init_install_key(self._keys_dir)
         self._conn = _db.connect(self._index_path)
         self._conn.row_factory = sqlite3.Row
         _db.run_schema(self._conn, INDEX_SCHEMA)
@@ -301,14 +312,71 @@ class ArchiveStore:
         except Exception:
             data = json.loads(json.dumps(data, default=str))
 
-        # Redact secrets before storage (for JSONL write - same keys as before)
-        from .secret_filter import redact_secrets
-        summary, _ = redact_secrets(summary)
-        for key in ("content", "text", "msg", "query", "body"):
-            if key in data and isinstance(data[key], str):
-                data[key], _ = redact_secrets(data[key])
+        # Find secret spans on the ORIGINAL values: every string leaf of data
+        # (walked recursively) plus summary. Spans are reported against the
+        # original text, so offsets never refer to an already-rewritten string.
+        from .secret_filter import find_secret_spans
+
+        marked: list[tuple[list, str]] = []
+        summary_spans = find_secret_spans(summary)
+        if summary_spans:
+            marked.append((["summary"], summary))
+
+        def _collect(value: Any, path: list) -> None:
+            if isinstance(value, str):
+                spans = find_secret_spans(value)
+                if spans:
+                    marked.append((path, value))
+            elif isinstance(value, dict):
+                for key, val in value.items():
+                    _collect(val, path + [key])
+            elif isinstance(value, (list, tuple)):
+                for index, val in enumerate(value):
+                    _collect(val, path + [index])
+
+        _collect(data, ["data"])
 
         ts = time.time()
+
+        # Seal: one random DEK per record with spans, wrapped to the install
+        # key and fsynced to the wrap log before the archive line is written.
+        # Each span is encrypted with the DEK (existing codec, unchanged) and
+        # stored as its redaction placeholder, so every readable view keeps
+        # showing the redacted form while the raw bytes stay encrypted.
+        enc_spans: list[dict] = []
+        if marked:
+            dek = os.urandom(32)
+            dek_id = secrets.token_hex(8)
+            wrapped = keywrap.wrap_dek(self._install_key, dek)
+            keywrap.append_wrap(
+                self._install_key, dek_id, wrapped["wrapped_dek"], wrapped["eph_pub"]
+            )
+            provider = keywrap.DekProvider(self._install_key, dek_id, dek)
+
+            def _seal(value: Any, path: list) -> Any:
+                if isinstance(value, str):
+                    spans = find_secret_spans(value)
+                    if not spans:
+                        return value
+                    redacted, entries = encode_leaf(
+                        value,
+                        spans,
+                        ts=ts,
+                        event_type=event_type,
+                        path=path,
+                        provider=provider,
+                    )
+                    enc_spans.extend(entries)
+                    return redacted
+                if isinstance(value, dict):
+                    return {key: _seal(val, path + [key]) for key, val in value.items()}
+                if isinstance(value, (list, tuple)):
+                    return [_seal(val, path + [index]) for index, val in enumerate(value)]
+                return value
+
+            summary = _seal(summary, ["summary"])
+            data = _seal(data, ["data"])
+
         event = {
             "timestamp": ts,
             "event_type": event_type,
@@ -318,6 +386,9 @@ class ArchiveStore:
             "summary": summary,
             "data": data,
         }
+        if enc_spans:
+            event["enc_spans"] = enc_spans
+            event["secret_schema"] = 2
 
         # Write to JSONL
         f, file_path = self._ensure_file(ts)
@@ -379,6 +450,45 @@ class ArchiveStore:
 
         self._conn.commit()
         return row_id
+
+    async def reveal(self, event: dict) -> dict:
+        """Return ``event`` with every sealed secret span decrypted.
+
+        Python API only: no HTTP, MCP or bus route. Every readable or derived
+        view (JSONL, archive_index.data_json, archive_fts, exports) keeps the
+        redacted form; this is the only path that touches the key. Lines
+        written without ``secret_schema`` are returned unchanged (deep-copied,
+        so the caller's dict is never mutated).
+        """
+        if not event.get("enc_spans"):
+            return copy.deepcopy(event)
+
+        event = copy.deepcopy(event)
+        ts = event.get("timestamp")
+        event_type = event.get("event_type")
+        provider = keywrap.DekProvider(self._install_key)
+
+        by_path: dict[tuple, list[dict]] = {}
+        for entry in event["enc_spans"]:
+            by_path.setdefault(tuple(entry["path"]), []).append(entry)
+
+        for path, entries in by_path.items():
+            target = event
+            for part in path[:-1]:
+                target = target[part]
+            leaf = target[path[-1]]
+            if isinstance(leaf, str):
+                target[path[-1]] = reveal_leaf(
+                    leaf,
+                    entries,
+                    ts=ts,
+                    event_type=event_type,
+                    provider=provider,
+                )
+
+        event.pop("enc_spans", None)
+        event.pop("secret_schema", None)
+        return event
 
     # ------------------------------------------------------------------
     # Full-text search
