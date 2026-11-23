@@ -53,12 +53,13 @@ class MissingMCPDependencyError(RuntimeError):
         )
 
 
-def _require_mcp():
+def _require_fastmcp():
     """Import the MCP server class lazily, supporting mcp 1.x and 2.x.
 
     In mcp 2.x, FastMCP was renamed to MCPServer (imported from
     ``mcp.server.mcpserver``).  This function tries the mcp 2.x import first
     and falls back to ``mcp.server.fastmcp.FastMCP`` for mcp 1.x.
+    Raises :class:`MissingMCPDependencyError` only when neither import succeeds.
     """
     try:
         from mcp.server.mcpserver import MCPServer  # noqa: PLC0415
@@ -72,22 +73,22 @@ def _require_mcp():
 
 
 def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
-    """Build (but do not run) a FastMCP server bound to ``data_dir``.
+    """Build (but do not run) an MCP server bound to ``data_dir``.
 
     Registers the memory tools and A2A bus tools, each routing to
     :mod:`taosmd.service` on the shared service-loop thread. Returns the
-    configured ``FastMCP`` instance
-    (its ``_taosmd_service_loop`` attribute holds the :class:`_ServiceLoop` so
+    configured ``MCP`` instance
+    (``_taosmd_service_loop`` attribute holds the :class:`_ServiceLoop` so
     callers/tests can close it on teardown). ``runner`` lets a caller supply an
     existing loop (e.g. tests); otherwise one is created here.
 
     Raises :class:`MissingMCPDependencyError` if the ``mcp`` SDK is not
     installed.
     """
-    FastMCP = _require_mcp()
+    MCPClass = _require_fastmcp()
 
     loop = runner if runner is not None else _ServiceLoop()
-    mcp = FastMCP("taosmd")
+    mcp = MCPClass("taosmd")
     mcp._taosmd_service_loop = loop  # for teardown / introspection
 
     async def _dispatch(coro):
