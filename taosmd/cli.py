@@ -1161,6 +1161,7 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
     to start against a store it would silently need to upgrade.
     """
     from . import migrations  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
 
     data_dir = args.data_dir
     rows = migrations.status_all(data_dir)
@@ -1217,7 +1218,17 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
             )
         else:
             print(f"  {res.db}: already at version {res.to_version}")
-    return 0
+
+    # Guarded dense-vector conversion (JSON -> base64 float32). Runs by
+    # default so a store is upgraded without starting the service; it is a
+    # no-op (exit 0) on an already-converted or absent store.
+    from .store_convert import convert_dense_store  # noqa: PLC0415
+
+    convert_result = convert_dense_store(
+        Path(data_dir) / "vector-memory.db",
+    )
+    print(f"  vector-memory: {convert_result.message}")
+    return convert_result.exit_code
 
 
 def _reindex_cmd(args: argparse.Namespace) -> int:
@@ -1774,6 +1785,11 @@ def _build_parser() -> argparse.ArgumentParser:
     migrate_p.add_argument(
         "--json", action="store_true",
         help="With --status/--check, emit machine-readable JSON.",
+    )
+    migrate_p.add_argument(
+        "--convert-vectors", action="store_true",
+        help="Run the guarded dense-vector (JSON -> float32) conversion after "
+             "the schema steps. This is the default for ``taosmd migrate``.",
     )
 
     # ----- reindex subcommand ------------------------------------------
