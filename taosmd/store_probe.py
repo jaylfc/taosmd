@@ -15,10 +15,16 @@ being read as if its newest content did not exist.
 Exit codes, as used by ``taosmd migrate --probe``:
 
     0   current   every database is at the format this build writes
-    10  old       a schema step or the vector float32 conversion is pending
+    10  old       a schema step is pending, or the vector store still holds
+                  JSON vectors (a supported state, served as is; converting
+                  is optional and never happens on open)
     11  unknown   unreadable, live writer or uncheckpointed WAL, unparseable
                   marker, or rows that contradict the marker
     12  newer     a ``user_version`` or marker key this build does not know
+
+A missing or empty data dir is ``current`` (a first install: each database is
+"not created yet"). A database whose only pending step is the version stamp
+(schema already complete) is ``current`` and says "stamp only".
 
 When databases disagree the worst wins: newer, then unknown, then old.
 """
@@ -76,6 +82,11 @@ _KNOWN_DENSE_FORMATS = frozenset({"f32", "none"})
 
 _VECTOR_DB = "vector_memory"
 _WAL_REASON = "live writer or uncheckpointed WAL"
+_JSON_NOTE = (
+    "{what}; supported as is, not an error (an explicit conversion is optional "
+    "and is not run on open)"
+)
+_NOT_CREATED = "not created yet"
 
 
 class WalPresent(Exception):
@@ -170,7 +181,7 @@ def _probe_vector_rows(conn: sqlite3.Connection, user_version: int) -> tuple[Pro
             return ProbeState.CURRENT, "fresh store, no marker and no rows", detail
         if f32_rows:
             return ProbeState.UNKNOWN, "rows without a marker include non-JSON embeddings", detail
-        return ProbeState.OLD, "legacy JSON vectors with no marker", detail
+        return ProbeState.OLD, _JSON_NOTE.format(what="legacy JSON vectors with no marker"), detail
 
     parsed: dict[str, str] = {}
     for part in marker.split(";"):
@@ -190,10 +201,16 @@ def _probe_vector_rows(conn: sqlite3.Connection, user_version: int) -> tuple[Pro
     fmt = parsed.get("dense_format")
     if fmt is None:
         if parsed.get("late_interaction") == "1" or parsed.get("binary_quant") == "1":
-            return ProbeState.UNKNOWN, "legacy marker on a late-interaction or binary store", detail
+            # A 0.4.x opt-in binary or late-interaction store: master opens it
+            # as is and leaves the marker alone; nothing converts it.
+            return ProbeState.CURRENT, (
+                "legacy marker on a late-interaction or binary store; opens as is"
+            ), detail
         if f32_rows:
             return ProbeState.UNKNOWN, "legacy marker but non-JSON embeddings present", detail
-        return ProbeState.OLD, "legacy marker without dense_format (JSON vectors)", detail
+        return ProbeState.OLD, _JSON_NOTE.format(
+            what="legacy marker without dense_format (JSON vectors)"
+        ), detail
     if fmt not in _KNOWN_DENSE_FORMATS:
         return ProbeState.NEWER, f"dense_format={fmt!r} is not known to this build", detail
     if fmt == "f32" and json_rows:
@@ -208,7 +225,7 @@ def _probe_one(db: str, path: Path) -> DbProbe:
     out = DbProbe(db=db, path=str(path), state=ProbeState.UNKNOWN, latest=latest)
     if not path.exists():
         out.state = ProbeState.ABSENT
-        out.reason = "no such database"
+        out.reason = _NOT_CREATED
         return out
     try:
         conn = open_readonly(path)
@@ -228,7 +245,16 @@ def _probe_one(db: str, path: Path) -> DbProbe:
                 return out
             state, reason = ProbeState.CURRENT, ""
             if uv < latest:
-                state, reason = ProbeState.OLD, f"user_version {uv} is below {latest}"
+                st = migrations.status(conn, db)
+                if st["pending"]:
+                    state, reason = ProbeState.OLD, f"user_version {uv} is below {latest}"
+                else:
+                    # Same wording as `migrate --status`: only the stamp is
+                    # missing, nothing is converted (a2a-receipts.db is never
+                    # stamped by its own store).
+                    state = ProbeState.CURRENT
+                    reason = f"stamp only, schema already at {st['detected_baseline']}"
+                    out.detail["stamp_only"] = True
             if db == _VECTOR_DB:
                 vstate, vreason, detail = _probe_vector_rows(conn, uv)
                 out.detail.update(detail)
@@ -249,13 +275,21 @@ def _probe_one(db: str, path: Path) -> DbProbe:
 def probe_store(data_dir: Union[str, Path]) -> ProbeReport:
     """Probe every database in ``data_dir`` without modifying anything."""
     root = Path(data_dir)
+    if not root.exists():
+        dbs = [
+            DbProbe(db=db, path=str(root / migrations.DB_FILES[db]),
+                    state=ProbeState.ABSENT, latest=migrations.latest_version(db),
+                    reason=_NOT_CREATED)
+            for db in sorted(migrations.DB_FILES)
+        ]
+        return ProbeReport(data_dir=str(root), state=ProbeState.CURRENT, databases=dbs)
     if not root.is_dir():
         return ProbeReport(
             data_dir=str(root),
             state=ProbeState.UNKNOWN,
             databases=[DbProbe(
                 db="(data dir)", path=str(root), state=ProbeState.UNKNOWN,
-                reason="data dir does not exist or is not a directory",
+                reason="data dir is not a directory",
             )],
         )
     dbs = [_probe_one(db, root / migrations.DB_FILES[db]) for db in sorted(migrations.DB_FILES)]

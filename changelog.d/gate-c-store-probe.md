@@ -5,3 +5,7 @@
 ### Fixed
 
 - `taosmd migrate --status` and `--check` no longer create `-wal`/`-shm` files or switch a database to WAL mode just to report its version.
+
+### Changed
+
+- `taosmd migrate --probe` treats a missing or empty data dir as current (a first install), a database that only lacks its version stamp as current ("stamp only", as `--status` reports), and a 0.4.x `binary_quant` or `late_interaction` store as current. A legacy JSON vector store is reported as old with the note that it is supported as is.

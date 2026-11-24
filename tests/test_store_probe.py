@@ -144,8 +144,23 @@ def test_empty_dir_is_current(tmp_path):
     assert {d.state.value for d in r.databases} == {"absent"}
 
 
-def test_missing_dir_is_unknown(tmp_path):
+def test_missing_dir_is_current_first_install(tmp_path):
+    """A caller reads 11 as "do not start"; a first install must not be blocked."""
     r = _probe(tmp_path / "nope")
+    assert r.state.value == "current" and r.exit_code == 0
+    assert r.databases and all(d.state.value == "absent" for d in r.databases)
+    assert all(d.reason == "not created yet" for d in r.databases)
+    assert not (tmp_path / "nope").exists()
+
+
+def test_empty_dir_notes_not_created_yet(tmp_path):
+    assert all(d.reason == "not created yet" for d in _probe(tmp_path).databases)
+
+
+def test_data_dir_that_is_a_file_is_unknown(tmp_path):
+    f = tmp_path / "afile"
+    f.write_text("x")
+    r = _probe(f)
     assert r.state.value == "unknown" and r.exit_code == 11
 
 
@@ -243,12 +258,21 @@ def test_worst_state_wins(tmp_path):
     assert _probe(tmp_path).state.value == "newer"
 
 
-def test_marker_keys_match_what_vector_memory_writes():
+def test_marker_keys_match_what_vector_memory_writes(tmp_path):
     from taosmd.store_probe import KNOWN_MARKER_KEYS
     from taosmd.vector_memory import VectorMemory
 
-    sig = VectorMemory(":memory:")._store_mode_signature()
-    assert set(VectorMemory._parse_mode(sig)) == set(KNOWN_MARKER_KEYS)
+    import asyncio
+
+    async def sig():
+        vm = VectorMemory(tmp_path / "vm.db", embed_mode="onnx")
+        await vm.init()
+        try:
+            return vm._store_mode_signature()
+        finally:
+            vm._conn.close()
+
+    assert set(VectorMemory._parse_mode(asyncio.run(sig()))) == set(KNOWN_MARKER_KEYS)
 
 
 def test_unregistered_db_is_listed_unversioned(tmp_path):
@@ -376,3 +400,107 @@ def test_cli_probe_does_not_run_status_all(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(migrations, "status_all", boom)
     assert cli.main(["--data-dir", str(tmp_path), "migrate", "--probe"]) == 0
+
+
+# ---------------------------------------------------------------- review fixes
+
+def test_legacy_json_store_text_says_supported_not_error(tmp_path):
+    _make_vector_db(tmp_path / VEC, marker=LEGACY_MARKER, rows=["[0.1]"])
+    reason = _vec(_probe(tmp_path)).reason
+    assert "supported as is" in reason and "not an error" in reason
+
+
+@pytest.mark.parametrize("marker", [
+    "late_interaction=0;binary_quant=1;embedder=minilm-onnx",      # v0.4.0 binary_quant
+    "late_interaction=1;binary_quant=0;embedder=minilm-onnx",      # v0.4.0 late_interaction
+    "late_interaction=0;binary_quant=1;dense_format=none;embedder=minilm-onnx",  # master
+    "late_interaction=1;binary_quant=0;dense_format=none;embedder=minilm-onnx",
+])
+@pytest.mark.parametrize("rows", [[], [b"\x01\x02\x03"]])
+def test_binary_and_late_interaction_stores_are_current(tmp_path, marker, rows):
+    _make_vector_db(tmp_path / VEC, marker=marker, rows=rows)
+    v = _vec(_probe(tmp_path))
+    assert v.state.value == "current", v.reason
+
+
+def test_real_binary_quant_store_written_by_master_is_current(tmp_path):
+    import asyncio
+
+    from taosmd.vector_memory import VectorMemory
+
+    async def build():
+        vm = VectorMemory(tmp_path / VEC, embed_mode="onnx", binary_quant=True)
+        await vm.init()
+        vm._conn.close()
+
+    asyncio.run(build())
+    assert _vec(_probe(tmp_path)).state.value == "current"
+
+
+def test_stamp_only_db_is_current_and_says_so(tmp_path):
+    """a2a-receipts.db is never stamped by its own store: user_version 0 with
+    the schema complete. `migrate --status` calls that "stamp only"."""
+    p = tmp_path / "a2a-receipts.db"
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE a2a_receipts (x)")
+    c.commit()
+    c.close()
+    r = _probe(tmp_path)
+    d = next(x for x in r.databases if x.db == "a2a_receipts")
+    assert d.user_version == 0
+    assert d.state.value == "current" and r.exit_code == 0
+    assert d.reason.startswith("stamp only, schema already at 1")
+
+
+def test_unstamped_db_with_real_pending_steps_is_still_old(tmp_path):
+    sqlite3.connect(tmp_path / "claims.db").close()
+    d = next(x for x in _probe(tmp_path).databases if x.db == "claims")
+    assert d.state.value == "old" and d.reason == "user_version 0 is below 3"
+
+
+def test_hot_journal_is_unknown(tmp_path):
+    _make_stamped(tmp_path / "claims.db", "claims")
+    (tmp_path / "claims.db-journal").write_bytes(b"\x00" * 512)
+    d = next(x for x in _probe(tmp_path).databases if x.db == "claims")
+    assert d.state.value == "unknown" and d.reason == "live writer or uncheckpointed WAL"
+
+
+def test_empty_wal_and_journal_are_not_live(tmp_path):
+    _make_stamped(tmp_path / "claims.db", "claims")
+    (tmp_path / "claims.db-wal").write_bytes(b"")
+    (tmp_path / "claims.db-journal").write_bytes(b"")
+    d = next(x for x in _probe(tmp_path).databases if x.db == "claims")
+    assert d.state.value == "current"
+
+
+def test_dense_format_none_is_known(tmp_path):
+    _make_vector_db(
+        tmp_path / VEC,
+        marker="late_interaction=0;binary_quant=0;dense_format=none;embedder=minilm-onnx",
+        rows=[],
+    )
+    assert _vec(_probe(tmp_path)).state.value == "current"
+
+
+def test_data_dir_with_space_hash_and_question_mark(tmp_path):
+    """Unquoted, '#' and '?' end the path inside the sqlite URI."""
+    d = tmp_path / "my data #1? x"
+    d.mkdir()
+    _make_vector_db(d / VEC, marker=LEGACY_MARKER, rows=["[0.1]"])
+    v = _vec(_probe(d))
+    # sqlite opens a truncated path as an empty database, so check that the
+    # real file's contents were read, not just that something opened.
+    assert v.state.value == "old"
+    assert v.user_version == migrations.latest_version("vector_memory")
+    assert v.detail["json_rows"] == 1 and v.detail["marker"] == LEGACY_MARKER
+
+
+def test_status_all_with_live_wal_falls_back_and_reports(tmp_path):
+    _stamp_others(tmp_path)
+    writer = _live_wal(tmp_path / "claims.db")
+    try:
+        rows = migrations.status_all(tmp_path)
+    finally:
+        writer.close()
+    claims = next(r for r in rows if r["db"] == "claims")
+    assert claims["exists"] is True and claims["user_version"] is not None

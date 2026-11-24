@@ -135,10 +135,13 @@ nothing, and it changes nothing on disk. Exit codes:
 
 | code | state   | meaning |
 |------|---------|---------|
-| 0    | current | every database is at the format this build writes (an empty data dir counts) |
-| 10   | old     | a schema step is pending, or the vector store still holds JSON vectors |
-| 11   | unknown | unreadable, a live writer or uncheckpointed `-wal`, an unparseable marker, rows that contradict the marker, or a missing data dir |
+| 0    | current | every database opens as is: at the latest step, or needing only a version stamp (reported as "stamp only"), or not created yet. A missing or empty data dir is a first install and counts |
+| 10   | old     | a schema step is pending, or the vector store still holds JSON vectors. Legacy JSON vectors are a supported state served as is, not an error; converting them is optional and never happens on open |
+| 11   | unknown | unreadable, a live writer or uncheckpointed `-wal`, an unparseable marker, or rows that contradict the marker |
 | 12   | newer   | a `user_version` above this build's latest, or marker keys or a `dense_format` this build does not know |
+
+A 0.4.x `binary_quant` or `late_interaction` store (a marker with no
+`dense_format`) is `current`: it opens as is and nothing converts it.
 
 When databases disagree the worst wins: newer, then unknown, then old.
 `.db` files that are not in the migration registry are listed as `unversioned`
