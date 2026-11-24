@@ -754,7 +754,6 @@ def test_crystallize_and_reflect_use_served_data_dir(tmp_path, monkeypatch):
 
     import taosmd
     import taosmd.config as config_mod
-    from taosmd import agents
     from taosmd.crystallize import CrystalStore
     from taosmd.reflect import InsightStore
 
