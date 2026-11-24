@@ -95,15 +95,16 @@ def test_supersede_idempotent_returns_false_second_time(tmp_path):
 
 
 def test_supersede_matching_by_text(tmp_path):
-    """supersede_matching hides every active row containing the substring."""
+    """supersede_matching hides the agent's active rows containing the substring."""
     vmem = _make_store(tmp_path)
     try:
-        asyncio.run(vmem.add("jay works on ProjectAlpha"))
-        asyncio.run(vmem.add("we discussed ProjectAlpha at length"))
-        keep = asyncio.run(vmem.add("jay works on ProjectBeta"))
+        meta = {"agent": "jay-agent"}
+        asyncio.run(vmem.add("jay works on ProjectAlpha", meta))
+        asyncio.run(vmem.add("we discussed ProjectAlpha at length", meta))
+        keep = asyncio.run(vmem.add("jay works on ProjectBeta", meta))
 
-        n = asyncio.run(vmem.supersede_matching("ProjectAlpha"))
-        assert n == 2
+        n = asyncio.run(vmem.supersede_matching("ProjectAlpha", agent="jay-agent", force=True))
+        assert len(n) == 2
 
         hits = asyncio.run(vmem.search("project work", limit=10, hybrid=False, fusion="none"))
         texts = {h["text"] for h in hits}
@@ -124,8 +125,8 @@ def test_supersede_matching_blank_is_noop(tmp_path):
     try:
         asyncio.run(vmem.add("alpha"))
         asyncio.run(vmem.add("beta"))
-        assert asyncio.run(vmem.supersede_matching("")) == 0
-        assert asyncio.run(vmem.supersede_matching("   ")) == 0
+        assert asyncio.run(vmem.supersede_matching("", agent="a")) == []
+        assert asyncio.run(vmem.supersede_matching("   ", force=True)) == []
         hits = asyncio.run(vmem.search("alpha", limit=5, hybrid=False, fusion="none"))
         assert len(hits) == 2
     finally:
@@ -189,11 +190,12 @@ def test_migration_adds_valid_to_to_legacy_db(tmp_path):
         asyncio.run(vmem.close())
 
 
-def test_kg_contradiction_supersedes_matching_vector_chunk(tmp_path):
-    """The auto-resolve KG path opportunistically supersedes vector chunks.
+def test_kg_contradiction_leaves_vector_chunks_alone(tmp_path):
+    """An auto-resolved contradiction invalidates the old triple only.
 
-    Wires a correction end-to-end: an auto-resolved contradiction invalidates
-    the old triple AND soft-hides the vector chunk carrying the old value.
+    A triple records no link to the vector row it came from, so the old
+    object's text is never used to hide vector rows (it used to hide every
+    row, of every agent, containing the word).
     """
     vmem = _make_store(tmp_path)
     kg = TemporalKnowledgeGraph(db_path=str(tmp_path / "kg.db"))
@@ -202,24 +204,20 @@ def test_kg_contradiction_supersedes_matching_vector_chunk(tmp_path):
         old_chunk = asyncio.run(vmem.add("jay works on ProjectAlpha"))
         asyncio.run(vmem.add("jay enjoys hiking"))
 
-        # First fact.
         asyncio.run(kg.add_triple_with_contradiction_check(
             subject="jay", predicate="works_on", obj="ProjectAlpha", vmem=vmem,
         ))
-        # Correction — contradicts the singular works_on fact, auto-resolves.
         result = asyncio.run(kg.add_triple_with_contradiction_check(
             subject="jay", predicate="works_on", obj="ProjectBeta", vmem=vmem,
         ))
         assert result["contradictions_resolved"] == 1
 
-        # The old chunk is gone from recall...
         hits = asyncio.run(vmem.search("jay project", limit=10, hybrid=False, fusion="none"))
-        assert all(h["id"] != old_chunk for h in hits)
+        assert any(h["id"] == old_chunk for h in hits)
     finally:
         asyncio.run(vmem.close())
         asyncio.run(kg.close())
 
-    # ...but retained in the table (zero-loss).
     assert _row_count(tmp_path / "vec.db") == 2
 
 

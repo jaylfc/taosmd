@@ -39,11 +39,35 @@ CREATE TABLE IF NOT EXISTS vector_memory (
     valid_to REAL
 );
 CREATE INDEX IF NOT EXISTS idx_vm_created ON vector_memory(created_at DESC);
+CREATE TABLE IF NOT EXISTS supersede_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_id INTEGER NOT NULL,
+    at REAL NOT NULL,
+    reason TEXT NOT NULL,
+    ref TEXT NOT NULL DEFAULT '',
+    caller TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_supersede_audit_row ON supersede_audit(row_id);
 CREATE TABLE IF NOT EXISTS store_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 """
+
+
+class SupersedeRefused(ValueError):
+    """Raised when a bulk supersede is refused by a safety guard.
+
+    Nothing is hidden when this is raised. Pass ``force=True`` to override
+    the guard on purpose.
+    """
+
+
+# A needle shorter than this is too likely to match unrelated text.
+MIN_SUPERSEDE_NEEDLE = 12
+# More matches than this is almost certainly not one corrected fact.
+DEFAULT_SUPERSEDE_MAX_ROWS = 20
+UNKNOWN_HIDE_REASON = "unknown (before audit log)"
 
 
 class StoreModeMismatch(Exception):
@@ -1569,7 +1593,31 @@ class VectorMemory:
         """Overall vector-memory statistics."""
         return {"count": await self.count()}
 
-    async def supersede(self, row_id: int, ended_at: float | None = None) -> bool:
+    def _audit(self, row_id: int, reason: str, ref: str, caller: str, at: float) -> None:
+        self._conn.execute(
+            "INSERT INTO supersede_audit (row_id, at, reason, ref, caller) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (row_id, at, reason, ref or "", caller or ""),
+        )
+
+    @staticmethod
+    def _row_agent(metadata_json: str) -> str | None:
+        try:
+            agent = json.loads(metadata_json).get("agent")
+        except (ValueError, AttributeError):
+            return None
+        return agent if isinstance(agent, str) else None
+
+    async def supersede(
+        self,
+        row_id: int,
+        ended_at: float | None = None,
+        *,
+        agent: str | None = None,
+        reason: str = "explicit",
+        ref: str = "",
+        caller: str = "",
+    ) -> bool:
         """Soft-hide a single vector row from active recall.
 
         Sets ``valid_to`` on the row so ``search()`` (and the adjacent-neighbour
@@ -1579,45 +1627,197 @@ class VectorMemory:
         deleted. The append-only archive entry is likewise untouched, so
         zero-loss is preserved.
 
+        ``agent`` (optional) scopes the hide: when given, a row whose metadata
+        agent is not that agent is left alone and False is returned. Every hide
+        writes a ``supersede_audit`` row (``reason``, ``ref``, ``caller``);
+        :meth:`restore` undoes it.
+
         Already-superseded rows are left as-is (the guard mirrors the KG's
         ``valid_to IS NULL`` condition). Returns True if a row was affected.
         """
         end = ended_at if ended_at is not None else time.time()
+        if agent is not None:
+            row = self._conn.execute(
+                "SELECT metadata_json FROM vector_memory WHERE id = ?", (row_id,)
+            ).fetchone()
+            if row is None or self._row_agent(row["metadata_json"]) != agent:
+                return False
         cursor = self._conn.execute(
             "UPDATE vector_memory SET valid_to = ? WHERE id = ? AND valid_to IS NULL",
             (end, row_id),
         )
-        self._conn.commit()
         if cursor.rowcount > 0:
+            self._audit(row_id, reason, ref, caller, time.time())
             self._bm25_dirty = True  # active corpus changed; invalidate BM25 cache
+        self._conn.commit()
         return cursor.rowcount > 0
 
-    async def supersede_matching(self, text_or_substring: str, ended_at: float | None = None) -> int:
-        """Soft-hide every active row whose stored text contains the substring.
+    async def supersede_matching(
+        self,
+        text_or_substring: str,
+        ended_at: float | None = None,
+        *,
+        agent: str | None = None,
+        force: bool = False,
+        max_rows: int = DEFAULT_SUPERSEDE_MAX_ROWS,
+        caller: str = "",
+    ) -> list[int]:
+        """Soft-hide one agent's active rows whose text contains the substring.
 
-        Used to wire corrections by content: when a fact is corrected, the
-        chunk(s) still carrying the *old* value are excluded from active recall
-        so the stale fact stops resurfacing in vector search too. As with
-        :meth:`supersede`, the raw rows are retained (zero-loss); only their
-        ``valid_to`` is stamped. Matching is a plain case-sensitive substring
-        test on the stored (already secret-redacted) text. An empty/blank
-        ``text_or_substring`` is a no-op (returns 0) so a missing correction
-        value can never sweep the whole store. Returns the number of rows
-        superseded.
+        This is an explicit, caller-driven correction; the automatic
+        contradiction path never uses it. Guards, all lifted by ``force=True``:
+
+          * ``agent`` is required. Only rows whose metadata agent equals it are
+            considered (rows with no agent tag are never matched).
+          * the stripped needle must be at least 12 characters;
+          * the needle must match no more than ``max_rows`` (default 20) rows.
+
+        A refused call raises :class:`SupersedeRefused` and hides nothing.
+        With ``force=True`` and no ``agent`` the match is store-wide. A blank
+        needle is always a no-op. Matching is a case-sensitive substring test on
+        the stored text. Raw rows are retained (zero-loss) and each hide writes
+        a ``substring`` audit row. Returns the ids hidden (empty list if none).
         """
         needle = (text_or_substring or "").strip()
         if not needle:
-            return 0
+            return []
+        if not force:
+            if agent is None:
+                raise SupersedeRefused(
+                    "supersede_matching needs an agent scope (or force=True)")
+            if len(needle) < MIN_SUPERSEDE_NEEDLE:
+                raise SupersedeRefused(
+                    f"needle is shorter than {MIN_SUPERSEDE_NEEDLE} characters "
+                    "(pass force=True to override)")
+        sql = "SELECT id FROM vector_memory WHERE valid_to IS NULL AND instr(text, ?) > 0"
+        params: list = [text_or_substring]
+        if agent is not None:
+            sql += " AND json_extract(metadata_json, '$.agent') = ?"
+            params.append(agent)
+        ids = [r["id"] for r in self._conn.execute(sql, params).fetchall()]
+        if not force and len(ids) > max_rows:
+            raise SupersedeRefused(
+                f"needle matches {len(ids)} rows, more than the cap of {max_rows} "
+                "(pass force=True or a larger max_rows to override)")
+        if not ids:
+            return []
         end = ended_at if ended_at is not None else time.time()
-        cursor = self._conn.execute(
-            "UPDATE vector_memory SET valid_to = ? "
-            "WHERE valid_to IS NULL AND instr(text, ?) > 0",
-            (end, text_or_substring),
-        )
+        now = time.time()
+        for rid in ids:
+            self._conn.execute(
+                "UPDATE vector_memory SET valid_to = ? WHERE id = ? AND valid_to IS NULL",
+                (end, rid),
+            )
+            self._audit(rid, "substring", needle, caller, now)
         self._conn.commit()
-        if cursor.rowcount > 0:
-            self._bm25_dirty = True  # active corpus changed; invalidate BM25 cache
-        return cursor.rowcount
+        self._bm25_dirty = True  # active corpus changed; invalidate BM25 cache
+        return ids
+
+    async def list_hidden(self, agent: str | None = None) -> list[dict]:
+        """List soft-hidden rows (``valid_to`` set), oldest id first.
+
+        Each item has ``id``, ``agent``, ``text`` (first 80 characters),
+        ``valid_to`` and ``reason``: the latest audit reason, or the row's
+        ``hidden_by`` marker (shelf archive, collection reindex), or
+        ``"unknown (before audit log)"`` for rows hidden before the audit table
+        existed. ``agent`` filters by the row's metadata agent.
+        """
+        rows = self._conn.execute(
+            "SELECT id, text, metadata_json, valid_to FROM vector_memory "
+            "WHERE valid_to IS NOT NULL ORDER BY id"
+        ).fetchall()
+        out = []
+        for row in rows:
+            row_agent = self._row_agent(row["metadata_json"])
+            if agent is not None and row_agent != agent:
+                continue
+            last = self._conn.execute(
+                "SELECT reason FROM supersede_audit WHERE row_id = ? "
+                "ORDER BY id DESC LIMIT 1", (row["id"],),
+            ).fetchone()
+            reason = UNKNOWN_HIDE_REASON
+            if last is not None and last["reason"] != "restored":
+                reason = last["reason"]
+            else:
+                try:
+                    marker = json.loads(row["metadata_json"]).get("hidden_by")
+                except (ValueError, AttributeError):
+                    marker = None
+                if marker:
+                    reason = f"hidden_by {marker}"
+            out.append({
+                "id": row["id"],
+                "agent": row_agent,
+                "text": row["text"][:80],
+                "valid_to": row["valid_to"],
+                "reason": reason,
+            })
+        return out
+
+    def _restore_rows(self, rows, caller: str) -> list[int]:
+        restored = []
+        now = time.time()
+        for row in rows:
+            try:
+                meta = json.loads(row["metadata_json"])
+            except ValueError:
+                meta = {}
+            marker = meta.pop("hidden_by", None) if isinstance(meta, dict) else None
+            self._conn.execute(
+                "UPDATE vector_memory SET valid_to = NULL, metadata_json = ? WHERE id = ?",
+                (json.dumps(meta) if isinstance(meta, dict) else row["metadata_json"],
+                 row["id"]),
+            )
+            self._audit(row["id"], "restored", str(marker or ""), caller, now)
+            restored.append(row["id"])
+        if restored:
+            self._conn.commit()
+            self._bm25_dirty = True
+        return restored
+
+    async def restore(self, row_ids: list[int], *, caller: str = "") -> list[int]:
+        """Make hidden rows visible again. Never deletes; always allowed.
+
+        Clears ``valid_to`` (and any ``hidden_by`` marker) and writes a
+        ``restored`` audit row. Ids that are unknown or already visible are
+        skipped. Returns the ids actually restored.
+        """
+        rows = []
+        for rid in row_ids:
+            row = self._conn.execute(
+                "SELECT id, metadata_json FROM vector_memory "
+                "WHERE id = ? AND valid_to IS NOT NULL", (rid,),
+            ).fetchone()
+            if row is not None:
+                rows.append(row)
+        return self._restore_rows(rows, caller)
+
+    async def restore_all(
+        self, *, since: str | float, agent: str | None = None, caller: str = "",
+    ) -> list[int]:
+        """Restore every row hidden at or after ``since``.
+
+        ``since`` is an ISO date or datetime (naive values are read as UTC) or a
+        float epoch. ``agent`` restricts it to one agent's rows. Returns the ids
+        restored.
+        """
+        if isinstance(since, (int, float)):
+            cutoff = float(since)
+        else:
+            from datetime import datetime, timezone  # noqa: PLC0415
+
+            dt = datetime.fromisoformat(str(since))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            cutoff = dt.timestamp()
+        rows = [
+            r for r in self._conn.execute(
+                "SELECT id, metadata_json FROM vector_memory "
+                "WHERE valid_to IS NOT NULL AND valid_to >= ? ORDER BY id", (cutoff,),
+            ).fetchall()
+            if agent is None or self._row_agent(r["metadata_json"]) == agent
+        ]
+        return self._restore_rows(rows, caller)
 
     async def iter_entries(
         self,

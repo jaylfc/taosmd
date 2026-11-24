@@ -346,7 +346,8 @@ def test_unarchive_does_not_resurrect_non_shelf_superseded_rows(
     vmem = stores["vector"]
 
     async def _do_supersede():
-        await vmem.supersede_matching("Row superseded for contradiction reason")
+        await vmem.supersede_matching(
+            "Row superseded for contradiction reason", agent=shelf)
 
     httpd.service_loop.run(_do_supersede())
 
