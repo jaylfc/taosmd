@@ -29,6 +29,7 @@ import json
 import re
 import shutil
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -303,18 +304,35 @@ class AgentRegistry:
                 return a
         raise AgentNotFoundError(f"agent {name!r} is not registered")
 
-    def delete_agent(self, name: str, *, drop_data: bool = False) -> None:
+    def delete_agent(self, name: str, *, drop_data: bool = False, wipe: bool = False) -> None:
         data = self._read()
         before = len(data["agents"])
         data["agents"] = [a for a in data["agents"] if a["name"] != name]
         if len(data["agents"]) == before:
-            raise AgentNotFoundError(f"agent {name!r} is not registered")
-        self._write(data)
+            if not (wipe or drop_data):
+                raise AgentNotFoundError(f"agent {name!r} is not registered")
+        else:
+            self._write(data)
 
-        if drop_data:
-            agent_dir = self._agent_dir(name)
+        agent_dir = self._agent_dir(name)
+        archive_root = self.data_dir / "archived-agents"
+        if wipe or drop_data:
             if agent_dir.exists():
                 shutil.rmtree(agent_dir)
+            if archive_root.exists():
+                for d in archive_root.iterdir():
+                    if d.is_dir() and d.name.startswith(f"{name}-"):
+                        shutil.rmtree(d)
+        else:
+            if agent_dir.exists():
+                archive_root.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                dest = archive_root / f"{name}-{ts}"
+                counter = 0
+                while dest.exists():
+                    counter += 1
+                    dest = archive_root / f"{name}-{ts}-{counter}"
+                shutil.move(str(agent_dir), str(dest))
 
     def update_stats(
         self,
@@ -606,8 +624,8 @@ def get_agent(name: str) -> dict:
     return _registry().get_agent(name)
 
 
-def delete_agent(name: str, *, drop_data: bool = False) -> None:
-    _registry().delete_agent(name, drop_data=drop_data)
+def delete_agent(name: str, *, drop_data: bool = False, wipe: bool = False, data_dir: Path | str | None = None) -> None:
+    _registry(data_dir).delete_agent(name, drop_data=drop_data, wipe=wipe)
 
 
 def ensure_agent(name: str, *, display_name: str = "", data_dir: Path | str | None = None) -> dict:

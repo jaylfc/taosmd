@@ -119,11 +119,17 @@ def parse_entry(
                 if text_parts:
                     text = "\n".join(text_parts)
                     if text:
-                        text, truncated = _cap_field(_sanitize_text(text))
+                        text = _sanitize_text(text)
+                        text_indexed, truncated = _cap_field(text)
                         items.append(
                             {
                                 "id": base_id,
                                 "text": text,
+                                "indexed_text": text_indexed,
+                                "archive_text": text,
+                                "full_text": text,
+                                "raw_text": text,
+                                "content": text,
                                 "metadata": {
                                     "source": "hook:claude-code",
                                     "session_id": session_id_from,
@@ -149,14 +155,20 @@ def parse_entry(
                         tr_text = tr_content
                     else:
                         tr_text = str(tr_content)
-                    tr_text, truncated = _cap_field(_sanitize_text(tr_text))
+                    tr_text = _sanitize_text(tr_text)
+                    tr_text_indexed, truncated = _cap_field(tr_text)
                     item_id = f"{base_id}:tool_result:{idx}"
                     # Filter out empty tool_result content
-                    if tr_text:
+                    if tr_text_indexed:
                         items.append(
                             {
                                 "id": item_id,
                                 "text": tr_text,
+                                "indexed_text": tr_text_indexed,
+                                "archive_text": tr_text,
+                                "full_text": tr_text,
+                                "raw_text": tr_text,
+                                "content": tr_text,
                                 "metadata": {
                                     "source": "hook:claude-code",
                                     "session_id": session_id_from,
@@ -174,11 +186,17 @@ def parse_entry(
             if text_parts:
                 text = "\n".join(text_parts)
                 if text:
-                    text, truncated = _cap_field(_sanitize_text(text))
+                    text = _sanitize_text(text)
+                    text_indexed, truncated = _cap_field(text)
                     items.append(
                         {
                             "id": base_id,
                             "text": text,
+                                "indexed_text": text_indexed,
+                                "archive_text": text,
+                                "full_text": text,
+                                "raw_text": text,
+                                "content": text,
                             "metadata": {
                                 "source": "hook:claude-code",
                                 "session_id": session_id_from,
@@ -194,12 +212,18 @@ def parse_entry(
             return None, None
 
         if isinstance(content, str):
-            text, truncated = _cap_field(_sanitize_text(content))
-            if text:
+            text = _sanitize_text(content)
+            text_indexed, truncated = _cap_field(text)
+            if text_indexed:
                 items.append(
                     {
                         "id": base_id,
                         "text": text,
+                                "indexed_text": text_indexed,
+                                "archive_text": text,
+                                "full_text": text,
+                                "raw_text": text,
+                                "content": text,
                         "metadata": {
                             "source": "hook:claude-code",
                             "session_id": session_id_from,
@@ -244,11 +268,17 @@ def parse_entry(
         if text_parts:
             text = "\n".join(text_parts)
             if text:
-                text, truncated = _cap_field(_sanitize_text(text))
+                text = _sanitize_text(text)
+                text_indexed, truncated = _cap_field(text)
                 items.append(
                     {
                         "id": base_id,
                         "text": text,
+                                "indexed_text": text_indexed,
+                                "archive_text": text,
+                                "full_text": text,
+                                "raw_text": text,
+                                "content": text,
                         "metadata": {
                             "source": "hook:claude-code",
                             "session_id": session_id_from,
@@ -267,12 +297,18 @@ def parse_entry(
                 tub_text = json.dumps(tub_input, separators=(",", ":"))
             else:
                 tub_text = str(tub_input)
-            tub_text, truncated = _cap_field(_sanitize_text(tub_text))
+            tub_text = _sanitize_text(tub_text)
+            tub_text_indexed, truncated = _cap_field(tub_text)
             item_id = f"{base_id}:tool_use:{idx}"
             items.append(
                 {
                     "id": item_id,
                     "text": tub_text,
+                    "indexed_text": tub_text_indexed,
+                    "archive_text": tub_text,
+                    "full_text": tub_text,
+                    "raw_text": tub_text,
+                    "content": tub_text,
                     "metadata": {
                         "source": "hook:claude-code",
                         "session_id": session_id_from,

@@ -665,16 +665,16 @@ def _setup_prompt_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
-def _agent_rm(registry: AgentRegistry, name: str, drop_data: bool) -> int:
+def _agent_rm(registry: AgentRegistry, name: str, drop_data: bool, wipe: bool = False) -> int:
     try:
-        registry.delete_agent(name, drop_data=drop_data)
+        registry.delete_agent(name, drop_data=drop_data, wipe=wipe or drop_data)
     except AgentNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    if drop_data:
+    if wipe or drop_data:
         print(f"Removed agent {name!r} and deleted its index files.")
     else:
-        print(f"Removed agent {name!r}. Index files preserved (use --drop-data to delete).")
+        print(f"Removed agent {name!r}. Index files archived (use --wipe to delete).")
     return 0
 
 
@@ -1417,7 +1417,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     rm_p = agent_sub.add_parser("rm", help="Remove a registered agent")
     rm_p.add_argument("name")
-    rm_p.add_argument("--drop-data", action="store_true", help="Also delete the agent's index files")
+    rm_p.add_argument("--drop-data", action="store_true", help="Also delete the agent's index files (alias for --wipe)")
+    rm_p.add_argument("--wipe", action="store_true", help="Permanently delete the agent's index files instead of archiving them")
 
     # ----- librarian subcommands -------------------------------------------
     lib_p = sub.add_parser("librarian", help="Per-agent librarian (LLM enrichment) controls")
@@ -2048,7 +2049,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.agent_cmd == "add":
             return _agent_add(registry, args.name, args.display_name, args.clobber)
         if args.agent_cmd == "rm":
-            return _agent_rm(registry, args.name, args.drop_data)
+            return _agent_rm(registry, args.name, args.drop_data, args.wipe)
 
     if args.cmd == "librarian":
         if args.librarian_cmd == "show":
