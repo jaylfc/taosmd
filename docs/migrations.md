@@ -114,11 +114,40 @@ taosmd migrate --status     # per-database version, latest, pending steps
 taosmd migrate --check      # dry run; exits 1 if anything is pending
 taosmd migrate              # apply pending migrations to the data dir
 taosmd migrate --status --json
+taosmd migrate --probe     # read-only store format probe, exit code is the verdict
+taosmd migrate --probe --json
 ```
 
 `--status` runs the same detect walk the runner would, so an unstamped store
 whose schema is already complete is reported as needing only a stamp, with an
 empty pending list, rather than appearing to face a replay of every step.
+
+`--status` and `--probe` open each database read-only and immutable, so they
+create no `-wal` or `-shm` files and do not switch a database's journal mode.
+The one exception for `--status`: when a non-empty `-wal` or `-journal` already
+exists it falls back to a normal connection so the report reflects that content.
+
+`--probe` is the format check to run before an upgrade. It looks at each
+database's `PRAGMA user_version` against the latest known step, and at the
+vector store's `store_meta` marker and the real row encoding (JSON `[...]`
+vectors versus base64 float32). It never calls a store class, so it converts
+nothing, and it changes nothing on disk. Exit codes:
+
+| code | state   | meaning |
+|------|---------|---------|
+| 0    | current | every database opens as is: at the latest step, or needing only a version stamp (reported as "stamp only"), or not created yet. A missing or empty data dir is a first install and counts |
+| 10   | old     | a schema step is pending, or the vector store still holds JSON vectors. Legacy JSON vectors are a supported state served as is, not an error; converting them is optional and never happens on open |
+| 11   | unknown | unreadable, a live writer or uncheckpointed `-wal`, an unparseable marker, or rows that contradict the marker |
+| 12   | newer   | a `user_version` above this build's latest, or marker keys or a `dense_format` this build does not know |
+
+A 0.4.x `binary_quant` or `late_interaction` store (a marker with no
+`dense_format`) is `current`: it opens as is and nothing converts it.
+
+When databases disagree the worst wins: newer, then unknown, then old.
+`.db` files that are not in the migration registry are listed as `unversioned`
+and do not affect the exit code. From Python, `taosmd.store_probe.probe_store(dir)`
+returns the same report (overall state plus per-database path, state,
+`user_version`, `latest`, reason).
 
 `--check` is the deploy pre-flight: it writes nothing and exits non-zero when
 any database in the data directory is behind, so a rollout can refuse to start
