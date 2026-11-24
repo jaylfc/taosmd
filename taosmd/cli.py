@@ -1207,6 +1207,27 @@ def _reconcile_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _migrate_probe(data_dir, as_json: bool) -> int:
+    """Print the read-only store format probe; the exit code is its overall state."""
+    from . import store_probe  # noqa: PLC0415
+
+    report = store_probe.probe_store(data_dir)
+    if as_json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(f"data dir: {report.data_dir}")
+        print(f"state: {report.state.value} (exit {report.exit_code})")
+        width = max((len(d.db) for d in report.databases), default=0)
+        for d in report.databases:
+            version = "-" if d.user_version is None else str(d.user_version)
+            latest = "-" if d.latest is None else str(d.latest)
+            line = f"  {d.db:<{width}}  {d.state.value:<11} version {version:>3} of {latest:<3}"
+            if d.reason:
+                line += f"  {d.reason}"
+            print(line)
+    return report.exit_code
+
+
 def _migrate_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd migrate``: report or apply pending schema migrations.
 
@@ -1218,6 +1239,8 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
     from . import migrations  # noqa: PLC0415
 
     data_dir = args.data_dir
+    if args.probe:
+        return _migrate_probe(data_dir, args.json)
     rows = migrations.status_all(data_dir)
 
     if args.status or args.check:
@@ -1852,8 +1875,17 @@ def _build_parser() -> argparse.ArgumentParser:
              "non-zero if any database has pending migrations.",
     )
     migrate_p.add_argument(
+        "--probe", action="store_true",
+        help="Read-only store format probe: opens every database immutable, "
+             "creates no -wal/-shm files, changes nothing. Exit code: "
+             "0 current, 10 old (a schema step or the float32 vector "
+             "conversion is pending), 11 unknown (unreadable, live writer or "
+             "uncheckpointed WAL, or rows contradicting the marker), 12 newer "
+             "than this build. The worst state across databases wins.",
+    )
+    migrate_p.add_argument(
         "--json", action="store_true",
-        help="With --status/--check, emit machine-readable JSON.",
+        help="With --status/--check/--probe, emit machine-readable JSON.",
     )
 
     # ----- reindex subcommand ------------------------------------------
