@@ -486,6 +486,23 @@ def test_exit2_when_free_space_is_too_low(store, monkeypatch):
     assert file_hash(store) == h and not backups(store)
 
 
+def test_exit2_when_space_covers_the_backup_but_not_the_conversion(store, monkeypatch):
+    h = file_hash(store)
+    size = store.stat().st_size
+    need_backup = int(size * 1.10)
+    monkeypatch.setattr(
+        store_convert.shutil, "disk_usage", lambda p: _Usage(10**9, 0, need_backup + size // 2)
+    )
+    res = convert_dense_store(store)
+    assert res.exit_code == 2 and "free disk space" in res.message
+    assert file_hash(store) == h and not backups(store)
+    # with room for both the backup and the conversion it goes ahead
+    monkeypatch.setattr(
+        store_convert.shutil, "disk_usage", lambda p: _Usage(10**9, 0, need_backup + size + 4096)
+    )
+    assert convert_dense_store(store).exit_code == 0
+
+
 def test_exit2_when_only_the_backup_filesystem_is_short(store, tmp_path, monkeypatch):
     h = file_hash(store)
     real = shutil.disk_usage
@@ -799,23 +816,81 @@ def test_exit4_when_the_marker_is_not_written(store, monkeypatch):
     assert file_hash(store) == h
 
 
-def test_recall_check_rejects_reordered_results(store, monkeypatch):
-    """Per-row checks pass, but the recall probe sees different scores."""
-    h = file_hash(store)
+def _skew_live_side(monkeypatch, vecs_fn=None, ids_fn=None):
     real = store_convert._TopK.add
     state = {"n": 0}
 
     def skewed(self, ids, vecs):
         state["n"] += 1
-        if state["n"] % 2 == 0:  # every second call is the live side
-            vecs = np.asarray(vecs).copy()
-            vecs[0] = vecs[0] + 0.5
+        if state["n"] % 2 == 0:  # calls alternate backup side, live side
+            if vecs_fn:
+                vecs = vecs_fn(np.asarray(vecs).copy())
+            if ids_fn:
+                ids = ids_fn(np.asarray(ids).copy())
         return real(self, ids, vecs)
 
     monkeypatch.setattr(store_convert._TopK, "add", skewed)
+
+
+def _nudge(v):
+    v[:, 0] += 1e-3  # same ids, scores off by about 1e-3
+    return v
+
+
+def test_recall_check_rejects_shifted_scores(store, monkeypatch):
+    """Per-row checks pass, same top-10 ids, but scores differ by more than 1e-6."""
+    h = file_hash(store)
+    _skew_live_side(monkeypatch, vecs_fn=_nudge)
     res = convert_dense_store(store)
-    assert res.exit_code == 4 and "recall" in res.message
+    assert res.exit_code == 4 and "scores differ" in res.message
     assert file_hash(store) == h
+
+
+def test_recall_check_rejects_different_top_ids(store, monkeypatch):
+    h = file_hash(store)
+    _skew_live_side(monkeypatch, ids_fn=lambda ids: ids + 1_000_000)
+    res = convert_dense_store(store)
+    assert res.exit_code == 4 and "ids differ" in res.message
+    assert file_hash(store) == h
+
+
+def test_per_row_check_is_exact_not_a_tolerance(store, monkeypatch):
+    """One float32 ulp in one component is far inside the recall tolerance, so
+    only the exact per-row comparison can see it."""
+    h = file_hash(store)
+
+    def one_ulp(arr):
+        a = np.asarray(arr, dtype="<f4").copy()
+        a[0] = np.nextafter(a[0], np.float32(np.inf))
+        return _f32(a)
+
+    monkeypatch.setattr(store_convert, "_encode_row", one_ulp)
+    res = convert_dense_store(store)
+    assert res.exit_code == 4 and "differs from the original" in res.message
+    assert file_hash(store) == h
+
+
+def test_exit4_when_an_id_changes_but_the_count_does_not(store, monkeypatch):
+    h = file_hash(store)
+    real = store_convert._convert_rows
+
+    def evil(conn, dim, result):
+        real(conn, dim, result)
+        conn.execute("UPDATE vector_memory SET id = 100005 WHERE id = 5")
+
+    monkeypatch.setattr(store_convert, "_convert_rows", evil)
+    res = convert_dense_store(store)
+    assert res.exit_code == 4 and "row ids differ" in res.message
+    assert file_hash(store) == h
+
+
+def test_wrong_length_row_never_becomes_a_recall_query(tmp_path):
+    # Row 1 is structurally valid but the wrong length; it is always among the
+    # sampled candidate queries, so it must be filtered out of the probe.
+    p = make_store(tmp_path / "vector-memory.db", n=100, dim=16, overrides={1: json.dumps([0.5] * 9)})
+    res = convert_dense_store(p)
+    assert res.exit_code == 0, res.message
+    assert dict(res.malformed)[1].startswith("wrong length 9")
 
 
 def test_post_commit_failure_restores_from_backup(store, monkeypatch):
