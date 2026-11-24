@@ -1163,6 +1163,8 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
     from . import migrations  # noqa: PLC0415
 
     data_dir = args.data_dir
+    if getattr(args, "convert_vectors", False):
+        return _convert_vectors_cmd(args)
     rows = migrations.status_all(data_dir)
 
     if args.status or args.check:
@@ -1218,6 +1220,32 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
         else:
             print(f"  {res.db}: already at version {res.to_version}")
     return 0
+
+
+def _convert_vectors_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd migrate --convert-vectors``: guarded float32 conversion.
+
+    Exit codes: 0 converted or already current, 2 refused (nothing touched),
+    3 unknown or newer store format, 4 failed and restored, 1 unexpected.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from .store_convert import convert_dense_store  # noqa: PLC0415
+
+    if args.status or args.check:
+        print("--convert-vectors cannot be combined with --status or --check", file=sys.stderr)
+        return 2
+    db_path = Path(args.data_dir) / "vector-memory.db"
+    result = convert_dense_store(db_path)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(result.message)
+        if result.backup_path:
+            print(f"backup: {result.backup_path}")
+        for rid, reason in result.malformed:
+            print(f"  left unchanged: row {rid}: {reason}")
+    return result.exit_code
 
 
 def _reindex_cmd(args: argparse.Namespace) -> int:
@@ -1773,7 +1801,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     migrate_p.add_argument(
         "--json", action="store_true",
-        help="With --status/--check, emit machine-readable JSON.",
+        help="With --status/--check/--convert-vectors, emit machine-readable JSON.",
+    )
+    migrate_p.add_argument(
+        "--convert-vectors", action="store_true",
+        help="Convert the vector store's dense embeddings from JSON text to "
+             "float32 after a verified backup, with post-checks and automatic "
+             "rollback. One-way: releases that only read JSON vectors cannot "
+             "read the store afterwards (the backup is kept). Exit codes: 0 "
+             "converted or already current, 2 refused (nothing touched), 3 "
+             "unknown or newer format, 4 failed and restored, 1 unexpected.",
     )
 
     # ----- reindex subcommand ------------------------------------------
