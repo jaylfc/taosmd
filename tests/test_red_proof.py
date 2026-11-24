@@ -4,8 +4,6 @@ import json
 import multiprocessing
 import os
 import sqlite3
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -87,7 +85,7 @@ async def test_next_seq_ignores_max_id_downgrade_upgrade(tmp_path):
             """INSERT INTO archive_index
                (id, timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (i, float(i), "conversation", "a", None, None, f"old {i}", f"old.jsonl", i - 31, "{}"),
+            (i, float(i), "conversation", "a", None, None, f"old {i}", "old.jsonl", i - 31, "{}"),
         )
     arc._conn.commit()
 
