@@ -114,6 +114,35 @@ def _make_broken_kg_store(data_dir: Path) -> None:
     conn.close()
 
 
+def _break_vector_store_differently(data_dir: Path) -> str:
+    """Replace vector-memory.db with a non-SQLite file so init fails with a
+    different error than the mode-mismatch break. Returns expected error fragment."""
+    db_path = data_dir / "vector-memory.db"
+    if db_path.exists():
+        db_path.unlink()
+    # Also remove WAL/SHM sidecars if present
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(db_path) + suffix)
+        if sidecar.exists():
+            sidecar.unlink()
+    db_path.write_bytes(b"not a sqlite database\n")
+    return "sqlite3.DatabaseError"
+
+
+def _break_kg_store_differently(data_dir: Path) -> str:
+    """Replace knowledge-graph.db with a non-SQLite file so init fails with a
+    different error than the schema break. Returns expected error fragment."""
+    db_path = data_dir / "knowledge-graph.db"
+    if db_path.exists():
+        db_path.unlink()
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(db_path) + suffix)
+        if sidecar.exists():
+            sidecar.unlink()
+    db_path.write_bytes(b"not a sqlite database\n")
+    return "sqlite3.DatabaseError"
+
+
 def _make_broken_archive(data_dir: Path) -> None:
     """Make the archive path a regular file so it cannot be opened as a directory."""
     archive_dir = data_dir / "archive"
@@ -1017,3 +1046,429 @@ class TestReadinessWait:
             httpd.server_close()
             t.join(timeout=5)
             httpd.service_loop.close()
+
+class TestCacheHitFailureBranches:
+    """Pin the 15 mutants surviving #758: cache-hit failure branches,
+    vector guards in reconcile/reindex/supersede_vectors, and collections
+    has_changes. Real store failures only; no mocks of the function under test.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_vector_failure_records_error_and_timestamp(self, tmp_path, monkeypatch):
+        """Cache-hit vector retry that FAILS must record new error and timestamp."""
+        data_dir = tmp_path / "vec-cache-fail"
+        data_dir.mkdir()
+        _make_broken_vector_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["vector"] is None
+        resolved = str(data_dir)
+        first_err = taosmd_api._store_errors[resolved]["vector"]
+        first_ts = taosmd_api._last_attempt[resolved]["vector"]
+        assert "StoreModeMismatch" in first_err
+
+        # Repair then break differently so the retry fails with a NEW error.
+        _break_vector_store_differently(data_dir)
+
+        base_time = time.time()
+
+        def after_cooldown():
+            return base_time + 31
+
+        with patch("taosmd.api.time.time", side_effect=after_cooldown):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["vector"] is None
+        second_err = taosmd_api._store_errors[resolved]["vector"]
+        second_ts = taosmd_api._last_attempt[resolved]["vector"]
+        assert second_err != first_err
+        assert "sqlite3.DatabaseError" in second_err or "DatabaseError" in second_err or "database" in second_err.lower()
+        assert second_ts > first_ts
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_vector_failure_clears_error_on_recovery(self, tmp_path, monkeypatch):
+        """Cache-hit vector retry that fails then succeeds must clear error."""
+        data_dir = tmp_path / "vec-cache-recover"
+        data_dir.mkdir()
+        _make_broken_vector_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["vector"] is None
+        resolved = str(data_dir)
+        assert "vector" in taosmd_api._store_errors.get(resolved, {})
+
+        _break_vector_store_differently(data_dir)
+        base_time = time.time()
+        with patch("taosmd.api.time.time", side_effect=lambda: base_time + 31):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["vector"] is None
+        assert "vector" in taosmd_api._store_errors[resolved]
+
+        # Repair for real: remove the broken file so a fresh store can init.
+        db_path = data_dir / "vector-memory.db"
+        db_path.unlink()
+        for suffix in ("-wal", "-shm"):
+            p = Path(str(db_path) + suffix)
+            if p.exists():
+                p.unlink()
+
+        with patch("taosmd.api.time.time", side_effect=lambda: base_time + 62):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["vector"] is not None
+        assert "vector" not in taosmd_api._store_errors.get(resolved, {})
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_vector_failure_via_http_health(self, tmp_path, monkeypatch):
+        """HTTP /health reflects cache-hit vector failure with new error/timestamp, then recovery."""
+        data_dir = tmp_path / "vec-cache-http"
+        data_dir.mkdir()
+        _make_broken_vector_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        httpd = http_server.make_server("127.0.0.1", 0, data_dir=str(data_dir))
+        host, port = httpd.server_address[:2]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        try:
+            base_url = f"http://{host}:{port}"
+            body = _wait_for_health(base_url)
+            assert body["status"] == "degraded"
+            first_err = body["stores"]["vector"]
+            assert "StoreModeMismatch" in first_err
+
+            _break_vector_store_differently(data_dir)
+            base_time = time.time()
+            with patch("taosmd.api.time.time", side_effect=lambda: base_time + 31):
+                body = _wait_for_health(base_url)
+            assert body["status"] == "degraded"
+            second_err = body["stores"]["vector"]
+            assert second_err.startswith("error:")
+            assert second_err != first_err
+            assert "StoreModeMismatch" not in second_err
+
+            db_path = data_dir / "vector-memory.db"
+            db_path.unlink()
+            for suffix in ("-wal", "-shm"):
+                p = Path(str(db_path) + suffix)
+                if p.exists():
+                    p.unlink()
+            with patch("taosmd.api.time.time", side_effect=lambda: base_time + 62):
+                body = _wait_for_health(base_url)
+            assert body["status"] == "ok"
+            assert body["stores"]["vector"] == "ok"
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            t.join(timeout=5)
+            httpd.service_loop.close()
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_kg_failure_records_error_and_timestamp(self, tmp_path, monkeypatch):
+        """Cache-hit KG retry that FAILS must record new error and timestamp."""
+        data_dir = tmp_path / "kg-cache-fail"
+        data_dir.mkdir()
+        _make_broken_kg_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["kg"] is None
+        resolved = str(data_dir)
+        first_err = taosmd_api._store_errors[resolved]["kg"]
+        first_ts = taosmd_api._last_attempt[resolved]["kg"]
+
+        _break_kg_store_differently(data_dir)
+        base_time = time.time()
+        with patch("taosmd.api.time.time", side_effect=lambda: base_time + 31):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["kg"] is None
+        second_err = taosmd_api._store_errors[resolved]["kg"]
+        second_ts = taosmd_api._last_attempt[resolved]["kg"]
+        assert second_err != first_err
+        assert "sqlite3.DatabaseError" in second_err or "DatabaseError" in second_err or "database" in second_err.lower()
+        assert second_ts > first_ts
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_kg_failure_clears_error_on_recovery(self, tmp_path, monkeypatch):
+        """Cache-hit KG retry that fails then succeeds must clear error."""
+        data_dir = tmp_path / "kg-cache-recover"
+        data_dir.mkdir()
+        _make_broken_kg_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["kg"] is None
+        resolved = str(data_dir)
+        assert "kg" in taosmd_api._store_errors.get(resolved, {})
+
+        _break_kg_store_differently(data_dir)
+        base_time = time.time()
+        with patch("taosmd.api.time.time", side_effect=lambda: base_time + 31):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["kg"] is None
+        assert "kg" in taosmd_api._store_errors[resolved]
+
+        db_path = data_dir / "knowledge-graph.db"
+        db_path.unlink()
+        for suffix in ("-wal", "-shm"):
+            p = Path(str(db_path) + suffix)
+            if p.exists():
+                p.unlink()
+
+        with patch("taosmd.api.time.time", side_effect=lambda: base_time + 62):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["kg"] is not None
+        assert "kg" not in taosmd_api._store_errors.get(resolved, {})
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_kg_failure_via_http_health(self, tmp_path, monkeypatch):
+        """HTTP /health reflects cache-hit KG failure with new error/timestamp, then recovery."""
+        data_dir = tmp_path / "kg-cache-http"
+        data_dir.mkdir()
+        _make_broken_kg_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        httpd = http_server.make_server("127.0.0.1", 0, data_dir=str(data_dir))
+        host, port = httpd.server_address[:2]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        try:
+            base_url = f"http://{host}:{port}"
+            body = _wait_for_health(base_url)
+            assert body["status"] == "degraded"
+            first_err = body["stores"]["kg"]
+            assert first_err.startswith("error:")
+
+            _break_kg_store_differently(data_dir)
+            base_time = time.time()
+            with patch("taosmd.api.time.time", side_effect=lambda: base_time + 31):
+                body = _wait_for_health(base_url)
+            assert body["status"] == "degraded"
+            second_err = body["stores"]["kg"]
+            assert second_err.startswith("error:")
+            assert second_err != first_err
+
+            db_path = data_dir / "knowledge-graph.db"
+            db_path.unlink()
+            for suffix in ("-wal", "-shm"):
+                p = Path(str(db_path) + suffix)
+                if p.exists():
+                    p.unlink()
+            with patch("taosmd.api.time.time", side_effect=lambda: base_time + 62):
+                body = _wait_for_health(base_url)
+            assert body["status"] == "ok"
+            assert body["stores"]["kg"] == "ok"
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            t.join(timeout=5)
+            httpd.service_loop.close()
+
+    @pytest.mark.asyncio
+    async def test_kg_cooldown_blocks_and_allows_retry_by_attempt_count(self, tmp_path, monkeypatch):
+        """KG broken+cached: call inside cooldown must not retry (no new attempt); after cooldown must."""
+        data_dir = tmp_path / "kg-cooldown-count"
+        data_dir.mkdir()
+        _make_broken_kg_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["kg"] is None
+        resolved = str(data_dir)
+        ts_after_first = taosmd_api._last_attempt[resolved]["kg"]
+
+        # Repair the store on disk so a retry would succeed if it happened.
+        db_path = data_dir / "knowledge-graph.db"
+        db_path.unlink()
+        for suffix in ("-wal", "-shm"):
+            p = Path(str(db_path) + suffix)
+            if p.exists():
+                p.unlink()
+
+        base_time = time.time()
+        with patch("taosmd.api.time.time", side_effect=lambda: base_time + 10):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["kg"] is None
+        assert taosmd_api._last_attempt[resolved]["kg"] == ts_after_first
+
+        with patch("taosmd.api.time.time", side_effect=lambda: base_time + 31):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["kg"] is not None
+        assert taosmd_api._last_attempt.get(resolved, {}).get("kg", ts_after_first) != ts_after_first or "kg" not in taosmd_api._store_errors.get(resolved, {})
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_vector_cooldown_blocks_retry_by_attempt_count(self, tmp_path, monkeypatch):
+        """Vector broken+cached: inside cooldown must not retry; after cooldown must."""
+        data_dir = tmp_path / "vec-cooldown-count"
+        data_dir.mkdir()
+        _make_broken_vector_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["vector"] is None
+        resolved = str(data_dir)
+        ts_after_first = taosmd_api._last_attempt[resolved]["vector"]
+
+        # Repair on disk.
+        db_path = data_dir / "vector-memory.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("DELETE FROM store_meta WHERE key='mode'")
+        conn.commit()
+        conn.close()
+
+        base_time = time.time()
+        with patch("taosmd.api.time.time", side_effect=lambda: base_time + 10):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["vector"] is None
+        assert taosmd_api._last_attempt[resolved]["vector"] == ts_after_first
+
+        with patch("taosmd.api.time.time", side_effect=lambda: base_time + 31):
+            stores = await taosmd_api._ensure_stores(str(data_dir))
+        assert stores["vector"] is not None
+
+    @pytest.mark.asyncio
+    async def test_reconcile_raises_store_unavailable_when_vector_down(self, tmp_path, monkeypatch):
+        """reconcile raises StoreUnavailableError (not AttributeError) when vector is down."""
+        data_dir = tmp_path / "reconcile-vec-down"
+        data_dir.mkdir()
+        _make_broken_vector_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        with pytest.raises(taosmd_api.StoreUnavailableError) as excinfo:
+            await taosmd_api.reconcile(agent="test-agent", data_dir=str(data_dir))
+        assert "vector" in str(excinfo.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_reindex_raises_store_unavailable_when_vector_down(self, tmp_path, monkeypatch):
+        """reindex raises StoreUnavailableError (not AttributeError) when vector is down."""
+        data_dir = tmp_path / "reindex-vec-down"
+        data_dir.mkdir()
+        _make_broken_vector_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        with pytest.raises(taosmd_api.StoreUnavailableError) as excinfo:
+            await taosmd_api.reindex(agent="test-agent", data_dir=str(data_dir))
+        assert "vector" in str(excinfo.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_supersede_vectors_raises_store_unavailable_when_vector_down(self, tmp_path, monkeypatch):
+        """supersede_vectors raises StoreUnavailableError (not AttributeError) when vector is down."""
+        data_dir = tmp_path / "supersede-vec-down"
+        data_dir.mkdir()
+        _make_broken_vector_store(data_dir)
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+
+        with pytest.raises(taosmd_api.StoreUnavailableError) as excinfo:
+            await taosmd_api.supersede_vectors("match", data_dir=str(data_dir))
+        assert "vector" in str(excinfo.value).lower()
+
+
+class TestCollectionsHasChangesGuard:
+    """Pin collections has_changes mutants: unchanged collection must not need vector store."""
+
+    def test_unchanged_collection_noop_when_vector_down(self, tmp_path, monkeypatch):
+        """Collection with no changes must not need vector store (has_changes=False)."""
+        from taosmd import config
+        from taosmd.collections import CollectionStore, ingest_folder
+
+        data_dir = tmp_path / "coll-unchanged-vec-down"
+        data_dir.mkdir()
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        (source_dir / "doc.md").write_text("# Hello\n\nContent")
+
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+        config.set_collections_allowed_roots([str(source_dir)], data_dir=str(data_dir))
+
+        # Index with healthy stores
+        store = CollectionStore(str(data_dir))
+        col = store.create(name="docs", kind="docs", source_path=str(source_dir))
+        stores = asyncio.run(taosmd_api._ensure_stores(str(data_dir)))
+        vmem = stores["vector"]
+
+        async def _fake_embed(text: str, task: str = "search_document") -> list[float]:
+            h = hash(text) & 0xFFFFFFFF
+            return [((h >> (i * 4)) & 0xFF) / 255.0 for i in range(8)]
+
+        vmem.embed = _fake_embed  # type: ignore[assignment]
+        asyncio.run(ingest_folder(col["id"], data_dir=str(data_dir)))
+        assert store.get(col["id"])["status"] == "ready"
+
+        # Break vector and clear cache so it is down.
+        _make_broken_vector_store(data_dir)
+        taosmd_api._stores_cache.clear()
+        taosmd_api._store_errors.clear()
+        taosmd_api._last_attempt.clear()
+
+        # Unchanged: must succeed as no-op, not require vector.
+        stats = asyncio.run(ingest_folder(col["id"], data_dir=str(data_dir)))
+        assert stats["files_indexed"] == 0
+        assert stats["files_unchanged"] == 1
+        assert stats["chunks_ingested"] == 0
+        assert store.get(col["id"])["status"] == "ready"
+        store.close()
+
+    def test_changed_collection_fails_when_vector_down(self, tmp_path, monkeypatch):
+        """Changed collection must fail when vector store is down (proves has_changes gates)."""
+        from taosmd import config
+        from taosmd.collections import CollectionStore, ingest_folder
+
+        data_dir = tmp_path / "coll-changed-vec-down"
+        data_dir.mkdir()
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        (source_dir / "doc.md").write_text("# Hello\n\nContent")
+
+        monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+        monkeypatch.setattr(taosmd_api, "_store_errors", {})
+        monkeypatch.setattr(taosmd_api, "_last_attempt", {})
+        config.set_collections_allowed_roots([str(source_dir)], data_dir=str(data_dir))
+
+        store = CollectionStore(str(data_dir))
+        col = store.create(name="docs", kind="docs", source_path=str(source_dir))
+        stores = asyncio.run(taosmd_api._ensure_stores(str(data_dir)))
+        vmem = stores["vector"]
+
+        async def _fake_embed(text: str, task: str = "search_document") -> list[float]:
+            h = hash(text) & 0xFFFFFFFF
+            return [((h >> (i * 4)) & 0xFF) / 255.0 for i in range(8)]
+
+        vmem.embed = _fake_embed  # type: ignore[assignment]
+        asyncio.run(ingest_folder(col["id"], data_dir=str(data_dir)))
+        assert store.get(col["id"])["status"] == "ready"
+
+        # Change file, break vector, clear cache.
+        (source_dir / "doc.md").write_text("# Hello\n\nChanged content")
+        _make_broken_vector_store(data_dir)
+        taosmd_api._stores_cache.clear()
+        taosmd_api._store_errors.clear()
+        taosmd_api._last_attempt.clear()
+
+        with pytest.raises(taosmd_api.StoreUnavailableError, match="vector store unavailable"):
+            asyncio.run(ingest_folder(col["id"], data_dir=str(data_dir)))
+        assert store.get(col["id"])["status"] == "error"
+        store.close()
