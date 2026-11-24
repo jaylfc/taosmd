@@ -115,7 +115,7 @@ CONTROLS: dict[str, Control] = {
         id="embedder", label="Dense embedder",
         category="hardware", scope="store", type="choice",
         config_key="vector_memory.embed_model", default="arctic-embed-s",
-        choices=("arctic-embed-s", "minilm-onnx"),
+        choices=("arctic-embed-s", "minilm-onnx", "mdbr-leaf-ir"),
         cost="a one-time model fetch; changing it re-embeds the whole store",
         pros="arctic-embed-s scores +0.057 judged retrieval over MiniLM at the same 384 dims and latency",
         cons="store-level: switching after ingest requires a re-index; MiniLM is the model the 97.0% headline was measured on",
