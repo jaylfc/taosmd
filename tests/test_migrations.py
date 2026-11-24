@@ -9,7 +9,9 @@ would have caught a real field break.
 """
 from __future__ import annotations
 
+import base64
 import json
+import numpy as np
 import sqlite3
 
 import pytest
@@ -666,7 +668,8 @@ async def test_vector_memory_open_stamps_the_database(tmp_path):
     await vm.close()
 
     conn = sqlite3.connect(tmp_path / "vector-memory.db")
-    assert _user_version(conn) == migrations.latest_version("vector_memory")
+    assert _user_version(conn) == 2
+    assert _user_version(conn) != migrations.latest_version("vector_memory")
     assert "valid_to" in _columns(conn, "vector_memory")
     conn.close()
 
@@ -756,6 +759,101 @@ def test_cli_check_json_stays_parseable_when_databases_are_behind(tmp_path, caps
     by_db = {r["db"]: r for r in payload["databases"]}
     assert by_db["archive_index"]["current"] is False
     assert "run `taosmd migrate`" not in out
+
+
+def _legacy_vector_store(tmp_path, *, converted: bool):
+    """A vector_memory.db stamped at schema version 2.
+
+    ``converted=False`` is a legacy JSON store: the mode marker lacks
+    ``dense_format`` and every row holds JSON. ``converted=True`` carries
+    ``dense_format=f32`` in the marker and base64 float32 rows.
+    """
+    from taosmd.vector_memory import SCHEMA
+
+    path = tmp_path / "vector-memory.db"
+    conn = _db.connect(path)
+    conn.executescript(SCHEMA)
+    conn.executemany(
+        "INSERT INTO vector_memory (text, embedding, metadata_json, created_at)"
+        " VALUES (?, ?, ?, ?)",
+        [
+            ("alpha", "[0.1, 0.2, 0.3]", "{}", 1.0),
+            ("beta", "[0.4, 0.5, 0.6]", "{}", 2.0),
+        ],
+    )
+    if converted:
+        updates = []
+        for row_id, emb in ((1, [0.1, 0.2, 0.3]), (2, [0.4, 0.5, 0.6])):
+            arr = np.asarray(emb, dtype="<f4")
+            updates.append(
+                (base64.b64encode(arr.tobytes()).decode("ascii"), row_id)
+            )
+        conn.executemany(
+            "UPDATE vector_memory SET embedding = ? WHERE id = ?", updates
+        )
+        mode = "late_interaction=0;binary_quant=0;dense_format=f32;embedder=qmd:qmd"
+    else:
+        mode = "late_interaction=0;binary_quant=0;embedder=qmd:qmd"
+    conn.execute(
+        "INSERT INTO store_meta (key, value) VALUES ('mode', ?)", (mode,)
+    )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_cli_check_reports_unconverted_vector_memory_as_pending(tmp_path, capsys):
+    from taosmd.cli import main
+
+    _legacy_vector_store(tmp_path, converted=False)
+
+    rc = main(["--data-dir", str(tmp_path), "migrate", "--check"])
+    assert rc == 1, "an unconverted vector store must fail --check"
+    out = capsys.readouterr().out
+    assert "vector_memory" in out
+    assert "PENDING" in out
+    # A dry run must not touch the store.
+    conn = sqlite3.connect(tmp_path / "vector-memory.db")
+    assert _user_version(conn) == 2
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM vector_memory WHERE embedding LIKE '[%'"
+        ).fetchone()[0]
+        == 2
+    )
+    conn.close()
+
+
+def test_cli_check_is_clean_for_converted_vector_memory(tmp_path, capsys):
+    from taosmd.cli import main
+
+    _legacy_vector_store(tmp_path, converted=True)
+
+    assert (
+        main(["--data-dir", str(tmp_path), "migrate", "--check"]) == 0
+    )
+    assert "PENDING" not in capsys.readouterr().out
+
+
+def test_status_flags_unconverted_vector_store_pending(tmp_path):
+    path = _legacy_vector_store(tmp_path, converted=False)
+    conn = _db.connect(path)
+    st = migrations.status(conn, "vector_memory")
+    assert st["user_version"] == 2
+    assert st["latest"] == migrations.latest_version("vector_memory")
+    assert st["current"] is False
+    assert "vector_memory_dense_to_f32" in st["pending"]
+    conn.close()
+
+
+def test_status_reports_converted_vector_store_current(tmp_path):
+    path = _legacy_vector_store(tmp_path, converted=True)
+    conn = _db.connect(path)
+    st = migrations.status(conn, "vector_memory")
+    assert st["current"] is True
+    assert st["pending"] == []
+    conn.close()
 
 
 def test_registry_validation_rejects_a_noncontiguous_version():

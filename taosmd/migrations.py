@@ -294,6 +294,43 @@ def _vector_memory_valid_to(conn: sqlite3.Connection) -> None:
     )
 
 
+def _vector_memory_dense_to_f32_detect(conn: sqlite3.Connection) -> bool:
+    """Probe: is the f32 conversion already present in this store?
+
+    Complete when the mode marker carries ``dense_format=f32`` and no row
+    still holds JSON (an embedding starting with ``[``). A store whose table
+    or marker cannot be read is treated as unconverted so ``migrate --check``
+    keeps reporting it pending rather than guessing.
+    """
+    try:
+        row = conn.execute(
+            "SELECT value FROM store_meta WHERE key = 'mode'"
+        ).fetchone()
+        if row is None or "dense_format=f32" not in row[0]:
+            return False
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM vector_memory WHERE embedding LIKE '[%' ESCAPE '\\'"
+        ).fetchone()[0]
+        return remaining == 0
+    except sqlite3.Error:
+        return False
+
+
+def _vector_memory_dense_to_f32(conn: sqlite3.Connection) -> None:
+    """Apply for the registered f32 conversion step: intentionally a no-op.
+
+    The real conversion is Card B's concern
+    (``taosmd migrate --convert-vectors``: backup, free-space and content
+    checks, then an atomic convert-and-verify). It must NOT run here:
+    ``migrate()`` runs on every store open (vector_memory.py:310), and an
+    implicit conversion on open is exactly what Card A removes. This step
+    merely registers the conversion with the framework so ``migrate --check``
+    reports it pending via the detect probe above; the step stamps the
+    version without touching any row.
+    """
+    return None
+
+
 _VECTOR_MEMORY: tuple[Migration, ...] = (
     Migration(
         1, "vector_memory_baseline", _vector_memory_baseline,
@@ -305,6 +342,10 @@ _VECTOR_MEMORY: tuple[Migration, ...] = (
             has_column(c, "vector_memory", "valid_to")
             and index_exists(c, "idx_vm_valid")
         ),
+    ),
+    Migration(
+        3, "vector_memory_dense_to_f32", _vector_memory_dense_to_f32,
+        _vector_memory_dense_to_f32_detect,
     ),
 )
 
@@ -656,13 +697,34 @@ def status(
     version = _read_version(conn)
     target = latest_version(db, migs)
     detected = _detect_baseline(conn, migs) if version == 0 else version
-    pending = [m.name for m in migs if m.version > max(version, detected)]
+
+    def step_present(migration: Migration) -> bool:
+        try:
+            return bool(migration.detect(conn))
+        except sqlite3.Error:
+            # A probe that cannot run means the change cannot be assumed
+            # present: treat the step as still pending.
+            return False
+
+    # ``pending`` consults each step's detect probe, not just the stored
+    # version: a store whose conversion was already applied outside this
+    # runner (e.g. vector_memory dense_format=f32 with no JSON rows) reports
+    # nothing pending even though its stamp lags behind.
+    pending = [
+        m.name for m in migs
+        if m.version > max(version, detected) and not step_present(m)
+    ]
+    # An unstamped database (version 0) predates versioning: the stamp itself
+    # is outstanding work, so it is never current even when every step's
+    # change is already present. A stamped store is current once no pending
+    # step's change is missing.
+    current = False if version == 0 else not pending
     return {
         "db": db,
         "user_version": version,
         "detected_baseline": detected,
         "latest": target,
-        "current": version >= target,
+        "current": current,
         "pending": pending,
     }
 
