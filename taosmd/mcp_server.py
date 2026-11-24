@@ -35,6 +35,8 @@ cross-thread result so FastMCP's loop is never blocked.
 
 from __future__ import annotations
 
+import json
+
 from . import service
 from .http_server import _ServiceLoop
 
@@ -53,13 +55,81 @@ class MissingMCPDependencyError(RuntimeError):
         )
 
 
-def _require_fastmcp():
-    """Import :class:`FastMCP` lazily, with a clear error if mcp is absent."""
+def _require_mcp_server():
+    """Import the MCP server class lazily, preferring mcp 2.x.
+
+    Imports :class:`MCPServer` from ``mcp.server.mcpserver`` (mcp 2.x) first
+    and falls back to :class:`FastMCP` from ``mcp.server.fastmcp`` (mcp 1.x).
+    Raises :class:`MissingMCPDependencyError` only when neither import works.
+    Returns ``(server_class, backend)`` where backend is ``"2"`` or ``"1"``.
+    """
+    try:
+        from mcp.server.mcpserver import MCPServer  # noqa: PLC0415
+        return MCPServer, "2"
+    except ImportError:
+        pass
     try:
         from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
+        return FastMCP, "1"
     except ImportError as exc:  # pragma: no cover - exercised when mcp absent
         raise MissingMCPDependencyError() from exc
-    return FastMCP
+
+
+class _ContentBlock:
+    """A minimal content block with a ``.text`` attribute.
+
+    Mirrors the shape mcp 1.x FastMCP returns from ``call_tool`` so callers
+    (and the tests) decode results identically on both major versions.
+    """
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _MCPServer:
+    """Compatibility shim over MCPServer (mcp 2.x) and FastMCP (mcp 1.x).
+
+    Presents one async interface (``list_tools``, ``call_tool``) and
+    normalises ``call_tool``'s return value to a list of content blocks with a
+    ``.text`` attribute, which is the shape mcp 1.x returns. Exposes
+    ``tool()`` for decorator registration and ``run()`` for the stdio
+    transport. Works identically whichever major version of ``mcp`` is
+    installed.
+    """
+
+    def __init__(self, server, backend: str):
+        self._server = server
+        self._backend = backend
+        self._taosmd_service_loop = None
+
+    def tool(self, *args, **kwargs):
+        return self._server.tool(*args, **kwargs)
+
+    async def list_tools(self):
+        return await self._server.list_tools()
+
+    async def call_tool(self, name: str, args: dict):
+        result = await self._server.call_tool(name, args)
+        if self._backend == "2":
+            # Reconstruct the full tool result value. mcp 2.x splits list
+            # returns into one content block per element (and may leave
+            # structured_content None for plain dict returns), so neither
+            # result.content[0].text nor the blocks alone reliably carry the
+            # whole value. structured_content carries the complete result,
+            # mirroring the mcp 1.x shape where block 0's text is the full
+            # serialised value.
+            if result.structured_content is not None:
+                value = result.structured_content.get("result", result.structured_content)
+            else:
+                blocks = result.content or []
+                value = json.loads(blocks[0].text) if blocks else None
+            if value is None:
+                return []
+            return [_ContentBlock(json.dumps(value))]
+        return result
+
+    def run(self, transport: str = "stdio", **kwargs):
+        return self._server.run(transport=transport, **kwargs)
 
 
 def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
@@ -67,7 +137,7 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
 
     Registers the memory tools and A2A bus tools, each routing to
     :mod:`taosmd.service` on the shared service-loop thread. Returns the
-    configured ``FastMCP`` instance
+    configured MCP server instance
     (its ``_taosmd_service_loop`` attribute holds the :class:`_ServiceLoop` so
     callers/tests can close it on teardown). ``runner`` lets a caller supply an
     existing loop (e.g. tests); otherwise one is created here.
@@ -75,10 +145,10 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
     Raises :class:`MissingMCPDependencyError` if the ``mcp`` SDK is not
     installed.
     """
-    FastMCP = _require_fastmcp()
+    ServerClass, backend = _require_mcp_server()
 
     loop = runner if runner is not None else _ServiceLoop()
-    mcp = FastMCP("taosmd")
+    mcp = _MCPServer(ServerClass("taosmd"), backend)
     mcp._taosmd_service_loop = loop  # for teardown / introspection
 
     async def _dispatch(coro):
