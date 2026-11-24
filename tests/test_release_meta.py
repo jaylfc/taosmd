@@ -955,6 +955,111 @@ class TestRepoChangelogD:
         assert out_file.exists()
 
 
+class TestHomoglyphRule:
+    """Tests for the homoglyph (confusable) trailer key refusal.
+
+    The homoglyph rule uses the same key pattern as the normal trailer rule
+    (migrations? and manual[\W_]*steps?) after mapping confusables to ASCII.
+    Any trailer attempt where the key portion contains non-ASCII characters
+    that map to the canonical pattern is refused with exit 2.
+    """
+
+    @pytest.mark.parametrize("fragment_name, content_line, description", [
+        # Homoglyph in Migration key (not first letter)
+        ("homoglyph-migration-cyrillic-o.md", "Migrati\u043en: one-way", "Cyrillic о in Migration"),
+        ("homoglyph-migration-greek-o.md", "Migrati\u03bfn: one-way", "Greek ο in Migration"),
+        ("homoglyph-migration-cyrillic-a.md", "Migr\u0430tion: one-way", "Cyrillic а in Migration"),
+        ("homoglyph-migration-greek-a.md", "Migr\u03b1tion: one-way", "Greek α in Migration"),
+        ("homoglyph-migration-cyrillic-i.md", "M\u0456gration: one-way", "Cyrillic і in Migration"),
+        ("homoglyph-migration-greek-i.md", "M\u03b9gration: one-way", "Greek ι in Migration"),
+        # Homoglyph in Manual-Step key (after first word boundary)
+        ("homoglyph-manual-step-cyrillic-e.md", "Manual-St\u0435p: reboot", "Cyrillic е in Step (Manual-Step)"),
+        ("homoglyph-manual-step-greek-e.md", "Manual-St\u03b5p: reboot", "Greek ε in Step (Manual-Step)"),
+        ("homoglyph-manual-step-cyrillic-p.md", "Manual-Ste\u0440: reboot", "Cyrillic р in Step (Manual-Step)"),
+        ("homoglyph-manual-step-greek-p.md", "Manual-Ste\u03c1: reboot", "Greek ρ in Step (Manual-Step)"),
+        # Homoglyph in Manual_Step key
+        ("homoglyph-manual-step-underscore-cyrillic-e.md", "Manual_St\u0435p: reboot", "Cyrillic е in Step (Manual_Step)"),
+        ("homoglyph-manual-step-underscore-greek-p.md", "Manual_Ste\u03c1: reboot", "Greek ρ in Step (Manual_Step)"),
+        # Homoglyph in Manual Step key
+        ("homoglyph-manual-step-space-cyrillic-e.md", "Manual St\u0435p: reboot", "Cyrillic е in Step (Manual Step)"),
+        ("homoglyph-manual-step-space-greek-p.md", "Manual Ste\u03c1: reboot", "Greek ρ in Step (Manual Step)"),
+        # Homoglyph in manual steps key
+        ("homoglyph-manual-steps-cyrillic-p.md", "manual ste\u0440s: reboot", "Cyrillic р in steps (manual steps)"),
+        ("homoglyph-manual-steps-greek-p.md", "manual ste\u03c1s: reboot", "Greek ρ in steps (manual steps)"),
+        ("homoglyph-manual-steps-cyrillic-t.md", "manual s\u0422eps: reboot", "Cyrillic Т in steps (manual steps)"),
+        ("homoglyph-manual-steps-greek-t.md", "manual s\u03a4eps: reboot", "Greek Τ in steps (manual steps)"),
+    ])
+    def test_homoglyph_refusal(self, tmp_path, fragment_name, content_line, description):
+        """Cyrillic and Greek lookalike letters in Migration: and Manual-Step:
+        must each REFUSE (exit 2)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        content = f"### Changed\n\n{content_line}\n"
+        _write_fragment(repo, fragment_name, content)
+        _commit_all(repo, f"add {fragment_name}")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        assert result.returncode == 2, (
+            f"Expected exit 2 for {fragment_name} ({description}), "
+            f"got {result.returncode}: {result.stdout}"
+        )
+        assert fragment_name in result.stderr
+        assert "confusable trailer key" in result.stderr
+        assert not out_file.exists()
+
+
+class TestManualStepVariants:
+    """Tests for Manual-Step spelling variants.
+
+    The canonical form is 'Manual-Step: <text>'. The following variants are
+    accepted and normalized to the canonical form:
+    - Manual_Step: (underscore)
+    - ManualStep: (no separator)
+    - Manual Step: (space)
+    - manual steps : (lowercase, plural, space before colon)
+    """
+
+    @pytest.mark.parametrize("fragment_name, content_line, description", [
+        ("manual_step_underscore.md", "Manual_Step: do something", "underscore separator"),
+        ("manual_step_nospace.md", "ManualStep: do something", "no separator"),
+        ("manual_step_space.md", "Manual Step: do something", "space separator"),
+        ("manual_steps_space_colon.md", "manual steps : do something", "lowercase plural with space before colon"),
+    ])
+    def test_manual_step_variants_parse(self, tmp_path, fragment_name, content_line, description):
+        """Manual-Step variants parse as manual step (exit 0, manual_step=true)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        content = f"### Changed\n\n{content_line}\n"
+        _write_fragment(repo, fragment_name, content)
+        _commit_all(repo, f"add {fragment_name}")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+
+        assert result.returncode == 0, (
+            f"Expected exit 0 for {fragment_name} ({description}), "
+            f"got {result.returncode}: {result.stderr}"
+        )
+        assert "manual_step=true" in result.stdout
+        assert out_file.exists()
+
+        data = json.loads(out_file.read_text(encoding="utf-8"))
+        assert data["manual_step"] is True
+        assert data["manual_steps"] == ["do something"]
+
+
 class TestNormalizationPins:
     @pytest.mark.parametrize("line, expected", [
         ("Migra\u00adtion: one-way", "parse"),

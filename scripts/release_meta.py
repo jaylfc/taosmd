@@ -209,20 +209,40 @@ def _deconfuse(text: str) -> str:
 
 
 def _is_homoglyph_trailer_attempt(normalized_line: str) -> bool:
-    """Refuse confusable-key attempts with a colon-like separator."""
+    r"""Refuse confusable-key attempts with a colon-like separator.
+
+    Uses the same key pattern as the normal trailer rule (migrations? and
+    manual[\W_]*steps?) after mapping confusables to ASCII. Only flags lines
+    where the key portion contains non-ASCII characters that map to the
+    canonical key pattern.
+    """
     stripped = _strip_leading_markup(normalized_line)
     if not stripped:
         return False
-    m = re.match(r"([A-Za-z\u0080-\uffff]+)", stripped)
+
+    # First check if the stripped line (as-is) matches the trailer key pattern
+    # with a colon-like separator. If it does, it's a normal attempt, not a
+    # homoglyph attempt (the normal path will handle it).
+    if _trailer_attempt_after_strip(stripped):
+        return False
+
+    # Now check if deconfusing the line makes it match the trailer key pattern.
+    # We need to find the key portion in the original (with potential homoglyphs)
+    # and verify it contained non-ASCII characters.
+    deconfused = _deconfuse(stripped)
+    m = _TRAILER_KEY_RE.match(deconfused)
     if not m:
         return False
-    word = m.group(1)
-    if word.isascii():
+
+    # The key matched in the deconfused version. Now check if the corresponding
+    # portion in the original stripped line contained any non-ASCII characters.
+    key_end = m.end()
+    original_key_portion = stripped[:key_end]
+    if original_key_portion.isascii():
         return False
-    mapped = _deconfuse(word).casefold()
-    if mapped not in {"migration", "migrations", "manual"}:
-        return False
-    rest = stripped[m.end():].lstrip()
+
+    # Verify there's a colon-like separator after the key in the original
+    rest = stripped[key_end:].lstrip()
     return bool(rest) and _is_colon_like(rest[0])
 
 
