@@ -201,7 +201,8 @@ def test_reconcile_does_not_resurrect_superseded_entry(isolated):
 
     # Supersede the vector copy of the first turn (correction path).
     superseded = asyncio.run(
-        taosmd_api.supersede_vectors("old fact about jay", data_dir=str(data_dir))
+        taosmd_api.supersede_vectors(
+            "old fact about jay", agent=agent, data_dir=str(data_dir))
     )
     assert superseded == 1
 

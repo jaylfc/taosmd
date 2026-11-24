@@ -491,7 +491,7 @@ async def process_conversation_turn(
     llm_url: str = "",
     http_client=None,
     use_llm: bool = True,
-    auto_resolve_contradictions: bool = True,
+    auto_resolve_contradictions: bool | None = None,
     extraction_model: str = "default",
     pending_store=None,
     defer_below_confidence: float = 0.0,
@@ -518,11 +518,20 @@ async def process_conversation_turn(
         catalog pass, a summary of a summary) should pass a lower
         value -- e.g. 0.6 for regex on a session summary -- so the
         deferral threshold can actually fire.
-      - ``vmem``: an optional :class:`~taosmd.vector_memory.VectorMemory`.
-        When provided, an auto-resolved contradiction also soft-supersedes
-        the raw vector chunk(s) carrying the old object value, so a corrected
-        fact stops resurfacing in vector recall as well as in the KG. When
-        None (default), the vector store is left completely untouched.
+      - ``auto_resolve_contradictions``: ``None`` (default) means facts from
+        the LLM extractor invalidate the old triple on a contradiction, while
+        facts from the regex extractor (low precision) never do: the
+        contradiction is queued in the pending-decisions store (the one in the
+        knowledge graph's database unless ``pending_store`` is given) for
+        ``taosmd review``, and neither triple is changed. ``True`` forces
+        auto-resolve for every fact (old triple invalidated, new one written),
+        ``False`` never auto-resolves and never queues: the new fact is
+        written and the old one stays current too (both coexist), exactly as
+        before. Resolving only ever touches the typed knowledge graph.
+      - ``vmem``: accepted for compatibility and not used. A contradiction no
+        longer hides vector rows: a triple records no link to the row it came
+        from, so there is nothing safe to hide. Use ``taosmd supersede`` for an
+        explicit, agent-scoped correction.
 
     Returns ``{facts_extracted, triples_created, contradictions_resolved,
     deferred, deferred_ids, triple_ids, method}``.
@@ -599,6 +608,29 @@ async def process_conversation_turn(
     deferred_ids: list[str] = []
     contradictions = 0
 
+    auto_resolve = (
+        auto_resolve_contradictions
+        if auto_resolve_contradictions is not None
+        else method == "llm"
+    )
+    own_pending = None
+    if auto_resolve_contradictions is None and method != "llm":
+        # Default for regex facts: park a contradiction in the pending queue
+        # (same SQLite file as the KG) instead of changing either triple.
+        # An explicit False is NOT this: it keeps both facts, as it always did.
+        defer_below_confidence = max(defer_below_confidence, 1.01)
+        kg_db_path = getattr(kg, "_db_path", None)
+        if pending_store is None and isinstance(kg_db_path, str):
+            try:
+                from .pending_decisions import PendingDecisionsStore  # noqa: PLC0415
+
+                own_pending = PendingDecisionsStore(db_path=kg_db_path)
+                await own_pending.init()
+                pending_store = own_pending
+            except Exception as e:
+                logger.debug("pending store unavailable: %s", e)
+                own_pending = None
+
     for fact in facts:
         try:
             # Use contradiction-aware insertion for singular predicates.
@@ -613,7 +645,7 @@ async def process_conversation_turn(
                 obj=fact["object"],
                 confidence=fact_confidence,
                 source=f"{source}:{agent_name or 'user'}",
-                auto_resolve=auto_resolve_contradictions,
+                auto_resolve=auto_resolve,
                 pending_store=pending_store,
                 defer_below_confidence=defer_below_confidence,
                 evidence=text[:500],
@@ -627,6 +659,9 @@ async def process_conversation_turn(
             contradictions += result.get("contradictions_resolved", 0)
         except Exception as e:
             logger.debug("Failed to add triple: %s", e)
+
+    if own_pending is not None:
+        await own_pending.close()
 
     # Archive the extraction event
     if archive and (triple_ids or deferred_ids):

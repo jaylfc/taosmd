@@ -1106,6 +1106,61 @@ def _collections_cmd(args: argparse.Namespace) -> int:
     return 1
 
 
+def _supersede_cmd(args) -> int:
+    import asyncio  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+    from datetime import datetime  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+    from .vector_memory import SupersedeRefused  # noqa: PLC0415
+
+    modes = [bool(args.match), args.list_hidden, args.restore is not None,
+             args.restore_all]
+    if sum(modes) != 1:
+        print("error: give exactly one of --match, --list-hidden, --restore, "
+              "--restore-all", file=sys.stderr)
+        return 2
+
+    if args.list_hidden:
+        rows = asyncio.run(service.list_hidden(agent=args.agent, data_dir=args.data_dir))
+        if args.json:
+            print(_json.dumps(rows, indent=2))
+        else:
+            for r in rows:
+                when = datetime.fromtimestamp(r["valid_to"]).isoformat(timespec="seconds")
+                text = r["text"].replace("\n", " ")
+                print(f"{r['id']}\t{r['agent'] or '-'}\t{when}\t{r['reason']}\t{text}")
+            if not rows:
+                print("no hidden rows")
+        return 0
+
+    if args.restore is not None or args.restore_all:
+        if args.restore_all and not args.since:
+            print("error: --restore-all requires --since <ISO date>", file=sys.stderr)
+            return 2
+        try:
+            result = asyncio.run(service.restore_hidden(
+                args.restore, since=None if args.restore else args.since,
+                agent=args.agent, data_dir=args.data_dir))
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"restored {result['restored']} row(s)")
+        return 0
+
+    if not args.agent and not args.force:
+        print("error: --match needs --agent (or --force for a store-wide match)",
+              file=sys.stderr)
+        return 2
+    try:
+        result = asyncio.run(service.supersede(
+            args.match, agent=args.agent, force=args.force, data_dir=args.data_dir))
+    except SupersedeRefused as exc:
+        print(f"error: refused: {exc}", file=sys.stderr)
+        return 2
+    print(f"superseded {result['superseded']} chunk(s) matching {result['match']!r}")
+    return 0
+
+
 def _reconcile_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd reconcile``: compare archive to vector store and repair gaps."""
     import asyncio  # noqa: PLC0415
@@ -1588,16 +1643,41 @@ def _build_parser() -> argparse.ArgumentParser:
     # ----- supersede subcommand (retire stale chunks from vector recall) -
     supersede_p = sub.add_parser(
         "supersede",
-        help="Soft-hide vector chunk(s) whose text contains --match from active "
-             "recall (zero-loss: raw rows are retained, only excluded from search)",
+        help="Soft-hide one agent's vector chunk(s) whose text contains --match "
+             "from active recall, or list/restore hidden rows (zero-loss: raw "
+             "rows are retained, only excluded from search)",
     )
     supersede_p.add_argument(
         "--agent", default=None,
-        help="Agent name (accepted for symmetry; the vector store is per data dir)",
+        help="Agent scope: required with --match; filters --list-hidden and --restore-all",
     )
     supersede_p.add_argument(
-        "--match", required=True,
-        help="Substring; every active chunk whose stored text contains it is superseded",
+        "--match", default=None,
+        help="Substring (12+ characters); that agent's active chunks containing it "
+             "are superseded. Refused if it matches more than 20 rows",
+    )
+    supersede_p.add_argument(
+        "--force", action="store_true",
+        help="Override the guards: allow a short needle, more than 20 matches, "
+             "or no --agent (store-wide)",
+    )
+    supersede_p.add_argument(
+        "--list-hidden", action="store_true",
+        help="List hidden rows (id, agent, text, valid_to, reason)",
+    )
+    supersede_p.add_argument(
+        "--json", action="store_true", help="With --list-hidden: print JSON",
+    )
+    supersede_p.add_argument(
+        "--restore", type=int, nargs="+", metavar="ID", default=None,
+        help="Make the given hidden row id(s) visible again",
+    )
+    supersede_p.add_argument(
+        "--restore-all", action="store_true",
+        help="Restore every row hidden since --since (optionally only --agent)",
+    )
+    supersede_p.add_argument(
+        "--since", default=None, help="ISO date for --restore-all (naive = UTC)",
     )
 
     # ----- config subcommand (server URL + token + show) ----------------
@@ -2081,13 +2161,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     if args.cmd == "supersede":
-        import asyncio  # noqa: PLC0415
-        from . import service  # noqa: PLC0415
-        result = asyncio.run(
-            service.supersede(args.match, agent=args.agent, data_dir=args.data_dir)
-        )
-        print(f"superseded {result['superseded']} chunk(s) matching {result['match']!r}")
-        return 0
+        return _supersede_cmd(args)
 
     if args.cmd == "reconcile":
         return _reconcile_cmd(args)

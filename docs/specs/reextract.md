@@ -131,9 +131,9 @@ live ingest does under #653 (Q1 A). No text, status or `source_extractor` change
 The extractor's facts are also written as KG triples. Re-extraction reads old
 history, so the live KG write path is NOT reusable as-is: `add_triple` only
 dedups against an ACTIVE identical triple, and `add_triple_with_contradiction_check`
-with `auto_resolve` invalidates the current value (stamping `valid_to = now`) and,
-given `vmem`, soft-supersedes vector chunks. Replaying a 2025 "I live in London"
-through that path would close today's `lives_in Paris` and hide its vector rows.
+with `auto_resolve` invalidates the current value (stamping `valid_to = now`). It no
+longer touches vector rows (a contradiction never hides them). Replaying a 2025
+"I live in London" through that path would still close today's `lives_in Paris`.
 `reextract` therefore uses its own insert rule, `KnowledgeGraph.add_historical_triple`:
 
 1. `valid_from` is the span's `archive_index.timestamp`, never `now`.

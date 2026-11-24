@@ -42,7 +42,7 @@ When you cite something, cite the page. When the librarian doesn't know, say so.
 
 ### Pending decisions: surface them before answering
 
-Every nightly run, the librarian may have deferred some updates to a pending-decisions queue because the new claim contradicted an existing fact and her confidence was below threshold. **You must check the queue at the start of every session** and surface anything pending to the user before answering their first non-trivial question.
+Every nightly run, the librarian may have deferred some updates to a pending-decisions queue because the new claim contradicted an existing fact and her confidence was below threshold, or because a regex-extracted fact contradicted a stored one (those are always queued, never applied on their own). **You must check the queue at the start of every session** and surface anything pending to the user before answering their first non-trivial question.
 
 ```python
 import taosmd
