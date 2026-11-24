@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from benchmarks.product_context import (
     CONTEXT_MODES,
     PRODUCT_AGENT,
+    DEFAULT_READER_OVERHEAD,
     PRODUCT_PROMPT,
     count_in,
     check_ingest,
@@ -1112,6 +1113,7 @@ async def run_benchmark(
     writer_model = "default"
     context_mode = "legacy"
     reader_ctx_tokens = None
+    reader_overhead = DEFAULT_READER_OVERHEAD
     answer_limit = None
     answer_neighbors = None
     reader_timeout = 600.0
@@ -1129,6 +1131,9 @@ async def run_benchmark(
         writer_model = getattr(args, "writer_model", None)
         context_mode = _resolve_context_mode(args)
         reader_ctx_tokens = getattr(args, "reader_ctx_tokens", None)
+        reader_overhead = getattr(args, "reader_overhead_tokens", None)
+        if reader_overhead is None:
+            reader_overhead = DEFAULT_READER_OVERHEAD
         answer_limit = getattr(args, "answer_limit", None)
         answer_neighbors = getattr(args, "answer_neighbors", None)
         reader_timeout = float(getattr(args, "reader_timeout", None) or 600.0)
@@ -1415,8 +1420,12 @@ async def run_benchmark(
                 try:
                     answer, prompt_tokens = await llm_answer_product(
                         llm_client, full_context, question, prod["guidance"],
-                        reader_ctx_tokens, timeout=reader_timeout)
+                        reader_ctx_tokens + reader_overhead, timeout=reader_timeout)
                     product_meta["prompt_eval_count"] = prompt_tokens
+                    if prompt_tokens is not None and prompt_tokens >= reader_ctx_tokens + reader_overhead:
+                        product_meta["prompt_truncated"] = True
+                        print(f"    [PROMPT TRUNCATED] q={i}: server read {prompt_tokens} tokens, "
+                              f"window {reader_ctx_tokens + reader_overhead}", file=sys.stderr)
                 except ReaderError as exc:
                     answer, answer_error = "", str(exc)
                     product_meta["answer_error"] = answer_error
@@ -1545,6 +1554,8 @@ async def run_benchmark(
             "date_frame": date_frame,
             "context_mode": context_mode,
             "reader_ctx_tokens": reader_ctx_tokens,
+            "reader_overhead_tokens": reader_overhead,
+            "reader_num_ctx": (reader_ctx_tokens or 0) + reader_overhead if context_mode == "product" else None,
             "answer_limit": answer_limit,
             "answer_neighbors": answer_neighbors,
             "reader_timeout": reader_timeout,
@@ -1640,8 +1651,16 @@ def main() -> None:
         "--reader-ctx-tokens",
         type=int,
         default=None,
-        help="Reader model context window in tokens; the answer_context budget "
-             "and the Ollama num_ctx. Required with --context product.",
+        help="Evidence budget in tokens: passed as budget_tokens to answer_context "
+             "(the most the context string may take, headers included). The Ollama "
+             "num_ctx is this plus --reader-overhead-tokens. Required with --context product.",
+    )
+    parser.add_argument(
+        "--reader-overhead-tokens",
+        type=int,
+        default=None,
+        help="Product mode: tokens added to --reader-ctx-tokens for the guidance, "
+             "question, answer and template when sizing num_ctx (default 1536).",
     )
     parser.add_argument(
         "--reader-timeout",

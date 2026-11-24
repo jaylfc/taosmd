@@ -99,7 +99,7 @@ Endpoints
                            content to the search (grants enforced per requesting agent;
                            collection hits carry ``collection_id``/``file_path``/``source``
                            metadata); ``collections_only`` restricts to them.
-``POST /answer-context``   ``{"query", "agent", "budget_tokens", "limit"?, "project"?, "also_include"?, "mode"?, "collection"?, "collections"?: [...], "collections_only"?, "now"?, "reasoning_reserve"?, "answer_reserve"?, "neighbors"?, "include_facts"?}``
+``POST /answer-context``   ``{"query", "agent", "budget_tokens", "limit"?, "project"?, "also_include"?, "mode"?, "collection"?, "collections"?: [...], "collections_only"?, "now"?, "neighbors"?, "include_facts"?}``
                            -> ``{"context", "guidance", "sessions_included", "sessions_dropped",
                            "hits_total", "tokens_used", "budget_available", "expanded"}``.
                            The context an agent answers from: ``Current date:`` line, then dated
@@ -1725,14 +1725,16 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             budget = body.get("budget_tokens")
             if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
                 raise _BadRequest("'budget_tokens' (non-negative integer) is required")
-            for name in ("reasoning_reserve", "answer_reserve", "neighbors"):
-                if name in body and (
-                    isinstance(body[name], bool) or not isinstance(body[name], int)
-                    or body[name] < 0
-                ):
-                    raise _BadRequest(f"'{name}' must be a non-negative integer")
+            for name in ("reasoning_reserve", "answer_reserve"):
                 if name in body:
-                    opts[name] = body[name]
+                    raise _BadRequest(
+                        f"'{name}' is not a parameter: 'budget_tokens' is the evidence "
+                        "budget, so subtract reserves before calling (default_budget_tokens)")
+            if "neighbors" in body:
+                if isinstance(body["neighbors"], bool) or not isinstance(body["neighbors"], int) \
+                        or body["neighbors"] < 0:
+                    raise _BadRequest("'neighbors' must be a non-negative integer")
+                opts["neighbors"] = body["neighbors"]
             if limit_i is not None:
                 opts["limit"] = limit_i
             if "include_facts" in body:

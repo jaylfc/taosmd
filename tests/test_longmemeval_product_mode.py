@@ -103,7 +103,7 @@ def _args(tmp_path, **kw):
     base = dict(limit=1, type=None, llm=True, graph_expansion=0, retrieval_path="retrieve",
                 report_retrieval_delta=False, out=str(tmp_path / "out.json"), writer_url=None,
                 writer_model="default", context="product", reader_ctx_tokens=100_000,
-                answer_limit=24, answer_neighbors=None)
+                answer_limit=24, answer_neighbors=None, reader_overhead_tokens=None, reader_timeout=None)
     base.update(kw)
     return type("Args", (), base)
 
@@ -127,7 +127,7 @@ async def test_product_mode_has_no_character_cut_and_uses_guidance(mod, monkeypa
     assert "Session 2023-05-20 (Sat)" in prompt
     assert prompt.rstrip().endswith("Answer:")
     # The reader window is the budget the context was built for.
-    assert client.posts[0]["options"]["num_ctx"] == 100_000
+    assert client.posts[0]["options"]["num_ctx"] == 100_000 + 1536
     # per-question record
     row = doc["results"][0]
     ctx = prompt[len(GUIDANCE) + 2: prompt.index("\n\nQuestion:")]
@@ -136,6 +136,7 @@ async def test_product_mode_has_no_character_cut_and_uses_guidance(mod, monkeypa
     assert row["product"]["sessions_dropped"] == 0
     assert row["context_chars"] == len(ctx) > mod.CONTEXT_CHARS
     assert doc["context_mode"] == "product" and doc["reader_ctx_tokens"] == 100_000
+    assert doc["reader_num_ctx"] == 101_536
 
 
 @pytest.mark.asyncio
@@ -312,3 +313,19 @@ async def test_judge_failure_is_counted_not_scored(mod, monkeypatch, tmp_path):
     doc = json.loads((tmp_path / "out.json").read_text())
     assert doc["answer_failures"] == 1
     assert "judge_error" in doc["results"][0]["product"]
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_that_fills_the_window_is_flagged_as_truncated(mod, monkeypatch, tmp_path):
+    class Full(_Client):
+        async def post(self, url, json=None, timeout=30):
+            self.posts.append(json)
+            window = json["options"].get("num_ctx", 0)
+            resp = _Resp("Rex is a beagle")
+            resp.json = lambda: {"message": {"content": "x"}, "prompt_eval_count": window}
+            return resp
+
+    doc = await _run(mod, monkeypatch, tmp_path, Full(), reader_ctx_tokens=50_000,
+                     reader_overhead_tokens=500)
+    assert doc["reader_num_ctx"] == 50_500
+    assert doc["results"][0]["product"]["prompt_truncated"] is True

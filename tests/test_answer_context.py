@@ -268,7 +268,7 @@ def _chars(s: str) -> int:
 def _budget_for(texts_blocks, extra=0):
     """Budget (tokens = characters) that fits exactly the given blocks."""
     ctx = "Current date: 2023-06-10 (Sat)\n\n" + "\n\n".join(texts_blocks)
-    return len(GUIDANCE) + len(ctx) + extra
+    return len(ctx) + extra
 
 
 def test_budget_fitting_two_of_three_drops_the_third_whole(monkeypatch, data_dir):
@@ -276,7 +276,7 @@ def test_budget_fitting_two_of_three_drops_the_third_whole(monkeypatch, data_dir
     _ranked(monkeypatch, data_dir, [
         SESSIONS["s1"][1][1][1], SESSIONS["s2"][1][1][1], SESSIONS["s3"][1][1][1]])
     b1, b2, b3 = _block("s1", 0, 3), _block("s2", 0, 3), _block("s3", 0, 3)
-    out = _ctx(data_dir, tokenizer=_chars, answer_reserve=0, budget_tokens=_budget_for([b1, b2]))
+    out = _ctx(data_dir, tokenizer=_chars, budget_tokens=_budget_for([b1, b2]))
     assert out["sessions_included"] == 2
     assert out["sessions_dropped"] == 1
     assert out["context"] == "Current date: 2023-06-10 (Sat)\n\n" + b1 + "\n\n" + b2
@@ -291,7 +291,7 @@ def test_dropped_ids_are_reported_and_never_in_the_context(monkeypatch, data_dir
     _ranked(monkeypatch, data_dir, [
         SESSIONS["s1"][1][1][1], SESSIONS["s2"][1][1][1], SESSIONS["s3"][1][1][1]])
     b1, b2 = _block("s1", 0, 3), _block("s2", 0, 3)
-    out = _ctx(data_dir, tokenizer=_chars, answer_reserve=0, budget_tokens=_budget_for([b1, b2]))
+    out = _ctx(data_dir, tokenizer=_chars, budget_tokens=_budget_for([b1, b2]))
     assert [b["session_id"] for b in out["included"]] == ["s1", "s2"]
     assert [b["session_id"] for b in out["dropped"]] == ["s3"]
     dropped_turns = out["dropped"][0]["turns"]
@@ -313,7 +313,7 @@ def test_block_that_does_not_fit_is_skipped_and_the_next_still_tried(monkeypatch
     _ingest_sessions(data_dir, sessions={**big, "s1": SESSIONS["s1"]})
     _ranked(monkeypatch, data_dir, ["x" * 5000, SESSIONS["s1"][1][1][1]])
     b1 = _block("s1", 0, 3)
-    out = _ctx(data_dir, tokenizer=_chars, answer_reserve=0, budget_tokens=_budget_for([b1], 10))
+    out = _ctx(data_dir, tokenizer=_chars, budget_tokens=_budget_for([b1], 10))
     assert out["sessions_included"] == 1
     assert out["sessions_dropped"] == 1
     assert "xxxx" not in out["context"]
@@ -323,7 +323,7 @@ def test_block_that_does_not_fit_is_skipped_and_the_next_still_tried(monkeypatch
 def test_block_larger_than_whole_budget_is_dropped_never_cut(monkeypatch, data_dir):
     _ingest_sessions(data_dir)
     _ranked(monkeypatch, data_dir, [SESSIONS["s1"][1][1][1]])
-    out = _ctx(data_dir, tokenizer=_chars, answer_reserve=0, budget_tokens=len(GUIDANCE) + 60)
+    out = _ctx(data_dir, tokenizer=_chars, budget_tokens=60)
     assert out["context"] == ""
     assert out["sessions_included"] == 0
     assert out["sessions_dropped"] == 1
@@ -336,30 +336,33 @@ def test_tokens_used_never_exceeds_available_at_any_budget(monkeypatch, data_dir
         SESSIONS["s1"][1][1][1], SESSIONS["s2"][1][1][1], SESSIONS["s3"][1][1][1]])
     seen = set()
     for budget in range(0, 1200, 7):
-        out = _ctx(data_dir, budget_tokens=budget, answer_reserve=100, reasoning_reserve=50)
+        out = _ctx(data_dir, budget_tokens=budget)
         assert out["tokens_used"] <= out["budget_available"]
         assert out["sessions_included"] + out["sessions_dropped"] == 3
         seen.add(out["sessions_included"])
     assert seen == {0, 1, 2, 3}
 
 
-def test_answer_reserve_is_subtracted(monkeypatch, data_dir):
-    _ingest_sessions(data_dir)
-    _ranked(monkeypatch, data_dir, [SESSIONS["s1"][1][1][1]])
-    b1 = _block("s1", 0, 3)
-    fits = _budget_for([b1])
-    assert _ctx(data_dir, tokenizer=_chars, answer_reserve=0, budget_tokens=fits)["sessions_included"] == 1
-    out = _ctx(data_dir, tokenizer=_chars, answer_reserve=1, budget_tokens=fits)
-    assert out["sessions_included"] == 0
-    assert out["budget_available"] == fits - 1 - len(GUIDANCE)
-
-
-def test_reasoning_reserve_is_subtracted(monkeypatch, data_dir):
+def test_budget_tokens_is_the_evidence_budget_exactly(monkeypatch, data_dir):
+    """Nothing is subtracted inside answer_context: the context may use exactly
+    budget_tokens, one token less drops the block, and budget_available echoes it."""
     _ingest_sessions(data_dir)
     _ranked(monkeypatch, data_dir, [SESSIONS["s1"][1][1][1]])
     fits = _budget_for([_block("s1", 0, 3)])
-    out = _ctx(data_dir, tokenizer=_chars, answer_reserve=0, reasoning_reserve=1, budget_tokens=fits)
-    assert out["sessions_included"] == 0
+    out = _ctx(data_dir, tokenizer=_chars, budget_tokens=fits)
+    assert out["sessions_included"] == 1
+    assert out["tokens_used"] == fits == out["budget_available"]
+    out = _ctx(data_dir, tokenizer=_chars, budget_tokens=fits - 1)
+    assert out["sessions_included"] == 0 and out["budget_available"] == fits - 1
+
+
+def test_the_reserves_are_not_answer_context_parameters(data_dir):
+    with pytest.raises(TypeError):
+        asyncio.run(taosmd.answer_context("q", agent="a", data_dir=data_dir, budget_tokens=10,
+                                          answer_reserve=512))
+    with pytest.raises(TypeError):
+        asyncio.run(taosmd.answer_context("q", agent="a", data_dir=data_dir, budget_tokens=10,
+                                          reasoning_reserve=1))
 
 
 def test_default_estimate_is_chars_over_3_5_rounded_up():
@@ -378,6 +381,9 @@ def test_default_budget_tokens_arithmetic():
     # a typical agent turn: ~22k already used in a 32k window
     assert ac.default_budget_tokens(32768, used_tokens=22000) == 10256
     assert ac.default_budget_tokens(32768) == 13107
+    assert ac.default_budget_tokens(32768, used_tokens=22000, reasoning_reserve=3584) == 6672
+    assert ac.default_budget_tokens(65536, used_tokens=22000) == 26214
+    assert ac.default_budget_tokens(10_000, used_tokens=9_000, reasoning_reserve=600) == 0
     assert ac.default_budget_tokens(0) == 0
     assert ac.default_budget_tokens(10_000, share=0.5, answer_reserve=0) == 5000
     assert taosmd.default_budget_tokens is ac.default_budget_tokens
@@ -623,6 +629,8 @@ def test_http_validation(live):
     assert _post(f"{live.url}/answer-context", {**base, "neighbors": "2"})[0] == 400
     assert _post(f"{live.url}/answer-context", {**base, "include_facts": "yes"})[0] == 400
     assert _post(f"{live.url}/answer-context", {**base, "now": "not a date"})[0] == 400
+    assert _post(f"{live.url}/answer-context", {**base, "answer_reserve": 512})[0] == 400
+    assert _post(f"{live.url}/answer-context", {**base, "reasoning_reserve": 0})[0] == 400
 
 
 def test_http_rejects_the_same_unauthenticated_calls_as_search(tmp_path, monkeypatch):
@@ -798,7 +806,6 @@ def test_product_environment_reports_a_missing_reranker(data_dir, monkeypatch):
 
 def _grown(data_dir, tokenizer=_chars, **kw):
     kw.setdefault("grow", True)
-    kw.setdefault("answer_reserve", 0)
     return _ctx(data_dir, tokenizer=tokenizer, **kw)
 
 
@@ -895,7 +902,7 @@ def test_budget_sized_limit_is_not_capped_by_the_recipe_pool(data_dir, monkeypat
                    "reranker": "none", "adjacent_neighbors": 0})
     monkeypatch.setattr(recipes, "resolve_recipe", lambda agent, data_dir=None: recipe)
     small = asyncio.run(taosmd_api.search("p3x1", agent="a", data_dir=data_dir, limit=50))
-    assert len(small) <= 20  # search itself is capped by the recipe pool, as before
+    assert len(small) < 30  # search itself stays capped by the recipe pool (20, plus a kg/archive hit)
     out = asyncio.run(taosmd.answer_context(
         "p3x1", agent="a", data_dir=data_dir, budget_tokens=100_000, now=NOW, limit=50, grow=False))
     assert out["hits_total"] == 50

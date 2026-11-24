@@ -128,7 +128,7 @@ def test_product_run_no_char_cut_guidance_and_records(mod, monkeypatch, tmp_path
     from taosmd.answer_context import GUIDANCE
     assert prompt.startswith(GUIDANCE)
     assert len(prompt) > 16_000
-    assert _Client.posts[0]["options"]["num_ctx"] == 100_000
+    assert _Client.posts[0]["options"]["num_ctx"] == 100_000 + 1536
     row = doc["results"][0]
     ctx = prompt[len(GUIDANCE) + 2: prompt.index("\n\nQuestion:")]
     assert row["product"]["context_sha256"] == hashlib.sha256(ctx.encode()).hexdigest()

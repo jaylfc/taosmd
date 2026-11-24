@@ -56,11 +56,15 @@ def default_budget_tokens(
     *,
     used_tokens: int = 0,
     answer_reserve: int = 512,
+    reasoning_reserve: int = 0,
     share: float = 0.4,
 ) -> int:
     """Context budget for one turn, from the model window and what is already used.
 
-    ``min(int(window * share), window - used - answer_reserve)``, floored at 0.
+    ``min(int(window * share), window - used - answer_reserve -
+    reasoning_reserve)``, floored at 0. This is the only place the reserves
+    live: the result is the *evidence budget* to pass to :func:`answer_context`
+    as ``budget_tokens``, which does not subtract anything further.
 
     ``share`` caps evidence at 40% of the window. ``used_tokens`` (system
     prompt, tools and conversation at turn start; about 22k for a typical
@@ -70,7 +74,10 @@ def default_budget_tokens(
     """
     return max(
         0,
-        min(int(window_tokens * share), window_tokens - used_tokens - answer_reserve),
+        min(
+            int(window_tokens * share),
+            window_tokens - used_tokens - answer_reserve - reasoning_reserve,
+        ),
     )
 
 
@@ -238,8 +245,6 @@ async def answer_context(
     data_dir=None,
     budget_tokens: int,
     now=None,
-    reasoning_reserve: int = 0,
-    answer_reserve: int = 512,
     neighbors: int = 2,
     limit: int | None = None,
     tokenizer=None,
@@ -272,12 +277,13 @@ async def answer_context(
     Each block is ``Session <YYYY-MM-DD (Ddd)>`` (or ``Session (date unknown)``)
     followed by one ``role: text`` line per turn in original order.
 
-    Budget, in tokens: ``available = budget_tokens - answer_reserve -
-    reasoning_reserve - tokens(guidance)``. ``tokenizer`` (``str -> int``) counts
-    when given, else ``ceil(chars / 3.5)``. Blocks are added in the rank order of
-    their best hit; one that does not fit is dropped whole and the next is tried.
-    ``tokens_used`` is the token count of the returned context and never exceeds
-    ``budget_available``. When no block fits the context is the empty string.
+    Budget, in tokens: ``budget_tokens`` is the evidence budget, the tokens the
+    returned ``context`` string may take, headers included. Nothing is
+    subtracted from it here (the answer and reasoning reserves belong to
+    :func:`default_budget_tokens`), so ``budget_available == budget_tokens``.
+    ``tokenizer`` (``str -> int``) counts when given, else ``ceil(chars / 3.5)``.
+    ``tokens_used`` is the count of the returned context and never exceeds
+    ``budget_tokens``. When no block fits the context is the empty string.
 
     ``limit`` is the number of hits fetched.
     ``include_facts`` appends knowledge-graph fact hits as a final ``Known
@@ -294,10 +300,8 @@ async def answer_context(
         raise ValueError("agent name is required")
     if neighbors < 0:
         raise ValueError("neighbors must be >= 0")
-    for name, value in (("budget_tokens", budget_tokens), ("answer_reserve", answer_reserve),
-                        ("reasoning_reserve", reasoning_reserve)):
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ValueError(f"{name} must be a non-negative integer")
+    if isinstance(budget_tokens, bool) or not isinstance(budget_tokens, int) or budget_tokens < 0:
+        raise ValueError("budget_tokens must be a non-negative integer")
     if limit is None:
         limit = default_limit(budget_tokens)
     count = tokenizer if tokenizer is not None else estimate_tokens
@@ -309,7 +313,7 @@ async def answer_context(
         if now_dt is None:
             raise ValueError(f"cannot read 'now' as a date: {now!r}")
 
-    available = max(0, budget_tokens - answer_reserve - reasoning_reserve - count(GUIDANCE))
+    available = budget_tokens
 
     hits = await _api.search(
         query,

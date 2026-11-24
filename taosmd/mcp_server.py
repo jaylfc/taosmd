@@ -229,8 +229,6 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
         limit: int | None = None,
         neighbors: int = 2,
         now: str | None = None,
-        reasoning_reserve: int = 0,
-        answer_reserve: int = 512,
         include_facts: bool = False,
     ) -> dict:
         """Build the context to answer ``query`` from, inside a token budget.
@@ -240,8 +238,9 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
         oldest first, each turn whole and in order. Every candidate session
         first gets its matching turns with ``neighbors`` turns either side;
         budget left over then grows sessions to the whole session, best
-        match first. A block that does not fit ``budget_tokens`` is dropped
-        whole, never cut. Returns ``{"context", "guidance",
+        match first. ``budget_tokens`` is the evidence budget for the returned
+        string (see ``default_budget_tokens``). A block that does not fit is
+        dropped whole, never cut. Returns ``{"context", "guidance",
         "sessions_included", "sessions_dropped", "hits_total", "tokens_used",
         "budget_available", "expanded"}``; answer from ``context`` following
         ``guidance``.
@@ -259,8 +258,7 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
             opts["now"] = now
         return await _dispatch(service.answer_context(
             query, agent=agent, data_dir=data_dir, budget_tokens=budget_tokens,
-            neighbors=neighbors, reasoning_reserve=reasoning_reserve,
-            answer_reserve=answer_reserve, include_facts=include_facts, **opts))
+            neighbors=neighbors, include_facts=include_facts, **opts))
 
     @mcp.tool()
     async def memory_list_projects() -> list[dict]:

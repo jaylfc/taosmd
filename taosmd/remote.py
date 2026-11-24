@@ -148,8 +148,7 @@ class RemoteClient:
         """POST /answer-context: the server builds the dated, budgeted context.
 
         ``opts`` are the :func:`taosmd.answer_context` parameters that have a
-        JSON form (``budget_tokens``, ``now``, ``reasoning_reserve``,
-        ``answer_reserve``, ``neighbors``, ``limit``, ``include_facts``,
+        JSON form (``budget_tokens``, ``now``, ``neighbors``, ``limit``, ``include_facts``,
         ``project``, ``also_include``, ``mode``, ``collections``,
         ``collections_only``). A ``tokenizer`` callable cannot cross the wire.
         """

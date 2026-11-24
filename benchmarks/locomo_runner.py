@@ -65,6 +65,7 @@ from taosmd import api as _api  # noqa: E402
 from taosmd.answer_context import answer_context as _answer_context  # noqa: E402
 from benchmarks.product_context import (  # noqa: E402
     PRODUCT_AGENT,
+    DEFAULT_READER_OVERHEAD,
     PRODUCT_PROMPT,
     check_ingest,
     count_in,
@@ -1128,6 +1129,7 @@ async def _process_qa_product(
     model: str,
     *,
     reader_ctx_tokens: int,
+    reader_overhead_tokens: int,
     answer_limit: int | None,
     answer_neighbors: int | None,
     llm_backend: str = "ollama",
@@ -1175,7 +1177,7 @@ async def _process_qa_product(
         repeat_penalty=repeat_penalty,
         num_predict=num_predict,
         stop=stop,
-        num_ctx=reader_ctx_tokens,
+        num_ctx=reader_ctx_tokens + reader_overhead_tokens,
     )
     gen_ms = (time.time() - t1) * 1000.0
     judge = (
@@ -1668,6 +1670,9 @@ async def run(args: argparse.Namespace) -> int:
     context_mode = resolve_context_mode(args)
     product = context_mode == "product"
     reader_ctx_tokens = getattr(args, "reader_ctx_tokens", None)
+    reader_overhead = getattr(args, "reader_overhead_tokens", None)
+    if reader_overhead is None:
+        reader_overhead = DEFAULT_READER_OVERHEAD
     answer_limit = getattr(args, "answer_limit", None)
     answer_neighbors = getattr(args, "answer_neighbors", None)
     product_env = None
@@ -1768,6 +1773,7 @@ async def run(args: argparse.Namespace) -> int:
         meta_for_hash.update({
             "context_mode": "product",
             "reader_ctx_tokens": reader_ctx_tokens,
+            "reader_overhead_tokens": reader_overhead,
             "answer_limit": answer_limit,
             "answer_neighbors": answer_neighbors,
         })
@@ -1824,6 +1830,7 @@ async def run(args: argparse.Namespace) -> int:
                     outcome = await _process_qa_product(
                         qa, conv_id, vmem, turn_index, client, gen_url, args.model,
                         reader_ctx_tokens=reader_ctx_tokens,
+                        reader_overhead_tokens=reader_overhead,
                         answer_limit=answer_limit,
                         answer_neighbors=answer_neighbors,
                         llm_backend=args.llm_backend,
@@ -2044,7 +2051,8 @@ async def run(args: argparse.Namespace) -> int:
     }
     if product:
         meta.update({k: meta_for_hash[k] for k in (
-            "context_mode", "reader_ctx_tokens", "answer_limit", "answer_neighbors")})
+            "context_mode", "reader_ctx_tokens", "reader_overhead_tokens", "answer_limit",
+            "answer_neighbors")})
         meta["product_environment"] = product_env
 
     out_path.write_text(json.dumps(
@@ -2366,8 +2374,14 @@ def _build_parser() -> argparse.ArgumentParser:
                         "guidance text is the instruction, no verify pass. Needs "
                         "--reader-ctx-tokens.")
     p.add_argument("--reader-ctx-tokens", type=int, default=None,
-                   help="Reader model context window in tokens: the answer_context "
-                        "budget and the Ollama num_ctx. Required with --context product.")
+                   help="Evidence budget in tokens: passed as budget_tokens to "
+                        "answer_context (the most the context string may take). The "
+                        "Ollama num_ctx is this plus --reader-overhead-tokens. "
+                        "Required with --context product.")
+    p.add_argument("--reader-overhead-tokens", type=int, default=None,
+                   help="Product mode: tokens added to --reader-ctx-tokens for the "
+                        "guidance, question, answer and template when sizing num_ctx "
+                        "(default 1536).")
     p.add_argument("--answer-limit", type=int, default=None,
                    help="Product mode: hits fetched per question (default: the product default).")
     p.add_argument("--answer-neighbors", type=int, default=None,

@@ -22,6 +22,11 @@ CONTEXT_MODES = ("legacy", "product")
 #: Agent name the product-mode haystack is ingested under.
 PRODUCT_AGENT = "bench_eval"
 
+#: Tokens added to the evidence budget to size the reader's window: the
+#: guidance, the question, the answer and the chat template. ``budget_tokens``
+#: bounds only the context string, so the window must be larger than it.
+DEFAULT_READER_OVERHEAD = 1536
+
 #: The guidance text from answer_context is the instruction.
 PRODUCT_PROMPT = """{guidance}
 
