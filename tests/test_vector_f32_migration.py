@@ -449,7 +449,6 @@ def test_fresh_store_mode_marker_and_reopen(tmp_path, mode_kwarg, mode_name):
 
 def test_dense_format_applies_only_to_dense_stores(tmp_path):
     """Dense-format logic applies only to plain dense stores, not binary_quant/late_interaction."""
-    import taosmd.vector_memory as vm_module
 
     db = str(tmp_path / "test_vec.db")
 
