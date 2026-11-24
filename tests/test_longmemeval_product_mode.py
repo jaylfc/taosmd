@@ -329,3 +329,26 @@ async def test_a_prompt_that_fills_the_window_is_flagged_as_truncated(mod, monke
                      reader_overhead_tokens=500)
     assert doc["reader_num_ctx"] == 50_500
     assert doc["results"][0]["product"]["prompt_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_dataset_session_ids_never_reach_the_store(mod, monkeypatch, tmp_path):
+    """Evidence sessions are named answer_...; a stored id is searchable text."""
+    item = _item()
+    item["haystack_session_ids"] = ["answer_111", "noise_222", "answer_333"]
+    item["answer_session_ids"] = ["answer_111"]
+    stored = []
+    orig = taosmd_api.ingest
+
+    async def spy(turns, **kw):
+        stored.extend(turns)
+        return await orig(turns, **kw)
+
+    monkeypatch.setattr(taosmd_api, "ingest", spy)
+    doc = await _run(mod, monkeypatch, tmp_path, _Client(), item=item)
+    assert stored and {t["session_id"] for t in stored} == {"s0", "s1", "s2"}
+    assert "answer_" not in json.dumps(stored) and "noise_" not in json.dumps(stored)
+    # ... and results are reported in the dataset's own ids
+    assert {b["session_id"] for b in doc["results"][0]["product"]["included"]} == {
+        "answer_111", "noise_222", "answer_333"}
+    assert doc["results"][0]["product"]["evidence"]["sessions_total"] == 1

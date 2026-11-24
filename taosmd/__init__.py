@@ -115,7 +115,7 @@ from .api import (
     resolve_pending_decision,
 )
 
-from .answer_context import answer_context, default_budget_tokens
+from .answer_context import answer_context, default_budget_tokens, is_abstention
 
 # Project identity: git-remote-derived fingerprint for cross-agent memory
 # sharing (the project= / also_include= args on ingest/search).
@@ -265,6 +265,7 @@ __all__ = [
     "search",
     "answer_context",
     "default_budget_tokens",
+    "is_abstention",
     # Project identity + cross-agent discovery
     "project",
     "get_project_id",

@@ -46,6 +46,31 @@ _DATE_FORMATS = (
 _FACT_SOURCES = ("kg", "kg_expansion")
 
 
+#: The phrases that mark an "I don't know" style answer (the LongMemEval
+#: runner's list, lower case).
+_ABSTENTION_PHRASES = (
+    "i don't know",
+    "i do not know",
+    "i'm sorry",
+    "not in the context",
+    "does not contain",
+    "no information",
+)
+
+
+def is_abstention(text: str) -> bool:
+    """True when ``text`` reads as a decline to answer ("I don't know" and kin).
+
+    Case-insensitive substring match on :data:`_ABSTENTION_PHRASES`; a curly
+    apostrophe counts as a straight one. An empty or non-string value is not an
+    abstention (it is a missing answer).
+    """
+    if not isinstance(text, str) or not text.strip():
+        return False
+    folded = text.lower().replace("\u2019", "'")
+    return any(p in folded for p in _ABSTENTION_PHRASES)
+
+
 def estimate_tokens(text: str) -> int:
     """Conservative token estimate: characters / 3.5, rounded up."""
     return math.ceil(len(text) / 3.5)

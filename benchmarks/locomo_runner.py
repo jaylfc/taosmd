@@ -1145,8 +1145,10 @@ async def _process_qa_product(
     """Answer one QA from ``taosmd.answer_context`` and nothing else.
 
     The context is passed whole (no character cut), the guidance text is the
-    instruction, and the Ollama window is the budget the context was built
-    for. There is no verify pass, as in production.
+    instruction, and the Ollama window is the evidence budget plus
+    ``reader_overhead_tokens`` (guidance, question, answer, template), since
+    the budget bounds only the context string. There is no verify pass, as in
+    production.
     """
     if "answer" not in qa:
         return None

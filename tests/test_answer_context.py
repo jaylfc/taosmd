@@ -12,6 +12,7 @@ import asyncio
 import importlib
 import json
 import threading
+from pathlib import Path
 import urllib.error
 import urllib.request
 
@@ -971,3 +972,30 @@ def test_mcp_agent_a_never_sees_agent_b(tmp_path, monkeypatch):
                     except Exception:
                         pass
         loop.close()
+
+
+# ---------------------------------------------------------------------------
+# is_abstention
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "I don't know.", "I DO NOT KNOW the answer", "I\u2019m sorry, I can't say",
+    "That is not in the context.", "The context does not contain it.",
+    "There is no information about that.", "Hmm. I Don't Know",
+])
+def test_is_abstention_true(text):
+    assert taosmd.is_abstention(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "Rex is a beagle.", "He adopted a dog in May.", "", "   ", None, 7,
+    "The information was given in session two.",
+])
+def test_is_abstention_false(text):
+    assert taosmd.is_abstention(text) is False
+
+
+def test_is_abstention_matches_the_longmemeval_runner_list():
+    src = (Path(__file__).resolve().parent.parent / "benchmarks" / "longmemeval_runner.py").read_text()
+    for phrase in ac._ABSTENTION_PHRASES:
+        assert f'"{phrase}"' in src

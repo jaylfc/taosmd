@@ -590,8 +590,9 @@ async def llm_answer_product(client, context: str, question: str, guidance: str,
     """Generate the answer from an answer_context result.
 
     The guidance text is the instruction, the context goes in whole (no
-    character cut), and the Ollama window is set to the budget the context was
-    built for. Returns ``(answer, prompt_tokens)``; ``prompt_tokens`` is the
+    character cut), and ``num_ctx`` is the Ollama window to use: the evidence
+    budget plus the reader overhead (the budget bounds only the context string).
+    Returns ``(answer, prompt_tokens)``; ``prompt_tokens`` is the
     server's own count of the prompt it read (Ollama's ``prompt_eval_count``)
     so a prompt the server truncated or a token estimate that was too low shows
     in the results. A failed call raises :class:`ReaderError` instead of
