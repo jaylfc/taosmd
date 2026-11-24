@@ -381,6 +381,11 @@ _EMBEDDER_DOWNLOAD = {
         '--include "onnx/model.onnx" "*.json" "tokenizer*" "vocab*" "special_tokens*" '
         "--local-dir models/arctic-embed-s"
     ),
+    "mdbr-leaf-ir": (
+        "hf download MongoDB/mdbr-leaf-ir "
+        '--include "onnx/model.onnx" "*.json" "tokenizer*" "vocab*" "special_tokens*" '
+        "--local-dir models/mdbr-leaf-ir"
+    ),
 }
 
 

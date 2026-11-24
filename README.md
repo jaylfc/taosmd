@@ -441,7 +441,7 @@ You can set the live controls three ways: the dashboard Settings panel (presets 
 
 | Control | Default | What it does | When to turn it on, and the trade-off | Resource cost |
 | --- | --- | --- | --- | --- |
-| `embedder` | `arctic-embed-s` | Which ONNX dense embedder backs retrieval, set at setup (`arctic-embed-s` or `minilm-onnx`). | `arctic-embed-s` scores +0.057 judged retrieval over MiniLM at the same 384 dims and latency. MiniLM is the model the 97.0% Recall@5 headline was measured on; on that same LongMemEval-S Recall@5 run arctic-embed-s scores 95.6% (478/500 vs 485/500, research report N-031). | A one-time model fetch; changing it re-embeds the whole store. |
+| `embedder` | `arctic-embed-s` | Which ONNX dense embedder backs retrieval, set at setup (`arctic-embed-s`, `minilm-onnx` or `mdbr-leaf-ir`). | `arctic-embed-s` scores +0.057 judged retrieval over MiniLM at the same 384 dims and latency. MiniLM is the model the 97.0% Recall@5 headline was measured on; on that same LongMemEval-S Recall@5 run arctic-embed-s scores 95.6% (478/500 vs 485/500, research report N-031). | A one-time model fetch; changing it re-embeds the whole store. |
 | `binary_quant` | `off` | Stores 1 bit per dimension instead of full-precision floats. | 32x smaller vector footprint, recall-neutral; for SBC and low-memory tiers. | Re-embed to apply; then 32x smaller vectors and cheaper CPU distance. |
 | `late_interaction` | `off` | Token-level MaxSim scoring; the store is built with per-token vectors. | Lifts evidence recall from 0.64 to 0.85 on LoCoMo, CPU-only, with no GPU or reranker. | Re-index to apply; then about 110 ms per query on a 16-core CPU. |
 
@@ -625,7 +625,8 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 
 ## Embedding Model
 
-Two ONNX embedders are supported, both 384-dimensional and CPU-fast. Neither is bundled (size); each is fetched on setup.
+Three ONNX embedders are supported, all CPU-fast. None is bundled (size); each
+is fetched on setup.
 
 **`snowflake-arctic-embed-s`** is the dense default for fresh low-tier installs. It scores +0.057 judged retrieval quality on the full 1540-QA LoCoMo set (0.730 vs 0.674 for MiniLM) at the same dimensions and latency, so it is a free upgrade for the low-end tier. It uses an asymmetric query prefix and CLS pooling, both handled automatically. Fetch it:
 
@@ -645,6 +646,35 @@ model.save('models/minilm-onnx')
 ```
 
 Or download directly from [HuggingFace](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2).
+
+**`MongoDB/mdbr-leaf-ir`** is selectable but not the default. It is a 22.6M-param,
+Apache-2.0 sentence-transformers model (22.6M params, 768-d output) whose model
+card ("Sentence Transformers" quickstart / `config_sentence_transformers.json`
+prompts) uses query prefix ``Represent this sentence for searching relevant
+passages: `` and no document prefix, with mean pooling. It is handled
+automatically when the model directory is named `mdbr-leaf-ir`.
+
+IMPORTANT: its official `onnx/model.onnx` omits the 384->768 Dense layer after
+pooling, so the graph exposes no `sentence_embedding` output and taOSmd will
+refuse to load it (silent wrong-embedder protection). Produce a Dense-inclusive
+ONNX export that exposes `sentence_embedding`, for example with the full
+sentence-transformers pipeline:
+
+```bash
+pip install sentence-transformers
+python -c "
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer('MongoDB/mdbr-leaf-ir')
+model.save('models/mdbr-leaf-ir')
+"
+```
+
+or with `optimum-cli export onnx` over the complete model (Transformer +
+Pooling + Dense + Normalize). Then fetch:
+
+```bash
+hf download MongoDB/mdbr-leaf-ir --include "onnx/model.onnx" "*.json" "tokenizer*" --local-dir models/mdbr-leaf-ir
+```
 
 ## Embedding Speed
 

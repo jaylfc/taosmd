@@ -175,6 +175,6 @@ def test_get_rejects_bad_kid(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "exists", property(fail_exists))
     monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
 
-    for bad_kid in ["../x", "ABCDEF0123456789", "", "z" * 16]:
+    for bad_kid in ["../x", "ABCDEF0123456789", "", "z" * 16, "a" * 15, "a" * 17]:
         with pytest.raises(KeyError):
             provider.get(bad_kid)

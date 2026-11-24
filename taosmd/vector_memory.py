@@ -12,7 +12,6 @@ import json
 import logging
 import math
 import os
-import shutil
 import sqlite3
 import time
 from pathlib import Path
@@ -127,14 +126,18 @@ def pack_sign_bits(embedding: list[float]) -> str:
 # Query-time prefix for arctic-embed (asymmetric: queries only, no doc prefix).
 _ARCTIC_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
+# Query-time prefix for mdbr-leaf-ir (asymmetric: queries only, no doc prefix).
+_LEAF_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
 
 def _onnx_apply_prefix(onnx_path, text: str, task: str) -> str:
     """Apply a model-specific input prefix to ONNX embed text.
 
     Asymmetric embedders need the right prefix or retrieval silently
     degrades. nomic-embed prefixes both queries and documents with the
-    task name; arctic-embed prefixes only the query. MiniLM and anything
-    else gets no prefix. Detection is by model directory name.
+    task name; arctic-embed and mdbr-leaf-ir prefix only the query.
+    MiniLM and anything else gets no prefix. Detection is by model
+    directory name.
     """
     # Env override (E-010 bake-off: let any model set its prefixes explicitly,
     # independent of pooling and of directory-name detection). Active when
@@ -148,6 +151,10 @@ def _onnx_apply_prefix(onnx_path, text: str, task: str) -> str:
         return f"{task}: {text}"
     if "arctic" in path and task == "search_query":
         return f"{_ARCTIC_QUERY_PREFIX}{text}"
+    if "mdbr-leaf-ir" in path:
+        if task == "search_query":
+            return f"{_LEAF_QUERY_PREFIX}{text}"
+        return text
     return text
 
 
@@ -155,8 +162,9 @@ def _onnx_pooling_mode(onnx_path) -> str:
     """Pooling mode for an ONNX embedder: "cls" or "mean".
 
     arctic-embed pools the CLS token (its 1_Pooling config sets
-    pooling_mode_cls_token true, mean false); the MiniLM default and
-    everything else mean-pool over the attention mask.
+    pooling_mode_cls_token true, mean false); mdbr-leaf-ir mean-pools
+    (pooling_mode_mean_tokens true); the MiniLM default and everything
+    else mean-pool over the attention mask.
     """
     pm = os.environ.get("TAOSMD_ONNX_POOLING")
     if pm in ("cls", "mean"):
@@ -164,6 +172,8 @@ def _onnx_pooling_mode(onnx_path) -> str:
     path = str(onnx_path).lower() if onnx_path else ""
     if "arctic" in path:
         return "cls"
+    if "mdbr-leaf-ir" in path:
+        return "mean"
     return "mean"
 
 
@@ -224,6 +234,92 @@ def _onnx_feed(session, inputs: dict) -> dict:
             continue
         feed[name] = np.zeros((0, *rest), dtype=np.dtype(np_dtype))
     return feed
+
+
+class _OnnxEmbedderConfigError(RuntimeError):
+    """An ONNX embedder's files/graph are configured so loading it would serve
+    a different embedding than the model documents. Never falls back to a
+    different embedder or to pooling; the caller must re-export or re-point."""
+
+
+def _onnx_dense_head_config(model_dir: str) -> dict | None:
+    """Return the Dense module config if modules.json lists a Dense head.
+
+    sentence-transformers lays each module out under its own directory
+    (``<model_dir>/<path>/config.json``). Returns None when modules.json is
+    absent, unreadable, or lists no ``sentence_transformers.models.Dense``
+    module; returns an empty dict when the Dense module is listed but its
+    config file is missing or unreadable.
+    """
+    modules_file = Path(model_dir) / "modules.json"
+    if not modules_file.exists():
+        return None
+    try:
+        modules = json.loads(modules_file.read_text())
+    except (OSError, ValueError):
+        return None
+    dense_path = None
+    for module in modules:
+        if module.get("type") == "sentence_transformers.models.Dense":
+            dense_path = module.get("path")
+            break
+    if not dense_path:
+        return None
+    config_file = Path(model_dir) / dense_path / "config.json"
+    if not config_file.exists():
+        return {}
+    try:
+        return json.loads(config_file.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _onnx_require_sentence_embedding(model_dir: str, session) -> None:
+    """Refuse an ONNX export that drops a sentence_transformers Dense head.
+
+    A sentence-transformers model whose modules.json lists a Dense module but
+    whose ONNX graph exposes no ``sentence_embedding`` output has had its
+    projection head stripped. Mean-pooling the backbone output would silently
+    produce a different (lower-dimensional) embedding, so raise here and name
+    the fix rather than fall back to pooling.
+    """
+    dense_cfg = _onnx_dense_head_config(model_dir)
+    if dense_cfg is None:
+        return
+    output_names = [o.name for o in session.get_outputs()]
+    if "sentence_embedding" in output_names:
+        return
+    raise _OnnxEmbedderConfigError(
+        f"ONNX embedder at {model_dir} exports a sentence_transformers Dense "
+        f"head (modules.json lists sentence_transformers.models.Dense) but "
+        f"its graph exposes no 'sentence_embedding' output, so the Dense "
+        f"projection was dropped from the export. Mean-pooling the backbone "
+        f"output would silently produce a different embedding. Re-export with "
+        f"the full pipeline so the graph exposes 'sentence_embedding', e.g. "
+        f"`sentence-transformers SentenceTransformer.save()` or "
+        f"`optimum-cli export onnx` with the complete model, then point "
+        f"onnx_path at that dir."
+    )
+
+
+def _onnx_declared_output_dim(model_dir: str) -> int | None:
+    """Output dimension declared by config_sentence_transformers.json or the
+    Dense module config, else None. The Dense config out_features takes
+    precedence since it is the projection head that sets the embedding size.
+    """
+    dim = None
+    st_cfg = Path(model_dir) / "config_sentence_transformers.json"
+    if st_cfg.exists():
+        try:
+            data = json.loads(st_cfg.read_text())
+        except (OSError, ValueError):
+            data = {}
+        if data.get("output_dim"):
+            dim = int(data["output_dim"])
+    dense_cfg = _onnx_dense_head_config(model_dir)
+    if isinstance(dense_cfg, dict) and dense_cfg.get("out_features"):
+        dim = int(dense_cfg["out_features"])
+    return dim or None
 
 
 class VectorMemory:
@@ -308,9 +404,15 @@ class VectorMemory:
         # before any query, so a legacy table has gained `valid_to` (and its
         # index) by the time the first SELECT touches it.
         migrations.migrate(self._conn, "vector_memory")
-        self._migrate_dense_to_f32()
         self._check_store_mode()
         self._conn.commit()
+        # Legacy JSON stores are served as-is: nothing is converted on open.
+        if self._store_is_legacy():
+            logger.info(
+                "vector store %s holds legacy JSON vectors; serving it as-is "
+                "(no conversion on open) so older releases can still read it",
+                self._db_path,
+            )
         # QMD embed mode talks to a remote QMD server over HTTP. When the
         # caller does not hand in a client, create and own one so _embed_qmd
         # has something to POST to; otherwise add() fails for every chunk and
@@ -411,6 +513,11 @@ class VectorMemory:
                     providers=["CPUExecutionProvider"],
                 )
                 self._onnx_tokenizer = AutoTokenizer.from_pretrained(model_dir)
+                # Refuse an export that drops a sentence_transformers Dense
+                # head: mean-pooling the backbone would silently serve a
+                # different embedding. This raises (propagates out of init)
+                # rather than falling back to a different embedder.
+                _onnx_require_sentence_embedding(model_dir, self._onnx_session)
                 # Load-time probe: drive the graph once with an empty media
                 # input. A model we cannot drive (e.g. one whose graph has a
                 # declared input this embedder cannot populate) must fail loud
@@ -435,7 +542,22 @@ class VectorMemory:
                         f"ONNX embedder {model_file} cannot be driven; "
                         f"unfed graph inputs: {unfed}"
                     )
+                # The Dense/Normalize head declares the embedding size; reject
+                # a graph whose first embedding does not match it.
+                declared_dim = _onnx_declared_output_dim(model_dir)
+                if declared_dim is not None and len(probe_vec) != declared_dim:
+                    raise _OnnxEmbedderConfigError(
+                        f"ONNX embedder at {model_dir} declares a {declared_dim}-dim "
+                        f"output but its first embedding is {len(probe_vec)}-dim. "
+                        f"The exported graph does not match the model's Dense/"
+                        f"Normalize head; re-export with the full pipeline "
+                        f"exposing 'sentence_embedding'."
+                    )
                 logger.info("Loaded ONNX embedding model from %s", model_file)
+            except _OnnxEmbedderConfigError:
+                # A misconfigured export must not silently fall back to a
+                # different embedder (that would serve wrong vectors); propagate.
+                raise
             except Exception as e:
                 # Loud and actionable: a silent embedder swap corrupts retrieval.
                 # The store's vectors are tied to the embedder that wrote them, so
@@ -455,22 +577,66 @@ class VectorMemory:
     def _store_mode_signature(self) -> str:
         """The storage-format and vector-space mode of this instance.
 
-        Two kinds of dimension belong here. Format: late_interaction (per-token
-        matrix vs single pooled vector), binary_quant (packed bits vs float),
-        and dense_format (JSON vs base64 float32). Space: the embedder identity,
-        because two embedders (e.g. MiniLM vs arctic-embed) produce vectors in
-        incompatible spaces even at the same dim, so a stored MiniLM vector is
-        meaningless to an arctic query and the store must be re-embedded on a
-        switch. embed_mode (qmd/local/onnx) is NOT included: those are
-        transports for the same model, interoperable.
+        Format: late_interaction (per-token matrix vs single pooled vector),
+        binary_quant (packed bits vs float), and dense_format (JSON vs base64
+        float32). Space: the embedder identity, because two embedders (e.g.
+        MiniLM vs arctic-embed) produce vectors in incompatible spaces even at
+        the same dim, so a stored MiniLM vector is meaningless to an arctic
+        query and the store must be re-embedded on a switch. embed_mode
+        (qmd/local/onnx) is NOT included: those are transports for the same
+        model, interoperable.
+
+        ``dense_format=f32`` is only reported when the recorded marker already
+        carries it (a converted store) or the store is fresh. A legacy marker
+        (no ``dense_format``) yields the full signature minus ``dense_format``
+        so 0.4.x can still open the store.
         """
-        dense_fmt = "f32" if not self.binary_quant and not self.late_interaction else "none"
-        return (
-            f"late_interaction={int(self.late_interaction)};"
-            f"binary_quant={int(self.binary_quant)};"
-            f"dense_format={dense_fmt};"
-            f"embedder={self._embedder_identity()}"
-        )
+        parts = [
+            f"late_interaction={int(self.late_interaction)}",
+            f"binary_quant={int(self.binary_quant)}",
+        ]
+        dense_fmt = self._dense_format()
+        if dense_fmt is not None:
+            parts.append(f"dense_format={dense_fmt}")
+        parts.append(f"embedder={self._embedder_identity()}")
+        return ";".join(parts)
+
+    def _dense_format(self) -> str | None:
+        """The ``dense_format`` component of this store's signature, or None to
+        omit it.
+
+        A recorded marker is echoed: whatever it says about dense_format (f32
+        for a converted store, none for a binary_quant or late_interaction store
+        written by 0.5.x) is kept, and a marker without the key stays without
+        it, so 0.4.x can still open the store. Only a store with no marker
+        decides: binary_quant and late_interaction stores are ``none``, a fresh
+        dense store is ``f32``, and a dense store that already holds rows (a
+        pre-marker legacy store) omits the key and stays JSON.
+        """
+        row = self._conn.execute(
+            "SELECT value FROM store_meta WHERE key = 'mode'"
+        ).fetchone()
+        if row is not None:
+            return self._parse_mode(row["value"]).get("dense_format")
+        if self.binary_quant or self.late_interaction:
+            return "none"
+        has_rows = self._conn.execute(
+            "SELECT 1 FROM vector_memory LIMIT 1"
+        ).fetchone() is not None
+        return None if has_rows else "f32"
+
+    def _store_is_legacy(self) -> bool:
+        """True for a dense store whose recorded marker lacks dense_format, i.e.
+        one that holds JSON vectors and is served (and appended to) in that
+        format. Never true for binary_quant or late_interaction stores."""
+        if self.binary_quant or self.late_interaction:
+            return False
+        row = self._conn.execute(
+            "SELECT value FROM store_meta WHERE key = 'mode'"
+        ).fetchone()
+        if row is None:
+            return False
+        return "dense_format" not in self._parse_mode(row["value"])
 
     def _embedder_identity(self) -> str:
         """A stable name for the embedding model, machine-path independent.
@@ -497,133 +663,6 @@ class VectorMemory:
                 k, v = part.split("=", 1)
                 out[k] = v
         return out
-
-    def _migrate_dense_to_f32(self) -> None:
-        """Migrate dense embeddings from JSON to base64 little-endian float32.
-
-        Runs on init for dense stores (not binary_quant, not late_interaction)
-        whose recorded marker lacks dense_format (or has no marker but has rows).
-        Conversion happens in a single transaction: all rows JSON -> f32 base64,
-        then the new marker with dense_format=f32 is written. On any exception,
-        the transaction rolls back, the error is logged, and the exception is
-        re-raised. The store remains in its original JSON state.
-        """
-        # Only applies to dense stores
-        if self.binary_quant or self.late_interaction:
-            return
-
-        current_sig = self._store_mode_signature()
-
-        row = self._conn.execute(
-            "SELECT value FROM store_meta WHERE key = 'mode'"
-        ).fetchone()
-        recorded = row["value"] if row else None
-
-        # If a marker is recorded, check for conflicts with current signature
-        # BEFORE migrating. Component-wise comparison over keys the recorded
-        # marker carries, exactly as _check_store_mode does. Any conflict means
-        # the store is incompatible; return without migrating so _check_store_mode
-        # raises StoreModeMismatch and the store is left byte-identical.
-        if recorded is not None:
-            rec = self._parse_mode(recorded)
-            cur = self._parse_mode(self._store_mode_signature())
-            conflict = {k: v for k, v in rec.items() if cur.get(k) != v}
-            if conflict:
-                return
-
-        # Check if migration is needed
-        needs_migration = False
-        if recorded is not None:
-            rec = self._parse_mode(recorded)
-            # Migration needed if recorded marker lacks dense_format key
-            if "dense_format" not in rec:
-                needs_migration = True
-        else:
-            # No marker: check if there are any rows (legacy store)
-            has_rows = self._conn.execute(
-                "SELECT 1 FROM vector_memory LIMIT 1"
-            ).fetchone() is not None
-            if has_rows:
-                needs_migration = True
-
-        if not needs_migration:
-            return
-
-        logger.info("Migrating dense embeddings from JSON to base64 float32 at %s", self._db_path)
-
-        try:
-            # Start transaction
-            self._conn.execute("BEGIN IMMEDIATE")
-
-            # Fetch all rows that need migration (JSON format starts with '[')
-            rows = self._conn.execute(
-                "SELECT id, embedding FROM vector_memory WHERE embedding LIKE '[%'"
-            ).fetchall()
-
-            if rows:
-                # Convert each row
-                updates = []
-                for row in rows:
-                    try:
-                        vec = json.loads(row["embedding"])
-                        # Convert to base64 little-endian float32
-                        arr = np.asarray(vec, dtype="<f4")
-                        f32_b64 = base64.b64encode(arr.tobytes()).decode("ascii")
-                        updates.append((f32_b64, row["id"]))
-                    except (json.JSONDecodeError, TypeError, ValueError) as e:
-                        # Rollback on any parse failure
-                        self._conn.execute("ROLLBACK")
-                        logger.error("Migration failed at row %s: %s", row["id"], e)
-                        raise RuntimeError(f"Failed to parse embedding for row {row['id']}: {e}") from e
-
-                # Batch update all rows
-                self._conn.executemany(
-                    "UPDATE vector_memory SET embedding = ? WHERE id = ?",
-                    updates,
-                )
-
-            # Write the new marker with dense_format=f32
-            self._conn.execute(
-                "INSERT OR REPLACE INTO store_meta (key, value) VALUES ('mode', ?)",
-                (current_sig,),
-            )
-
-            self._conn.execute("COMMIT")
-            logger.info("Migrated %d dense embeddings to base64 float32", len(rows))
-
-            # VACUUM if free disk space >= 2x db file size
-            self._maybe_vacuum_after_migration()
-
-        except Exception:
-            # Ensure rollback on any exception
-            try:
-                self._conn.execute("ROLLBACK")
-            except Exception:
-                pass
-            logger.exception("Dense->f32 migration failed, rolled back")
-            raise
-
-    def _maybe_vacuum_after_migration(self) -> None:
-        """Run VACUUM after migration if free disk space >= 2x db file size.
-
-        VACUUM failure is logged but does not fail init.
-        """
-        try:
-            db_path = Path(self._db_path)
-            if not db_path.exists():
-                return
-            db_size = db_path.stat().st_size
-            free_space = shutil.disk_usage(db_path.parent).free
-            if free_space >= 2 * db_size:
-                logger.info("Running VACUUM after migration (free space %.1fx db size)", free_space / db_size)
-                self._conn.execute("VACUUM")
-            else:
-                logger.info(
-                    "Skipping VACUUM after migration: free space %.1fx db size (need >= 2x), space will be reclaimed later",
-                    free_space / db_size,
-                )
-        except Exception as e:
-            logger.warning("VACUUM after migration failed (non-fatal): %s", e)
 
     def _check_store_mode(self) -> None:
         """Refuse to open a store in a different format or vector space than it
@@ -949,6 +988,9 @@ class VectorMemory:
             # Dense mode stores the float vector as base64 little-endian float32.
             if self.binary_quant:
                 embedding_text = pack_sign_bits(embedding)
+            elif self._store_is_legacy():
+                # Legacy JSON store: keep writing JSON so 0.4.x can still read it.
+                embedding_text = json.dumps(embedding)
             else:
                 arr = np.asarray(embedding, dtype="<f4")
                 embedding_text = base64.b64encode(arr.tobytes()).decode("ascii")
