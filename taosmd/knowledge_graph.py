@@ -514,16 +514,14 @@ class TemporalKnowledgeGraph:
              triple but leave the old one(s) active too. Caller decides
              what to do with them.
 
-        ``vmem`` (optional): a :class:`~taosmd.vector_memory.VectorMemory`. When
-        supplied AND a contradiction is auto-resolved (policy 3), the raw vector
-        chunk(s) whose stored text contains the *old* object value are
-        opportunistically soft-superseded too (``valid_to`` stamped), so a
-        corrected fact stops resurfacing in vector recall as well as in the
-        typed KG. This closes the gap where corrections only superseded in the
-        KG layer. Default None preserves the legacy KG-only behaviour exactly.
-        nothing about the vector store is touched. The supersede is best-effort:
-        any failure is swallowed so a vmem hiccup can never block the KG write,
-        and it never deletes a row (zero-loss).
+        ``vmem`` (accepted for compatibility, no longer acted on): resolving a
+        contradiction only invalidates the old *triple*. The vector layer is
+        never touched, because a triple records no link to the vector row it
+        came from (its ``source`` is just ``<kind>:<agent>``), and hiding rows
+        by matching the old object's text swept up unrelated memories of every
+        agent. To retire a vector row on purpose use
+        :meth:`VectorMemory.supersede` (by id) or ``supersede_matching``
+        (agent-scoped, guarded, audited), or ``taosmd supersede``.
 
         Returns a dict whose ``status`` field is one of ``written``,
         ``deferred``, or ``written_with_conflicts``. ``triple_id`` is empty
@@ -563,15 +561,6 @@ class TemporalKnowledgeGraph:
         if contradictions and auto_resolve:
             for c in contradictions:
                 await self.invalidate(c["id"])
-                # Mirror the invalidation into the vector layer when a store is
-                # available: soft-hide chunk(s) carrying the old object value so
-                # the corrected fact leaves vector recall too. Raw rows are kept
-                # (zero-loss); failures must never block the KG write.
-                if vmem is not None:
-                    try:
-                        await vmem.supersede_matching(c["object_name"])
-                    except Exception as e:  # pragma: no cover - defensive
-                        logger.debug("vector supersede skipped: %s", e)
 
         tid = await self.add_triple(
             subject=subject, predicate=predicate, obj=obj,

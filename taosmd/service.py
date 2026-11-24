@@ -303,18 +303,45 @@ async def reindex(*, agent: str, data_dir=None, check: bool = False) -> dict:
     return await _api.reindex(agent=agent, data_dir=data_dir, check=check)
 
 
-async def supersede(match: str, *, agent: str | None = None, data_dir=None) -> dict:
-    """Soft-supersede vector chunk(s) whose stored text contains ``match``.
+async def supersede(
+    match: str, *, agent: str | None = None, force: bool = False, data_dir=None,
+) -> dict:
+    """Soft-supersede one agent's vector chunk(s) whose text contains ``match``.
 
-    Thin wrapper over :func:`taosmd.api.supersede_vectors`. Used to wire a
-    correction into the vector layer by content: matching chunks leave active
-    recall while the raw rows + archive entries are retained (zero-loss),
-    mirroring how the typed KG invalidates a corrected triple. ``agent`` is
-    accepted for adapter symmetry; the vector store is keyed per data dir.
+    Thin wrapper over :func:`taosmd.api.supersede_vectors`: the explicit
+    correction path. Matching chunks leave active recall while the raw rows
+    and archive entries are retained (zero-loss). ``agent`` scopes the match
+    and is required unless ``force`` is set; a needle under 12 characters or
+    one matching more than 20 rows is refused unless ``force`` is set (raises
+    :class:`~taosmd.vector_memory.SupersedeRefused`). Every hide is audited
+    and reversible with :func:`restore_hidden`.
     Returns ``{"superseded": int, "match": str}``.
     """
-    count = await _api.supersede_vectors(match, data_dir=data_dir)
+    count = await _api.supersede_vectors(
+        match, agent=agent, force=force, data_dir=data_dir)
     return {"superseded": count, "match": match}
+
+
+async def list_hidden(*, agent: str | None = None, data_dir=None) -> list[dict]:
+    """List hidden vector rows: ``id``, ``agent``, ``text`` (80 chars),
+    ``valid_to``, ``reason`` (``"unknown (before audit log)"`` if unaudited)."""
+    return await _api.list_hidden_vectors(agent=agent, data_dir=data_dir)
+
+
+async def restore_hidden(
+    ids: list[int] | None = None,
+    *,
+    since: str | None = None,
+    agent: str | None = None,
+    data_dir=None,
+) -> dict:
+    """Restore hidden vector rows by id, or all rows hidden since ``since``.
+
+    Returns ``{"restored": int, "ids": [int, ...]}``. Never deletes.
+    """
+    restored = await _api.restore_vectors(
+        ids, since=since, agent=agent, data_dir=data_dir)
+    return {"restored": len(restored), "ids": restored}
 
 
 async def stats(*, agent: str, data_dir=None) -> dict:

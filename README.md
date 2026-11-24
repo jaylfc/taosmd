@@ -616,7 +616,7 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 - **Dependency-aware task graph**, `taosmd tasks` gives multi-agent teams a ready queue (open tasks with no open blockers) and a `prime` briefing endpoint for session handoffs; every mutation is an append-only archive event, so the task tables are replayable history (concept credit: [beads](https://github.com/gastownhall/beads))
 - **Coordination is part of the memory, not bolted on**, we are not aware of another local-first memory system that ships an auditable comms bus and a dependency-aware task graph inside the memory server itself. Both are projections of the same zero-loss archive, so who said what and who did what are reconstructable from the source of truth.
 - **Temporal facts**, validity windows, point-in-time queries
-- **Contradiction detection**, corrected facts supersede across both the typed knowledge graph (via `valid_to` invalidation) and the vector recall layer (matching chunks soft-hidden, not deleted); recall returns only the active fact
+- **Contradiction detection**, a conflicting fact on a singular predicate invalidates the old triple in the typed knowledge graph (`valid_to`), except for regex-extracted facts, which are queued for `taosmd review` instead. A contradiction never hides vector rows; an explicit `taosmd supersede` soft-hides one agent's matching chunks (audited, nothing deleted) and `taosmd supersede --list-hidden` / `--restore` bring them back
 - **Provable Memory (recall gate on by default)**, because the archive keeps every source span, taOSmd can verify each extracted fact against the spans it came from, mark it supported or unsupported, and demote (never delete) the unsupported ones at recall. The `prefer_verified` gate ships on by default (a full tri-judge confirm eliminated served-hallucination at no accuracy cost) and is a safe no-op until you run the verify-pass. That makes the extraction-hallucination rate a measurable, standing number: 18.8% of regex-extracted facts on LoCoMo were not fully supported by their source, cross-family verified. Extraction-based systems that discard the source cannot measure this; we can ([methodology](docs/research-report.md))
 - **Zero-loss archive**, append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
 - **Intent-aware retrieval**, routes queries to optimal memory layer
@@ -879,6 +879,10 @@ taosmd reconcile --check          # dry-run: report missing counts without modif
 ```
 
 `--check` exits non-zero when any turn is missing, so you can run it from a cron health-check. The repair path re-adds only turns that are genuinely absent; it never resurrects turns that were intentionally superseded by a correction. Safe to run after a crash or periodically via cron.
+
+### Hidden rows: list and restore
+
+`taosmd supersede --agent NAME --match "text"` soft-hides one agent's vector rows containing the text (12+ characters, refused above 20 matches unless `--force`). Each hide is written to an audit table. `taosmd supersede --list-hidden [--agent NAME] [--json]` shows every hidden row with its reason (`unknown (before audit log)` for rows hidden by older versions), and `taosmd supersede --restore ID [ID ...]` or `--restore-all --since DATE [--agent NAME]` makes them searchable again. Nothing is deleted.
 
 ### Install the taOSmd-a2a skill
 
