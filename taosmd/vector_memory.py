@@ -560,27 +560,40 @@ class VectorMemory:
                 "SELECT id, embedding FROM vector_memory WHERE embedding LIKE '[%'"
             ).fetchall()
 
-            if rows:
-                # Convert each row
-                updates = []
-                for row in rows:
-                    try:
-                        vec = json.loads(row["embedding"])
-                        # Convert to base64 little-endian float32
-                        arr = np.asarray(vec, dtype="<f4")
-                        f32_b64 = base64.b64encode(arr.tobytes()).decode("ascii")
-                        updates.append((f32_b64, row["id"]))
-                    except (json.JSONDecodeError, TypeError, ValueError) as e:
-                        # Rollback on any parse failure
-                        self._conn.execute("ROLLBACK")
-                        logger.error("Migration failed at row %s: %s", row["id"], e)
-                        raise RuntimeError(f"Failed to parse embedding for row {row['id']}: {e}") from e
+            # Convert each row
+            updates = []
+            skipped = 0
+            for row in rows:
+                try:
+                    vec = json.loads(row["embedding"])
+                    # Check dimension matches store dimension
+                    if len(vec) != self._token_dim:
+                        logger.warning(
+                            "Skipping row %s during migration: embedding dimension %d does not match store dimension %d",
+                            row["id"], len(vec), self._token_dim,
+                        )
+                        skipped += 1
+                        continue
+                    # Convert to base64 little-endian float32
+                    arr = np.asarray(vec, dtype="<f4")
+                    f32_b64 = base64.b64encode(arr.tobytes()).decode("ascii")
+                    updates.append((f32_b64, row["id"]))
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
+                    logger.warning(
+                        "Skipping row %s during migration: failed to parse embedding: %s",
+                        row["id"], e,
+                    )
+                    skipped += 1
+                    continue
 
-                # Batch update all rows
+            # Batch update all successfully converted rows
+            if updates:
                 self._conn.executemany(
                     "UPDATE vector_memory SET embedding = ? WHERE id = ?",
                     updates,
                 )
+            if skipped:
+                logger.info("Migration skipped %d malformed or mismatched rows", skipped)
 
             # Write the new marker with dense_format=f32
             self._conn.execute(
@@ -589,7 +602,7 @@ class VectorMemory:
             )
 
             self._conn.execute("COMMIT")
-            logger.info("Migrated %d dense embeddings to base64 float32", len(rows))
+            logger.info("Migrated %d dense embeddings to base64 float32 (skipped %d)", len(updates), skipped)
 
             # VACUUM if free disk space >= 2x db file size
             self._maybe_vacuum_after_migration()
@@ -1247,6 +1260,10 @@ class VectorMemory:
                         if raw.startswith("["):
                             # Legacy JSON format
                             emb = json.loads(raw)
+                            # Skip if dimension doesn't match store dimension
+                            if len(emb) != self._token_dim:
+                                logger.warning("Skipping row %s: embedding dimension %d does not match store dimension %d", row["id"], len(emb), self._token_dim)
+                                continue
                         else:
                             # New f32 base64 format
                             try:
@@ -1459,6 +1476,10 @@ class VectorMemory:
                     if raw.startswith("["):
                         # Legacy JSON format
                         emb = json.loads(raw)
+                        # Skip if dimension doesn't match store dimension
+                        if len(emb) != self._token_dim:
+                            logger.warning("Skipping row %s: embedding dimension %d does not match store dimension %d", row["id"], len(emb), self._token_dim)
+                            continue
                     else:
                         # New f32 base64 format - decode without numpy
                         try:
