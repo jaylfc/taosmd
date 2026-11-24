@@ -73,7 +73,7 @@ def _mp_worker(db_dir: str, q, label: str, n: int) -> None:
 
 def test_two_processes_distinct_seq(tmp_path):
     db_dir = str(tmp_path)
-    ctx = multiprocessing.get_context("fork")
+    ctx = multiprocessing.get_context("spawn")
     q = ctx.Queue()
     procs = [
         ctx.Process(target=_mp_worker, args=(db_dir, q, "p0", 20)),

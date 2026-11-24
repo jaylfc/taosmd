@@ -490,8 +490,6 @@ class ArchiveStore:
         """
         if self._conn is None:
             raise RuntimeError("ArchiveStore is not initialised")
-        if self._conn.in_transaction:
-            self._conn.commit()
         self._conn.execute("BEGIN IMMEDIATE")
         try:
             row = self._conn.execute(
@@ -516,13 +514,12 @@ class ArchiveStore:
                 (str(nxt),),
             )
             self._conn.commit()
-        except Exception:
+        except sqlite3.Error:
             try:
                 self._conn.rollback()
             except sqlite3.Error:
                 pass
             raise
-        self._seq_counter = nxt
         return nxt
 
     # ------------------------------------------------------------------
