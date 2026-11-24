@@ -881,13 +881,6 @@ async def ingest_folder(
                 max_file_bytes=max_file_bytes, max_files=max_files,
             )
 
-            stores = await _api._ensure_stores(data_dir)
-            vmem = stores["vector"]
-            if vmem is None:
-                resolved = _api._resolve_data_dir(data_dir)
-                vector_error = _api._store_errors.get(resolved, {}).get("vector", "vector store unavailable")
-                raise _api.StoreUnavailableError(f"vector store unavailable: {vector_error}")
-
             items: list[dict] = []
             indexed: list[tuple[str, str]] = []
             changed: list[str] = []
@@ -966,6 +959,19 @@ async def ingest_folder(
             # only the stats split them apart.
             retired = sorted(set(prior) - seen)
             removed = [rel for rel in retired if rel not in emptied]
+
+            # Determine if there are any changes requiring the vector store
+            has_changes = bool(items or changed or retired or emptied)
+
+            # Get vector store only if there are changes
+            vmem = None
+            if has_changes:
+                stores = await _api._ensure_stores(data_dir)
+                vmem = stores["vector"]
+                if vmem is None:
+                    resolved = _api._resolve_data_dir(data_dir)
+                    vector_error = _api._store_errors.get(resolved, {}).get("vector", "vector store unavailable")
+                    raise _api.StoreUnavailableError(f"vector store unavailable: {vector_error}")
 
             chunks_superseded = 0
             for rel in [*changed, *retired]:
