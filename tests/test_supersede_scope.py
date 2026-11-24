@@ -375,3 +375,64 @@ def test_cli_restore_all_needs_since(data_dir, capsys):
     assert main(["supersede", "--restore-all", "--since", "2000-01-01",
                  "--agent", "agent-a"]) == 0
     assert "restored 1" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Realistic size: 15,000 generated rows across 3 agents
+# ---------------------------------------------------------------------------
+
+def test_fifteen_thousand_rows_three_agents(data_dir, capsys):
+    agents = ["agent-a", "agent-b", "agent-c"]
+    stores = _run(taosmd_api._ensure_stores(data_dir))
+    vmem = stores["vector"]
+    _fake_embed(vmem)
+    now = time.time()
+    rows = [
+        (f"turn {i} for {agents[i % 3]}: the office was cold, ticket {i}", "[]",
+         json.dumps({"agent": agents[i % 3]}), now)
+        for i in range(15000)
+    ]
+    vmem._conn.executemany(
+        "INSERT INTO vector_memory (text, embedding, metadata_json, created_at) "
+        "VALUES (?, ?, ?, ?)", rows)
+    vmem._conn.commit()
+    total = vmem._conn.execute("SELECT COUNT(*) FROM vector_memory").fetchone()[0]
+
+    def hidden_count():
+        return vmem._conn.execute(
+            "SELECT COUNT(*) FROM vector_memory WHERE valid_to IS NOT NULL"
+        ).fetchone()[0]
+
+    # Default-path contradiction hides nothing, in any agent.
+    kg = TemporalKnowledgeGraph(db_path=f"{data_dir}/knowledge-graph.db")
+    _run(kg.init())
+    try:
+        _run(process_conversation_turn("The office is cold.", "agent-a", kg, vmem=vmem))
+        out = _run(process_conversation_turn("The office is nice.", "agent-a", kg, vmem=vmem))
+    finally:
+        _run(kg.close())
+    assert out["deferred"] == 1
+    assert hidden_count() == 0
+
+    # An explicit, source-linked correction hides exactly the linked row.
+    target = vmem._conn.execute(
+        "SELECT id FROM vector_memory WHERE text LIKE 'turn 7 for %'").fetchone()[0]
+    assert _run(vmem.supersede(target, agent="agent-b", ref="triple-7")) is True
+    assert hidden_count() == 1
+    assert vmem._conn.execute("SELECT COUNT(*) FROM vector_memory").fetchone()[0] == total
+
+    # list-hidden and restore round-trip, each under 2 s.
+    t0 = time.perf_counter()
+    assert main(["supersede", "--list-hidden", "--json"]) == 0
+    list_secs = time.perf_counter() - t0
+    listed = json.loads(capsys.readouterr().out)
+    assert [(r["id"], r["agent"], r["reason"]) for r in listed] == [
+        (target, "agent-b", "explicit")]
+
+    t0 = time.perf_counter()
+    assert main(["supersede", "--restore", str(target)]) == 0
+    restore_secs = time.perf_counter() - t0
+    assert "restored 1" in capsys.readouterr().out
+    assert hidden_count() == 0
+    assert list_secs < 2.0, list_secs
+    assert restore_secs < 2.0, restore_secs
