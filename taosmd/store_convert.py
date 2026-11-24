@@ -413,7 +413,7 @@ def _fsync_path(path: Path, directory: bool = False) -> None:
 
 
 def _open_ro(path: Path) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True, isolation_level=None)
+    return sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, isolation_level=None)
 
 
 def _take_backup(
@@ -483,7 +483,10 @@ def _take_backup(
         finally:
             v.close()
         os.replace(partial, final)
-        _fsync_path(backup_dir, directory=True)
+        try:
+            _fsync_path(backup_dir, directory=True)
+        except OSError:  # directories cannot be fsynced on every platform
+            pass
     except BaseException:
         if bconn is not None:
             try:
@@ -634,6 +637,43 @@ def _maybe_vacuum(conn: sqlite3.Connection, db: Path) -> None:
         logger.warning("VACUUM after conversion failed (non-fatal): %s", e)
 
 
+def _peek_without_lock(db: Path) -> ConvertResult | None:
+    """Best-effort read-only look at a store somebody else is using.
+
+    Lets a re-run on an already converted store (or one in a format this build
+    does not know) answer 0 or 3 even while `taosmd serve` has it open, instead
+    of a misleading "in use". Returns None when it cannot tell, and the caller
+    then refuses with exit 2. Never writes.
+    """
+    c = None
+    try:
+        c = _open_ro(db)
+        c.execute("PRAGMA busy_timeout=500")
+        try:
+            det = _detect(c)
+        except _Stop as stop:
+            return stop.result if stop.result.exit_code == EXIT_UNKNOWN_FORMAT else None
+        if not det.marker_has_f32:
+            return None
+        json_left = c.execute(
+            f"SELECT 1 FROM {_TABLE} WHERE embedding LIKE '[%' OR embedding LIKE ' %' LIMIT 1"
+        ).fetchone()
+        if json_left is None:
+            return ConvertResult(
+                status="already_current", exit_code=EXIT_OK,
+                message="already current: nothing to convert (the store is in use by another process)",
+            )
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        if c is not None:
+            try:
+                c.close()
+            except Exception:
+                pass
+
+
 # ----------------------------------------------------------------------
 # entry point
 # ----------------------------------------------------------------------
@@ -667,9 +707,17 @@ def convert_dense_store(db_path, *, backup_dir=None) -> ConvertResult:
             # it until the connection closes, so the detection, the backup and
             # the conversion all see one unchanging store.
             conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            # Rollback-journal stores only block writers once the write
+            # reservation is taken, so take and release it here, inside the
+            # lock error mapping, rather than failing later with a backup made.
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("ROLLBACK")
         except sqlite3.DatabaseError as e:
             low = str(e).lower()
             if "locked" in low or "busy" in low:
+                peeked = _peek_without_lock(db)
+                if peeked is not None:
+                    return peeked
                 raise _Stop(ConvertResult(
                     status="refused", exit_code=EXIT_REFUSED,
                     message="the store is in use by another process (for example "

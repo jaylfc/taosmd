@@ -22,9 +22,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from taosmd import store_convert
-from taosmd.store_convert import convert_dense_store
 from taosmd.vector_memory import SCHEMA, VectorMemory
+
+try:
+    from taosmd import store_convert
+    from taosmd.store_convert import convert_dense_store
+except ImportError:  # keeps the file collectable on a tree without the module
+    store_convert = None  # type: ignore[assignment]
+
+    def convert_dense_store(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("taosmd.store_convert is not present in this tree")
 
 LEGACY_MARKER = "late_interaction=0;binary_quant=0;embedder=all-MiniLM-L6-v2"
 CURRENT_MARKER = "late_interaction=0;binary_quant=0;dense_format=f32;embedder=all-MiniLM-L6-v2"
@@ -48,12 +55,13 @@ def make_store(
     f32_ids: tuple[int, ...] = (),
     overrides: dict[int, str] | None = None,
     float64: bool = False,
+    wal: bool = True,
 ) -> Path:
     """Build a legacy store: JSON embeddings (some optionally f32), raw sqlite."""
     from taosmd import migrations
 
     conn = sqlite3.connect(path)
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA journal_mode={'WAL' if wal else 'DELETE'}")
     conn.executescript(SCHEMA)
     for i in range(1, n + 1):
         v = _vec(i, dim)
@@ -339,6 +347,18 @@ def test_dimension_comes_from_the_store_not_an_embedder(tmp_path):
     assert "wrong length 7" in dict(res.malformed)[5]
 
 
+def test_already_f32_row_of_the_wrong_length_is_reported(tmp_path):
+    p = make_store(tmp_path / "vector-memory.db", n=300)
+    c = sqlite3.connect(p)
+    odd = _f32(np.arange(5, dtype=np.float32))
+    c.execute("UPDATE vector_memory SET embedding = ? WHERE id = 9", (odd,))
+    c.commit()
+    c.close()
+    res = convert_dense_store(p)
+    assert res.exit_code == 0 and dict(res.malformed)[9].startswith("wrong length 5")
+    assert [r[1] for r in rows(p) if r[0] == 9] == [odd]
+
+
 def test_wal_content_is_in_the_backup(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
@@ -405,6 +425,54 @@ def test_exit2_when_another_connection_is_merely_open(store):
     assert res.exit_code == 2
     assert file_hash(store) == h and not backups(store)
     assert n_json(store) == 30
+
+
+def test_non_wal_store_converts(tmp_path):
+    p = make_store(tmp_path / "vector-memory.db", wal=False)
+    res = convert_dense_store(p)
+    assert res.exit_code == 0 and res.rows_converted == 30
+    assert marker_of(p) == CURRENT_MARKER and n_json(p) == 0
+
+
+def test_exit2_non_wal_store_with_another_writer(tmp_path):
+    p = make_store(tmp_path / "vector-memory.db", wal=False)
+    h = file_hash(p)
+    other = sqlite3.connect(p, isolation_level=None)
+    other.execute("BEGIN IMMEDIATE")
+    try:
+        res = convert_dense_store(p)
+    finally:
+        other.execute("ROLLBACK")
+        other.close()
+    assert res.exit_code == 2, res.message
+    assert file_hash(p) == h and not backups(p)
+
+
+def test_converted_store_in_use_answers_already_current(store):
+    assert convert_dense_store(store).exit_code == 0
+    other = sqlite3.connect(store)
+    other.execute("SELECT count(*) FROM vector_memory").fetchall()
+    try:
+        res = convert_dense_store(store)
+    finally:
+        other.close()
+    assert res.exit_code == 0 and res.status == "already_current"
+    assert len(backups(store)) == 1
+
+
+def test_newer_store_in_use_answers_unknown_format(tmp_path):
+    p = make_store(tmp_path / "vector-memory.db")
+    c = sqlite3.connect(p)
+    c.execute("PRAGMA user_version = 99")
+    c.commit()
+    c.close()
+    other = sqlite3.connect(p)
+    other.execute("SELECT count(*) FROM vector_memory").fetchall()
+    try:
+        res = convert_dense_store(p)
+    finally:
+        other.close()
+    assert res.exit_code == 3 and not backups(p)
 
 
 _Usage = namedtuple("usage", "total used free")
@@ -788,7 +856,7 @@ _CHILD = textwrap.dedent(
     n = [0]
     def slow(arr):
         n[0] += 1
-        if n[0] == 1500:
+        if n[0] == 2500:
             Path(flag).write_text("mid-conversion")
             time.sleep(120)
         return real(arr)
@@ -799,7 +867,7 @@ _CHILD = textwrap.dedent(
 
 
 def test_sigkill_mid_conversion_then_rerun_is_correct(tmp_path):
-    p = make_store(tmp_path / "vector-memory.db", n=3000, dim=16)
+    p = make_store(tmp_path / "vector-memory.db", n=3000, dim=128)
     before = rows(p)
     flag = tmp_path / "flag"
     child = subprocess.Popen([sys.executable, "-c", _CHILD, str(p), str(flag)])
@@ -808,6 +876,8 @@ def test_sigkill_mid_conversion_then_rerun_is_correct(tmp_path):
         while not flag.exists() and time.time() < deadline:
             time.sleep(0.05)
         assert flag.exists(), "child never reached mid-conversion"
+        # Uncommitted frames really reached the WAL, so the kill is not trivial.
+        assert Path(str(p) + "-wal").stat().st_size > 0
         os.kill(child.pid, signal.SIGKILL)
         child.wait(timeout=30)
     finally:
