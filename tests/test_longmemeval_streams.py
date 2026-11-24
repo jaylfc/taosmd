@@ -496,7 +496,10 @@ async def test_retrieval_delta_call_gets_streams(monkeypatch, tmp_path):
     assembler = _RecordingAssembler()
     mod.ContextAssembler = lambda kg, archive: assembler
 
+    retrieve_vector_results_calls = []
+
     async def fake_retrieve_vector_results(*args, **kwargs):
+        retrieve_vector_results_calls.append((args, kwargs))
         return [{"text": "VECTOR_TEXT"}]
 
     monkeypatch.setattr(mod, "retrieve_vector_results", fake_retrieve_vector_results)
@@ -528,3 +531,4 @@ async def test_retrieval_delta_call_gets_streams(monkeypatch, tmp_path):
     assert assembler.assemble_calls == []
     for inst in archive_instances:
         assert inst.fts_calls == []
+    assert len(retrieve_vector_results_calls) == 2

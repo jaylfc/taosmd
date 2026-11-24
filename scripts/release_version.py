@@ -38,9 +38,19 @@ def _run(repo_dir, *args):
     )
 
 
+
+def _resolve_repo_root(repo_dir):
+    """Resolve *repo_dir* to its git toplevel, if it is inside a work tree."""
+    repo_dir = Path(repo_dir)
+    result = _run(repo_dir, "rev-parse", "--show-toplevel")
+    if result.returncode != 0 or not result.stdout.strip():
+        raise ReleaseVersionError(f"not a git repository: {repo_dir}")
+    return Path(result.stdout.strip())
+
+
 def compute_version(repo_dir, anchor=DEFAULT_ANCHOR, rev=DEFAULT_REV):
     """Return the 0.5.N version for *rev* relative to *anchor* in *repo_dir*."""
-    repo_dir = Path(repo_dir)
+    repo_dir = _resolve_repo_root(repo_dir)
 
     # Anchor tag must exist.
     if _run(repo_dir, "rev-parse", "--verify", "--quiet", anchor).returncode != 0:
@@ -87,9 +97,12 @@ def _project_version_indices(lines):
 
 def stamp(repo_dir, version, commit, built_at):
     """Rewrite the [project] version line and write taosmd/_build_info.py."""
-    repo_dir = Path(repo_dir)
+    repo_dir = _resolve_repo_root(repo_dir)
     pyproject = repo_dir / "pyproject.toml"
-    lines = pyproject.read_text(encoding="utf-8").split("\n")
+    try:
+        lines = pyproject.read_text(encoding="utf-8").split("\n")
+    except OSError as exc:
+        raise ReleaseVersionError(f"cannot read {pyproject}: {exc}")
 
     indices = _project_version_indices(lines)
     if len(indices) != 1:
@@ -101,13 +114,19 @@ def stamp(repo_dir, version, commit, built_at):
     index = indices[0]
     match = _VERSION_LINE_RE.match(lines[index])
     lines[index] = f'{match.group(1)}"{version}"{match.group(2)}'
-    pyproject.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        pyproject.write_text("\n".join(lines), encoding="utf-8")
+    except OSError as exc:
+        raise ReleaseVersionError(f"cannot write {pyproject}: {exc}")
 
     build_info = repo_dir / "taosmd" / "_build_info.py"
-    build_info.parent.mkdir(parents=True, exist_ok=True)
-    build_info.write_text(
-        f"COMMIT = '{commit}'\nBUILT_AT = '{built_at}'\n", encoding="utf-8"
-    )
+    try:
+        build_info.parent.mkdir(parents=True, exist_ok=True)
+        build_info.write_text(
+            f"COMMIT = '{commit}'\nBUILT_AT = '{built_at}'\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        raise ReleaseVersionError(f"cannot write {build_info}: {exc}")
 
 
 def _utc_now():
