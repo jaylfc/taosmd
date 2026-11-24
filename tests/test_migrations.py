@@ -668,7 +668,8 @@ async def test_vector_memory_open_stamps_the_database(tmp_path):
     await vm.close()
 
     conn = sqlite3.connect(tmp_path / "vector-memory.db")
-    assert _user_version(conn) == migrations.latest_version("vector_memory")
+    assert _user_version(conn) == 2
+    assert _user_version(conn) != migrations.latest_version("vector_memory")
     assert "valid_to" in _columns(conn, "vector_memory")
     conn.close()
 

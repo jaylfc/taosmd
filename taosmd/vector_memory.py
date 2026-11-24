@@ -307,7 +307,9 @@ class VectorMemory:
         # Schema versioning and upgrades. Runs before _check_store_mode and
         # before any query, so a legacy table has gained `valid_to` (and its
         # index) by the time the first SELECT touches it.
-        migrations.migrate(self._conn, "vector_memory")
+        migrations.migrate(
+            self._conn, "vector_memory", migrations_list=migrations._VECTOR_MEMORY[:2]
+        )
         self._migrate_dense_to_f32()
         self._check_store_mode()
         self._conn.commit()

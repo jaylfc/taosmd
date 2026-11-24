@@ -309,7 +309,7 @@ def _vector_memory_dense_to_f32_detect(conn: sqlite3.Connection) -> bool:
         if row is None or "dense_format=f32" not in row[0]:
             return False
         remaining = conn.execute(
-            "SELECT COUNT(*) FROM vector_memory WHERE embedding LIKE '[%'"
+            "SELECT COUNT(*) FROM vector_memory WHERE embedding LIKE '[%' ESCAPE '\\'"
         ).fetchone()[0]
         return remaining == 0
     except sqlite3.Error:
