@@ -3538,7 +3538,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     print(f"taosmd HTTP API listening on http://{bound_host}:{bound_port} ({where})")
     print(f"A2A registry auth mode: {mode}")
     print(f"Inspection UI (read-only): http://{bound_host}:{bound_port}/")
-    print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, "
+    print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, POST /answer-context, "
           "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
           "POST /a2a/send, GET /a2a/messages, GET /a2a/mentions, GET /a2a/stream, "

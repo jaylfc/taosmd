@@ -1113,6 +1113,8 @@ class VectorMemory:
         ids = set(session_ids)
         if not ids:
             return []
+        # upgrade-path: this scans every active row (the same full scan search
+        # does); index session_id if stores with many sessions make it slow.
         out = []
         for row in self._load_active_rows(
             project=project, search_agents=search_agents, session_ids=ids

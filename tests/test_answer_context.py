@@ -899,3 +899,68 @@ def test_budget_sized_limit_is_not_capped_by_the_recipe_pool(data_dir, monkeypat
     out = asyncio.run(taosmd.answer_context(
         "p3x1", agent="a", data_dir=data_dir, budget_tokens=100_000, now=NOW, limit=50, grow=False))
     assert out["hits_total"] == 50
+
+
+def test_http_ungranted_collection_is_absent(tmp_path, monkeypatch):
+    from taosmd import config as taosmd_config
+    from taosmd.collections import CollectionStore, ingest_folder
+
+    monkeypatch.delenv("TAOSMD_COLLECTIONS_ALLOWED_ROOTS", raising=False)
+    srv = _Live(tmp_path, monkeypatch)
+    try:
+        source = tmp_path / "src"
+        source.mkdir()
+        (source / "readme.md").write_text("# Widget\n\nThe widget frobnicates the sprocket.")
+        taosmd_config.set_collections_allowed_roots([str(source)], data_dir=srv.data_dir)
+        store = CollectionStore(srv.data_dir)
+        col = store.create(name="docs", kind="docs", source_path=str(source))
+        store.grant(col["id"], "dev")
+        srv.httpd.service_loop.run(ingest_folder(col["id"], data_dir=srv.data_dir))
+        ask = {"query": "widget frobnicates", "budget_tokens": 50_000, "now": NOW,
+               "collections": [col["id"]]}
+        _, granted = _post(f"{srv.url}/answer-context", {**ask, "agent": "dev"})
+        _, denied = _post(f"{srv.url}/answer-context", {**ask, "agent": "stranger"})
+        _, only = _post(f"{srv.url}/answer-context", {**ask, "agent": "stranger", "collections_only": True})
+        assert "frobnicates" in granted["context"]
+        assert "frobnicates" not in denied["context"]
+        assert only["context"] == "" and only["hits_total"] == 0
+    finally:
+        srv.close()
+
+
+def test_mcp_agent_a_never_sees_agent_b(tmp_path, monkeypatch):
+    pytest.importorskip("mcp")
+    from taosmd import mcp_server
+
+    d = tmp_path / "taosmd-data"
+    d.mkdir()
+    monkeypatch.setattr(taosmd_api, "_stores_cache", {})
+    mcp = mcp_server.build_server(data_dir=str(d))
+    loop = mcp._taosmd_service_loop
+    _patch_embedder(loop.run(taosmd_api._ensure_stores(str(d))))
+
+    async def call(name, args):
+        result = await mcp.call_tool(name, args)
+        if isinstance(result, tuple) and isinstance(result[1], dict) and "result" in result[1]:
+            return result[1]["result"]
+        return json.loads(result[0].text)
+
+    try:
+        for agent, tag in (("a", "alpha"), ("b", "bravo")):
+            for i in range(3):
+                asyncio.run(call("memory_ingest", {
+                    "text": f"{tag} turn {i} about Rex", "agent": agent, "session_id": "same",
+                    "turn_index": i, "session_date": "2023/05/20 (Sat) 02:21", "role": "user"}))
+        out = asyncio.run(call("memory_answer_context", {
+            "query": "Rex", "agent": "a", "budget_tokens": 50_000, "now": NOW, "limit": 10}))
+        assert "alpha turn 1" in out["context"]
+        assert "bravo" not in out["context"]
+    finally:
+        for s in list(taosmd_api._stores_cache.values()):
+            for store in (s.get("archive"), s.get("vector"), s.get("kg")):
+                if store and hasattr(store, "close"):
+                    try:
+                        loop.run(store.close())
+                    except Exception:
+                        pass
+        loop.close()

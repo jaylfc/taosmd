@@ -481,12 +481,25 @@ def _check_product_mode(args, reader_ctx_tokens, date_frame: str) -> None:
 
 
 def _haystack_session_ids(item: dict) -> list[str]:
-    """The dataset's own session ids when it has them, else ``s<index>``."""
+    """Neutral ids stored with the haystack: ``s<index>``.
+
+    The dataset's own ids are NOT stored: evidence sessions are named
+    ``answer_...``, and a stored id is searchable text (the archive line and
+    full-text index hold it), so ingesting it could let a question about an
+    "answer" retrieve the gold session. They are mapped back only when
+    results are written (:func:`_dataset_ids`).
+    """
+    return [f"s{si}" for si in range(len(item.get("haystack_sessions", [])))]
+
+
+def _dataset_ids(item: dict) -> dict[str, str]:
+    """``s<index>`` -> the dataset's own session id (identity when it has none)."""
     given = item.get("haystack_session_ids")
     sessions = item.get("haystack_sessions", [])
+    neutral = _haystack_session_ids(item)
     if isinstance(given, list) and len(given) == len(sessions):
-        return [str(g) for g in given]
-    return [f"s{si}" for si in range(len(sessions))]
+        return {n: str(g) for n, g in zip(neutral, given)}
+    return {n: n for n in neutral}
 
 
 def gold_evidence(item: dict) -> dict:
@@ -499,7 +512,9 @@ def gold_evidence(item: dict) -> dict:
         for ti, turn in enumerate(session):
             if turn.get("has_answer"):
                 turns.add((ids[si], ti))
-    return {"turns": turns, "sessions": {str(x) for x in item.get("answer_session_ids") or []}}
+    gold_names = {str(x) for x in item.get("answer_session_ids") or []}
+    sessions = {n for n, d in _dataset_ids(item).items() if d in gold_names}
+    return {"turns": turns, "sessions": sessions}
 
 
 def haystack_turns(item: dict) -> list[dict]:
@@ -1242,8 +1257,12 @@ async def run_benchmark(
                 await release_product_stores(product_dir)
             full_context = prod["context"]
             delta = None
-            product_meta = _product_meta(prod)
             gold = gold_evidence(item)
+            names = _dataset_ids(item)
+            product_meta = _product_meta(prod)
+            for key in ("included", "dropped"):
+                for block in product_meta[key]:
+                    block["session_id"] = names.get(block["session_id"], block["session_id"])
             product_meta["evidence"] = {
                 "turns_included": count_in(prod["included"], gold["turns"]),
                 "turns_dropped": count_in(prod["dropped"], gold["turns"]),

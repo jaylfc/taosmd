@@ -141,10 +141,11 @@ async def test_product_mode_has_no_character_cut_and_uses_guidance(mod, monkeypa
 @pytest.mark.asyncio
 async def test_small_budget_drops_whole_sessions_and_says_so(mod, monkeypatch, tmp_path):
     client = _Client()
-    doc = await _run(mod, monkeypatch, tmp_path, client, reader_ctx_tokens=3_000)
+    doc = await _run(mod, monkeypatch, tmp_path, client, reader_ctx_tokens=6_000)
     row = doc["results"][0]["product"]
-    assert row["sessions_dropped"] >= 1
-    assert row["tokens_used"] <= row["budget_available"] <= 3_000
+    # each session is about 4,300 tokens, so one fits and the other two are dropped whole
+    assert (row["sessions_included"], row["sessions_dropped"]) == (1, 2)
+    assert 0 < row["tokens_used"] <= row["budget_available"] <= 6_000
 
 
 @pytest.mark.asyncio
@@ -287,7 +288,7 @@ async def test_evidence_in_a_dropped_session_is_reported_as_dropped(mod, monkeyp
     item["answer_session_ids"] = ["sess_a", "sess_b", "sess_c"]
     for si in range(3):
         item["haystack_sessions"][si][3]["has_answer"] = True
-    doc = await _run(mod, monkeypatch, tmp_path, _Client(), item=item, reader_ctx_tokens=3_000)
+    doc = await _run(mod, monkeypatch, tmp_path, _Client(), item=item, reader_ctx_tokens=6_000)
     ev = doc["results"][0]["product"]["evidence"]
     assert ev["sessions_dropped"] >= 1
     assert ev["sessions_included"] + ev["sessions_dropped"] == 3

@@ -132,6 +132,12 @@ CAPABILITY_PROBES: tuple[CapabilityProbe, ...] = (
         route_markers=('"/search"',),
     ),
     CapabilityProbe(
+        name="answer-context.v1",
+        module="taosmd.service",
+        symbols=("answer_context",),
+        route_markers=('"/answer-context"',),
+    ),
+    CapabilityProbe(
         name="shelves.v1",
         module="taosmd.service",
         symbols=(

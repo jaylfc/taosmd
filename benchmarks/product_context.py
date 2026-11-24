@@ -153,7 +153,12 @@ async def product_environment(data_dir: str, agent: str = PRODUCT_AGENT) -> dict
     if wanted == "bge-v2-m3":
         from taosmd.cross_encoder import CrossEncoderReranker  # noqa: PLC0415
         available = bool(CrossEncoderReranker(data_dir=stores["data_dir"]).available)
+    vm_cfg = _api._load_config(stores["data_dir"]).get("vector_memory", {})
     return {
+        "config_seeded": os.path.exists(os.path.join(stores["data_dir"], "config.json")),
+        "embed_mode": vm_cfg.get("embed_mode", "onnx"),
+        "embed_model": vm_cfg.get("embed_model", "minilm-onnx"),
+        "late_interaction": bool(vm_cfg.get("late_interaction", False)),
         "recipe": recipe.id,
         "embedder": stores["vector"]._embedder_identity(),
         "reranker": wanted,
@@ -165,7 +170,18 @@ async def product_environment(data_dir: str, agent: str = PRODUCT_AGENT) -> dict
 
 
 def require_healthy(env: dict) -> None:
-    """Exit 1 if the recipe's reranker is missing: search would run without it."""
+    """Exit 1 if the recipe's reranker is missing: search would run without it.
+
+    Also warns when no product config was seeded (``TAOSMD_PRODUCT_CONFIG``):
+    the data dir is then bare, so the embedder and recipe are whatever this
+    host's defaults resolve to, not necessarily what an installed product uses.
+    """
+    if not env.get("config_seeded"):
+        print(
+            "  WARNING: no config.json seeded (set TAOSMD_PRODUCT_CONFIG to the install's "
+            f"config); using defaults: embedder {env.get('embedder')!r}, recipe {env.get('recipe')!r}.",
+            file=sys.stderr,
+        )
     if not env["reranker_available"]:
         print(
             f"  ERROR: recipe {env['recipe']!r} uses the {env['reranker']!r} reranker but it is "

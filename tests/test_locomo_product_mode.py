@@ -73,6 +73,9 @@ class _Client:
     async def __aexit__(self, *a):
         return False
 
+    async def aclose(self):
+        pass
+
     async def post(self, url, json=None, **kw):
         _Client.posts.append(json)
         return _Resp({"response": "beagle"})
@@ -152,10 +155,11 @@ def test_product_evidence_dropped_is_reported_under_a_small_budget(mod, monkeypa
     args = mod._build_parser().parse_args([
         "--dataset", str(ds), "--conversations", "1", "--no-inline-judge",
         "--out", str(tmp_path / "o.json"), "--context", "product",
-        "--reader-ctx-tokens", "3500", "--answer-limit", "24", "--concurrency", "1"])
+        "--reader-ctx-tokens", "6000", "--answer-limit", "24", "--concurrency", "1"])
     asyncio.run(mod.run(args))
     row = json.loads((tmp_path / "o.json").read_text())["results"][0]
-    assert row["product"]["sessions_dropped"] >= 1
+    assert (row["product"]["sessions_included"], row["product"]["sessions_dropped"]) == (1, 2)
+    assert row["product"]["tokens_used"] > 0
     assert row["evidence_hits"] + row["evidence_dropped"] == 2
     assert row["evidence_dropped"] >= 1
 

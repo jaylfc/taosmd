@@ -237,9 +237,11 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
 
         Like ``memory_search`` (same scoping and grants) but returns one
         answer-ready string: ``Current date:`` then dated session blocks,
-        oldest first, each turn whole and in order, with ``neighbors`` turns
-        either side of every hit. A block that does not fit ``budget_tokens``
-        is dropped whole, never cut. Returns ``{"context", "guidance",
+        oldest first, each turn whole and in order. Every candidate session
+        first gets its matching turns with ``neighbors`` turns either side;
+        budget left over then grows sessions to the whole session, best
+        match first. A block that does not fit ``budget_tokens`` is dropped
+        whole, never cut. Returns ``{"context", "guidance",
         "sessions_included", "sessions_dropped", "hits_total", "tokens_used",
         "budget_available", "expanded"}``; answer from ``context`` following
         ``guidance``.
