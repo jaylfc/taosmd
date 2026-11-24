@@ -9,11 +9,8 @@ the exact migration command. Never auto-move.
 from __future__ import annotations
 
 import logging
-import os
-from pathlib import Path
 
 from taosmd import cli
-from taosmd.migrations import DB_FILES
 
 
 def _reset_warnings(monkeypatch):
