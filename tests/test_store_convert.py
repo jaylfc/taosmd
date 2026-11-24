@@ -201,10 +201,7 @@ def _patch_embed(vm: VectorMemory) -> None:
 
 
 def _search_all(db: Path, queries, monkeypatch):
-    # Neutralise any implicit convert-on-open so the "before" read really sees
-    # JSON rows. raising=False keeps this valid once that method is deleted.
-    monkeypatch.setattr(VectorMemory, "_migrate_dense_to_f32", lambda self: None, raising=False)
-
+    # Opening a legacy store no longer converts it, so the "before" read sees JSON rows.
     async def go():
         vm = VectorMemory(db_path=str(db), embed_mode="local", local_model="all-MiniLM-L6-v2")
         await vm.init()
