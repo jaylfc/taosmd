@@ -416,3 +416,73 @@ class TestF32Migration:
         assert rows_after == rows_before, (
             f"Embeddings changed: {rows_before} -> {rows_after}"
         )
+
+@pytest.mark.parametrize(
+    "mode_kwarg, mode_name",
+    [
+        ({"binary_quant": True}, "binary_quant"),
+        ({"late_interaction": True}, "late_interaction"),
+    ],
+)
+def test_fresh_store_mode_marker_and_reopen(tmp_path, mode_kwarg, mode_name):
+    """Fresh binary_quant/late_interaction stores write dense_format=none and reopen."""
+    db = str(tmp_path / "test_vec.db")
+    embed_kwarg = {"embed_mode": "qmd"}  # default embedder
+    vm = VectorMemory(db_path=db, **embed_kwarg, **mode_kwarg)
+    asyncio.run(vm.init())
+    # Check the marker has dense_format=none
+    marker = _get_marker(db)
+    assert marker is not None
+    assert "dense_format=f32" not in marker, (
+        f"Fresh {mode_name} store should not have dense_format=f32"
+    )
+    assert "dense_format=none" in marker, (
+        f"Fresh {mode_name} store should have dense_format=none, got: {marker}"
+    )
+    # Reopen same mode
+    asyncio.run(vm.close())
+    vm2 = VectorMemory(db_path=db, **embed_kwarg, **mode_kwarg)
+    asyncio.run(vm2.init())
+    marker2 = _get_marker(db)
+    assert "dense_format=none" in marker2
+    asyncio.run(vm2.close())
+
+def test_dense_format_applies_only_to_dense_stores(tmp_path):
+    """Dense-format logic applies only to plain dense stores, not binary_quant/late_interaction."""
+    import taosmd.vector_memory as vm_module
+
+    db = str(tmp_path / "test_vec.db")
+
+    # Build a dense f32 store and verify dense_format=f32
+    vm = VectorMemory(db_path=db, embed_mode="qmd")
+    asyncio.run(vm.init())
+    _make_fixed_embedder(vm)
+    asyncio.run(vm.add("first document"))
+    marker = _get_marker(db)
+    assert "dense_format=f32" in marker
+
+    # Build a fresh binary_quant store in a new DB and verify dense_format=none
+    db_q = str(tmp_path / "test_vec_q.db")
+    vm_q = VectorMemory(db_path=db_q, embed_mode="qmd", binary_quant=True)
+    asyncio.run(vm_q.init())
+    marker_q = _get_marker(db_q)
+    assert "dense_format=f32" not in marker_q, (
+        "binary_quant store should not have dense_format=f32"
+    )
+    assert "dense_format=none" in marker_q, (
+        "binary_quant store should have dense_format=none"
+    )
+    asyncio.run(vm_q.close())
+
+    # Build a fresh late_interaction store in a new DB and verify dense_format=none
+    db_li = str(tmp_path / "test_vec_li.db")
+    vm_li = VectorMemory(db_path=db_li, embed_mode="qmd", late_interaction=True)
+    asyncio.run(vm_li.init())
+    marker_li = _get_marker(db_li)
+    assert "dense_format=f32" not in marker_li, (
+        "late_interaction store should not have dense_format=f32"
+    )
+    assert "dense_format=none" in marker_li, (
+        "late_interaction store should have dense_format=none"
+    )
+    asyncio.run(vm_li.close())

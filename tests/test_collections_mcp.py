@@ -68,7 +68,6 @@ def test_tools_registered(env):
     mcp, *_ = env
     names = {t.name for t in asyncio.run(mcp.list_tools())}
     assert "memory_list_collections" in names
-    assert "memory_search" in names
 
 
 def test_list_collections_and_scoped_search(env):

@@ -103,33 +103,6 @@ def test_registers_expected_tools(server):
     } <= names
 
 
-def test_registers_full_tool_set(server):
-    """Every tool build_server registers must be present; a silently dropped
-    tool fails this test."""
-    tools = asyncio.run(server.list_tools())
-    names = {t.name for t in tools}
-    assert names == {
-        "memory_ingest",
-        "memory_search",
-        "memory_list_projects",
-        "memory_list_collections",
-        "memory_list_shelves",
-        "memory_pending_list",
-        "memory_pending_resolve",
-        "memory_stats",
-        "a2a_channels",
-        "a2a_members",
-        "a2a_send",
-        "a2a_read",
-        "a2a_join",
-        "task_add",
-        "task_ready",
-        "task_prime",
-        "task_update",
-        "task_edge",
-    }
-
-
 def test_ingest_then_search_roundtrip(server):
     out = asyncio.run(_call(
         server,

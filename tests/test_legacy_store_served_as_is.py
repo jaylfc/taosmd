@@ -140,7 +140,7 @@ def test_legacy_store_search_and_add_stay_json(tmp_path):
 def _check_store_mode_v040(
     conn, late_interaction: bool = False, binary_quant: bool = False
 ) -> None:
-    """Copy of the v0.4.0 store-mode guard.
+    """Faithful copy of v0.4.0 _check_store_mode.
 
     v0.4.0 only knew the format components (late_interaction, binary_quant);
     the embedder of a legacy store is unknowable and not enforced. A legacy

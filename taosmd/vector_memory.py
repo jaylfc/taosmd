@@ -485,7 +485,21 @@ class VectorMemory:
         return ";".join(parts)
 
     def _dense_format(self) -> str | None:
-        """``f32`` if the store is converted or fresh, else None (legacy JSON)."""
+        """``f32`` if the store is converted or fresh dense, else ``"none"``
+        for binary-quant/late-interaction stores (dense_format logic applies
+        only to plain dense stores)."""
+        if self.binary_quant or self.late_interaction:
+            row = self._conn.execute(
+                "SELECT value FROM store_meta WHERE key = 'mode'"
+            ).fetchone()
+            recorded = row["value"] if row else None
+            if recorded is not None:
+                rec = self._parse_mode(recorded)
+                if rec.get("dense_format") == "f32":
+                    return "f32"  # converted store: keep f32
+                return "none"  # legacy/fresh: dense_format=none
+            # Fresh store (no marker yet): write dense_format=none
+            return "none"
         row = self._conn.execute(
             "SELECT value FROM store_meta WHERE key = 'mode'"
         ).fetchone()
