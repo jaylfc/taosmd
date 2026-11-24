@@ -125,3 +125,7 @@ any database in the data directory is behind, so a rollout can refuse to start
 against a store it would silently need to upgrade. Databases that do not exist
 yet are reported as absent and are not treated as pending work by `--check`,
 since each store builds its own on first open.
+
+## Release metadata trailer rule
+
+`scripts/release_meta.py` parses changelog trailer lines with this rule. It normalises each line (NFKC, remove Unicode format/Cf and U+00AD, casefold, strip), then strips leading markup (whitespace, `>`, `#`, `-`, `*`, `+`, `_`, `~`, backticks, `|`, checkboxes, numbered/lettered list markers, `<!--`). A trailer attempt is a remaining line that starts with `migration`/`migrations` or `manual[\W_]*steps?`, optional whitespace, and a colon-like char (`:`, Unicode colon forms after NFKC, or `=`). An exact canonical form parses (`Migration: one-way`, `Migration: reversible`, `Manual-Step: <non-empty text>`); any other trailer attempt refuses with exit 2 naming file, line, and line text. Prose that merely mentions migration (e.g. `migrate`, `migrating`) is ignored. Trailer attempts inside closed ```/~~~ fences are ignored; an unclosed fence refuses. A confusable-key homoglyph followed by a colon-like char refuses.

@@ -74,44 +74,202 @@ def _read_fragment_at_rev(repo_dir: Path, fragment: Path, rev: str) -> str:
         ) from e
 
 
+# Confusables: Cyrillic and Greek lookalikes for a, c, e, i, o, p, x, y, M, T, H.
+_CONFUSABLES = {
+    "\u0430": "a",  # Cyrillic a
+    "\u0441": "c",  # Cyrillic es
+    "\u0435": "e",  # Cyrillic ie
+    "\u0454": "e",  # Cyrillic Ukrainian ie
+    "\u0456": "i",  # Cyrillic Ukrainian i
+    "\u0457": "i",  # Cyrillic yi
+    "\u0458": "j",
+    "\u043e": "o",  # Cyrillic o
+    "\u0440": "p",  # Cyrillic er
+    "\u0445": "x",  # Cyrillic ha
+    "\u0443": "y",  # Cyrillic u (looks like y)
+    "\u041c": "M",  # Cyrillic Em
+    "\u0422": "T",  # Cyrillic Te
+    "\u041d": "H",  # Cyrillic En
+    "\u0391": "A",  # Greek Alpha
+    "\u0392": "B",  # Greek Beta
+    "\u0395": "E",  # Greek Epsilon
+    "\u0397": "H",  # Greek Eta
+    "\u0399": "I",  # Greek Iota
+    "\u039a": "K",  # Greek Kappa
+    "\u039c": "M",  # Greek Mu
+    "\u039d": "N",  # Greek Nu
+    "\u039f": "O",  # Greek Omicron
+    "\u03a1": "P",  # Greek Rho
+    "\u03a4": "T",  # Greek Tau
+    "\u03a7": "X",  # Greek Chi
+    "\u03a5": "Y",  # Greek Upsilon
+    "\u03b1": "a",  # Greek alpha
+    "\u03bf": "o",  # Greek omicron
+    "\u03c1": "p",  # Greek rho
+    "\u03c7": "x",  # Greek chi
+    "\u03c5": "y",  # Greek upsilon
+    "\u03b5": "e",  # Greek epsilon
+    "\u03b9": "i",  # Greek iota
+    "\u03ba": "k",  # Greek kappa
+    "\u03bd": "v",
+    "\u03bc": "m",
+}
+
+_CANONICAL_MIGRATION = "Migration: one-way"
+_CANONICAL_REVERSIBLE = "Migration: reversible"
+_CANONICAL_MANUAL_PREFIX = "Manual-Step: "
+
+
+def _canonicalize_trailer(stripped: str) -> str | None:
+    """Return canonical trailer string when a trailer attempt is canonicalizable."""
+    m = re.match(r"^(migrations?|manual[\W_]*steps?)\s*([:=]|[\u0080-\uffff])\s*(.*)$", stripped, re.IGNORECASE)
+    if not m:
+        return None
+    key_raw, sep_raw, value = m.group(1), m.group(2), m.group(3)
+    sep = unicodedata.normalize("NFKC", sep_raw)
+    if sep not in ":=":
+        if "COLON" not in unicodedata.name(sep_raw, ""):
+            return None
+        sep = ":"
+    if sep != ":":
+        return None
+    key_norm = re.sub(r"[\W_]+", "", key_raw).casefold()
+    if key_norm in ("migration", "migrations"):
+        if value.strip() == "one-way":
+            return _CANONICAL_MIGRATION
+        if value.strip() == "reversible":
+            return _CANONICAL_REVERSIBLE
+        return None
+    if key_norm == "manualstep":
+        value = value.strip()
+        if value:
+            return f"{_CANONICAL_MANUAL_PREFIX}{value}"
+    if key_norm == "manualsteps":
+        value = value.strip()
+        if value:
+            return f"{_CANONICAL_MANUAL_PREFIX}{value}"
+    return None
+
+
 def _normalize_line(line: str) -> str:
     """Normalize a line for trailer detection.
 
-    Applies NFKC normalization, removes Unicode format (Cf) characters and soft hyphens,
-    then strips whitespace.
+    NFKC; remove every Unicode format (Cf) character and U+00AD; strip.
     """
-    normalized = unicodedata.normalize('NFKC', line)
-    cleaned = ''.join(
+    normalized = unicodedata.normalize("NFKC", line)
+    cleaned = "".join(
         ch for ch in normalized
-        if unicodedata.category(ch) != 'Cf' and ch != '\u00ad'
+        if unicodedata.category(ch) != "Cf" and ch != "\u00ad"
     )
     return cleaned.strip()
 
 
+def _is_colon_like(ch: str) -> bool:
+    """Colon-like character: ':', fullwidth colon and other Unicode colon forms after NFKC, or '='."""
+    if ch in ":=":
+        return True
+    normalized = unicodedata.normalize("NFKC", ch)
+    if normalized in ":=":
+        return True
+    name = unicodedata.name(ch, "")
+    return "COLON" in name and unicodedata.category(ch).startswith("P")
+
+
+def _strip_leading_markup(line: str) -> str:
+    """Strip a leading run of markup as defined by the trailer rule."""
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch.isspace() or ch in ">#-*+_~`|":
+            i += 1
+            continue
+        if line.startswith("<!--", i):
+            i += 4
+            continue
+        if ch == "[" and i + 2 < n and line[i + 1] in " xX" and line[i + 2] == "]":
+            i += 3
+            continue
+        m = re.match(r"[0-9A-Za-z]+[.)]", line[i:])
+        if m:
+            i += m.end()
+            continue
+        break
+    return line[i:].rstrip()
+
+
+def _deconfuse(text: str) -> str:
+    out = []
+    for ch in text:
+        if ch.isascii():
+            out.append(ch)
+        else:
+            out.append(_CONFUSABLES.get(ch, ch))
+    return "".join(out)
+
+
+def _is_homoglyph_trailer_attempt(normalized_line: str) -> bool:
+    """Refuse confusable-key attempts with a colon-like separator."""
+    stripped = _strip_leading_markup(normalized_line)
+    if not stripped:
+        return False
+    m = re.match(r"([A-Za-z\u0080-\uffff]+)", stripped)
+    if not m:
+        return False
+    word = m.group(1)
+    if word.isascii():
+        return False
+    mapped = _deconfuse(word).casefold()
+    if mapped not in {"migration", "migrations", "manual"}:
+        return False
+    rest = stripped[m.end():].lstrip()
+    return bool(rest) and _is_colon_like(rest[0])
+
+
+_TRAILER_KEY_RE = re.compile(r"(migrations?|manual[\W_]*steps?)", re.IGNORECASE)
+
+
+def _trailer_attempt_after_strip(stripped: str) -> bool:
+    m = _TRAILER_KEY_RE.match(stripped)
+    if not m:
+        return False
+    rest = stripped[m.end():].lstrip()
+    return bool(rest) and _is_colon_like(rest[0])
+
+
+def _is_trailer_attempt(line: str) -> tuple[bool, str, str]:
+    """Return (is_attempt, normalized_line, stripped_after_markup)."""
+    normalized = _normalize_line(line)
+    stripped = _strip_leading_markup(normalized)
+    return _trailer_attempt_after_strip(stripped), normalized, stripped
+
+
 def _strip_trailer_markers(line: str) -> str:
-    """Strip leading whitespace, list markers and emphasis from a line."""
-    # Strip leading whitespace
-    stripped = line.strip()
-
-    # Strip UTF-8 BOM only (not ZWSP - that should cause refusal)
-    stripped = stripped.lstrip('\ufeff')
-
-    # Strip emphasis FIRST: **bold**, *italic*, _underline_, `inline code`
-    # Bold: **text** -> text
-    stripped = re.sub(r'\*\*([^*]*)\*\*', r'\1', stripped)
-    # Italic: *text* -> text (but not if part of ** already handled)
-    stripped = re.sub(r'(?<!\*)\*([^*]*)\*(?!\*)', r'\1', stripped)
-    # Underline: _text_ -> text
-    stripped = re.sub(r'_+([^_]*)_+', r'\1', stripped)
-    # Inline code: `code` -> code
-    stripped = re.sub(r'`([^`]*)`', r'\1', stripped)
-
-    # Strip ONE leading list marker (-, *, +, >) if present
-    if stripped and stripped[0] in '-*+>':
-        stripped = stripped[1:].strip()
-
-    # Strip trailing whitespace
-    stripped = stripped.strip()
+    """Strip leading/trailing markup for canonical trailer parsing."""
+    normalized = _normalize_line(line)
+    stripped = _strip_leading_markup(normalized)
+    # Leading markup stripping can consume opening emphasis markers; remove any
+    # remaining symmetric wrappers around the canonical trailer text.
+    for _ in range(3):
+        prev = stripped
+        stripped = stripped.strip()
+        if len(stripped) >= 4 and stripped.startswith("**") and stripped.endswith("**"):
+            stripped = stripped[2:-2].strip()
+        elif len(stripped) >= 4 and stripped.startswith("__") and stripped.endswith("__"):
+            stripped = stripped[2:-2].strip()
+        elif len(stripped) >= 2 and stripped.startswith("`") and stripped.endswith("`"):
+            stripped = stripped[1:-1].strip()
+        elif len(stripped) >= 2 and stripped[0] in "*_" and stripped.endswith(stripped[0]):
+            stripped = stripped[1:-1].strip()
+        stripped = stripped.rstrip()
+        while stripped and stripped[-1] in "*_`~>|":
+            stripped = stripped[:-1].rstrip()
+        if stripped.endswith("-->"):
+            stripped = stripped[:-3].rstrip()
+        if stripped.endswith("--"):
+            stripped = stripped[:-2].rstrip()
+        if stripped == prev:
+            break
     return stripped
 
 
@@ -146,35 +304,19 @@ def _is_real_fence(line: str) -> bool:
 
 
 def _looks_like_trailer(line: str) -> bool:
-    """Check if a line looks like a trailer candidate (broad detection).
-
-    Uses normalized, case-folded text to detect any mention of migration or manual steps.
-    """
-    normalized = _normalize_line(line)
-    folded = normalized.casefold()
-    # Check for migration mention
-    if 'migration' in folded:
-        return True
-    # Check for manual steps mention (manual step, manual steps, manual-step, manual_step, etc.)
-    # \W matches non-word chars; underscore is a word char, so also check for underscore explicitly
-    if re.search(r'manual[\W_]*steps?', folded):
-        return True
-    return False
+    """Check if a line is a trailer attempt under the strict rule."""
+    is_attempt, normalized, _ = _is_trailer_attempt(line)
+    return is_attempt or _is_homoglyph_trailer_attempt(normalized)
 
 
 def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInfo], list[str]]:
     """Parse trailer lines from fragment content.
 
-    Returns:
-        Tuple of (migrations, manual_steps).
-
-    A line is a trailer candidate when its normalized, case-folded text contains
-    "migration" or matches "manual[\\W_]*steps?". If a candidate is EXACTLY a canonical
-    trailer line (Migration: one-way, Migration: reversible, Manual-Step: <non-empty text>),
-    after stripping markers, it is used. Any other candidate raises ReleaseMetaError
-    naming the file, line number and the canonical form to use (CLI exit 2, no file written).
-    Lines inside fenced code blocks (between ``` or ~~~ lines) are ignored entirely,
-    neither used nor refused.
+    A line is a trailer attempt if, after normalisation and markup stripping, it
+    starts with migration/migrations or manual/manual-step/manual_step/manual steps
+    followed by optional whitespace and a colon-like character. Canonical attempts
+    parse; any other trailer attempt refuses with exit 2. A line that is not a
+    trailer attempt is ignored.
     """
     migrations: list[MigrationInfo] = []
     manual_steps: list[str] = []
@@ -182,7 +324,6 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
     in_code_block = False
 
     for line_num, line in enumerate(content.splitlines(), start=1):
-        # Check for fenced code block boundaries - only toggle on REAL fence lines
         if _is_real_fence(line):
             in_code_block = not in_code_block
             continue
@@ -190,32 +331,31 @@ def _parse_trailers(content: str, fragment_path: str) -> tuple[list[MigrationInf
         if in_code_block:
             continue
 
-        # Broad detection: does this line look like a trailer attempt?
-        if not _looks_like_trailer(line):
+        is_attempt, normalized, _ = _is_trailer_attempt(line)
+        if not is_attempt:
+            if _is_homoglyph_trailer_attempt(normalized):
+                canonical = "Migration: one-way or Migration: reversible, Manual-Step: <non-empty text>"
+                raise ReleaseMetaError(
+                    f"{fragment_path}:{line_num} - confusable trailer key; "
+                    f"use one of: {canonical}"
+                )
             continue
 
-        # It looks like a trailer - now do canonical stripping and validation
         stripped = _strip_trailer_markers(line)
-
-        # Check for canonical Migration: form (case-sensitive key, exact value)
-        if re.match(r'^Migration:\s+one-way$', stripped):
+        canonical = _canonicalize_trailer(stripped)
+        if canonical == _CANONICAL_MIGRATION:
             migrations.append(MigrationInfo(fragment=fragment_path, kind="one-way"))
-        elif re.match(r'^Migration:\s+reversible$', stripped):
+        elif canonical == _CANONICAL_REVERSIBLE:
             migrations.append(MigrationInfo(fragment=fragment_path, kind="reversible"))
-        # Check for canonical Manual-Step: form (case-sensitive, exact case with hyphen)
-        elif re.match(r'^Manual-Step:\s+.+$', stripped):
-            value = stripped[len("Manual-Step:"):].strip()
-            if value:
-                manual_steps.append(value)
+        elif canonical and canonical.startswith(_CANONICAL_MANUAL_PREFIX):
+            manual_steps.append(canonical[len(_CANONICAL_MANUAL_PREFIX):])
         else:
-            # Candidate matches the pattern but is not canonical - raise loud refusal
-            canonical = "Migration: one-way or Migration: reversible, Manual-Step: <non-empty text>"
+            canonical_form = "Migration: one-way or Migration: reversible, Manual-Step: <non-empty text>"
             raise ReleaseMetaError(
                 f"{fragment_path}:{line_num} - unknown trailer format; "
-                f"use one of: {canonical}"
+                f"use one of: {canonical_form}"
             )
 
-    # Check for unclosed fence at end of file
     if in_code_block:
         raise ReleaseMetaError(
             f"{fragment_path}: - unclosed code fence"

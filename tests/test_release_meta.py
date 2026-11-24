@@ -242,9 +242,8 @@ class TestCollect:
             "changelog.d/fragment-2.md",
         ])
 
-    def test_prose_refused(self, tmp_path):
-        """Prose mentioning migration is no longer ignored; it must refuse (exit 2)
-        because it matches the pattern but is not canonical."""
+    def test_prose_migration_mention_ignored(self, tmp_path):
+        """Prose mentioning migration is not a trailer attempt; it is ignored."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
@@ -257,10 +256,9 @@ class TestCollect:
         out_file = repo / "release.json"
         result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
 
-        # Must refuse (exit 2) - prose mentioning migration is ambiguous
-        assert result.returncode == 2, f"Expected exit 2, got {result.returncode}: {result.stdout}"
-        assert "prose.md" in result.stderr
-        assert not out_file.exists()
+        assert result.returncode == 0, f"Expected exit 0, got {result.returncode}: {result.stderr}"
+        assert "one_way_migration=false" in result.stdout
+        assert out_file.exists()
 
     def test_fenced_code_block_ignored(self, tmp_path):
         """(d) Migration: one-way inside a fenced code block is ignored
@@ -424,18 +422,20 @@ class TestCollect:
         assert result.returncode == 0, f"Expected exit 0, got {result.returncode}: {result.stderr}"
         assert "one_way_migration=true" in result.stdout, f"Expected one_way_migration=true, got stdout: {result.stdout}"
 
-    @pytest.mark.parametrize("fragment_name, fragment_content", [
-        ("near-miss-gt-dash.md", "### Changed\n\n> - Migration: one-way\n"),
-        ("near-miss-numbered.md", "### Changed\n\n1. Migration: one-way\n"),
-        ("near-miss-checkbox.md", "### Changed\n\n- [ ] Migration: one-way\n"),
-        ("near-miss-h2.md", "### Changed\n\n## Migration: one-way\n"),
-        ("near-miss-fullwidth-colon.md", "### Changed\n\nMigration： one-way\n"),  # full-width colon
-        ("near-miss-zwsp.md", "### Changed\n\n\u200bMigration: one-way\n"),  # zero-width space prefix
-        ("near-miss-plural-migrations.md", "### Changed\n\nMigrations: one-way\n"),
-        ("near-miss-plural-manual.md", "### Changed\n\nManual-Steps: do something\n"),
+    @pytest.mark.parametrize("fragment_name, fragment_content, should_parse", [
+        ("near-miss-gt-dash.md", "### Changed\n\n> - Migration: one-way\n", True),
+        ("near-miss-numbered.md", "### Changed\n\n1. Migration: one-way\n", True),
+        ("near-miss-checkbox.md", "### Changed\n\n- [ ] Migration: one-way\n", True),
+        ("near-miss-h2.md", "### Changed\n\n## Migration: one-way\n", True),
+        ("near-miss-fullwidth-colon.md", "### Changed\n\nMigration： one-way\n", True),
+        ("near-miss-zwsp.md", "### Changed\n\n\u200bMigration: one-way\n", True),
+        ("near-miss-plural-migrations.md", "### Changed\n\nMigrations: one-way\n", True),
+        ("near-miss-plural-manual.md", "### Changed\n\nManual-Steps: do something\n", True),
+        ("near-miss-not-attempt.md", "### Changed\n\nThis plan includes a migration step later\n", "ignore"),
+        ("near-miss-migrating-prose.md", "### Changed\n\nmigrating old stores is handled automatically\n", "ignore"),
     ])
-    def test_near_miss_prefixes_refused(self, tmp_path, fragment_name, fragment_content):
-        """(4) Near-miss prefixes must refuse: > -, 1., - [ ], ##, full-width colon, ZWSP, plurals."""
+    def test_near_miss_prefixes(self, tmp_path, fragment_name, fragment_content, should_parse):
+        """Trailer attempts that normalize to canonical parse; prose mentions are ignored."""
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
@@ -449,10 +449,16 @@ class TestCollect:
         out_file = repo / "release.json"
         result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
 
-        # All should refuse (exit 2)
-        assert result.returncode == 2, f"Expected exit 2 for {fragment_name}, got {result.returncode}: {result.stdout}"
-        assert fragment_name in result.stderr
-        assert not out_file.exists()
+        if should_parse == "ignore":
+            assert result.returncode == 0, f"Expected exit 0 for {fragment_name}: {result.stderr}"
+            assert "one_way_migration=false" in result.stdout
+            assert "manual_step=false" in result.stdout
+        elif should_parse:
+            assert result.returncode == 0, f"Expected exit 0 for {fragment_name}: {result.stderr}"
+            assert "one_way_migration=true" in result.stdout or "manual_step=true" in result.stdout
+        else:
+            assert result.returncode == 2, f"Expected exit 2 for {fragment_name}, got {result.returncode}: {result.stdout}"
+            assert not out_file.exists()
 
     def test_non_utf8_fragment_refused(self, tmp_path):
         """(5) Non-UTF8 fragment gives exit-2 refusal, not uncaught traceback."""
@@ -499,33 +505,34 @@ class TestCollect:
         assert "Manual-Step" in result.stderr
         assert not out_file.exists()
 
-    # Parametrised test for all variants from the WHY section (tsk-dtb6f6)
+    # Parametrised test for all variants from the WHY section (tsk-dtb6f6 / tsk-j7fnhc)
     @pytest.mark.parametrize("fragment_name, fragment_content, should_parse", [
-        # Variants that should REFUSE (exit 2) - mention migration/manual but not canonical
-        ("numbered_list.md", "### Changed\n\n1) Migration: one-way\n", False),
-        ("blockquote_heading.md", "### Changed\n\n> ## Migration: one-way\n", False),
-        ("zwsp_prefix.md", "### Changed\n\n\u200bMigration: one-way\n", False),  # U+200B
-        ("word_joiner_prefix.md", "### Changed\n\n\u2060Migration: one-way\n", False),  # U+2060
-        ("zwnj_prefix.md", "### Changed\n\n\u200cMigration: one-way\n", False),  # U+200C
-        ("soft_hyphen_prefix.md", "### Changed\n\n\u00adMigration: one-way\n", False),  # U+00AD
-        ("dash_numbered.md", "### Changed\n\n- 1. Migration: one-way\n", False),
-        ("lettered_list.md", "### Changed\n\na. Migration: one-way\n", False),
-        ("table_row.md", "### Changed\n\n| Migration: one-way |\n", False),
-        ("html_comment.md", "### Changed\n\n<!-- Migration: one-way -->\n", False),
-        ("manual_step_space.md", "### Changed\n\nManual Step: do something\n", False),
-        ("manual_step_underscore.md", "### Changed\n\nManual_Step: do something\n", False),
-        ("manual_step_nospace.md", "### Changed\n\nManualStep: do something\n", False),
-        # Variants that should PARSE (exit 0) - canonical forms
+        # Trailer attempts that normalize to canonical parse.
+        ("numbered_list.md", "### Changed\n\n1) Migration: one-way\n", True),
+        ("blockquote_heading.md", "### Changed\n\n> ## Migration: one-way\n", True),
+        ("zwsp_prefix.md", "### Changed\n\n\u200bMigration: one-way\n", True),
+        ("word_joiner_prefix.md", "### Changed\n\n\u2060Migration: one-way\n", True),
+        ("zwnj_prefix.md", "### Changed\n\n\u200cMigration: one-way\n", True),
+        ("soft_hyphen_prefix.md", "### Changed\n\n\u00adMigration: one-way\n", True),
+        ("dash_numbered.md", "### Changed\n\n- 1. Migration: one-way\n", True),
+        ("lettered_list.md", "### Changed\n\na. Migration: one-way\n", True),
+        ("table_row.md", "### Changed\n\n| Migration: one-way |\n", True),
+        ("html_comment.md", "### Changed\n\n<!-- Migration: one-way -->\n", True),
+        ("manual_step_space.md", "### Changed\n\nManual Step: do something\n", True),
+        ("manual_step_underscore.md", "### Changed\n\nManual_Step: do something\n", True),
+        ("manual_step_nospace.md", "### Changed\n\nManualStep: do something\n", True),
+        # Canonical forms.
         ("canonical_one_way.md", "### Changed\n\nMigration: one-way\n", True),
         ("canonical_reversible.md", "### Changed\n\nMigration: reversible\n", True),
         ("canonical_manual_step.md", "### Changed\n\nManual-Step: do something\n", True),
-        # Trailers INSIDE valid fences should be IGNORED (exit 0, no migration)
+        # Fences.
         ("fence_cpp_inside.md", "### Changed\n\n```c++\nMigration: one-way\n```\n", "ignore"),
         ("fence_tilde_inside.md", "### Changed\n\n~~~cpp\nMigration: one-way\n~~~\n", "ignore"),
-        # 4-space-indented fence is NOT a fence, trailer exposed and canonical -> PARSE
         ("fence_4space_indent.md", "### Changed\n\n    ```\nMigration: one-way\n    ```\n", True),
-        # Trailer BETWEEN two valid fences -> PARSE (canonical, outside fence)
         ("fence_between_blocks.md", "### Changed\n\n```c++\n```\nMigration: one-way\n```python\n```\n", True),
+        # Prose mentions are ignored by the new rule.
+        ("prose_migrate.md", "### Changed\n\nRun migrate before restart\n", "ignore"),
+        ("prose_migrating.md", "### Changed\n\nWe are migrating users gradually\n", "ignore"),
     ])
     def test_allowlist_variants(self, tmp_path, fragment_name, fragment_content, should_parse):
         """Parametrised test for all variants: canonical forms parse, non-canonical refuse,
@@ -896,27 +903,86 @@ class TestCLI:
         out_file = repo / "release.json"
         result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
 
-        # Canonical near-misses after stripping: -Migration: one-way and
-        # **Migration: one-way** become Migration: one-way which is canonical.
-        # All others are non-canonical and raise ReleaseMetaError.
-        if fragment_name in ("near-miss-dash.md", "near-miss-bold.md"):
-            # These are canonical after stripping - should succeed (exit 0)
+        # Canonicalizable near-misses parse after normalisation/markup stripping.
+        canonicalizable = {
+            "near-miss-lowercase.md",
+            "near-miss-dash.md",
+            "near-miss-bold.md",
+            "near-miss-space.md",
+            "near-miss-manual.md",
+        }
+        if fragment_name in canonicalizable:
             assert result.returncode == 0, (
-                f"Expected exit 0 for {fragment_name}, got {result.returncode}"
+                f"Expected exit 0 for {fragment_name}, got {result.returncode}: {result.stderr}"
             )
             assert out_file.exists()
-            # Fragments with canonical Migration: should have one_way_migration=true
-            assert "one_way_migration=true" in result.stdout, (
-                f"Expected one_way_migration=true for {fragment_name}"
-            )
+            if "manual" in fragment_name:
+                assert "manual_step=true" in result.stdout
+            else:
+                assert "one_way_migration=true" in result.stdout
         else:
-            # Non-canonical near-misses raise ReleaseMetaError (exit 2)
             assert result.returncode == 2, (
                 f"Expected exit 2 for {fragment_name}, got {result.returncode}"
             )
             assert fragment_name in result.stderr
-            # The error message references the canonical form
-            assert "migration" in result.stderr.lower() or "manual" in result.stderr.lower()
+            assert not out_file.exists()
+
+
+class TestRepoChangelogD:
+    def test_repo_changelog_d_self_check(self, tmp_path):
+        """Every real changelog.d fragment must parse with exit 0."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+
+        src = REPO_ROOT / "changelog.d"
+        dst = repo / "changelog.d"
+        dst.mkdir(parents=True, exist_ok=True)
+        for p in src.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(src)
+                target = dst / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(p.read_bytes())
+        _commit_all(repo, "add real changelog.d")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.0.0-test", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+        assert result.returncode == 0, result.stderr
+        assert out_file.exists()
+
+
+class TestNormalizationPins:
+    @pytest.mark.parametrize("line, expected", [
+        ("Migra\u00adtion: one-way", "parse"),
+        ("\uff2digration: one-way", "parse"),
+        ("Migra\u200btion: one-way", "parse"),
+        ("Manua\u00adl-Step: do it", "parse"),
+        ("\uff2danual-Step: do it", "parse"),
+        ("Manual\u200b-Step: do it", "parse"),
+    ])
+    def test_normalization_pins(self, tmp_path, line, expected):
+        """Normalised canonical trailers parse; never silently ignored."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        (repo / "README.md").write_text("# Test\n")
+        _commit_all(repo, "initial commit")
+        _tag(repo, "v0.5.0")
+        _write_fragment(repo, "pin.md", f"### Fixed\n\n{line}\n")
+        _commit_all(repo, "add pin fragment")
+
+        out_file = repo / "release.json"
+        result = _run_cli(repo, ["--version", "0.5.1", "--previous-ref", "v0.5.0", "--out", str(out_file)])
+        if expected == "parse":
+            assert result.returncode == 0, result.stderr
+            data = json.loads(out_file.read_text(encoding="utf-8"))
+            assert data["one_way_migration"] is True or data["manual_step"] is True
+        else:
+            assert result.returncode == 2
             assert not out_file.exists()
 
 
