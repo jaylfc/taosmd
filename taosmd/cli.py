@@ -1255,8 +1255,12 @@ def _convert_vectors_cmd(args: argparse.Namespace) -> int:
 
     from .store_convert import convert_dense_store  # noqa: PLC0415
 
-    if args.status or args.check:
-        print("--convert-vectors cannot be combined with --status or --check", file=sys.stderr)
+    if args.status or args.check or args.probe:
+        print(
+            "--convert-vectors cannot be combined with --status, --check or --probe "
+            "(they are read-only; nothing was changed)",
+            file=sys.stderr,
+        )
         return 2
     db_path = Path(args.data_dir) / "vector-memory.db"
     result = convert_dense_store(db_path)

@@ -217,6 +217,10 @@ def _search_all(db: Path, queries, monkeypatch):
 
 
 def test_product_read_path_matches_before_and_after(tmp_path, monkeypatch):
+    # Pin the embedder identity so every store here, fresh or converted, records
+    # the same one whether or not sentence-transformers is installed (without
+    # it VectorMemory falls back to qmd and would record embedder=qmd:qmd).
+    monkeypatch.setattr(VectorMemory, "_embedder_identity", lambda self: "all-MiniLM-L6-v2")
     p = tmp_path / "vector-memory.db"
     c = sqlite3.connect(p)
     c.execute("PRAGMA journal_mode=WAL")
@@ -1024,6 +1028,18 @@ def test_cli_convert_vectors(tmp_path, capsys):
     assert n_json(p) == 0
     assert main(["--data-dir", str(tmp_path), "migrate", "--convert-vectors", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "already_current"
+
+
+def test_cli_convert_vectors_refuses_read_only_flags(tmp_path, capsys):
+    from taosmd.cli import main
+
+    make_store(tmp_path / "vector-memory.db")
+    h = file_hash(tmp_path / "vector-memory.db")
+    for flag in ("--probe", "--status", "--check"):
+        assert main(["--data-dir", str(tmp_path), "migrate", "--convert-vectors", flag]) == 2
+        assert "cannot be combined" in capsys.readouterr().err
+    assert file_hash(tmp_path / "vector-memory.db") == h
+    assert not backups(tmp_path / "vector-memory.db")
 
 
 def test_cli_exit_codes_pass_through(tmp_path, capsys):
