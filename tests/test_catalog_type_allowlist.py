@@ -17,9 +17,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from taosmd.catalog_pipeline import CatalogPipeline
-from taosmd.crystallize import CrystalStore
-from taosmd.knowledge_graph import TemporalKnowledgeGraph
-from taosmd.session_catalog import SessionCatalog
 
 
 BASE_TS = 1744531200  # 2025-04-13 00:00:00 UTC
