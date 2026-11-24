@@ -129,3 +129,18 @@ since each store builds its own on first open.
 ## Release metadata trailer rule
 
 `scripts/release_meta.py` parses changelog trailer lines with this rule. It normalises each line (NFKC, remove Unicode format/Cf and U+00AD, casefold, strip), then strips leading markup (whitespace, `>`, `#`, `-`, `*`, `+`, `_`, `~`, backticks, `|`, checkboxes, numbered/lettered list markers, `<!--`). A trailer attempt is a remaining line that starts with `migration`/`migrations` or `manual[\W_]*steps?`, optional whitespace, and a colon-like char (`:`, Unicode colon forms after NFKC, or `=`). An exact canonical form parses (`Migration: one-way`, `Migration: reversible`, `Manual-Step: <non-empty text>`); any other trailer attempt refuses with exit 2 naming file, line, and line text. Prose that merely mentions migration (e.g. `migrate`, `migrating`) is ignored. Trailer attempts inside closed ```/~~~ fences are ignored; an unclosed fence refuses. A confusable-key homoglyph followed by a colon-like char refuses.
+
+## Data relocation
+
+`taosmd data status [--json]` reports the data dir, per-store sizes, free
+space on its filesystem, and a `low_space` flag (free < 10% or < 5 GiB by
+default).
+
+`taosmd data relocate <new_dir>` moves the data directory in a guarded
+sequence: refuse if stores are open for write, check target free space, copy
+(SQLite via the backup API, other files with fsync), verify (SHA-256 and
+`PRAGMA integrity_check` plus row counts), then switch the configured data
+dir atomically. The old directory is kept with a marker until
+`taosmd data relocate --confirm-remove-old` removes it after re-verifying
+the new copy. Exit codes: 0 moved, 2 refused, 4 failed and cleaned up, 1
+unexpected.

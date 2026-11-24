@@ -85,13 +85,29 @@ MANAGED_BY_TAOS = "taos"
 
 
 def _resolve_data_dir(data_dir=None) -> str:
-    """Resolve the data dir, mirroring ``taosmd.api._resolve_data_dir``."""
+    """Resolve the data dir, mirroring ``taosmd.api._resolve_data_dir``.
+
+    When no explicit/env data dir is given, a relocated install is followed
+    via the ``data_dir`` key in the (base) config file.
+    """
     if data_dir is not None:
         return os.fspath(data_dir)
     env = os.environ.get("TAOSMD_DATA_DIR")
-    if env:
-        return env
-    return _DEFAULT_DATA_DIR
+    base = env.strip() if (env and env.strip()) else _DEFAULT_DATA_DIR
+    try:
+        cfg_path = Path(base) / "config.json"
+        if cfg_path.exists():
+            raw = json.loads(cfg_path.read_text())
+            if isinstance(raw, dict):
+                for key in ("data_dir", "data_directory", "dataDir"):
+                    val = raw.get(key)
+                    if isinstance(val, str) and val.strip():
+                        target = val.strip()
+                        if os.path.abspath(target) != os.path.abspath(base):
+                            return target
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return base
 
 
 def _config_path(data_dir=None) -> Path:
@@ -1014,6 +1030,33 @@ def set_acl(channel: str, read=None, post=None, clear: bool = False, data_dir=No
     _ACL_SECTION_CACHE.pop(os.fspath(_config_path(data_dir)), None)
 
 
+
+# ---------------------------------------------------------------------------
+# Data dir relocation pointer
+# ---------------------------------------------------------------------------
+
+_DATA_DIR_KEY = "data_dir"
+
+
+def get_data_dir(data_dir=None) -> str | None:
+    """Return the configured relocated data dir, or None if unset."""
+    val = _read(data_dir).get(_DATA_DIR_KEY)
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return None
+
+
+def set_data_dir(path, *, clear: bool = False, data_dir=None) -> None:
+    """Persist the relocated data dir pointer (or clear it)."""
+    data = _read(data_dir)
+    if clear:
+        data.pop(_DATA_DIR_KEY, None)
+    else:
+        if not isinstance(path, str) or not str(path).strip():
+            raise ValueError("path must be a non-empty string (or pass clear=True)")
+        data[_DATA_DIR_KEY] = str(path).strip()
+    _write(data, data_dir)
+
 __all__ = [
     "get_acl",
     "set_acl",
@@ -1051,5 +1094,7 @@ __all__ = [
     "get_model_role",
     "set_model_role",
     "get_collections_allowed_roots",
+    "get_data_dir",
+    "set_data_dir",
     "set_collections_allowed_roots",
 ]
