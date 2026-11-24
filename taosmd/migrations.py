@@ -671,6 +671,20 @@ def _db_path(data_dir: Union[str, Path], db: str) -> Path:
     return Path(data_dir) / DB_FILES[db]
 
 
+def _open_for_status(path: Path) -> sqlite3.Connection:
+    """Read-only connection for reporting; creates no -wal/-shm sidecars.
+
+    Only when a live ``-wal`` or ``-journal`` already exists (so an immutable
+    open would miss content) does it fall back to the normal helper.
+    """
+    from taosmd import _db, store_probe  # noqa: PLC0415
+
+    try:
+        return store_probe.open_readonly(path)
+    except store_probe.WalPresent:
+        return _db.connect(path)
+
+
 def status_all(data_dir: Union[str, Path]) -> list[dict]:
     """Status for every known database in ``data_dir``. Creates nothing.
 
@@ -692,8 +706,7 @@ def status_all(data_dir: Union[str, Path]) -> list[dict]:
                 "pending": [m.name for m in REGISTRY[db]],
             })
             continue
-        from taosmd import _db
-        conn = _db.connect(path)
+        conn = _open_for_status(path)
         try:
             row = status(conn, db)
         finally:
