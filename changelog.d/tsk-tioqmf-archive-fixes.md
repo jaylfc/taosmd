@@ -6,3 +6,5 @@
 - Index rows written before `seq` existed keep their ids through an append-only `legacy-id-map` file in the archive directory. It is built automatically when the store is opened and again at the start of `rebuild()`; nothing needs to call `freeze_legacy_id_map()` any more.
 - `rebuild()` takes the same write lock as `record()` and swaps the index in one transaction, so a failure part way leaves the old index untouched. Legacy lines the map does not know get fresh ids above every id in use.
 - Opening a store no longer scans every raw file: the counter and the legacy-map watermark are kept in the index database, and only the tail of the newest raw file is read.
+- A truncated or corrupt `.jsonl.gz` day file no longer stops the archive from opening or a rebuild from running: the lines before the damage are used and one warning names the file.
+- New ids also start above every id in the `legacy-id-map`, so losing the index and recording before a rebuild can no longer take an id that an older line already has.

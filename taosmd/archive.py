@@ -20,6 +20,7 @@ import os
 import sqlite3
 import time
 import asyncio
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -155,6 +156,7 @@ class ArchiveStore:
         # entries to the legacy-id-map. Stored in archive_settings to avoid
         # re-scanning raw files on every init.
         self._legacy_map_watermark: int = 0
+        self._warned_files: set[str] = set()
 
     async def init(self) -> None:
         self._archive_dir.mkdir(parents=True, exist_ok=True)
@@ -384,11 +386,11 @@ class ArchiveStore:
                 event["sha256"] = hashlib.sha256(line.encode()).hexdigest()
                 line = json.dumps(event, default=str)
                 f.write(line + "\n")
-                f.flush()
+                # Once write() returns the line may reach the file even if the
+                # flush fails: never hand this seq out again, here or elsewhere.
                 raw_written = True
-                # The seq is now on disk: never hand it out again from this
-                # instance, even if the index insert below fails.
                 self._seq_counter = max(self._seq_counter, seq)
+                f.flush()
 
                 # Count lines for line_number. Track in memory rather than re-reading
                 # the whole daily JSONL on every write: seed from disk the first time
@@ -530,7 +532,40 @@ class ArchiveStore:
                 self._conn.commit()
         else:
             counter = max(setting, max_id, self._max_seq_in_tail())
-        self._seq_counter = counter
+        # Ids recorded for legacy lines must never be handed out again, even
+        # when the index (and the counter stored in it) is gone.
+        self._seq_counter = max(counter, self._legacy_map_max())
+
+    def _legacy_map_max(self) -> int:
+        """Highest id the legacy-id-map knows, without reading all of it.
+
+        Every extension appends a ``{"max_id": N}`` marker holding the running
+        maximum, so the last marker in the file's tail answers it. A map with
+        no marker (written before markers existed) is read in full once.
+        """
+        path = self._legacy_map_path()
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return 0
+        best = 0
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(max(0, size - 65536))
+                tail = fh.read().split(b"\n")
+            for raw in reversed(tail):
+                try:
+                    entry = json.loads(raw)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if isinstance(entry, dict) and "max_id" in entry:
+                    return max(best, int(entry["max_id"]))
+        except (OSError, ValueError, TypeError):
+            pass
+        try:
+            return max(self._load_legacy_map().values(), default=0)
+        except OSError:
+            return best
 
     def _max_seq_in_tail(self, max_bytes: int = 4 << 20) -> int:
         """Highest ``seq`` in the last ``max_bytes`` of the newest raw file."""
@@ -618,8 +653,21 @@ class ArchiveStore:
     def _read_archive_lines(self, path: Path) -> list[str]:
         """Read all lines of a raw archive file, transparently decompressing .gz."""
         if path.suffix == ".gz":
-            with gzip.open(path, "rt", encoding="utf-8") as fh:
-                return fh.readlines()
+            # A truncated or corrupt .gz must not stop the store from opening
+            # or a rebuild from indexing the lines before the damage.
+            lines: list[str] = []
+            try:
+                with gzip.open(path, "rt", encoding="utf-8") as fh:
+                    for line in fh:
+                        lines.append(line)
+            except (OSError, EOFError, zlib.error, UnicodeDecodeError) as exc:
+                if str(path) not in self._warned_files:
+                    self._warned_files.add(str(path))
+                    logger.warning(
+                        "damaged archive file %s (%s); using the %d lines before the damage",
+                        path, exc.__class__.__name__, len(lines),
+                    )
+            return lines
         with open(path, "r", encoding="utf-8") as fh:
             return fh.readlines()
 
@@ -731,9 +779,12 @@ class ArchiveStore:
                     default=str,
                 )
             )
+        appended = len(entries)
         if entries:
             path = self._legacy_map_path()
             path.parent.mkdir(parents=True, exist_ok=True)
+            batch_max = max(r["id"] for r in rows)
+            entries.append(json.dumps({"max_id": max(batch_max, self._legacy_map_max())}))
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write("\n".join(entries) + "\n")
                 fh.flush()
@@ -750,7 +801,7 @@ class ArchiveStore:
                     pass
                 raise
             self._legacy_map_watermark = top
-        return len(entries)
+        return appended
 
     async def freeze_legacy_id_map(self) -> int:
         """Append map entries for every index row that is still unmapped.

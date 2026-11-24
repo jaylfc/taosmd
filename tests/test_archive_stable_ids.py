@@ -368,7 +368,8 @@ async def test_map_is_idempotent_and_append_only(tmp_path):
         await a.close()
         sizes.append((archive_dir / "legacy-id-map").read_bytes())
     assert sizes[0] == sizes[1] == sizes[2]
-    assert len(sizes[0].splitlines()) == 2
+    entries = [ln for ln in sizes[0].splitlines() if b"file_path" in ln]
+    assert len(entries) == 2
 
 
 @pytest.mark.asyncio
@@ -795,4 +796,174 @@ async def test_day_with_both_jsonl_and_gz_is_indexed_once(tmp_path):
     assert report["indexed"] == 3
     assert _index_ids(arc._conn) == [1, 2, 3]
     assert _raw_hashes(tmp_path / "archive") == before
+    await arc.close()
+
+
+def _gz_in_place(day: Path) -> Path:
+    gz = Path(str(day) + ".gz")
+    with open(day, "rb") as src, gzip.open(gz, "wb") as dst:
+        dst.write(src.read())
+    day.unlink()
+    return gz
+
+
+def _truncate(path: Path, n: int = 12) -> None:
+    data = path.read_bytes()
+    path.write_bytes(data[:-n])
+
+
+@pytest.mark.asyncio
+async def test_damaged_gz_does_not_stop_open_or_rebuild(tmp_path):
+    archive_dir = tmp_path / "archive"
+    days = [
+        _write_legacy_day(archive_dir, f"2020/01/0{d}.jsonl", list(range(d * 100, d * 100 + 40)))
+        for d in (1, 2, 3)
+    ]
+    arc = _store(tmp_path)
+    await arc.init()
+    rid = 0
+    layout = {}
+    for day in days:
+        for ln in range(1, 41):
+            rid += 1
+            layout[(str(day), ln)] = rid
+            _insert_old_row(arc._conn, rid, day, ln)
+    await arc.close()
+    os.remove(archive_dir / "legacy-id-map") if (archive_dir / "legacy-id-map").exists() else None
+    gzs = [_gz_in_place(d) for d in days]
+    _truncate(gzs[0])
+    _truncate(gzs[2])
+    # rows now point at .jsonl names whose files are damaged .gz
+
+    arc2 = _store(tmp_path)
+    await arc2.init()  # must not raise
+    new = await arc2.record("conversation", {"text": "still works"})
+    assert new > rid
+    await arc2.rebuild()
+    got = {
+        (r["file_path"], r["line_number"]): r["id"]
+        for r in arc2._conn.execute("SELECT id, file_path, line_number FROM archive_index")
+    }
+    for ln in range(1, 41):  # the intact middle day keeps every id
+        assert got[(str(days[1]), ln)] == layout[(str(days[1]), ln)]
+    for key, value in got.items():  # damaged days: whatever is readable keeps its id
+        if key in layout:
+            assert value == layout[key]
+    assert sum(1 for k in got if k[0] == str(days[0])) > 0
+    await arc2.close()
+
+
+@pytest.mark.asyncio
+async def test_index_loss_then_record_then_rebuild_keeps_legacy_ids(tmp_path):
+    archive_dir = tmp_path / "archive"
+    day = _write_legacy_day(archive_dir, "2020/01/01.jsonl", list(range(10)))
+    arc = _store(tmp_path)
+    await arc.init()
+    for ln in range(1, 11):
+        _insert_old_row(arc._conn, ln, day, ln)
+    await arc.close()
+    arc = _store(tmp_path)
+    await arc.init()  # writes the map
+    await arc.close()
+    os.remove(tmp_path / "archive-index.db")
+
+    arc = _store(tmp_path)
+    await arc.init()
+    assert await arc.record("conversation", {"text": "new"}) == 11
+    await arc.rebuild()
+    got = {
+        r["line_number"]: r["id"]
+        for r in arc._conn.execute(
+            "SELECT id, line_number FROM archive_index WHERE file_path = ?", (str(day),)
+        )
+    }
+    assert got == {ln: ln for ln in range(1, 11)}
+    await arc.close()
+
+
+@pytest.mark.asyncio
+async def test_index_loss_mixed_archive_keeps_all_ids(tmp_path):
+    archive_dir = tmp_path / "archive"
+    day1 = _write_legacy_day(archive_dir, "2020/01/01.jsonl", [1, 2, 3, 4, 5])
+    arc = _store(tmp_path)
+    await arc.init()
+    for ln in range(1, 6):
+        _insert_old_row(arc._conn, ln, day1, ln)
+    await arc.close()
+    arc = _store(tmp_path)
+    await arc.init()  # maps day1
+    new_ids = [await arc.record("conversation", {"text": f"n{i}"}) for i in range(3)]
+    assert new_ids == [6, 7, 8]
+    day2 = _write_legacy_day(archive_dir, "2020/01/02.jsonl", [6, 7])
+    _insert_old_row(arc._conn, 9, day2, 1)
+    _insert_old_row(arc._conn, 10, day2, 2)
+    await arc.close()
+    arc = _store(tmp_path)
+    await arc.init()
+    before = {
+        (r["file_path"], r["line_number"]): r["id"]
+        for r in arc._conn.execute("SELECT id, file_path, line_number FROM archive_index")
+    }
+    await arc.close()
+    os.remove(tmp_path / "archive-index.db")
+
+    arc = _store(tmp_path)
+    await arc.init()
+    assert await arc.record("conversation", {"text": "after loss"}) == 11
+    await arc.rebuild()
+    after = {
+        (r["file_path"], r["line_number"]): r["id"]
+        for r in arc._conn.execute("SELECT id, file_path, line_number FROM archive_index")
+    }
+    for key, value in before.items():
+        assert after[key] == value
+    assert len(after) == len(before) + 1
+    await arc.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_flush_does_not_reuse_the_seq(tmp_path):
+    arc = _store(tmp_path)
+    await arc.init()
+    await arc.record("conversation", {"text": "a"})
+    real = arc._ensure_file
+
+    class FlushFails:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def write(self, text):
+            return self._fh.write(text)
+
+        def flush(self):
+            self._fh.flush()
+            raise OSError("flush failed")
+
+    arc._ensure_file = lambda ts: (lambda f, p: (FlushFails(f), p))(*real(ts))
+    with pytest.raises(OSError):
+        await arc.record("conversation", {"text": "b"})
+    arc._ensure_file = real
+    nxt = await arc.record("conversation", {"text": "c"})
+    seqs = _raw_seqs(tmp_path / "archive")
+    assert len(seqs) == 3 and len(set(seqs)) == 3
+    assert nxt == 3
+    await arc.close()
+
+
+@pytest.mark.asyncio
+async def test_map_max_is_read_from_the_marker_not_the_whole_map(tmp_path, monkeypatch):
+    archive_dir = tmp_path / "archive"
+    day = _write_legacy_day(archive_dir, "2020/01/01.jsonl", [1, 2, 3])
+    arc = _store(tmp_path)
+    await arc.init()
+    for ln, rid in ((1, 4), (2, 9), (3, 6)):
+        _insert_old_row(arc._conn, rid, day, ln)
+    await arc.close()
+    arc = _store(tmp_path)
+    await arc.init()  # writes the map and its max marker
+    monkeypatch.setattr(
+        ArchiveStore, "_load_legacy_map",
+        lambda self: (_ for _ in ()).throw(AssertionError("whole map read")),
+    )
+    assert arc._legacy_map_max() == 9
     await arc.close()
