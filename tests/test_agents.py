@@ -770,6 +770,7 @@ def test_crystallize_and_reflect_use_served_data_dir(tmp_path, monkeypatch):
 
     data_dir = tmp_path / "served"
     data_dir.mkdir()
+    agents.register_agent("alice", data_dir=str(data_dir))  # register in served dir
 
     asyncio.run(
         taosmd.ingest(
