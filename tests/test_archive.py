@@ -319,7 +319,7 @@ async def test_rebuild_uses_seq_ids_never_renumbers(tmp_path):
         return {
             str(path): path.read_bytes()
             for path in sorted(archive_dir.rglob("*"))
-            if path.is_file()
+            if path.is_file() and path.name.endswith((".jsonl", ".jsonl.gz"))
         }
 
     before = raw_hashes()
@@ -529,7 +529,7 @@ async def test_rebuild_keeps_raw_files_byte_identical(tmp_path):
         return {
             str(path): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(archive_dir.rglob("*"))
-            if path.is_file()
+            if path.is_file() and path.name.endswith((".jsonl", ".jsonl.gz"))
         }
 
     before = raw_hashes()

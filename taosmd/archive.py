@@ -173,10 +173,16 @@ class ArchiveStore:
         self._user_tracking_enabled = bool(row and row["value"] == "true")
         # Seed the record sequence counter so restarts never reuse an id.
         self._seed_seq_counter()
-        # Load legacy map watermark
+        # Build the legacy id map for index rows whose raw line has no seq
+        # (written by older code). Idempotent; only rows above the stored
+        # watermark are examined, so a reopen costs one indexed query.
         self._load_legacy_map_watermark()
-        # Auto-build legacy id map for any index rows not yet frozen
-        await self._auto_build_legacy_map()
+        try:
+            self._extend_legacy_map(only_above_watermark=True)
+        except OSError:
+            # Read-only directory: rebuild() retries and raises if it still
+            # cannot write the map.
+            logger.warning("could not extend the legacy id map on open", exc_info=True)
 
     async def close(self) -> None:
         if self._current_file:
@@ -303,7 +309,22 @@ class ArchiveStore:
         summary: str = "",
         project: str | None = None,
     ) -> int:
-        """Record an event to the archive. Returns the index row ID."""
+        """Record an event to the archive. Returns the index row ID.
+
+        The id is a record sequence number allocated before the raw write and
+        stored in the JSONL line (``seq``), so an index rebuild can restore it.
+        Everything after the allocation runs in one SQLite transaction (opened
+        with BEGIN IMMEDIATE, which also serialises writers in other processes):
+
+            allocate seq -> write the raw line and flush -> INSERT the index
+            row with id = seq -> update the counter -> COMMIT
+
+        On ANY exception the transaction is rolled back and the error is
+        re-raised, so the connection is never left inside a transaction and the
+        next call works. A raw line may remain without an index row after a
+        failure; that is acceptable (raw files are never rewritten) and a later
+        ``rebuild()`` indexes it.
+        """
         # Skip user activity events if tracking is disabled
         if event_type in USER_ACTIVITY_EVENTS and not self._user_tracking_enabled:
             return -1
@@ -328,28 +349,18 @@ class ArchiveStore:
 
         ts = time.time()
 
-        # One transaction per record: BEGIN IMMEDIATE; seq = max(counter, MAX(id)) + 1;
-        # write raw line with seq and flush; INSERT index row with id = seq;
-        # update counter; COMMIT. On ANY exception ROLLBACK and re-raise.
         async with self._write_lock:
             if self._conn is None:
                 raise RuntimeError("ArchiveStore is not initialised")
+            if self._conn.in_transaction:
+                # Master's record() committed whatever was pending; keep that
+                # rather than failing BEGIN with "within a transaction".
+                self._conn.commit()
             self._conn.execute("BEGIN IMMEDIATE")
+            seq = 0
+            raw_written = False
             try:
-                # Allocate seq: max of persisted counter and MAX(id in index)
-                row = self._conn.execute(
-                    "SELECT value FROM archive_settings WHERE key = 'archive_seq_counter'"
-                ).fetchone()
-                current = 0
-                if row is not None:
-                    try:
-                        current = int(row["value"] if isinstance(row, sqlite3.Row) else row[0])
-                    except (TypeError, ValueError, IndexError):
-                        current = 0
-                max_id = self._conn.execute(
-                    "SELECT COALESCE(MAX(id), 0) FROM archive_index"
-                ).fetchone()[0]
-                seq = max(current, int(max_id or 0)) + 1
+                seq = self._allocate_seq()
 
                 event = {
                     "seq": seq,
@@ -374,6 +385,10 @@ class ArchiveStore:
                 line = json.dumps(event, default=str)
                 f.write(line + "\n")
                 f.flush()
+                raw_written = True
+                # The seq is now on disk: never hand it out again from this
+                # instance, even if the index insert below fails.
+                self._seq_counter = max(self._seq_counter, seq)
 
                 # Count lines for line_number. Track in memory rather than re-reading
                 # the whole daily JSONL on every write: seed from disk the first time
@@ -406,7 +421,6 @@ class ArchiveStore:
                 )
 
                 # Index in FTS for full-text search
-                row_id = seq
                 # Build searchable content from data fields (use fully redacted derived)
                 content_parts = [summary]
                 for key in ("content", "text", "msg", "query", "tool", "result", "error"):
@@ -417,62 +431,143 @@ class ArchiveStore:
                 if content_text.strip():
                     self._conn.execute(
                         "INSERT INTO archive_fts (rowid, summary, content) VALUES (?, ?, ?)",
-                        (row_id, summary, content_text),
+                        (seq, summary, content_text),
                     )
 
-                # Persist the new counter value
-                self._conn.execute(
-                    """INSERT INTO archive_settings (key, value) VALUES ('archive_seq_counter', ?)
-                       ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-                    (str(seq),),
-                )
+                # Counter and legacy-map watermark move in the same transaction
+                # as the row, so they can never disagree with the index.
+                self._raise_setting_to("archive_seq_counter", seq)
+                self._raise_setting_to(self.LEGACY_MAP_WATERMARK_KEY, seq)
 
                 self._conn.commit()
-                self._seq_counter = seq
-                # Advance legacy map watermark since this new record has a seq
-                if seq > self._legacy_map_watermark:
-                    self._legacy_map_watermark = seq
-                    self._save_legacy_map_watermark()
-                    self._conn.commit()
-            except Exception:
+            except BaseException:
                 try:
                     self._conn.rollback()
                 except sqlite3.Error:
                     pass
+                if raw_written:
+                    self._burn_seq(seq)
                 raise
-        return row_id
+            if seq > self._legacy_map_watermark:
+                self._legacy_map_watermark = seq
+        return seq
 
     # ------------------------------------------------------------------
     # Record sequence: stable ids across index rebuilds
     # ------------------------------------------------------------------
 
-    def _seed_seq_counter(self) -> None:
-        """Start the sequence counter above every id already in use.
-
-        The durable source is the ``archive_seq_counter`` setting, which
-        is advanced and committed on every record, so restarts never reuse
-        a value. On stores that predate the counter (no setting yet) fall
-        back to the highest index id and the highest ``seq`` found in the
-        raw files, so a crash between the seq assignment and the raw write
-        leaves a gap but never a duplicate. On subsequent opens the setting
-        is always present, so we avoid the expensive file scan.
-        """
+    def _read_int_setting(self, key: str) -> int:
         row = self._conn.execute(
-            "SELECT value FROM archive_settings WHERE key = 'archive_seq_counter'"
+            "SELECT value FROM archive_settings WHERE key = ?", (key,)
         ).fetchone()
-        setting_value = 0
-        if row is not None:
+        if row is None:
+            return 0
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return 0
+
+    def _raise_setting_to(self, key: str, value: int) -> None:
+        """Set an integer setting to max(current, value). Never lowers it."""
+        self._conn.execute(
+            """INSERT INTO archive_settings (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = CAST(
+                   MAX(CAST(archive_settings.value AS INTEGER),
+                       CAST(excluded.value AS INTEGER)) AS TEXT)""",
+            (key, str(int(value))),
+        )
+
+    def _allocate_seq(self) -> int:
+        """Next record id: above the persisted counter, MAX(index id) and every
+        seq this instance has put on disk. Call inside BEGIN IMMEDIATE.
+
+        MAX(id) matters when older code wrote rows to the same directory (it
+        never touches the counter), or when the counter was lost.
+        """
+        current = self._read_int_setting("archive_seq_counter")
+        max_id = self._conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM archive_index"
+        ).fetchone()[0]
+        return max(current, int(max_id or 0), self._seq_counter) + 1
+
+    def _burn_seq(self, seq: int) -> None:
+        """Best effort: after a failure that left a raw line carrying ``seq``,
+        persist the counter so no writer (this process or another) reuses it.
+
+        If this also fails (for example the database is unwritable) the orphan
+        line stays; rebuild() copes with a repeated seq by giving the later
+        line a fresh id.
+        """
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._raise_setting_to("archive_seq_counter", seq)
+            self._conn.commit()
+        except Exception:
             try:
-                setting_value = int(row["value"])
-            except (TypeError, ValueError):
-                setting_value = 0
-        max_id = self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM archive_index").fetchone()[0]
-        if setting_value == 0:
-            # First run (no counter setting yet): scan raw files for max seq
-            self._seq_counter = max(max_id, self._max_seq_in_files())
+                self._conn.rollback()
+            except sqlite3.Error:
+                pass
+
+    def _seed_seq_counter(self) -> None:
+        """Start the in-memory sequence floor above every id already in use.
+
+        Cost on open: O(1) when the counter setting or the index has rows (two
+        indexed reads plus a read of the tail of the newest raw file, to catch
+        a line whose index row was lost). Only a directory with neither a
+        counter nor index rows (a fresh dir, or an index that was deleted)
+        scans every raw file, once; the result is persisted so the next open
+        does not scan again.
+        """
+        setting = self._read_int_setting("archive_seq_counter")
+        max_id = self._conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM archive_index"
+        ).fetchone()[0]
+        max_id = int(max_id or 0)
+        if setting == 0 and max_id == 0:
+            counter = self._max_seq_in_files()
+            if counter > 0:
+                self._raise_setting_to("archive_seq_counter", counter)
+                self._conn.commit()
         else:
-            # Counter exists: trust it and the index max_id
-            self._seq_counter = max(setting_value, max_id)
+            counter = max(setting, max_id, self._max_seq_in_tail())
+        self._seq_counter = counter
+
+    def _max_seq_in_tail(self, max_bytes: int = 4 << 20) -> int:
+        """Highest ``seq`` in the last ``max_bytes`` of the newest raw file."""
+        newest = None
+        for path in self._archive_dir.rglob("*.jsonl*"):
+            if not path.name.endswith((".jsonl", ".jsonl.gz")):
+                continue
+            if newest is None or str(path) > str(newest):
+                newest = path
+        if newest is None:
+            return 0
+        try:
+            if newest.suffix == ".gz":
+                lines = [ln.encode("utf-8") for ln in self._read_archive_lines(newest)]
+            else:
+                with open(newest, "rb") as fh:
+                    fh.seek(0, os.SEEK_END)
+                    size = fh.tell()
+                    fh.seek(max(0, size - max_bytes))
+                    # The first piece may be cut mid-line; a fragment is never
+                    # a JSON object, so the parse below skips it.
+                    lines = fh.read().split(b"\n")
+        except OSError:
+            return 0
+        best = 0
+        for raw in lines:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+                continue
+            seq = rec.get("seq") if isinstance(rec, dict) else None
+            if isinstance(seq, int) and not isinstance(seq, bool) and seq > best:
+                best = seq
+        return best
 
     def _max_seq_in_files(self) -> int:
         """Highest ``seq`` stored in any raw .jsonl or .jsonl.gz file."""
@@ -490,7 +585,7 @@ class ArchiveStore:
                     record = json.loads(line)
                 except (json.JSONDecodeError, TypeError):
                     continue
-                seq = record.get("seq")
+                seq = record.get("seq") if isinstance(record, dict) else None
                 if isinstance(seq, int) and not isinstance(seq, bool) and seq > max_seq:
                     max_seq = seq
         return max_seq
@@ -501,7 +596,24 @@ class ArchiveStore:
             list(self._archive_dir.rglob("*.jsonl"))
             + list(self._archive_dir.rglob("*.jsonl.gz"))
         )
+        # A compress that was interrupted (or whose .gz failed verification)
+        # leaves both DD.jsonl and DD.jsonl.gz; the plain file is the source.
+        files = [
+            p for p in files
+            if not (p.name.endswith(".gz") and p.with_suffix("").exists())
+        ]
         return sorted(files, key=lambda path: str(path))
+
+    @staticmethod
+    def _index_name(path: Path | str) -> str:
+        """The name the index uses for a raw file: always the .jsonl form.
+
+        compress_old_files() turns DD.jsonl into DD.jsonl.gz without touching
+        index rows, so legacy-map identities and rebuilt rows use the .jsonl
+        name regardless of which form is on disk.
+        """
+        name = str(path)
+        return name[:-3] if name.endswith(".gz") else name
 
     def _read_archive_lines(self, path: Path) -> list[str]:
         """Read all lines of a raw archive file, transparently decompressing .gz."""
@@ -522,7 +634,7 @@ class ArchiveStore:
         return None
 
     # ------------------------------------------------------------------
-    # Legacy id map: automatic, idempotent build on first write-open
+    # Legacy id map: automatic, idempotent, append-only
     # ------------------------------------------------------------------
 
     LEGACY_ID_MAP = "legacy-id-map"
@@ -534,8 +646,8 @@ class ArchiveStore:
     def _load_legacy_map(self) -> dict[tuple[str, int, str], int]:
         """Load the legacy-id-map sidecar, identity -> id.
 
-        Later entries override earlier ones so the most recent freeze wins;
-        the file is append-only and never truncated.
+        Later entries override earlier ones; the file is append-only and never
+        truncated.
         """
         mapping: dict[tuple[str, int, str], int] = {}
         path = self._legacy_map_path()
@@ -548,162 +660,109 @@ class ArchiveStore:
                     continue
                 try:
                     entry = json.loads(line)
-                except (json.JSONDecodeError, TypeError):
+                    mapping[
+                        (
+                            self._index_name(entry["file_path"]),
+                            int(entry["line_number"]),
+                            entry.get("sha256") or "",
+                        )
+                    ] = int(entry["id"])
+                except (json.JSONDecodeError, TypeError, KeyError, ValueError):
                     continue
-                mapping[
-                    (entry["file_path"], int(entry["line_number"]), entry.get("sha256") or "")
-                ] = int(entry["id"])
         return mapping
 
     def _load_legacy_map_watermark(self) -> None:
-        """Load the legacy map watermark from settings."""
-        row = self._conn.execute(
-            f"SELECT value FROM archive_settings WHERE key = '{self.LEGACY_MAP_WATERMARK_KEY}'"
-        ).fetchone()
-        if row is not None:
-            try:
-                self._legacy_map_watermark = int(row["value"])
-            except (TypeError, ValueError):
-                self._legacy_map_watermark = 0
-        else:
-            self._legacy_map_watermark = 0
+        self._legacy_map_watermark = self._read_int_setting(self.LEGACY_MAP_WATERMARK_KEY)
 
-    def _save_legacy_map_watermark(self) -> None:
-        """Save the legacy map watermark to settings."""
-        self._conn.execute(
-            f"""INSERT INTO archive_settings (key, value) VALUES ('{self.LEGACY_MAP_WATERMARK_KEY}', ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-            (str(self._legacy_map_watermark),),
-        )
+    def _extend_legacy_map(self, only_above_watermark: bool) -> int:
+        """Append map entries for index rows whose raw line has no ``seq``.
 
-    async def _auto_build_legacy_map(self) -> None:
-        """Automatically build the legacy id map for any index rows not yet frozen.
-
-        This runs on init (first write-open of a directory). It appends only
-        missing entries to the append-only legacy-id-map file. Idempotent:
-        safe to call repeatedly.
+        With ``only_above_watermark`` (the init path) only rows above the
+        stored watermark are looked at, so a reopen costs one indexed query
+        when nothing is new. Otherwise every index row is checked (rebuild and
+        freeze), skipping identities already in the map, so repeats add nothing.
+        The sidecar is append-only, fsynced, and raw files are only read.
+        Returns the number of entries appended.
         """
-        if self._conn is None:
-            return
-        # Find index rows with id > watermark that don't have seq in raw line
-        rows = self._conn.execute(
-            "SELECT id, file_path, line_number FROM archive_index WHERE id > ? ORDER BY id",
-            (self._legacy_map_watermark,),
-        ).fetchall()
+        if only_above_watermark:
+            rows = self._conn.execute(
+                "SELECT id, file_path, line_number FROM archive_index WHERE id > ? ORDER BY file_path, line_number",
+                (self._legacy_map_watermark,),
+            ).fetchall()
+            known: dict[tuple[str, int, str], int] = {}
+        else:
+            rows = self._conn.execute(
+                "SELECT id, file_path, line_number FROM archive_index ORDER BY file_path, line_number"
+            ).fetchall()
+            known = self._load_legacy_map()
         if not rows:
-            return
+            return 0
 
-        path = self._legacy_map_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        written = 0
-        max_id_processed = self._legacy_map_watermark
-        with open(path, "a", encoding="utf-8") as fh:
-            for row in rows:
-                archive_path = self._archive_file_for(row["file_path"])
-                sha256 = ""
-                has_seq = False
-                if archive_path is not None:
-                    try:
-                        lines = self._read_archive_lines(archive_path)
-                        if row["line_number"] <= len(lines):
-                            record = json.loads(lines[row["line_number"] - 1].strip())
-                            sha256 = record.get("sha256") or ""
-                            has_seq = isinstance(record.get("seq"), int) and not isinstance(record.get("seq"), bool)
-                    except (OSError, json.JSONDecodeError, TypeError, IndexError):
-                        sha256 = ""
-                # Only append to legacy map if the raw line has no seq (legacy line)
-                if not has_seq:
-                    fh.write(
-                        json.dumps(
-                            {
-                                "file_path": row["file_path"],
-                                "line_number": row["line_number"],
-                                "sha256": sha256,
-                                "id": row["id"],
-                            },
-                            default=str,
-                        )
-                        + "\n"
-                    )
-                    written += 1
-                # Always advance watermark to this row's id
-                if row["id"] > max_id_processed:
-                    max_id_processed = row["id"]
-        # Always update watermark to the highest id processed, even if no entries written
-        if max_id_processed > self._legacy_map_watermark:
-            self._legacy_map_watermark = max_id_processed
-            self._save_legacy_map_watermark()
-            self._conn.commit()
+        entries: list[str] = []
+        cached_path: str | None = None
+        cached_lines: list[str] = []
+        for row in rows:
+            if row["file_path"] != cached_path:
+                cached_path = row["file_path"]
+                archive_path = self._archive_file_for(cached_path)
+                try:
+                    cached_lines = self._read_archive_lines(archive_path) if archive_path else []
+                except OSError:
+                    cached_lines = []
+            sha256 = ""
+            has_seq = False
+            ln = row["line_number"]
+            if 1 <= ln <= len(cached_lines):
+                try:
+                    record = json.loads(cached_lines[ln - 1].strip())
+                    sha256 = record.get("sha256") or ""
+                    seq = record.get("seq")
+                    has_seq = isinstance(seq, int) and not isinstance(seq, bool)
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    pass
+            if has_seq:
+                continue
+            name = self._index_name(row["file_path"])
+            if known.get((name, ln, sha256)) == row["id"]:
+                continue
+            entries.append(
+                json.dumps(
+                    {"file_path": name, "line_number": ln, "sha256": sha256, "id": row["id"]},
+                    default=str,
+                )
+            )
+        if entries:
+            path = self._legacy_map_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write("\n".join(entries) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+        top = max(row["id"] for row in rows)
+        if top > self._legacy_map_watermark:
+            try:
+                self._raise_setting_to(self.LEGACY_MAP_WATERMARK_KEY, top)
+                self._conn.commit()
+            except BaseException:
+                try:
+                    self._conn.rollback()
+                except sqlite3.Error:
+                    pass
+                raise
+            self._legacy_map_watermark = top
+        return len(entries)
 
     async def freeze_legacy_id_map(self) -> int:
-        """Snapshot the current index -> raw-line mapping into the legacy-id-map.
+        """Append map entries for every index row that is still unmapped.
 
-        Appends one entry per index row: ``file_path + line_number + the
-        line's existing SHA-256`` maps to its current id. Safe to repeat
-        (each freeze re-appends the full mapping); call before rebuilding
-        the index so legacy lines without ``seq`` keep their ids. Raw files
-        are only read, never rewritten. Returns entries appended.
-
-        Note: This is now mostly a no-op since _auto_build_legacy_map runs
-        on init. Kept for backwards compatibility and manual triggers.
+        Not needed any more: the map is built automatically on open and again
+        at the start of rebuild(). Kept so existing callers keep working.
+        Returns entries appended.
         """
         if self._conn is None:
             raise RuntimeError("ArchiveStore is not initialised")
         async with self._write_lock:
-            # Use the same logic as _auto_build_legacy_map but force write all rows
-            path = self._legacy_map_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            rows = self._conn.execute(
-                "SELECT id, file_path, line_number FROM archive_index ORDER BY id"
-            ).fetchall()
-            written = 0
-            max_id_processed = self._legacy_map_watermark
-            with open(path, "a", encoding="utf-8") as fh:
-                for row in rows:
-                    archive_path = self._archive_file_for(row["file_path"])
-                    sha256 = ""
-                    if archive_path is not None:
-                        try:
-                            lines = self._read_archive_lines(archive_path)
-                            if row["line_number"] <= len(lines):
-                                record = json.loads(lines[row["line_number"] - 1].strip())
-                                sha256 = record.get("sha256") or ""
-                        except (OSError, json.JSONDecodeError, TypeError, IndexError):
-                            sha256 = ""
-                    fh.write(
-                        json.dumps(
-                            {
-                                "file_path": row["file_path"],
-                                "line_number": row["line_number"],
-                                "sha256": sha256,
-                                "id": row["id"],
-                            },
-                            default=str,
-                        )
-                        + "\n"
-                    )
-                    written += 1
-                    if row["id"] > max_id_processed:
-                        max_id_processed = row["id"]
-            if max_id_processed > self._legacy_map_watermark:
-                self._legacy_map_watermark = max_id_processed
-                self._save_legacy_map_watermark()
-                self._conn.commit()
-            return written
-
-    def _sha256_of_line(self, file_path: str, line_number: int) -> str:
-        """SHA-256 of the raw line at line_number, or blank when unreadable."""
-        archive_path = self._archive_file_for(file_path)
-        if archive_path is None:
-            return ""
-        try:
-            lines = self._read_archive_lines(archive_path)
-            if line_number < 1 or line_number > len(lines):
-                return ""
-            record = json.loads(lines[line_number - 1].strip())
-        except (OSError, json.JSONDecodeError, TypeError, IndexError):
-            return ""
-        return record.get("sha256") or ""
+            return self._extend_legacy_map(only_above_watermark=False)
 
     # ------------------------------------------------------------------
     # Index rebuild from the raw files
@@ -713,113 +772,171 @@ class ArchiveStore:
         """Rebuild ``archive_index`` and ``archive_fts`` from the raw files.
 
         Row ids come from the ``seq`` stored in each JSONL line, so a rebuild
-        can never renumber records. Legacy lines without ``seq`` are assigned
-        the id frozen in the append-only ``legacy-id-map`` sidecar
-        (identity: file path + line number + the line's SHA-256); legacy
-        lines absent from the map take the next unused id ABOVE every mapped
-        and stored id (never collide). Raw .jsonl and .jsonl.gz files are only
-        ever read, never rewritten.
+        never renumbers records. Legacy lines without ``seq`` take the id
+        recorded for them in the append-only ``legacy-id-map`` sidecar
+        (identity: file path + line number + the line's SHA-256), which the
+        store builds by itself (see init). Legacy lines the map does not know,
+        and a line whose seq or mapped id is already taken by another line,
+        get fresh ids ABOVE every id in use. Raw .jsonl and .jsonl.gz files are
+        only ever read, never rewritten.
 
-        The entire rebuild runs in a single transaction under the write lock,
-        so a crash mid-rebuild leaves the old index intact.
+        It takes the same write lock as record(), and the delete and reinsert
+        run in one transaction, so a failure part way leaves the old index
+        exactly as it was.
 
-        Returns ``{"indexed": N, "legacy": M}`` where ``legacy`` counts
-        lines restored from the legacy-id-map.
+        Returns ``{"indexed": N, "legacy": M}``; ``legacy`` counts lines that
+        carry no seq.
         """
         if self._conn is None:
             raise RuntimeError("ArchiveStore is not initialised")
         async with self._write_lock:
+            if self._conn.in_transaction:
+                self._conn.commit()
+            # Make sure every row the old index knows about is in the map
+            # before the index is thrown away (no-op when already mapped).
+            self._extend_legacy_map(only_above_watermark=False)
             legacy_map = self._load_legacy_map()
-            # First pass: collect all mapped ids and find the maximum
-            mapped_ids = set(legacy_map.values())
-            max_mapped_id = max(mapped_ids) if mapped_ids else 0
-            # Counter starts above all mapped ids AND above current seq_counter
-            counter = max(self._seq_counter, max_mapped_id)
+            files = self._iter_archive_files()
 
-            # Do the rebuild in one transaction
+            def parsed_lines(path: Path):
+                for line_number, line in enumerate(self._read_archive_lines(path), start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if isinstance(record, dict):
+                        yield line_number, record
+
+            def stored_seq(record: dict) -> int | None:
+                seq = record.get("seq")
+                if isinstance(seq, int) and not isinstance(seq, bool) and seq > 0:
+                    return seq
+                return None
+
             self._conn.execute("BEGIN IMMEDIATE")
             try:
+                # Pass 1: the highest id in use anywhere, and which seqs repeat.
+                top = max(
+                    self._seq_counter,
+                    self._read_int_setting("archive_seq_counter"),
+                    int(self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM archive_index").fetchone()[0] or 0),
+                    max(legacy_map.values(), default=0),
+                )
+                seen_seqs: set[int] = set()
+                contested: set[int] = set(legacy_map.values())  # seqs a mapped legacy line also holds
+                repeated: set[int] = set()
+                for path in files:
+                    for _, record in parsed_lines(path):
+                        seq = stored_seq(record)
+                        if seq is None:
+                            continue
+                        top = max(top, seq)
+                        if seq in seen_seqs:
+                            repeated.add(seq)
+                        seen_seqs.add(seq)
+                # A seq that two lines claim (an orphan line from a failed write
+                # whose seq was reused, or a legacy line mapped to the same id):
+                # the line the current index points at keeps it.
+                contested = (contested & seen_seqs) | repeated
+                index_pos: dict[int, tuple[str, int]] = {}
+                for seq in contested:
+                    old = self._conn.execute(
+                        "SELECT file_path, line_number FROM archive_index WHERE id = ?", (seq,)
+                    ).fetchone()
+                    if old is not None:
+                        index_pos[seq] = (self._index_name(old["file_path"]), old["line_number"])
+
                 self._conn.execute("DELETE FROM archive_index")
                 self._conn.execute("DELETE FROM archive_fts")
+
+                # Pass 2: stored seqs first, then mapped legacy ids, then fresh.
+                # Legacy lines are deferred so a mapped id can never be taken
+                # by an unmapped line that happens to sort earlier.
+                assigned: set[int] = set()
+                fresh = top
                 indexed = legacy = 0
-                for path in self._iter_archive_files():
-                    file_path = str(path)
-                    for line_number, line in enumerate(self._read_archive_lines(path), start=1):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            record = json.loads(line)
-                        except (json.JSONDecodeError, TypeError):
-                            continue
-                        seq = record.get("seq")
-                        if isinstance(seq, int) and not isinstance(seq, bool):
-                            row_id = seq
-                        else:
-                            legacy += 1
-                            identity = (
-                                file_path,
-                                line_number,
-                                record.get("sha256") or "",
-                            )
-                            row_id = legacy_map.get(identity)
-                            if row_id is None:
-                                counter += 1
-                                row_id = counter
-                            else:
-                                # Mapped legacy id: ensure counter stays above it
-                                if row_id > counter:
-                                    counter = row_id
-                        if row_id > counter:
-                            counter = row_id
-                        summary = record.get("summary") or ""
-                        derived = _redact_leaves(
-                            json.loads(json.dumps(record.get("data") or {}, default=str))
-                        )
-                        self._conn.execute(
-                            """INSERT INTO archive_index
-                               (id, timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (
-                                row_id,
-                                record.get("timestamp") or 0.0,
-                                record.get("event_type") or "",
-                                record.get("agent_name"),
-                                record.get("app_id"),
-                                record.get("project"),
-                                summary,
-                                file_path,
-                                line_number,
-                                json.dumps(derived, default=str),
-                            ),
-                        )
-                        content_parts = [summary]
-                        for key in ("content", "text", "msg", "query", "tool", "result", "error"):
-                            val = derived.get(key)
-                            if val and isinstance(val, str):
-                                content_parts.append(val)
-                        content_text = " ".join(content_parts)
-                        if content_text.strip():
-                            self._conn.execute(
-                                "INSERT INTO archive_fts (rowid, summary, content) VALUES (?, ?, ?)",
-                                (row_id, summary, content_text),
-                            )
-                        indexed += 1
-                # Update seq counter
-                if counter > self._seq_counter:
-                    self._seq_counter = counter
-                    self._conn.execute(
-                        """INSERT INTO archive_settings (key, value) VALUES ('archive_seq_counter', ?)
-                           ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-                        (str(self._seq_counter),),
+                deferred: list[tuple[str, int, dict]] = []
+
+                def insert(row_id: int, record: dict, file_path: str, line_number: int) -> None:
+                    summary = record.get("summary") or ""
+                    derived = _redact_leaves(
+                        json.loads(json.dumps(record.get("data") or {}, default=str))
                     )
+                    if not isinstance(derived, dict):
+                        derived = {}
+                    self._conn.execute(
+                        """INSERT INTO archive_index
+                           (id, timestamp, event_type, agent_name, app_id, project, summary, file_path, line_number, data_json)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            row_id,
+                            record.get("timestamp") or 0.0,
+                            record.get("event_type") or "",
+                            record.get("agent_name"),
+                            record.get("app_id"),
+                            record.get("project"),
+                            summary,
+                            file_path,
+                            line_number,
+                            json.dumps(derived, default=str),
+                        ),
+                    )
+                    content_parts = [summary]
+                    for key in ("content", "text", "msg", "query", "tool", "result", "error"):
+                        val = derived.get(key)
+                        if val and isinstance(val, str):
+                            content_parts.append(val)
+                    content_text = " ".join(content_parts)
+                    if content_text.strip():
+                        self._conn.execute(
+                            "INSERT INTO archive_fts (rowid, summary, content) VALUES (?, ?, ?)",
+                            (row_id, summary, content_text),
+                        )
+
+                for path in files:
+                    file_path = self._index_name(path)
+                    for line_number, record in parsed_lines(path):
+                        seq = stored_seq(record)
+                        if seq is None:
+                            legacy += 1
+                            deferred.append((file_path, line_number, record))
+                            continue
+                        owner = index_pos.get(seq)
+                        if seq in assigned or (
+                            owner is not None and owner != (file_path, line_number)
+                        ):
+                            # Repeated seq and not the line the index kept.
+                            deferred.append((file_path, line_number, record))
+                            continue
+                        assigned.add(seq)
+                        insert(seq, record, file_path, line_number)
+                        indexed += 1
+
+                for file_path, line_number, record in deferred:
+                    identity = (file_path, line_number, record.get("sha256") or "")
+                    row_id = legacy_map.get(identity)
+                    if row_id is None or row_id in assigned:
+                        fresh += 1
+                        row_id = fresh
+                    assigned.add(row_id)
+                    insert(row_id, record, file_path, line_number)
+                    indexed += 1
+
+                self._raise_setting_to("archive_seq_counter", max(top, fresh))
                 self._conn.commit()
-            except Exception:
+            except BaseException:
                 try:
                     self._conn.rollback()
                 except sqlite3.Error:
                     pass
                 raise
+            self._seq_counter = max(self._seq_counter, top, fresh)
+            # Persist the ids just given to unmapped legacy lines so a later
+            # rebuild gives them the same ones.
+            self._extend_legacy_map(only_above_watermark=False)
             return {"indexed": indexed, "legacy": legacy}
 
     # ------------------------------------------------------------------
