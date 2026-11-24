@@ -87,8 +87,8 @@ def _db_tables(conn: sqlite3.Connection) -> list[str]:
 
 def _verify_db(src: Path, dst: Path) -> tuple[bool, str | None]:
     try:
-        sconn = sqlite3.connect(str(src))
-        dconn = sqlite3.connect(str(dst))
+        sconn = sqlite3.connect(f"file:{src.as_posix()}?immutable=1", uri=True)
+        dconn = sqlite3.connect(f"file:{dst.as_posix()}?immutable=1", uri=True)
     except sqlite3.Error as exc:
         return False, str(exc)
     try:
@@ -125,7 +125,7 @@ def _verify(old_dir: Path, new_dir: Path, skip: set | None = None) -> tuple[bool
         for fn in files:
             src = Path(root) / fn
             rel = src.relative_to(old_dir)
-            if fn == _MARKER_NAME or str(rel) in skip or fn in skip:
+            if fn == _MARKER_NAME or fn == "config.json" or str(rel) in skip or fn in skip:
                 continue
             if fn.endswith(("-wal", "-shm", "-journal")):
                 continue
@@ -146,7 +146,7 @@ def _copy_db(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists():
         dst.unlink()
-    sconn = sqlite3.connect(str(src))
+    sconn = sqlite3.connect(f"file:{src.as_posix()}?immutable=1", uri=True)
     dconn = sqlite3.connect(str(dst))
     try:
         sconn.backup(dconn)
@@ -204,6 +204,15 @@ def _server_holds_stores_open(data_dir: Path) -> bool:
         pass
     # Otherwise probe with BEGIN IMMEDIATE.
     for db in data_dir.rglob("*.db"):
+        sidecars = []
+        for suf in ("-wal", "-shm", "-journal"):
+            sidecars.append(db.with_name(db.name + suf))
+        backups = {}
+        for sc in sidecars:
+            try:
+                backups[sc] = sc.read_bytes() if sc.exists() else None
+            except OSError:
+                backups[sc] = None
         try:
             conn = sqlite3.connect(str(db), timeout=1)
             try:
@@ -217,6 +226,16 @@ def _server_holds_stores_open(data_dir: Path) -> bool:
             conn.close()
         except Exception:
             continue
+        finally:
+            for sc, data in backups.items():
+                try:
+                    if data is None:
+                        if sc.exists():
+                            sc.unlink()
+                    else:
+                        sc.write_bytes(data)
+                except OSError:
+                    pass
     return False
 
 
@@ -471,10 +490,14 @@ def relocate(*args, **kwargs) -> dict:
         current_size = _dir_size(old_path)
     except OSError:
         current_size = 0
-    target_parent = new_path.parent if new_path.parent.exists() else new_path.parent
-    target_parent.mkdir(parents=True, exist_ok=True)
+    target_parent = new_path.parent
+    probe = target_parent
+    while probe is not None and not probe.exists():
+        probe = probe.parent
+    if probe is None or not probe.exists():
+        probe = Path("/")
     try:
-        free = _free_space(target_parent)
+        free = _free_space(probe)
     except OSError:
         free = 0
     if free < current_size * 1.10:
@@ -485,10 +508,11 @@ def relocate(*args, **kwargs) -> dict:
                               required_bytes=int(current_size * 1.10))
 
     # Handle partial target.
+    already_verified = False
     if new_path.exists():
-        ok, _err = _verify(old_path, new_path)
+        ok, _err = _verify(old_path, new_path, skip={"config.json"})
         if ok:
-            pass  # already complete
+            already_verified = True
         else:
             try:
                 shutil.rmtree(new_path)
@@ -498,28 +522,29 @@ def relocate(*args, **kwargs) -> dict:
                                       old_dir=str(old_path),
                                       new_dir=str(new_path))
 
-    # Copy.
-    try:
-        _copy_tree(old_path, new_path)
-    except Exception as exc:  # noqa: BLE001
+    if not already_verified:
+        # Copy.
         try:
-            shutil.rmtree(new_path)
-        except OSError:
-            pass
-        return RelocateResult(exit_code=1, status="error",
-                              error=str(exc), moved=False,
-                              old_dir=str(old_path), new_dir=str(new_path))
+            _copy_tree(old_path, new_path)
+        except Exception as exc:  # noqa: BLE001
+            try:
+                shutil.rmtree(new_path)
+            except OSError:
+                pass
+            return RelocateResult(exit_code=1, status="error",
+                                  error=str(exc), moved=False,
+                                  old_dir=str(old_path), new_dir=str(new_path))
 
-    # Verify.
-    ok, err = _verify(old_path, new_path)
-    if not ok:
-        try:
-            shutil.rmtree(new_path)
-        except OSError:
-            pass
-        return RelocateResult(exit_code=4, status="failed",
-                              error=err, moved=False, cleaned_up=True,
-                              old_dir=str(old_path), new_dir=str(new_path))
+        # Verify.
+        ok, err = _verify(old_path, new_path, skip={"config.json"})
+        if not ok:
+            try:
+                shutil.rmtree(new_path)
+            except OSError:
+                pass
+            return RelocateResult(exit_code=4, status="failed",
+                                  error=err, moved=False, cleaned_up=True,
+                                  old_dir=str(old_path), new_dir=str(new_path))
 
     # Switch: write new location into config (old dir).
     try:
