@@ -406,11 +406,11 @@ class VectorMemory:
         migrations.migrate(self._conn, "vector_memory")
         self._check_store_mode()
         self._conn.commit()
-        # Serve legacy JSON stores as-is; conversion is opt-in via `taosmd migrate`.
+        # Legacy JSON stores are served as-is: nothing is converted on open.
         if self._store_is_legacy():
             logger.info(
-                "vector store %s uses legacy JSON vectors; run `taosmd migrate` "
-                "to convert to base64 float32",
+                "vector store %s holds legacy JSON vectors; serving it as-is "
+                "(no conversion on open) so older releases can still read it",
                 self._db_path,
             )
         # QMD embed mode talks to a remote QMD server over HTTP. When the
@@ -602,40 +602,35 @@ class VectorMemory:
         return ";".join(parts)
 
     def _dense_format(self) -> str | None:
-        """``f32`` if the store is converted or fresh dense, else ``"none"``
-        for binary-quant/late-interaction stores (dense_format logic applies
-        only to plain dense stores)."""
-        if self.binary_quant or self.late_interaction:
-            row = self._conn.execute(
-                "SELECT value FROM store_meta WHERE key = 'mode'"
-            ).fetchone()
-            recorded = row["value"] if row else None
-            if recorded is not None:
-                rec = self._parse_mode(recorded)
-                if rec.get("dense_format") == "f32":
-                    return "f32"  # converted store: keep f32
-                return "none"  # legacy/fresh: dense_format=none
-            # Fresh store (no marker yet): write dense_format=none
-            return "none"
+        """The ``dense_format`` component of this store's signature, or None to
+        omit it.
+
+        A recorded marker is echoed: whatever it says about dense_format (f32
+        for a converted store, none for a binary_quant or late_interaction store
+        written by 0.5.x) is kept, and a marker without the key stays without
+        it, so 0.4.x can still open the store. Only a store with no marker
+        decides: binary_quant and late_interaction stores are ``none``, a fresh
+        dense store is ``f32``, and a dense store that already holds rows (a
+        pre-marker legacy store) omits the key and stays JSON.
+        """
         row = self._conn.execute(
             "SELECT value FROM store_meta WHERE key = 'mode'"
         ).fetchone()
-        recorded = row["value"] if row else None
-        if recorded is not None:
-            rec = self._parse_mode(recorded)
-            if rec.get("dense_format") == "f32":
-                return "f32"
-            return None  # legacy marker: no dense_format component
-        # No marker: fresh store (no rows) writes f32; legacy rows stay JSON.
+        if row is not None:
+            return self._parse_mode(row["value"]).get("dense_format")
+        if self.binary_quant or self.late_interaction:
+            return "none"
         has_rows = self._conn.execute(
             "SELECT 1 FROM vector_memory LIMIT 1"
         ).fetchone() is not None
-        return "f32" if not has_rows else None
+        return None if has_rows else "f32"
 
     def _store_is_legacy(self) -> bool:
-        """True when the recorded store marker lacks dense_format, i.e. the
-        store holds JSON vectors and is served (and appended to) in legacy
-        format until an explicit `taosmd migrate` conversion."""
+        """True for a dense store whose recorded marker lacks dense_format, i.e.
+        one that holds JSON vectors and is served (and appended to) in that
+        format. Never true for binary_quant or late_interaction stores."""
+        if self.binary_quant or self.late_interaction:
+            return False
         row = self._conn.execute(
             "SELECT value FROM store_meta WHERE key = 'mode'"
         ).fetchone()
