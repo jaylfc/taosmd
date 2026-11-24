@@ -315,6 +315,259 @@ async def test_rewrap_to_second_key(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_rewrap_subset_keeps_others(tmp_path):
+    """Re-wrap a subset: the others remain in the install log byte for byte."""
+    keys_dir_1 = tmp_path / "keys1"
+    keys_dir_2 = tmp_path / "keys2"
+    store = _store(tmp_path, keys_dir=keys_dir_1)
+    await store.init()
+    try:
+        await store.record("conversation", {"content": "key " + TOKEN}, summary=TOKEN)
+        await store.record("conversation", {"content": "other " + TOKEN}, summary="other")
+        wrap_log = keys_dir_1 / "wraps" / f"{store._install_key.recipient_kid}.jsonl"
+        before = wrap_log.read_bytes().decode(encoding="utf-8")
+        entries = [json.loads(line_) for line_ in before.splitlines() if line_]
+        assert len(entries) == 2
+        dek_ids = [e["dek_id"] for e in entries]
+        to_dek_id, keep_dek_id = dek_ids[0], dek_ids[1]
+        keep_line = next(
+            line_
+            for line_ in before.splitlines()
+            if line_ and json.loads(line_)["dek_id"] == keep_dek_id
+        )
+
+        install_2 = keywrap.init_install_key(keys_dir_2)
+        re_wrapped = keywrap.rewrap(
+            [to_dek_id],
+            install_2.public_key,
+            install_2.recipient_kid,
+            install_key=store._install_key,
+            to_keys_dir=keys_dir_2,
+        )
+        assert re_wrapped == [to_dek_id]
+
+        # Install log keeps the non-re-wrapped entry byte for byte.
+        after = wrap_log.read_bytes().decode(encoding="utf-8")
+        assert keep_line in after.splitlines()
+        assert all(e["dek_id"] != to_dek_id for e in entries_remaining(after))
+        # The re-wrapped DEK is gone from the install log.
+        assert to_dek_id not in after
+
+        # New recipient log has the re-wrapped entry.
+        new_log = keys_dir_2 / "wraps" / f"{install_2.recipient_kid}.jsonl"
+        new_entries = [
+            json.loads(line_)
+            for line_ in new_log.read_text(encoding="utf-8").splitlines()
+            if line_
+        ]
+        assert any(e["dek_id"] == to_dek_id for e in new_entries)
+
+        # Archive lines are untouched.
+        jsonl = list(tmp_path.glob("**/*.jsonl"))[0]
+        lines = [l for l in jsonl.read_text(encoding="utf-8").splitlines() if l]
+        assert len(lines) == 2
+
+        # Reveal the re-wrapped record with the new key...
+        store2 = _store(tmp_path, keys_dir=keys_dir_2)
+        await store2.init()
+        try:
+            for line_ in lines:
+                record = json.loads(line_)
+                if not record.get("enc_spans"):
+                    continue
+                entry = record["enc_spans"][0]
+                if entry["kid"] == to_dek_id:
+                    revealed = await store2.reveal(record)
+                    assert revealed["data"]["content"].endswith(TOKEN)
+        finally:
+            await store2.close()
+
+        # ...and the kept record with the install key.
+        for line_ in lines:
+            record = json.loads(line_)
+            if not record.get("enc_spans"):
+                continue
+            entry = record["enc_spans"][0]
+            if entry["kid"] == keep_dek_id:
+                revealed = await store.reveal(record)
+                assert revealed["data"]["content"].endswith(TOKEN)
+    finally:
+        await store.close()
+
+
+def entries_remaining(text: str) -> list[dict]:
+    return [
+        json.loads(line_)
+        for line_ in text.splitlines()
+        if line_ and json.loads(line_)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rewrap_all_empties_install_log(tmp_path):
+    """Re-wrap ALL: the install log is empty, every record reveals with the
+    new key.
+    """
+    keys_dir_1 = tmp_path / "keys1"
+    keys_dir_2 = tmp_path / "keys2"
+    store = _store(tmp_path, keys_dir=keys_dir_1)
+    await store.init()
+    try:
+        await store.record("conversation", {"content": "key " + TOKEN}, summary=TOKEN)
+        await store.record("conversation", {"content": "other " + TOKEN}, summary="other")
+        wrap_log = keys_dir_1 / "wraps" / f"{store._install_key.recipient_kid}.jsonl"
+        entries = [
+            json.loads(line_)
+            for line_ in wrap_log.read_text(encoding="utf-8").splitlines()
+            if line_
+        ]
+        dek_ids = [e["dek_id"] for e in entries]
+        assert len(dek_ids) == 2
+
+        install_2 = keywrap.init_install_key(keys_dir_2)
+        re_wrapped = keywrap.rewrap(
+            dek_ids,
+            install_2.public_key,
+            install_2.recipient_kid,
+            install_key=store._install_key,
+            to_keys_dir=keys_dir_2,
+        )
+        assert re_wrapped == dek_ids
+
+        # Install wrap log is empty.
+        assert wrap_log.read_text(encoding="utf-8") == ""
+
+        # New recipient log has every entry.
+        new_log = keys_dir_2 / "wraps" / f"{install_2.recipient_kid}.jsonl"
+        new_entries = [
+            json.loads(line_)
+            for line_ in new_log.read_text(encoding="utf-8").splitlines()
+            if line_
+        ]
+        assert {e["dek_id"] for e in new_entries} == set(dek_ids)
+
+        # Every record reveals with the new key.
+        jsonl = list(tmp_path.glob("**/*.jsonl"))[0]
+        store2 = _store(tmp_path, keys_dir=keys_dir_2)
+        await store2.init()
+        try:
+            for line_ in jsonl.read_text(encoding="utf-8").splitlines():
+                record = json.loads(line_)
+                if not record.get("enc_spans"):
+                    continue
+                revealed = await store2.reveal(record)
+                assert revealed["data"]["content"].endswith(TOKEN)
+        finally:
+            await store2.close()
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_rewrap_crash_leaves_both_present(tmp_path, monkeypatch):
+    """A crash between writing the new wrap and removing the old entry leaves
+    BOTH present and reveal still works with the install key.
+    """
+    keys_dir_1 = tmp_path / "keys1"
+    keys_dir_2 = tmp_path / "keys2"
+    store = _store(tmp_path, keys_dir=keys_dir_1)
+    await store.init()
+    try:
+        await store.record("conversation", {"content": "key " + TOKEN}, summary=TOKEN)
+        wrap_log = keys_dir_1 / "wraps" / f"{store._install_key.recipient_kid}.jsonl"
+        entries = [
+            json.loads(line_)
+            for line_ in wrap_log.read_text(encoding="utf-8").splitlines()
+            if line_
+        ]
+        dek_id = entries[0]["dek_id"]
+
+        install_2 = keywrap.init_install_key(keys_dir_2)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated crash before old entry removed")
+
+        monkeypatch.setattr(keywrap, "_save_wrap_entries", _boom)
+        with pytest.raises(RuntimeError):
+            keywrap.rewrap(
+                [dek_id],
+                install_2.public_key,
+                install_2.recipient_kid,
+                install_key=store._install_key,
+                to_keys_dir=keys_dir_2,
+            )
+
+        # New wrap was written (appended) before the crash.
+        new_log = keys_dir_2 / "wraps" / f"{install_2.recipient_kid}.jsonl"
+        new_entries = [
+            json.loads(line_)
+            for line_ in new_log.read_text(encoding="utf-8").splitlines()
+            if line_
+        ]
+        assert any(e["dek_id"] == dek_id for e in new_entries)
+
+        # Old entry is still present in the install log.
+        install_entries = [
+            json.loads(line_)
+            for line_ in wrap_log.read_text(encoding="utf-8").splitlines()
+            if line_
+        ]
+        assert any(e["dek_id"] == dek_id for e in install_entries)
+
+        # Reveal still works with the install key (old entry intact).
+        stored = json.loads(_raw_line(tmp_path))
+        revealed = await store.reveal(stored)
+        assert revealed["data"]["content"] == "key " + TOKEN
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_rewrap_reveal_with_install_key_fails(tmp_path):
+    """Reveal with the install key after a re-wrap fails cleanly for
+    re-wrapped records.
+    """
+    keys_dir_1 = tmp_path / "keys1"
+    keys_dir_2 = tmp_path / "keys2"
+    store = _store(tmp_path, keys_dir=keys_dir_1)
+    await store.init()
+    try:
+        await store.record("conversation", {"content": "key " + TOKEN}, summary=TOKEN)
+        wrap_log = keys_dir_1 / "wraps" / f"{store._install_key.recipient_kid}.jsonl"
+        entries = [
+            json.loads(line_)
+            for line_ in wrap_log.read_text(encoding="utf-8").splitlines()
+            if line_
+        ]
+        dek_id = entries[0]["dek_id"]
+
+        install_2 = keywrap.init_install_key(keys_dir_2)
+        keywrap.rewrap(
+            [dek_id],
+            install_2.public_key,
+            install_2.recipient_kid,
+            install_key=store._install_key,
+            to_keys_dir=keys_dir_2,
+        )
+
+        # Install log no longer has the DEK, so reveal fails cleanly.
+        stored = json.loads(_raw_line(tmp_path))
+        with pytest.raises(KeyError):
+            await store.reveal(stored)
+
+        # But the new key reveals it.
+        store2 = _store(tmp_path, keys_dir=keys_dir_2)
+        await store2.init()
+        try:
+            revealed = await store2.reveal(stored)
+            assert revealed["data"]["content"] == "key " + TOKEN
+        finally:
+            await store2.close()
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_legacy_lines_untouched(tmp_path):
     """(e) A store written before this change opens, reads and appends with
     no change to existing lines (hash-compare every existing file).
