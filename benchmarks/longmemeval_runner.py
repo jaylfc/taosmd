@@ -22,6 +22,23 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from benchmarks.product_context import (
+    CONTEXT_MODES,
+    PRODUCT_AGENT,
+    PRODUCT_PROMPT,
+    count_in,
+    check_ingest,
+    new_product_dir,
+    product_environment,
+    require_healthy,
+    product_meta as _product_meta,
+    reader_ctx_problem,
+    refuse,
+    release_product_stores,
+    resolve_context_mode as _resolve_context_mode,
+)
+from taosmd import api as _api
+from taosmd.answer_context import answer_context as _answer_context
 from taosmd.knowledge_graph import TemporalKnowledgeGraph
 from taosmd.archive import ArchiveStore
 from taosmd.memory_extractor import process_conversation_turn
@@ -262,7 +279,7 @@ _reranker = None
 def _gen_options(**extra):
     """Ollama options dict, carrying num_ctx only when it was explicitly set."""
     opts = dict(extra)
-    if NUM_CTX:
+    if NUM_CTX and "num_ctx" not in opts:
         opts["num_ctx"] = NUM_CTX
     return opts
 
@@ -360,7 +377,12 @@ def _parse_verdict(content: str) -> bool:
     return "CORRECT" in j
 
 
-async def score_answer_llm(client, predicted: str, gold: str, question: str, question_id: str = "") -> bool:
+class JudgeError(RuntimeError):
+    """The judge call failed (timeout, HTTP error): not a verdict."""
+
+
+async def score_answer_llm(client, predicted: str, gold: str, question: str, question_id: str = "",
+                           timeout: float = 30, raise_on_error: bool = False) -> bool:
     """Score using LLM-as-judge (official LongMemEval approach).
 
     For abstention questions (question_id ending in "_abs") the string filter is
@@ -382,13 +404,18 @@ async def score_answer_llm(client, predicted: str, gold: str, question: str, que
                 "think": False,
                 "options": {"temperature": 0, "num_predict": 16},
             },
-            timeout=30,
+            timeout=timeout,
         )
         if resp.status_code == 200:
             content = resp.json().get("message", {}).get("content", "")
             return _parse_verdict(content)
-    except Exception:
-        pass
+        if raise_on_error:
+            raise JudgeError(f"HTTP {resp.status_code}")
+    except JudgeError:
+        raise
+    except Exception as exc:
+        if raise_on_error:
+            raise JudgeError(f"{type(exc).__name__}: {exc}") from exc
     return False
 
 
@@ -425,6 +452,154 @@ async def llm_answer(client, context: str, question: str, date_frame: str = "off
     except Exception:
         pass
     return ""
+
+
+def _check_product_mode(args, reader_ctx_tokens, date_frame: str) -> None:
+    """Refuse product-mode runs that would silently ignore a setting.
+
+    Product mode builds the context only through taosmd.answer_context, so the
+    legacy levers do not apply. A flag that is set but ignored would make two
+    arms look different when they are the same run. Self-verify is the one
+    exception: production has no verify pass, so it is forced off (see
+    run_benchmark) rather than refused.
+    """
+    problems = reader_ctx_problem(reader_ctx_tokens)
+    if getattr(args, "graph_expansion", 0):
+        problems.append("--graph-expansion does not apply")
+    if getattr(args, "retrieval_path", "retrieve") != "retrieve":
+        problems.append("--retrieval-path does not apply")
+    if getattr(args, "report_retrieval_delta", False):
+        problems.append("--report-retrieval-delta does not apply")
+    if date_frame != "off":
+        problems.append("TAOSMD_LME_DATE_FRAME does not apply (the context always carries session dates)")
+    if "TAOSMD_LME_STREAMS" in os.environ:
+        problems.append("TAOSMD_LME_STREAMS does not apply")
+    for flag, name in ((RERANK, "TAOSMD_RERANK"), (DECOMPOSE, "TAOSMD_DECOMPOSE")):
+        if flag:
+            problems.append(f"{name} does not apply")
+    refuse(problems)
+
+
+def _haystack_session_ids(item: dict) -> list[str]:
+    """The dataset's own session ids when it has them, else ``s<index>``."""
+    given = item.get("haystack_session_ids")
+    sessions = item.get("haystack_sessions", [])
+    if isinstance(given, list) and len(given) == len(sessions):
+        return [str(g) for g in given]
+    return [f"s{si}" for si in range(len(sessions))]
+
+
+def gold_evidence(item: dict) -> dict:
+    """What the dataset marks as the evidence: ``turns`` (a set of
+    ``(session_id, turn_index)`` from ``has_answer``) and ``sessions``
+    (``answer_session_ids``). Either may be empty when the item lacks it."""
+    ids = _haystack_session_ids(item)
+    turns = set()
+    for si, session in enumerate(item.get("haystack_sessions", [])):
+        for ti, turn in enumerate(session):
+            if turn.get("has_answer"):
+                turns.add((ids[si], ti))
+    return {"turns": turns, "sessions": {str(x) for x in item.get("answer_session_ids") or []}}
+
+
+def haystack_turns(item: dict) -> list[dict]:
+    """The haystack as normal ingest turns: one dict per turn, in order.
+
+    Each carries the session id, its position in the session and the session's
+    own date, so a real ``taosmd.ingest`` call stores everything answer_context
+    needs; the runner holds nothing the product does not.
+    """
+    dates = item.get("haystack_dates") or []
+    ids = _haystack_session_ids(item)
+    turns = []
+    for si, session in enumerate(item.get("haystack_sessions", [])):
+        for ti, turn in enumerate(session):
+            content = turn.get("content", "")
+            if not content:
+                continue
+            row = {
+                "role": turn.get("role", "user"),
+                "content": content,
+                "session_id": ids[si],
+                "turn_index": ti,
+            }
+            if si < len(dates) and dates[si]:
+                row["session_date"] = dates[si]
+            turns.append(row)
+    return turns
+
+
+async def ingest_haystack_product(item: dict, data_dir: str) -> dict:
+    """Ingest one question's haystack through the normal product ingest path."""
+    result = await _api.ingest(haystack_turns(item), agent=PRODUCT_AGENT, data_dir=data_dir)
+    check_ingest(result, f"question {item.get('question_id', '')!r}")
+    return result
+
+
+async def build_product_context(
+    item: dict,
+    data_dir: str,
+    reader_ctx_tokens: int,
+    *,
+    limit: int | None = None,
+    neighbors: int | None = None,
+) -> dict:
+    """The context for one question, built only by taosmd.answer_context.
+
+    ``limit`` / ``neighbors`` left as None use the product defaults. No
+    character cut is applied anywhere on this path: the token budget in
+    answer_context is the only limit.
+    """
+    opts = {}
+    if limit is not None:
+        opts["limit"] = limit
+    if neighbors is not None:
+        opts["neighbors"] = neighbors
+    return await _answer_context(
+        item["question"],
+        agent=PRODUCT_AGENT,
+        data_dir=data_dir,
+        budget_tokens=reader_ctx_tokens,
+        now=item.get("question_date"),
+        **opts,
+    )
+
+
+class ReaderError(RuntimeError):
+    """The reader call failed (timeout, HTTP error). Never scored as an answer."""
+
+
+async def llm_answer_product(client, context: str, question: str, guidance: str,
+                             num_ctx: int, timeout: float = 600.0) -> tuple[str, int | None]:
+    """Generate the answer from an answer_context result.
+
+    The guidance text is the instruction, the context goes in whole (no
+    character cut), and the Ollama window is set to the budget the context was
+    built for. Returns ``(answer, prompt_tokens)``; ``prompt_tokens`` is the
+    server's own count of the prompt it read (Ollama's ``prompt_eval_count``)
+    so a prompt the server truncated or a token estimate that was too low shows
+    in the results. A failed call raises :class:`ReaderError` instead of
+    returning an empty answer, so a timeout is never scored as a wrong answer.
+    """
+    prompt = PRODUCT_PROMPT.format(guidance=guidance, context=context, question=question)
+    try:
+        resp = await client.post(
+            f"{REMOTE_LLM_URL}/api/chat",
+            json={
+                "model": REMOTE_LLM_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "think": False,
+                "options": _gen_options(num_ctx=num_ctx, temperature=0, num_predict=100),
+            },
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"HTTP {resp.status_code}")
+        body = resp.json()
+    except Exception as exc:
+        raise ReaderError(f"{type(exc).__name__}: {exc}") from exc
+    return body.get("message", {}).get("content", ""), body.get("prompt_eval_count")
 
 
 MULTIHOP_PROMPT = """Split this question into 2 or 3 shorter, focused sub-queries that together cover everything needed to answer it. Respond with one sub-query per line. No numbering, no explanation.
@@ -920,6 +1095,13 @@ async def run_benchmark(
     out_path = ""
     writer_url = None
     writer_model = "default"
+    context_mode = "legacy"
+    reader_ctx_tokens = None
+    answer_limit = None
+    answer_neighbors = None
+    reader_timeout = 600.0
+    product_env = None
+    answer_failures = 0
     if args is not None:
         limit = args.limit
         question_type = args.type
@@ -930,12 +1112,23 @@ async def run_benchmark(
         out_path = args.out
         writer_url = getattr(args, "writer_url", None)
         writer_model = getattr(args, "writer_model", None)
+        context_mode = _resolve_context_mode(args)
+        reader_ctx_tokens = getattr(args, "reader_ctx_tokens", None)
+        answer_limit = getattr(args, "answer_limit", None)
+        answer_neighbors = getattr(args, "answer_neighbors", None)
+        reader_timeout = float(getattr(args, "reader_timeout", None) or 600.0)
 
     # Parse TAOSMD_LME_STREAMS (exits on invalid value)
     streams = _parse_streams_env()
 
     # Date framing arm (E-036)
     date_frame = _date_frame_from_env()
+    self_verify = SELF_VERIFY
+    if context_mode == "product":
+        _check_product_mode(args, reader_ctx_tokens, date_frame)
+        if self_verify:
+            print("  NOTE: TAOSMD_SELF_VERIFY is ignored in product mode (production has no verify pass).")
+            self_verify = False
 
     print("=" * 70)
     print("LongMemEval Benchmark -- taOSmd")
@@ -944,6 +1137,9 @@ async def run_benchmark(
         f"  retrieval_path={retrieval_path}  graph_expansion={graph_expansion}  "
         f"num_ctx={NUM_CTX or 'ollama-default'}  streams={streams}  date_frame={date_frame}"
     )
+    if context_mode == "product":
+        print(f"  context=product  reader_ctx_tokens={reader_ctx_tokens}  "
+              f"answer_limit={answer_limit or 'default'}  neighbors={answer_neighbors if answer_neighbors is not None else 'default'}")
 
     # Refuse rather than silently run two identical arms. Exits non-zero on
     # purpose so an automated chain checking $? reads a refusal as a failure.
@@ -1019,145 +1215,209 @@ async def run_benchmark(
         question_date = item.get("question_date")
 
         # Validate dates for non-off arms (exits 1 on failure)
-        _validate_dates(item, date_frame, question_id=item.get("question_id"))
-
-        # Create fresh KG + archive + vector memory per question (isolated test)
-        tmp = tempfile.mkdtemp()
-        kg = TemporalKnowledgeGraph(db_path=os.path.join(tmp, "kg.db"))
-        archive = ArchiveStore(archive_dir=os.path.join(tmp, "archive"), index_path=os.path.join(tmp, "idx.db"))
-        vmem = VectorMemory(
-            db_path=os.path.join(tmp, "vectors.db"),
-            embed_mode=os.environ.get("TAOSMD_EMBED_MODE", "onnx"),
-            onnx_path=os.environ.get(
-                "TAOSMD_ONNX_PATH",
-                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx"),
-            ),
+        _validate_dates(
+            item, "both" if context_mode == "product" else date_frame,
+            question_id=item.get("question_id"),
         )
-        await kg.init()
-        await archive.init()
+        product_meta = None
+        answer_error = None
 
-        import httpx as _httpx
-        embed_client = _httpx.AsyncClient(timeout=15)
-        await vmem.init(http_client=embed_client)
+        if context_mode == "product":
+            product_dir = new_product_dir()
+            try:
+                t0 = time.time()
+                await ingest_haystack_product(item, product_dir)
+                if product_env is None:
+                    product_env = await product_environment(product_dir)
+                    print(f"  product environment: {product_env}")
+                    require_healthy(product_env)
+                ingest_time = time.time() - t0
+                t1 = time.time()
+                prod = await build_product_context(
+                    item, product_dir, reader_ctx_tokens,
+                    limit=answer_limit, neighbors=answer_neighbors,
+                )
+                query_time = time.time() - t1
+            finally:
+                await release_product_stores(product_dir)
+            full_context = prod["context"]
+            delta = None
+            product_meta = _product_meta(prod)
+            gold = gold_evidence(item)
+            product_meta["evidence"] = {
+                "turns_included": count_in(prod["included"], gold["turns"]),
+                "turns_dropped": count_in(prod["dropped"], gold["turns"]),
+                "turns_total": len(gold["turns"]),
+                "sessions_included": len(gold["sessions"] & {b["session_id"] for b in prod["included"]}),
+                "sessions_dropped": len(gold["sessions"] & {b["session_id"] for b in prod["dropped"]}),
+                "sessions_total": len(gold["sessions"]),
+            }
+        else:
+            # Create fresh KG + archive + vector memory per question (isolated test)
+            tmp = tempfile.mkdtemp()
+            kg = TemporalKnowledgeGraph(db_path=os.path.join(tmp, "kg.db"))
+            archive = ArchiveStore(archive_dir=os.path.join(tmp, "archive"), index_path=os.path.join(tmp, "idx.db"))
+            vmem = VectorMemory(
+                db_path=os.path.join(tmp, "vectors.db"),
+                embed_mode=os.environ.get("TAOSMD_EMBED_MODE", "onnx"),
+                onnx_path=os.environ.get(
+                    "TAOSMD_ONNX_PATH",
+                    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "minilm-onnx"),
+                ),
+            )
+            await kg.init()
+            await archive.init()
 
-        # Ingest conversation sessions
-        t0 = time.time()
-        for si, session in enumerate(sessions):
-            session_date = haystack_dates[si] if si < len(haystack_dates) else ""
-            date_prefix = f"[Session date: {session_date}]\n" if (date_frame in ("sessions", "both", "labelled") and session_date) else ""
-            # Build session-level text blocks for embedding
-            session_text = ""
-            for turn in session:
-                content = turn.get("content", "")
-                role = turn.get("role", "user")
-                if content:
-                    # Extract facts into KG
-                    if writer_url:
-                        result = await process_conversation_turn(
-                            content, agent_name="assistant" if role == "assistant" else None,
-                            kg=kg, archive=archive, source="longmemeval",
-                            llm_url=writer_url,
-                            http_client=writer_client,
-                            extraction_model=writer_model,
-                        )
-                        method = result.get("method", "regex")
-                        if method == "llm":
-                            method_llm_count += 1
+            import httpx as _httpx
+            embed_client = _httpx.AsyncClient(timeout=15)
+            await vmem.init(http_client=embed_client)
+
+            # Ingest conversation sessions
+            t0 = time.time()
+            for si, session in enumerate(sessions):
+                session_date = haystack_dates[si] if si < len(haystack_dates) else ""
+                date_prefix = f"[Session date: {session_date}]\n" if (date_frame in ("sessions", "both", "labelled") and session_date) else ""
+                # Build session-level text blocks for embedding
+                session_text = ""
+                for turn in session:
+                    content = turn.get("content", "")
+                    role = turn.get("role", "user")
+                    if content:
+                        # Extract facts into KG
+                        if writer_url:
+                            result = await process_conversation_turn(
+                                content, agent_name="assistant" if role == "assistant" else None,
+                                kg=kg, archive=archive, source="longmemeval",
+                                llm_url=writer_url,
+                                http_client=writer_client,
+                                extraction_model=writer_model,
+                            )
+                            method = result.get("method", "regex")
+                            if method == "llm":
+                                method_llm_count += 1
+                            else:
+                                method_regex_count += 1
+                            total_turns += 1
                         else:
+                            result = await process_conversation_turn(
+                                content, agent_name="assistant" if role == "assistant" else None,
+                                kg=kg, archive=archive, source="longmemeval",
+                            )
+                            total_turns += 1
                             method_regex_count += 1
-                        total_turns += 1
-                    else:
-                        result = await process_conversation_turn(
-                            content, agent_name="assistant" if role == "assistant" else None,
-                            kg=kg, archive=archive, source="longmemeval",
+                        # Archive raw content (with date prefix for sessions/both/labelled)
+                        archived_content = date_prefix + content if date_prefix else content
+                        await archive.record(
+                            "conversation",
+                            {"role": role, "content": archived_content},
+                            summary=archived_content[:80],
                         )
-                        total_turns += 1
-                        method_regex_count += 1
-                    # Archive raw content (with date prefix for sessions/both/labelled)
-                    archived_content = date_prefix + content if date_prefix else content
-                    await archive.record(
-                        "conversation",
-                        {"role": role, "content": archived_content},
-                        summary=archived_content[:80],
-                    )
-                    session_text += f"\n[{role}]: {content}"
+                        session_text += f"\n[{role}]: {content}"
 
-            # Embed the full session as one block (better for multi-turn recall)
-            if session_text:
-                # Split into ~500 char chunks with overlap for embedding
-                chunks = []
-                words = session_text.split()
-                chunk_size = 100  # words per chunk
-                overlap = 20
-                for start in range(0, len(words), chunk_size - overlap):
-                    chunk = " ".join(words[start:start + chunk_size])
-                    if chunk.strip():
-                        chunks.append(chunk)
-                for chunk in chunks:
-                    # Add date prefix to each chunk for sessions/both/labelled
-                    prefixed_chunk = date_prefix + chunk if date_prefix else chunk
-                    metadata = {"session": si}
-                    if date_frame in ("sessions", "both", "labelled") and session_date:
-                        metadata["session_date"] = session_date
-                    await vmem.add(prefixed_chunk, metadata=metadata)
+                # Embed the full session as one block (better for multi-turn recall)
+                if session_text:
+                    # Split into ~500 char chunks with overlap for embedding
+                    chunks = []
+                    words = session_text.split()
+                    chunk_size = 100  # words per chunk
+                    overlap = 20
+                    for start in range(0, len(words), chunk_size - overlap):
+                        chunk = " ".join(words[start:start + chunk_size])
+                        if chunk.strip():
+                            chunks.append(chunk)
+                    for chunk in chunks:
+                        # Add date prefix to each chunk for sessions/both/labelled
+                        prefixed_chunk = date_prefix + chunk if date_prefix else chunk
+                        metadata = {"session": si}
+                        if date_frame in ("sessions", "both", "labelled") and session_date:
+                            metadata["session_date"] = session_date
+                        await vmem.add(prefixed_chunk, metadata=metadata)
 
-        ingest_time = time.time() - t0
+            ingest_time = time.time() - t0
 
-        # Query taOSmd: assembled context + raw archive FTS + the vector stage,
-        # the last of which now runs through taosmd.retrieval.retrieve().
-        t1 = time.time()
-        full_context = await retrieve_context(
-            question, kg, archive, vmem,
-            llm_client=llm_client,
-            graph_expansion=graph_expansion,
-            retrieval_path=retrieval_path,
-            streams=streams,
-            date_frame=date_frame,
-            haystack_dates=haystack_dates,
-        )
-        query_time = time.time() - t1
-
-        # Anchor evidence: with the flag on, also build the pre-wiring context
-        # and record how far the two diverge, so "does the default path still
-        # reproduce the published numbers?" is answered with a measurement.
-        delta = None
-        if report_retrieval_delta:
-            legacy_ctx = await retrieve_context(
+            # Query taOSmd: assembled context + raw archive FTS + the vector stage,
+            # the last of which now runs through taosmd.retrieval.retrieve().
+            t1 = time.time()
+            full_context = await retrieve_context(
                 question, kg, archive, vmem,
                 llm_client=llm_client,
-                retrieval_path="legacy",
+                graph_expansion=graph_expansion,
+                retrieval_path=retrieval_path,
                 streams=streams,
                 date_frame=date_frame,
                 haystack_dates=haystack_dates,
             )
-            delta = {
-                "legacy_chars": len(legacy_ctx),
-                "wired_chars": len(full_context),
-                "identical": legacy_ctx == full_context,
-            }
-            print(
-                f"    [DELTA] q={i} legacy={delta['legacy_chars']} "
-                f"wired={delta['wired_chars']} identical={delta['identical']}"
-            )
+            query_time = time.time() - t1
+
+            # Anchor evidence: with the flag on, also build the pre-wiring context
+            # and record how far the two diverge, so "does the default path still
+            # reproduce the published numbers?" is answered with a measurement.
+            delta = None
+            if report_retrieval_delta:
+                legacy_ctx = await retrieve_context(
+                    question, kg, archive, vmem,
+                    llm_client=llm_client,
+                    retrieval_path="legacy",
+                    streams=streams,
+                    date_frame=date_frame,
+                    haystack_dates=haystack_dates,
+                )
+                delta = {
+                    "legacy_chars": len(legacy_ctx),
+                    "wired_chars": len(full_context),
+                    "identical": legacy_ctx == full_context,
+                }
+                print(
+                    f"    [DELTA] q={i} legacy={delta['legacy_chars']} "
+                    f"wired={delta['wired_chars']} identical={delta['identical']}"
+                )
 
         question_id = item.get("question_id", "")
         is_abstention = question_id.endswith("_abs")
 
+        async def _judge_checked(client, ans, gold, q, qid):
+            """Judge call; in product mode a failed call is counted, not scored."""
+            nonlocal answer_failures
+            if context_mode != "product":
+                return await score_answer_llm(client, ans, gold, q, question_id=qid)
+            try:
+                return await score_answer_llm(client, ans, gold, q, question_id=qid,
+                                              timeout=reader_timeout, raise_on_error=True)
+            except JudgeError as exc:
+                answer_failures += 1
+                product_meta["judge_error"] = str(exc)
+                print(f"    [JUDGE FAILED] q={i}: {exc}", file=sys.stderr)
+                return False
+
         if use_llm and llm_client is not None:
             t_llm = time.time()
             # Step 1: LLM generates answer from recalled context
-            answer = await llm_answer(llm_client, full_context, question, date_frame=date_frame, question_date=question_date)
-            if SELF_VERIFY:
-                answer = await self_verify_answer(llm_client, full_context, question, answer)
+            if context_mode == "product":
+                try:
+                    answer, prompt_tokens = await llm_answer_product(
+                        llm_client, full_context, question, prod["guidance"],
+                        reader_ctx_tokens, timeout=reader_timeout)
+                    product_meta["prompt_eval_count"] = prompt_tokens
+                except ReaderError as exc:
+                    answer, answer_error = "", str(exc)
+                    product_meta["answer_error"] = answer_error
+                    answer_failures += 1
+                    print(f"    [READER FAILED] q={i}: {answer_error}", file=sys.stderr)
+            else:
+                answer = await llm_answer(llm_client, full_context, question, date_frame=date_frame, question_date=question_date)
+                if self_verify:
+                    answer = await self_verify_answer(llm_client, full_context, question, answer)
             # Step 2: LLM judges whether answer matches gold (official eval method)
-            if is_abstention:
+            if answer_error:
+                correct = False
+            elif is_abstention:
                 # Abstention questions: never apply the "I don't know" string
                 # filter, because the correct behaviour IS to say the information
                 # is unavailable. Always send to the judge with the abstention
                 # prompt so a correct abstention is scored correct.
-                correct = await score_answer_llm(llm_client, answer, gold_answer, question, question_id=question_id)
+                correct = await _judge_checked(llm_client, answer, gold_answer, question, question_id)
             elif answer and not any(idk in answer.lower() for idk in ("i don't know", "i do not know", "i'm sorry", "not in the context", "does not contain", "no information")):
-                correct = await score_answer_llm(llm_client, answer, gold_answer, question, question_id=question_id)
+                correct = await _judge_checked(llm_client, answer, gold_answer, question, question_id)
             else:
                 correct = False
             llm_time = time.time() - t_llm
@@ -1192,15 +1452,17 @@ async def run_benchmark(
             "retrieved_chars": len(full_context),
             "context_chars": len(full_context),
             "retrieval_delta": delta,
+            **({"product": product_meta} if product_meta else {}),
         })
 
         status = "✓" if correct else "✗"
         print(f"  [{i+1:3d}/{len(dataset)}] {status} {qtype:25s} | ingest:{ingest_time:.1f}s query:{query_time:.3f}s | {question[:50]}")
 
-        await archive.close()
-        await kg.close()
-        await vmem.close()
-        await embed_client.aclose()
+        if context_mode != "product":
+            await archive.close()
+            await kg.close()
+            await vmem.close()
+            await embed_client.aclose()
 
     # Results
     overall = total_correct / total_questions * 100 if total_questions > 0 else 0
@@ -1252,7 +1514,7 @@ async def run_benchmark(
             "judge": JUDGE_MODEL,
             "rerank": RERANK,
             "decompose": DECOMPOSE,
-            "self_verify": SELF_VERIFY,
+            "self_verify": self_verify,
             "assemble_tokens": ASSEMBLE_TOKENS,
             "retrieve_limit": RETRIEVE_LIMIT,
             "fts_limit": FTS_LIMIT,
@@ -1262,6 +1524,13 @@ async def run_benchmark(
             "graph_expansion": graph_expansion,
             "streams": streams,
             "date_frame": date_frame,
+            "context_mode": context_mode,
+            "reader_ctx_tokens": reader_ctx_tokens,
+            "answer_limit": answer_limit,
+            "answer_neighbors": answer_neighbors,
+            "reader_timeout": reader_timeout,
+            "product_environment": product_env,
+            "answer_failures": answer_failures,
             "retrieval_delta": delta_summary,
             "metrics": {
                 "n": total_questions,
@@ -1284,6 +1553,14 @@ async def run_benchmark(
             json.dump(result_doc, f, indent=2)
         print(f"  results -> {out_path}")
     print(f"  writer: model={writer_model or 'default'} llm={method_llm_count} regex={method_regex_count}")
+
+    if answer_failures:
+        print(
+            f"  ERROR: {answer_failures} reader calls failed (timeout or HTTP error) and were "
+            "scored incorrect; the run is not a valid measurement. See answer_error per question.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     return overall
 
@@ -1329,6 +1606,43 @@ def main() -> None:
         "--writer-model",
         default="default",
         help="Model name for ingest-time fact extraction; used with --writer-url.",
+    )
+    parser.add_argument(
+        "--context",
+        default=None,
+        choices=CONTEXT_MODES,
+        help="'legacy' (default; or env TAOSMD_CONTEXT_MODE) builds the context "
+             "the runner always built. 'product' ingests the haystack through "
+             "taosmd.ingest and builds the context only with "
+             "taosmd.answer_context: no character cut, the guidance text is "
+             "the instruction. Needs --reader-ctx-tokens.",
+    )
+    parser.add_argument(
+        "--reader-ctx-tokens",
+        type=int,
+        default=None,
+        help="Reader model context window in tokens; the answer_context budget "
+             "and the Ollama num_ctx. Required with --context product.",
+    )
+    parser.add_argument(
+        "--reader-timeout",
+        type=float,
+        default=None,
+        help="Product mode: seconds to wait for the reader per question (default 600). "
+             "A failed or timed-out call is counted in answer_failures and the run "
+             "exits 1; it is never scored as a wrong answer.",
+    )
+    parser.add_argument(
+        "--answer-limit",
+        type=int,
+        default=None,
+        help="Product mode: hits fetched per question (default: the product default).",
+    )
+    parser.add_argument(
+        "--answer-neighbors",
+        type=int,
+        default=None,
+        help="Product mode: neighbouring turns either side of each hit (default: the product default).",
     )
     args = parser.parse_args()
 

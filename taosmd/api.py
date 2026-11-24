@@ -196,6 +196,25 @@ async def _ensure_stores(data_dir=None) -> dict:
         return stores
 
 
+def _session_meta(item: dict) -> dict:
+    """The session fields of a turn (``session_id``, ``turn_index``,
+    ``session_date``) as vector metadata; malformed values are left out.
+
+    One builder for ingest, reindex and reconcile, so a rebuilt row keeps the
+    session structure the hot path wrote.
+    """
+    out: dict = {}
+    sid = item.get("session_id")
+    if isinstance(sid, (str, int)) and not isinstance(sid, bool):
+        out["session_id"] = str(sid)
+    tix = item.get("turn_index")
+    if isinstance(tix, int) and not isinstance(tix, bool):
+        out["turn_index"] = tix
+    if isinstance(item.get("session_date"), str) and item["session_date"]:
+        out["session_date"] = item["session_date"]
+    return out
+
+
 def _normalize_transcript(transcript) -> list[dict]:
     """Coerce common shapes into a list of structured turn dicts.
 
@@ -232,7 +251,10 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
     Args:
         transcript: A single message (str), a structured turn dict
             (``{"role", "content", optional "timestamp"}``), or an iterable
-            of either.
+            of either. A turn dict may also carry ``session_id``,
+            ``turn_index`` (its position in the session) and
+            ``session_date``; these let :func:`taosmd.answer_context` rebuild
+            the turn's neighbours in order and date the session.
         agent: Registered agent name. Auto-registered if absent.
         project: Optional project fingerprint for cross-agent memory sharing.
             When set, memories are tagged with this project ID so that
@@ -282,6 +304,10 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
             meta["role"] = item["role"]
         if "timestamp" in item:
             meta["timestamp"] = item["timestamp"]
+        # Session structure, so answer_context() can rebuild a turn's
+        # neighbours in order and head each session with its own date. All
+        # three are optional and only ever added to NEW rows.
+        meta.update(_session_meta(item))
         # Provenance: tag the vector row with its archive span so the recall
         # gate can look up the verification status of the claims it backs.
         if isinstance(span_id, int) and span_id >= 0:
@@ -643,75 +669,21 @@ def _apply_runtime_overrides(recipe_retrieval: dict, overrides: dict) -> dict:
     return rc
 
 
-async def search(
-    query: str,
-    *,
+def _resolve_search_agents(
     agent: str,
-    project: str | None = None,
-    also_include: list[str] | None = None,
-    limit: int = 5,
-    mode: str | None = None,
-    prefer_verified: str | None = None,
-    collections: list[str] | None = None,
-    collections_only: bool = False,
-    data_dir=None,
-) -> list[dict]:
-    """Search the librarian's shelves for passages relevant to ``query``.
+    project: str | None,
+    also_include: list[str] | None,
+    collections: list[str] | None,
+    collections_only: bool,
+    data_dir,
+) -> list[str] | None:
+    """Resolve the agent namespaces one search may read.
 
-    Returns ranked hits in the agent-rules contract shape with explicit
-    ``source``, ``timestamp``, and ``confidence`` fields. If the top hit
-    has ``confidence < 0.6`` per the rules block, agents should treat it
-    as "she didn't find anything" rather than invent.
-
-    Args:
-        query: The search query.
-        agent: Registered agent name. Auto-registered if absent.
-        project: Optional project fingerprint. When set, only memories
-            tagged with this project are returned (scoped search).
-            Use ``taosmd.project.get_project_id()`` for automatic detection.
-        also_include: Optional list of additional agent names whose
-            memories should be included in the search results (cross-agent
-            reads). Only effective when ``project`` is also set.
-        limit: Maximum number of hits to return.
-        mode: Optional retrieval mode. ``"bm25"`` skips query embedding and
-            recipe resolution entirely and returns BM25-only hits (the #25
-            user-memory contract: keyword search-as-you-type, sub-300ms).
-            Default ``None`` is the full recipe-driven retrieval path.
-        collections: Optional list of collection ids whose indexed content
-            should be searched alongside conversation memory. Grants are
-            enforced per requesting agent: a collection the agent holds no
-            grant for (or that is archived) contributes no hits. Collection
-            hits carry ``collection_id``, ``file_path``, and ``source`` in
-            their metadata.
-        collections_only: When True (with ``collections``), restrict the
-            search to the granted collections and exclude conversation
-            memory. Returns ``[]`` when no requested collection is granted.
-        data_dir: Optional taosmd data dir (see :func:`ingest`).
+    The single place where owner, project, cross-agent and collection-grant
+    scoping is decided. :func:`search` and :func:`taosmd.answer_context` both
+    call it, so the two cannot drift apart. Returns ``None`` when the request
+    can match nothing (``collections_only`` with no granted collection).
     """
-    if not agent:
-        raise ValueError("agent name is required")
-    if mode not in (None, "", "bm25"):
-        raise ValueError(f"unsupported search mode: {mode!r} (supported: 'bm25')")
-    if not query:
-        return []
-
-    # Resolve the recall gate from the persisted controls when the caller did
-    # not pass one explicitly. The gate ships on by default (prefer_verified);
-    # a per-call argument always overrides the stored control.
-    from taosmd import config as _config  # noqa: PLC0415
-    if prefer_verified is None:
-        prefer_verified = _config.get_controls(data_dir).get(
-            "prefer_verified", "prefer_verified")
-
-    stores = await _ensure_stores(data_dir)
-
-    from taosmd.agents import ensure_agent
-    from taosmd.retrieval import retrieve as _retrieve
-    from taosmd import recipes as _recipes  # noqa: PLC0415
-    # Register against the same data_dir the recipe layer resolves against, so
-    # resolve_recipe() can read/write this agent's record.
-    ensure_agent(agent, data_dir=data_dir)
-
     # Build the list of agent names to search across.
     # When project + also_include are set, we search the calling agent
     # plus any explicitly included agents within the same project.
@@ -747,11 +719,95 @@ async def search(
             cstore.close()
         if collections_only:
             if not granted:
-                return []
+                return None
             search_agents = granted
         else:
             search_agents.extend(granted)
     elif collections_only:
+        return None
+    return search_agents
+
+
+async def search(
+    query: str,
+    *,
+    agent: str,
+    project: str | None = None,
+    also_include: list[str] | None = None,
+    limit: int = 5,
+    mode: str | None = None,
+    prefer_verified: str | None = None,
+    collections: list[str] | None = None,
+    collections_only: bool = False,
+    min_candidates: int | None = None,
+    data_dir=None,
+) -> list[dict]:
+    """Search the librarian's shelves for passages relevant to ``query``.
+
+    Returns ranked hits in the agent-rules contract shape with explicit
+    ``source``, ``timestamp``, and ``confidence`` fields. If the top hit
+    has ``confidence < 0.6`` per the rules block, agents should treat it
+    as "she didn't find anything" rather than invent.
+
+    Args:
+        query: The search query.
+        agent: Registered agent name. Auto-registered if absent.
+        project: Optional project fingerprint. When set, only memories
+            tagged with this project are returned (scoped search).
+            Use ``taosmd.project.get_project_id()`` for automatic detection.
+        also_include: Optional list of additional agent names whose
+            memories should be included in the search results (cross-agent
+            reads). Only effective when ``project`` is also set.
+        limit: Maximum number of hits to return.
+        mode: Optional retrieval mode. ``"bm25"`` skips query embedding and
+            recipe resolution entirely and returns BM25-only hits (the #25
+            user-memory contract: keyword search-as-you-type, sub-300ms).
+            Default ``None`` is the full recipe-driven retrieval path.
+        collections: Optional list of collection ids whose indexed content
+            should be searched alongside conversation memory. Grants are
+            enforced per requesting agent: a collection the agent holds no
+            grant for (or that is archived) contributes no hits. Collection
+            hits carry ``collection_id``, ``file_path``, and ``source`` in
+            their metadata.
+        collections_only: When True (with ``collections``), restrict the
+            search to the granted collections and exclude conversation
+            memory. Returns ``[]`` when no requested collection is granted.
+        min_candidates: Optional floor for the per-source candidate pool. The
+            recipe's ``candidate_top_k`` caps how many vector hits a search can
+            return, whatever ``limit`` says; a caller that wants a large
+            ``limit`` (``answer_context``) passes it here so the pool is not
+            smaller than the result it asked for. The recipe value is never
+            lowered. ``None`` (default) leaves search exactly as it was.
+        data_dir: Optional taosmd data dir (see :func:`ingest`).
+    """
+    if not agent:
+        raise ValueError("agent name is required")
+    if mode not in (None, "", "bm25"):
+        raise ValueError(f"unsupported search mode: {mode!r} (supported: 'bm25')")
+    if not query:
+        return []
+
+    # Resolve the recall gate from the persisted controls when the caller did
+    # not pass one explicitly. The gate ships on by default (prefer_verified);
+    # a per-call argument always overrides the stored control.
+    from taosmd import config as _config  # noqa: PLC0415
+    if prefer_verified is None:
+        prefer_verified = _config.get_controls(data_dir).get(
+            "prefer_verified", "prefer_verified")
+
+    stores = await _ensure_stores(data_dir)
+
+    from taosmd.agents import ensure_agent
+    from taosmd.retrieval import retrieve as _retrieve
+    from taosmd import recipes as _recipes  # noqa: PLC0415
+    # Register against the same data_dir the recipe layer resolves against, so
+    # resolve_recipe() can read/write this agent's record.
+    ensure_agent(agent, data_dir=data_dir)
+
+    search_agents = _resolve_search_agents(
+        agent, project, also_include, collections, collections_only, data_dir,
+    )
+    if search_agents is None:
         return []
 
     if mode == "bm25":
@@ -812,7 +868,10 @@ async def search(
         adjacent_neighbors=rc.get("adjacent_neighbors", 0),
         graph_expansion=rc.get("graph_expansion", 0),
         fusion=rc.get("fusion", "boost"),
-        candidate_top_k=rc.get("candidate_top_k"),
+        candidate_top_k=(
+            max(rc["candidate_top_k"], min_candidates)
+            if min_candidates and rc.get("candidate_top_k") else rc.get("candidate_top_k")
+        ),
         project=project,
         search_agents=search_agents,
     )
@@ -1216,6 +1275,9 @@ async def reconcile(*, agent: str, data_dir=None, repair: bool = True) -> dict:
                     meta["role"] = data["role"]
                 if "timestamp" in data:
                     meta["timestamp"] = data["timestamp"]
+                meta.update(_session_meta(data))
+                if "timestamp" not in meta and isinstance(row.get("timestamp"), (int, float)):
+                    meta["timestamp"] = row["timestamp"]
                 # Carry the archive row's nested user metadata (source_id,
                 # forget_after, ...). Without it a repaired batch row loses its
                 # source_id, so existing_source_ids() no longer sees it and a
@@ -1336,6 +1398,11 @@ async def reindex(*, agent: str, data_dir=None, check: bool = False) -> dict:
             meta["role"] = data["role"]
         if "timestamp" in data:
             meta["timestamp"] = data["timestamp"]
+        meta.update(_session_meta(data))
+        # The vector row's own clock restarts at the rebuild; keep the time the
+        # turn was archived so answer_context does not date it by the reindex.
+        if "timestamp" not in meta and isinstance(row.get("timestamp"), (int, float)):
+            meta["timestamp"] = row["timestamp"]
         # Carry the archive row's nested user metadata (source_id, forget_after,
         # ...). Without it a rebuilt row loses its source_id, so
         # existing_source_ids() no longer sees it and a re-POST of the same

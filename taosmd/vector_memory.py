@@ -1010,6 +1010,7 @@ class VectorMemory:
         search_agents: list[str] | None = None,
         now: float | None = None,
         include_expired: bool = False,
+        session_ids: set | None = None,
     ):
         """Fetch active (non-superseded) rows, scoped by project/agent.
 
@@ -1074,6 +1075,11 @@ class VectorMemory:
                             row["id"],
                         )
 
+            if session_ids is not None:
+                sid = meta.get("session_id")
+                if not isinstance(sid, (str, int)) or sid not in session_ids:
+                    continue
+
             if project is not None or search_agents is not None:
                 # Project filter: skip rows positively tagged with a different
                 # project. Untagged (pre-project) rows are kept so existing
@@ -1089,6 +1095,39 @@ class VectorMemory:
 
             filtered.append(row)
         return filtered
+
+    def get_session_rows(
+        self,
+        session_ids,
+        *,
+        project: str | None = None,
+        search_agents: list[str] | None = None,
+    ) -> list[dict]:
+        """Active rows that belong to any of ``session_ids``, scoped like search.
+
+        Goes through :meth:`_load_active_rows`, so project, agent, TTL and
+        supersede rules are exactly the ones recall applies. Rows written
+        before sessions were recorded carry no ``session_id`` and never match.
+        Returns ``{"id", "text", "metadata", "created_at"}`` dicts.
+        """
+        ids = set(session_ids)
+        if not ids:
+            return []
+        out = []
+        for row in self._load_active_rows(
+            project=project, search_agents=search_agents, session_ids=ids
+        ):
+            try:
+                meta = json.loads(row["metadata_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            out.append({
+                "id": row["id"],
+                "text": row["text"],
+                "metadata": meta,
+                "created_at": row["created_at"],
+            })
+        return out
 
     def existing_source_ids(self, agent: str | None = None) -> set[str]:
         """Return the user-metadata ``source_id`` values already stored.

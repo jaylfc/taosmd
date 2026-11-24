@@ -90,7 +90,14 @@ class RemoteClient:
         reconcile). ``project`` is forwarded so project-scoped memory works
         over the remote path.
         """
-        body: dict = {"text": text, "agent": agent}
+        if isinstance(text, dict):
+            # A structured turn: send its text as ``text`` and its optional
+            # role / session fields as the fields POST /ingest takes.
+            body: dict = {"text": text.get("content", ""), "agent": agent}
+            body.update({k: text[k] for k in ("role", "session_id", "turn_index", "session_date")
+                         if text.get(k) is not None})
+        else:
+            body = {"text": text, "agent": agent}
         if project is not None:
             body["project"] = project
         return await self._run("POST", "/ingest", body)
@@ -136,6 +143,21 @@ class RemoteClient:
             body["mode"] = mode
         resp = await self._run("POST", "/search", body)
         return resp.get("hits", [])
+
+    async def answer_context(self, query: str, agent: str, **opts) -> dict:
+        """POST /answer-context: the server builds the dated, budgeted context.
+
+        ``opts`` are the :func:`taosmd.answer_context` parameters that have a
+        JSON form (``budget_tokens``, ``now``, ``reasoning_reserve``,
+        ``answer_reserve``, ``neighbors``, ``limit``, ``include_facts``,
+        ``project``, ``also_include``, ``mode``, ``collections``,
+        ``collections_only``). A ``tokenizer`` callable cannot cross the wire.
+        """
+        if opts.get("tokenizer") is not None:
+            raise ValueError("a tokenizer callable cannot be sent to a remote server")
+        body = {"query": query, "agent": agent}
+        body.update({k: v for k, v in opts.items() if k != "tokenizer" and v is not None})
+        return await self._run("POST", "/answer-context", body)
 
     async def list_projects(self, **_opts) -> list[dict]:
         """GET /projects: list projects that have stored memories on the server."""
