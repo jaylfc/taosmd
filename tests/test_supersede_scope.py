@@ -436,3 +436,60 @@ def test_fifteen_thousand_rows_three_agents(data_dir, capsys):
     assert hidden_count() == 0
     assert list_secs < 2.0, list_secs
     assert restore_secs < 2.0, restore_secs
+
+
+# ---------------------------------------------------------------------------
+# auto_resolve_contradictions: None / True / False, for regex and LLM facts
+# ---------------------------------------------------------------------------
+
+def _two_turns(kg, vmem, mode, extractor):
+    """Run 'office is cold' then 'office is nice'; return (first, second, pending)."""
+    import taosmd.memory_extractor as me
+    from unittest.mock import patch
+
+    kwargs = {}
+    if mode != "default":
+        kwargs["auto_resolve_contradictions"] = mode
+    if extractor == "llm":
+        async def fake_llm(text, *a, **k):
+            return [{"subject": "office", "predicate": "is_a",
+                     "object": "cold" if "cold" in text else "nice"}]
+        kwargs.update(llm_url="http://unused", http_client=object())
+        ctx = patch.object(me, "extract_facts_with_llm", fake_llm)
+    else:
+        ctx = patch.object(me, "extract_facts_with_llm", None)
+    with ctx:
+        first = _run(process_conversation_turn(
+            "The office is cold.", "agent-a", kg, vmem=vmem, **kwargs))
+        second = _run(process_conversation_turn(
+            "The office is nice.", "agent-a", kg, vmem=vmem, **kwargs))
+    assert second["method"] == extractor
+    try:
+        rows = kg._conn.execute(
+            "SELECT COUNT(*) FROM kg_pending_decisions WHERE resolved_at IS NULL"
+        ).fetchone()[0]
+    except sqlite3.OperationalError:  # queue table never created: nothing queued
+        rows = 0
+    return first, second, rows
+
+
+@pytest.mark.parametrize("extractor,mode,current,queued", [
+    # default: regex facts are queued, LLM facts still resolve in the graph
+    ("regex", "default", ["cold"], 1),
+    ("llm", "default", ["nice"], 0),
+    # True: old triple invalidated, new one written, for either extractor
+    ("regex", True, ["nice"], 0),
+    ("llm", True, ["nice"], 0),
+    # False: keep both facts, nothing invalidated, nothing queued
+    ("regex", False, ["cold", "nice"], 0),
+    ("llm", False, ["cold", "nice"], 0),
+])
+def test_auto_resolve_modes(stores, extractor, mode, current, queued):
+    vmem, kg = stores
+    _add(vmem, "agent b note: cold storage is full", "agent-b")
+    first, second, pending = _two_turns(kg, vmem, mode, extractor)
+    assert first["triples_created"] == 1
+    assert sorted(_current_is_a(kg)) == sorted(current)
+    assert pending == queued
+    assert second["triples_created"] == (0 if queued else 1)
+    assert len(_active_ids(vmem)) == 1  # the vector layer is never touched

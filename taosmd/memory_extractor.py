@@ -525,8 +525,9 @@ async def process_conversation_turn(
         knowledge graph's database unless ``pending_store`` is given) for
         ``taosmd review``, and neither triple is changed. ``True`` forces
         auto-resolve for every fact (old triple invalidated, new one written),
-        ``False`` never auto-resolves. Resolving only ever touches the typed
-        knowledge graph.
+        ``False`` never auto-resolves and never queues: the new fact is
+        written and the old one stays current too (both coexist), exactly as
+        before. Resolving only ever touches the typed knowledge graph.
       - ``vmem``: accepted for compatibility and not used. A contradiction no
         longer hides vector rows: a triple records no link to the row it came
         from, so there is nothing safe to hide. Use ``taosmd supersede`` for an
@@ -613,9 +614,10 @@ async def process_conversation_turn(
         else method == "llm"
     )
     own_pending = None
-    if not auto_resolve:
-        # Not resolving on our own: park a contradiction in the pending queue
+    if auto_resolve_contradictions is None and method != "llm":
+        # Default for regex facts: park a contradiction in the pending queue
         # (same SQLite file as the KG) instead of changing either triple.
+        # An explicit False is NOT this: it keeps both facts, as it always did.
         defer_below_confidence = max(defer_below_confidence, 1.01)
         kg_db_path = getattr(kg, "_db_path", None)
         if pending_store is None and isinstance(kg_db_path, str):
