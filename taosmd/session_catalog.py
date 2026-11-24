@@ -40,6 +40,11 @@ SESSION_CATEGORIES = [
     "brainstorming", "review", "maintenance", "other",
 ]
 
+# Event types that the catalog pipeline processes. Only these types are split
+# into sessions, enriched, crystallised, and fed to the knowledge graph.
+# Lines without an event_type field (legacy) are always accepted.
+CATALOG_EVENT_TYPES = {"conversation"}
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,8 +168,14 @@ class SessionCatalog:
 
     def _read_archive_file(self, path: Path) -> list[dict]:
         """Read a JSONL or gzipped JSONL archive file, tagging each event with
-        its 1-based line number and source file path."""
+        its 1-based line number and source file path.
+
+        Only events whose ``event_type`` is in ``CATALOG_EVENT_TYPES`` are
+        returned. Lines without an ``event_type`` field (legacy) are always
+        accepted. A one-line INFO log summarises skipped lines by type.
+        """
         events = []
+        skipped: dict[str, int] = {}
         if path.suffix == ".gz":
             opener = lambda: gzip.open(path, "rt", encoding="utf-8")
         else:
@@ -177,11 +188,24 @@ class SessionCatalog:
                     continue
                 try:
                     event = json.loads(line)
-                    event["_line_num"] = line_num
-                    event["_file"] = str(path)
-                    events.append(event)
                 except json.JSONDecodeError:
                     continue
+
+                event_type = event.get("event_type")
+                if event_type is not None and event_type not in CATALOG_EVENT_TYPES:
+                    skipped[event_type] = skipped.get(event_type, 0) + 1
+                    continue
+
+                event["_line_num"] = line_num
+                event["_file"] = str(path)
+                events.append(event)
+
+        if skipped:
+            logger.info(
+                "Catalog split skipped %d non-conversation lines: %s",
+                sum(skipped.values()),
+                ", ".join(f"{k}={v}" for k, v in sorted(skipped.items())),
+            )
         return events
 
     # ------------------------------------------------------------------

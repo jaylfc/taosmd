@@ -1,0 +1,2 @@
+### Fixed
+- Catalog pipeline now filters archive events by `event_type` using the `CATALOG_EVENT_TYPES` allowlist (currently `{"conversation"}`). Non-conversation events (e.g., `setting.changed`, `bus.ack`, `archive.torn_tail`) are skipped during the split stage with a one-line INFO log summarizing skipped counts by type. Lines without an `event_type` field (legacy) are still accepted for backwards compatibility.
