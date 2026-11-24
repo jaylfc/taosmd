@@ -62,6 +62,12 @@ _MODEL_ROLES: tuple[str, ...] = (
 )
 # Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
 _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
+# Maximum request body size in bytes for POST /a2a/send. Returns 413 when exceeded.
+_A2A_MAX_BODY_BYTES_KEY = "a2a_max_body_bytes"
+_A2A_DEFAULT_MAX_BODY_BYTES = 256 * 1024  # 256 KiB
+# Graceful-drain deadline in seconds after SIGTERM before the server exits.
+_A2A_DRAIN_TIMEOUT_KEY = "a2a_drain_timeout"
+_A2A_DEFAULT_DRAIN_TIMEOUT = 10.0
 # Maximum age (seconds) of a cached revocation set before refresh failures fail
 # closed. Defaults to 6 * refresh_interval inside RegistryVerifier.
 _REGISTRY_STALENESS_BOUND_KEY = "registry_staleness_bound"
@@ -720,6 +726,94 @@ def set_a2a_auth_enforce(value: bool, data_dir=None) -> None:
     """Persist the a2a_auth_enforce flag."""
     data = _read(data_dir)
     data[_A2A_AUTH_ENFORCE_KEY] = bool(value)
+    _write(data, data_dir)
+
+
+def get_a2a_max_body_bytes(data_dir=None) -> int:
+    """Return the maximum request body size in bytes for ``POST /a2a/send``.
+
+    Resolution order:
+
+    1. ``TAOSMD_A2A_MAX_BODY_BYTES`` environment variable
+    2. ``a2a_max_body_bytes`` int in ``~/.taosmd/config.json``
+    3. Default: ``262144`` (256 KiB)
+
+    Bodies larger than this are rejected with ``413``.
+    """
+    env = os.environ.get("TAOSMD_A2A_MAX_BODY_BYTES")
+    if env and env.strip():
+        try:
+            val = int(env.strip())
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    val = _read(data_dir).get(_A2A_MAX_BODY_BYTES_KEY)
+    if val is not None:
+        try:
+            ival = int(val)
+            if ival > 0:
+                return ival
+        except (TypeError, ValueError):
+            pass
+    return _A2A_DEFAULT_MAX_BODY_BYTES
+
+
+def set_a2a_max_body_bytes(value: int, *, clear: bool = False,
+                           data_dir=None) -> None:
+    """Persist the a2a_max_body_bytes limit (or clear it)."""
+    data = _read(data_dir)
+    if clear:
+        data.pop(_A2A_MAX_BODY_BYTES_KEY, None)
+    else:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError("a2a_max_body_bytes must be a positive number")
+        data[_A2A_MAX_BODY_BYTES_KEY] = int(value)
+    _write(data, data_dir)
+
+
+def get_a2a_drain_timeout(data_dir=None) -> float:
+    """Return the graceful-drain deadline in seconds after SIGTERM.
+
+    Resolution order:
+
+    1. ``TAOSMD_A2A_DRAIN_TIMEOUT`` environment variable
+    2. ``a2a_drain_timeout`` float in ``~/.taosmd/config.json``
+    3. Default: ``10.0`` seconds
+
+    On SIGTERM the server stops accepting connections, sends each open SSE
+    stream a final ``retry: <ms>`` hint, finishes in-flight writes, and exits
+    within this bound.
+    """
+    env = os.environ.get("TAOSMD_A2A_DRAIN_TIMEOUT")
+    if env and env.strip():
+        try:
+            val = float(env.strip())
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    val = _read(data_dir).get(_A2A_DRAIN_TIMEOUT_KEY)
+    if val is not None:
+        try:
+            fval = float(val)
+            if fval > 0:
+                return fval
+        except (TypeError, ValueError):
+            pass
+    return _A2A_DEFAULT_DRAIN_TIMEOUT
+
+
+def set_a2a_drain_timeout(value: float, *, clear: bool = False,
+                          data_dir=None) -> None:
+    """Persist the a2a_drain_timeout deadline (or clear it)."""
+    data = _read(data_dir)
+    if clear:
+        data.pop(_A2A_DRAIN_TIMEOUT_KEY, None)
+    else:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError("a2a_drain_timeout must be a positive number")
+        data[_A2A_DRAIN_TIMEOUT_KEY] = float(value)
     _write(data, data_dir)
 
 

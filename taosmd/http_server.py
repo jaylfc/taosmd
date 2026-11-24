@@ -215,6 +215,7 @@ import json
 import logging
 import math
 import mimetypes
+import signal
 import sys
 import threading
 import time
@@ -274,6 +275,9 @@ _A2A_KINDS = frozenset({"chat", "alarm", "ack", "digest", "receipt", "review", "
 # Cursor pagination limits for /a2a/threads/{thread}/messages.
 _A2A_MSG_DEFAULT_LIMIT = 50
 _A2A_MSG_MAX_LIMIT = 200
+
+# A2A SSE stream: how many messages to fetch per replay/live poll batch.
+_A2A_STREAM_BATCH = 200
 
 # Upper cap for GET /memories?limit=. Negative values are rejected (400), and
 # limit=0 yields zero rows (SQLite LIMIT 0). See tsk-au6qkw.
@@ -1913,6 +1917,20 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._send_json(200, {"members": members})
 
         def _handle_a2a_send(self) -> None:
+            # Body size cap: reject oversized request bodies with 413 before
+            # parsing, so a caller can never upload past the configured limit.
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > self.server._a2a_max_body_bytes:
+                self._send_json(
+                    413,
+                    {
+                        "error": (
+                            f"request body exceeds {self.server._a2a_max_body_bytes} "
+                            f"bytes ({length} received)"
+                        )
+                    },
+                )
+                return
             body = self._read_json_body()
             from_ = body.get("from")
             body_text = body.get("body")
@@ -1954,14 +1972,6 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 for i, block in enumerate(blocks):
                     if not isinstance(block, dict):
                         raise _BadRequest(f"'blocks[{i}]' must be an object")
-            # Total serialized message (body+refs+blocks) <= 64KB.
-            serialized = json.dumps(
-                {"body": body_text, "refs": refs, "blocks": blocks}
-            )
-            if len(serialized.encode("utf-8")) > _A2A_MAX_MESSAGE_BYTES:
-                raise _BadRequest(
-                    "message (body+refs+blocks) exceeds 64KB limit"
-                )
             # Body validation: required when blocks is absent (existing behaviour).
             # Invariant: blocks present => body must be non-empty (body is ALWAYS
             # the flattened plain-text rendering; an empty body with blocks would
@@ -2475,20 +2485,64 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             the request thread, never inside the service loop. Disconnects
             are detected via write errors and exit the loop cleanly.
 
+            Every message frame carries an ``id: <message id>`` line so
+            clients can resume without missing or duplicating messages. On
+            connect the server honours the ``Last-Event-ID`` header, or the
+            ``?after=<id>`` query parameter as an alternative: it first
+            replays, in id order, every message with id greater than that
+            value that the caller may read (same thread filter and the same
+            channel-ACL / thread-membership read gates as the live stream),
+            then continues live from the highest replayed id. The replay-to-
+            live boundary has no gap and no duplicate: messages posted while
+            the replay is in progress are picked up by the live poll because
+            they carry a higher id than anything replayed.
+
             When the subscriber's identity is known (authenticated proxy
             path, ``sub`` claim present in the Bearer token) a delivered
             receipt is written after each frame lands on the wire. Raw-bus
             subscribers that carry no identifying token produce no delivered
             mark.
             """
-            _validate_a2a_params(qs, frozenset({"thread", "since"}), self._raw_qs)
+            _validate_a2a_params(
+                qs, frozenset({"thread", "since", "after"}), self._raw_qs
+            )
             thread = (qs.get("thread") or [None])[0]
             since_raw = (qs.get("since") or [None])[0]
+            after_raw = (qs.get("after") or [None])[0]
             last_ts = _parse_since(since_raw)
             if last_ts is None:
                 last_ts = time.time()
 
+            # Resume cursor: ``Last-Event-ID`` header wins, ``?after=<id>``
+            # is the alternative. Both are message ids, not timestamps.
+            after_id = None
+            last_event_id = self.headers.get("Last-Event-ID")
+            if last_event_id is not None:
+                try:
+                    after_id = int(last_event_id)
+                except (TypeError, ValueError):
+                    raise _BadRequest("'Last-Event-ID' must be a message id")
+                if after_id < 0:
+                    raise _BadRequest("'Last-Event-ID' must be a message id")
+            elif after_raw is not None:
+                try:
+                    after_id = int(after_raw)
+                except (TypeError, ValueError):
+                    raise _BadRequest("'after' must be a message id")
+                if after_id < 0:
+                    raise _BadRequest("'after' must be a message id")
+
             subscriber_agent = self._get_authenticated_agent_id()
+            server = self.server
+            write_lock = server._stream_write_lock
+            streams = server._streams
+            streams_lock = server._streams_lock
+            draining = server._draining
+            drain_timeout_ms = server._a2a_drain_timeout_ms
+
+            def write_frame(data: bytes) -> None:
+                with write_lock:
+                    self.wfile.write(data)
 
             # Send SSE response headers before entering the poll loop.
             self.send_response(200)
@@ -2497,28 +2551,39 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self.send_header("Connection", "keep-alive")
             self.end_headers()
 
+            # Register this stream so a graceful drain can reach it, and so
+            # the drain can wait for in-flight writes to finish.
+            with streams_lock:
+                streams.add(self)
             try:
-                while True:
-                    msgs = runner.run(
-                        service.a2a_feed(
-                            thread=thread, since=last_ts, limit=200, data_dir=data_dir,
+                if after_id is not None:
+                    # ----- resume mode: replay then live (id cursor) -----
+                    cursor_id = after_id
+                    # Phase 1: replay every readable message with id > after_id,
+                    # in id order, until caught up to the current end of the
+                    # archive. Messages posted while replaying carry a higher
+                    # id and are handed off to the live phase below.
+                    while True:
+                        if draining.is_set():
+                            return
+                        batch = runner.run(
+                            service.a2a_thread_messages(
+                                thread=thread,
+                                after=cursor_id,
+                                limit=_A2A_STREAM_BATCH,
+                                data_dir=data_dir,
+                            )
                         )
-                    )
-                    # Keep only messages strictly newer than last_ts to avoid
-                    # re-sending the boundary row on subsequent polls.
-                    new_msgs = [m for m in msgs if m["ts"] > last_ts]
-                    if new_msgs:
-                        # Channel ACL read filter: the ACL map is resolved
-                        # once per poll, so a changed ACL takes effect on the
-                        # next poll. The cursor moves past DENIED rows too, so
-                        # they are never re-polled.
-                        readable = self._filter_readable(
-                            new_msgs, {}, self._channel_aliases(), {},
-                        )
-                        last_ts = max(m["ts"] for m in new_msgs)
-                        for msg in readable:
-                            frame = f"data: {json.dumps(msg)}\n\n"
-                            self.wfile.write(frame.encode("utf-8"))
+                        items = batch.get("messages", [])
+                        items.sort(key=lambda m: m["id"])
+                        if not items:
+                            break
+                        for msg in items:
+                            frame = (
+                                f"id: {msg['id']}\n"
+                                f"data: {json.dumps(msg)}\n\n"
+                            )
+                            write_frame(frame.encode("utf-8"))
                             if subscriber_agent is not None:
                                 runner.run(
                                     service.a2a_record_delivered(
@@ -2528,16 +2593,107 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                                         data_dir=data_dir,
                                     )
                                 )
-                        if not readable:
-                            self.wfile.write(b": keepalive\n\n")
+                        cursor_id = max(m["id"] for m in items)
+                        write_frame(b": keepalive\n\n")
                         self.wfile.flush()
-                    else:
-                        self.wfile.write(b": keepalive\n\n")
-                        self.wfile.flush()
-                    time.sleep(1.0)
+                        if len(items) < _A2A_STREAM_BATCH:
+                            break
+                    # Phase 2: live poll, continuing from the replay cursor.
+                    while True:
+                        if draining.is_set():
+                            return
+                        batch = runner.run(
+                            service.a2a_thread_messages(
+                                thread=thread,
+                                after=cursor_id,
+                                limit=_A2A_STREAM_BATCH,
+                                data_dir=data_dir,
+                            )
+                        )
+                        items = batch.get("messages", [])
+                        items.sort(key=lambda m: m["id"])
+                        if items:
+                            # Channel ACL read filter: the ACL map is resolved
+                            # once per poll, so a changed ACL takes effect on
+                            # the next poll. The cursor moves past DENIED rows
+                            # too, so they are never re-polled.
+                            readable = self._filter_readable(
+                                items, {}, self._channel_aliases(), {},
+                            )
+                            for msg in readable:
+                                frame = (
+                                    f"id: {msg['id']}\n"
+                                    f"data: {json.dumps(msg)}\n\n"
+                                )
+                                write_frame(frame.encode("utf-8"))
+                                if subscriber_agent is not None:
+                                    runner.run(
+                                        service.a2a_record_delivered(
+                                            msg["id"],
+                                            subscriber_agent,
+                                            ts=time.time(),
+                                            data_dir=data_dir,
+                                        )
+                                    )
+                            cursor_id = max(m["id"] for m in items)
+                            self.wfile.flush()
+                        else:
+                            write_frame(b": keepalive\n\n")
+                            self.wfile.flush()
+                        if draining.is_set():
+                            return
+                        time.sleep(1.0)
+                else:
+                    # ----- since= mode: timestamp cursor (unchanged behaviour) -----
+                    while True:
+                        msgs = runner.run(
+                            service.a2a_feed(
+                                thread=thread, since=last_ts, limit=200, data_dir=data_dir,
+                            )
+                        )
+                        # Keep only messages strictly newer than last_ts to avoid
+                        # re-sending the boundary row on subsequent polls.
+                        new_msgs = [m for m in msgs if m["ts"] > last_ts]
+                        if new_msgs:
+                            # Channel ACL read filter: the ACL map is resolved
+                            # once per poll, so a changed ACL takes effect on the
+                            # next poll. The cursor moves past DENIED rows too,
+                            # so they are never re-polled.
+                            readable = self._filter_readable(
+                                new_msgs, {}, self._channel_aliases(), {},
+                            )
+                            last_ts = max(m["ts"] for m in new_msgs)
+                            for msg in readable:
+                                frame = (
+                                    f"id: {msg['id']}\n"
+                                    f"data: {json.dumps(msg)}\n\n"
+                                )
+                                write_frame(frame.encode("utf-8"))
+                                if subscriber_agent is not None:
+                                    runner.run(
+                                        service.a2a_record_delivered(
+                                            msg["id"],
+                                            subscriber_agent,
+                                            ts=time.time(),
+                                            data_dir=data_dir,
+                                        )
+                                    )
+                            if not readable:
+                                write_frame(b": keepalive\n\n")
+                            self.wfile.flush()
+                        else:
+                            write_frame(b": keepalive\n\n")
+                            self.wfile.flush()
+                        if draining.is_set():
+                            return
+                        time.sleep(1.0)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 # Client disconnected; exit the thread cleanly.
                 return
+            finally:
+                with streams_lock:
+                    streams.discard(self)
+
 
         def _handle_a2a_threads(self, qs: dict) -> None:
             _validate_a2a_params(qs, frozenset({"principal"}), self._raw_qs)
@@ -3434,6 +3590,17 @@ def make_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=Non
         _make_handler(data_dir, runner, verifier, grants_verifier),
     )
     httpd.service_loop = runner
+    # Per-server A2A stream bookkeeping (used by the stream handler and the
+    # graceful SIGTERM drain). Populated once at creation so every request
+    # handler shares the same state.
+    httpd._a2a_max_body_bytes = _config.get_a2a_max_body_bytes(data_dir)
+    _drain_timeout = _config.get_a2a_drain_timeout(data_dir)
+    httpd._a2a_drain_timeout = _drain_timeout
+    httpd._a2a_drain_timeout_ms = int(_drain_timeout * 1000)
+    httpd._streams = set()            # open /a2a/stream handler instances
+    httpd._streams_lock = threading.Lock()
+    httpd._stream_write_lock = threading.Lock()  # serialises SSE frame writes
+    httpd._draining = threading.Event()  # set once a graceful drain begins
     return httpd
 
 
