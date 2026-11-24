@@ -453,7 +453,12 @@ async def test_crash_between_seq_and_raw_write_leaves_gap_never_duplicate(
     tmp_path, monkeypatch
 ):
     """(c) A crash after the seq is assigned but before the raw write
-    consumes the id (a gap) but never reuses it."""
+    consumes the id (a gap) but never reuses it.
+
+    New behavior: the entire record() is one transaction. If the raw write
+    fails, the transaction rolls back and the seq is NOT consumed.
+    Subsequent records continue from the last successfully committed seq.
+    """
     arc = ArchiveStore(
         archive_dir=str(tmp_path / "archive"),
         index_path=str(tmp_path / "archive-index.db"),
@@ -473,20 +478,21 @@ async def test_crash_between_seq_and_raw_write_leaves_gap_never_duplicate(
     with pytest.raises(RuntimeError, match="crash before the raw write"):
         await arc.record("conversation", {"text": "lost"}, agent_name="a")
 
-    # The seq was durably persisted before the raw write: seq 1 is consumed.
+    # The seq was NOT persisted because the transaction rolled back.
+    # The counter remains at 0 (no records committed yet).
     counter = arc._conn.execute(
         "SELECT value FROM archive_settings WHERE key = 'archive_seq_counter'"
-    ).fetchone()["value"]
-    assert counter == "1"
+    ).fetchone()
+    assert counter is None or counter["value"] == "0"
     # Nothing was written to the raw files for the lost record.
     assert not list(arc._archive_dir.rglob("*.jsonl"))
 
-    # Subsequent records continue above the consumed id: a gap at 1, no duplicates.
+    # Subsequent records start from 1 (no gap, since the failed seq was rolled back).
     ids = [
         await arc.record("conversation", {"text": f"ok {i}"}, agent_name="a")
         for i in range(3)
     ]
-    assert ids == [2, 3, 4]
+    assert ids == [1, 2, 3]
 
     seqs = []
     for path in arc._archive_dir.rglob("*.jsonl"):
@@ -494,7 +500,7 @@ async def test_crash_between_seq_and_raw_write_leaves_gap_never_duplicate(
             for line in fh:
                 if line.strip():
                     seqs.append(json.loads(line)["seq"])
-    assert seqs == [2, 3, 4]
+    assert seqs == [1, 2, 3]
     assert len(seqs) == len(set(seqs))
     await arc.close()
 
