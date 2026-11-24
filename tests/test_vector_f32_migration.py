@@ -504,5 +504,149 @@ class TestF32Migration:
         assert len(rows_after) == len(rows_before) == 3
 
 
+def _build_store_with_malformed_row(db_path: str, n_rows: int = 5000, malformed_row: int = 4000) -> None:
+    """Build a store with JSON embeddings and one malformed row."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS vector_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            embedding TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at REAL NOT NULL,
+            valid_to REAL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vm_created ON vector_memory(created_at DESC)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS store_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+
+    fe = FixedEmbedder(384)
+    for i in range(1, n_rows + 1):
+        text = f"document {i} with some content for testing migration"
+        if i == malformed_row:
+            # Malformed JSON - missing closing bracket
+            emb_json = '[0.1, 0.2'
+        else:
+            vec = asyncio.run(fe.embed(text))
+            emb_json = json.dumps(vec)
+        conn.execute(
+            "INSERT INTO vector_memory (text, embedding, metadata_json, created_at) VALUES (?, ?, '{}', ?)",
+            (text, emb_json, float(i)),
+        )
+
+    # Legacy marker (no dense_format)
+    conn.execute(
+        "INSERT INTO store_meta (key, value) VALUES ('mode', 'late_interaction=0;binary_quant=0;embedder=all-MiniLM-L6-v2')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def _build_store_with_dimension_mismatch(db_path: str, n_rows: int = 100, mismatch_row: int = 50, wrong_dim: int = 768) -> None:
+    """Build a store with JSON embeddings and one row with wrong dimension."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS vector_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            embedding TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at REAL NOT NULL,
+            valid_to REAL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vm_created ON vector_memory(created_at DESC)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS store_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+
+    fe = FixedEmbedder(384)
+    for i in range(1, n_rows + 1):
+        text = f"document {i} with some content for testing migration"
+        if i == mismatch_row:
+            # Valid JSON but wrong dimension (768 instead of 384)
+            vec = [0.1] * wrong_dim
+            emb_json = json.dumps(vec)
+        else:
+            vec = asyncio.run(fe.embed(text))
+            emb_json = json.dumps(vec)
+        conn.execute(
+            "INSERT INTO vector_memory (text, embedding, metadata_json, created_at) VALUES (?, ?, '{}', ?)",
+            (text, emb_json, float(i)),
+        )
+
+    # Legacy marker (no dense_format)
+    conn.execute(
+        "INSERT INTO store_meta (key, value) VALUES ('mode', 'late_interaction=0;binary_quant=0;embedder=all-MiniLM-L6-v2')"
+    )
+    conn.commit()
+    conn.close()
+
+
+class TestMalformedRowHandling:
+    """Tests for Card E: malformed rows must not break store open/search."""
+
+    def test_malformed_json_row_does_not_break_store(self, tmp_path):
+        """Store with one malformed JSON row must open and search (Card E)."""
+        db_path = str(tmp_path / "test_malformed.db")
+        _build_store_with_malformed_row(db_path, n_rows=5000, malformed_row=4000)
+
+        vm = VectorMemory(db_path=db_path, embed_mode="local", local_model="all-MiniLM-L6-v2")
+        asyncio.run(vm.init())
+        _make_fixed_embedder(vm)
+
+        # Search should work and return results
+        results = asyncio.run(vm.search("document 100 content", limit=5, hybrid=False))
+        assert len(results) > 0, "Search should return results"
+
+        # Verify the malformed row was left as-is (still JSON)
+        row = vm._conn.execute("SELECT embedding FROM vector_memory WHERE id=4000").fetchone()
+        assert row is not None
+        assert row["embedding"] == '[0.1, 0.2', "Malformed row should be left as-is"
+
+        # Other rows should be converted to f32
+        row = vm._conn.execute("SELECT embedding FROM vector_memory WHERE id=1").fetchone()
+        assert row is not None
+        assert not row["embedding"].startswith("["), "Valid rows should be converted to f32"
+
+        asyncio.run(vm.close())
+
+    def test_dimension_mismatch_row_does_not_break_store(self, tmp_path):
+        """Store with one dimension-mismatch row must open and search (Card E)."""
+        db_path = str(tmp_path / "test_dim_mismatch.db")
+        _build_store_with_dimension_mismatch(db_path, n_rows=100, mismatch_row=50, wrong_dim=768)
+
+        vm = VectorMemory(db_path=db_path, embed_mode="local", local_model="all-MiniLM-L6-v2")
+        asyncio.run(vm.init())
+        _make_fixed_embedder(vm)
+
+        # Search should work and return results
+        results = asyncio.run(vm.search("document 10 content", limit=5, hybrid=False))
+        assert len(results) > 0, "Search should return results"
+
+        # Verify the mismatched row was left as-is (still JSON)
+        row = vm._conn.execute("SELECT embedding FROM vector_memory WHERE id=50").fetchone()
+        assert row is not None
+        assert row["embedding"].startswith("["), "Mismatched row should be left as JSON"
+        # Verify it has 768 dimensions
+        vec = json.loads(row["embedding"])
+        assert len(vec) == 768, "Mismatched row should have 768 dimensions"
+
+        # Other rows should be converted to f32
+        row = vm._conn.execute("SELECT embedding FROM vector_memory WHERE id=1").fetchone()
+        assert row is not None
+        assert not row["embedding"].startswith("["), "Valid rows should be converted to f32"
+
+        asyncio.run(vm.close())
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
