@@ -127,14 +127,18 @@ def pack_sign_bits(embedding: list[float]) -> str:
 # Query-time prefix for arctic-embed (asymmetric: queries only, no doc prefix).
 _ARCTIC_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
+# Query-time prefix for mdbr-leaf-ir (asymmetric: queries only, no doc prefix).
+_LEAF_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
 
 def _onnx_apply_prefix(onnx_path, text: str, task: str) -> str:
     """Apply a model-specific input prefix to ONNX embed text.
 
     Asymmetric embedders need the right prefix or retrieval silently
     degrades. nomic-embed prefixes both queries and documents with the
-    task name; arctic-embed prefixes only the query. MiniLM and anything
-    else gets no prefix. Detection is by model directory name.
+    task name; arctic-embed and mdbr-leaf-ir prefix only the query.
+    MiniLM and anything else gets no prefix. Detection is by model
+    directory name.
     """
     # Env override (E-010 bake-off: let any model set its prefixes explicitly,
     # independent of pooling and of directory-name detection). Active when
@@ -148,6 +152,10 @@ def _onnx_apply_prefix(onnx_path, text: str, task: str) -> str:
         return f"{task}: {text}"
     if "arctic" in path and task == "search_query":
         return f"{_ARCTIC_QUERY_PREFIX}{text}"
+    if "mdbr-leaf-ir" in path:
+        if task == "search_query":
+            return f"{_LEAF_QUERY_PREFIX}{text}"
+        return text
     return text
 
 
@@ -155,8 +163,9 @@ def _onnx_pooling_mode(onnx_path) -> str:
     """Pooling mode for an ONNX embedder: "cls" or "mean".
 
     arctic-embed pools the CLS token (its 1_Pooling config sets
-    pooling_mode_cls_token true, mean false); the MiniLM default and
-    everything else mean-pool over the attention mask.
+    pooling_mode_cls_token true, mean false); mdbr-leaf-ir mean-pools
+    (pooling_mode_mean_tokens true); the MiniLM default and everything
+    else mean-pool over the attention mask.
     """
     pm = os.environ.get("TAOSMD_ONNX_POOLING")
     if pm in ("cls", "mean"):
@@ -164,6 +173,8 @@ def _onnx_pooling_mode(onnx_path) -> str:
     path = str(onnx_path).lower() if onnx_path else ""
     if "arctic" in path:
         return "cls"
+    if "mdbr-leaf-ir" in path:
+        return "mean"
     return "mean"
 
 
@@ -224,6 +235,92 @@ def _onnx_feed(session, inputs: dict) -> dict:
             continue
         feed[name] = np.zeros((0, *rest), dtype=np.dtype(np_dtype))
     return feed
+
+
+class _OnnxEmbedderConfigError(RuntimeError):
+    """An ONNX embedder's files/graph are configured so loading it would serve
+    a different embedding than the model documents. Never falls back to a
+    different embedder or to pooling; the caller must re-export or re-point."""
+
+
+def _onnx_dense_head_config(model_dir: str) -> dict | None:
+    """Return the Dense module config if modules.json lists a Dense head.
+
+    sentence-transformers lays each module out under its own directory
+    (``<model_dir>/<path>/config.json``). Returns None when modules.json is
+    absent, unreadable, or lists no ``sentence_transformers.models.Dense``
+    module; returns an empty dict when the Dense module is listed but its
+    config file is missing or unreadable.
+    """
+    modules_file = Path(model_dir) / "modules.json"
+    if not modules_file.exists():
+        return None
+    try:
+        modules = json.loads(modules_file.read_text())
+    except (OSError, ValueError):
+        return None
+    dense_path = None
+    for module in modules:
+        if module.get("type") == "sentence_transformers.models.Dense":
+            dense_path = module.get("path")
+            break
+    if not dense_path:
+        return None
+    config_file = Path(model_dir) / dense_path / "config.json"
+    if not config_file.exists():
+        return {}
+    try:
+        return json.loads(config_file.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _onnx_require_sentence_embedding(model_dir: str, session) -> None:
+    """Refuse an ONNX export that drops a sentence_transformers Dense head.
+
+    A sentence-transformers model whose modules.json lists a Dense module but
+    whose ONNX graph exposes no ``sentence_embedding`` output has had its
+    projection head stripped. Mean-pooling the backbone output would silently
+    produce a different (lower-dimensional) embedding, so raise here and name
+    the fix rather than fall back to pooling.
+    """
+    dense_cfg = _onnx_dense_head_config(model_dir)
+    if dense_cfg is None:
+        return
+    output_names = [o.name for o in session.get_outputs()]
+    if "sentence_embedding" in output_names:
+        return
+    raise _OnnxEmbedderConfigError(
+        f"ONNX embedder at {model_dir} exports a sentence_transformers Dense "
+        f"head (modules.json lists sentence_transformers.models.Dense) but "
+        f"its graph exposes no 'sentence_embedding' output, so the Dense "
+        f"projection was dropped from the export. Mean-pooling the backbone "
+        f"output would silently produce a different embedding. Re-export with "
+        f"the full pipeline so the graph exposes 'sentence_embedding', e.g. "
+        f"`sentence-transformers SentenceTransformer.save()` or "
+        f"`optimum-cli export onnx` with the complete model, then point "
+        f"onnx_path at that dir."
+    )
+
+
+def _onnx_declared_output_dim(model_dir: str) -> int | None:
+    """Output dimension declared by config_sentence_transformers.json or the
+    Dense module config, else None. The Dense config out_features takes
+    precedence since it is the projection head that sets the embedding size.
+    """
+    dim = None
+    st_cfg = Path(model_dir) / "config_sentence_transformers.json"
+    if st_cfg.exists():
+        try:
+            data = json.loads(st_cfg.read_text())
+        except (OSError, ValueError):
+            data = {}
+        if data.get("output_dim"):
+            dim = int(data["output_dim"])
+    dense_cfg = _onnx_dense_head_config(model_dir)
+    if isinstance(dense_cfg, dict) and dense_cfg.get("out_features"):
+        dim = int(dense_cfg["out_features"])
+    return dim or None
 
 
 class VectorMemory:
@@ -411,6 +508,11 @@ class VectorMemory:
                     providers=["CPUExecutionProvider"],
                 )
                 self._onnx_tokenizer = AutoTokenizer.from_pretrained(model_dir)
+                # Refuse an export that drops a sentence_transformers Dense
+                # head: mean-pooling the backbone would silently serve a
+                # different embedding. This raises (propagates out of init)
+                # rather than falling back to a different embedder.
+                _onnx_require_sentence_embedding(model_dir, self._onnx_session)
                 # Load-time probe: drive the graph once with an empty media
                 # input. A model we cannot drive (e.g. one whose graph has a
                 # declared input this embedder cannot populate) must fail loud
@@ -435,7 +537,22 @@ class VectorMemory:
                         f"ONNX embedder {model_file} cannot be driven; "
                         f"unfed graph inputs: {unfed}"
                     )
+                # The Dense/Normalize head declares the embedding size; reject
+                # a graph whose first embedding does not match it.
+                declared_dim = _onnx_declared_output_dim(model_dir)
+                if declared_dim is not None and len(probe_vec) != declared_dim:
+                    raise _OnnxEmbedderConfigError(
+                        f"ONNX embedder at {model_dir} declares a {declared_dim}-dim "
+                        f"output but its first embedding is {len(probe_vec)}-dim. "
+                        f"The exported graph does not match the model's Dense/"
+                        f"Normalize head; re-export with the full pipeline "
+                        f"exposing 'sentence_embedding'."
+                    )
                 logger.info("Loaded ONNX embedding model from %s", model_file)
+            except _OnnxEmbedderConfigError:
+                # A misconfigured export must not silently fall back to a
+                # different embedder (that would serve wrong vectors); propagate.
+                raise
             except Exception as e:
                 # Loud and actionable: a silent embedder swap corrupts retrieval.
                 # The store's vectors are tied to the embedder that wrote them, so
