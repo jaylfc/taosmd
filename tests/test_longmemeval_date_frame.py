@@ -780,6 +780,41 @@ async def test_labelled_date_frame_label_compare_wrong_weekday(monkeypatch):
     assert "Where memories disagree, the most recent one is current and the earlier ones are historical." in ctx
 
 
+@pytest.mark.asyncio
+async def test_labelled_date_frame_label_compare_same_day(monkeypatch):
+    """labelled arm: two sessions on the same calendar day; only the later
+    one is 'most recent', the earlier one is 'historical'."""
+    mod = _load_runner()
+    monkeypatch.setenv("TAOSMD_LME_DATE_FRAME", "labelled")
+    monkeypatch.setattr(mod, "ContextAssembler", _FakeAssembler)
+
+    haystack_dates = [
+        "2023/05/20 (Sat) 10:00",  # earlier same day
+        "2023/05/20 (Sat) 18:00",  # later same day (most recent)
+    ]
+
+    fake_results = [
+        {"text": "[Session date: 2023/05/20 (Sat) 10:00]\nchunk morning", "metadata": {"session_date": haystack_dates[0]}, "similarity": 0.9},
+        {"text": "[Session date: 2023/05/20 (Sat) 18:00]\nchunk evening", "metadata": {"session_date": haystack_dates[1]}, "similarity": 0.8},
+    ]
+    monkeypatch.setattr(mod, "retrieve_vector_results", AsyncMock(return_value=fake_results))
+
+    archive = _FakeArchive()
+    kg = _FakeKG()
+
+    ctx = await mod.retrieve_context(
+        "test question", kg, archive, None,
+        llm_client=None, graph_expansion=0, retrieval_path="retrieve",
+        date_frame="labelled", haystack_dates=haystack_dates
+    )
+
+    # Later same-day session is "most recent"
+    assert "[Session date: 2023/05/20 (Sat) 18:00, most recent]" in ctx
+    # Earlier same-day session is "historical"
+    assert "[Session date: 2023/05/20 (Sat) 10:00, historical]" in ctx
+    assert "Where memories disagree, the most recent one is current and the earlier ones are historical." in ctx
+
+
 # ---------------------------------------------------------------------------
 # 5c. #734 fix: question_id in _validate_dates error messages
 # ---------------------------------------------------------------------------
