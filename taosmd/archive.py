@@ -472,20 +472,58 @@ class ArchiveStore:
         return None
 
     def _next_seq(self) -> int:
-        """Allocate the next sequence id and durably persist it before the raw write.
+        """Allocate the next sequence id atomically across instances/processes.
 
-        The increment is committed to archive_settings before the JSONL line is
-        written: a crash anywhere after this point consumes the id (a gap) but
-        can never reuse it, so rebuilds never renumber or duplicate records.
+        The allocation runs in its own ``BEGIN IMMEDIATE`` transaction and is
+        committed before the raw JSONL write, so:
+
+        * concurrent ``ArchiveStore`` instances (or processes) on the same
+          directory serialise on the SQLite write lock and can never hand out
+          the same id;
+        * a crash after allocation but before the raw write / index insert
+          consumes the id (a gap) but never reuses it.
+
+        The counter is never taken from an in-memory value: every allocation
+        reads the persisted ``archive_seq_counter`` (seeded from the highest
+        existing index id and raw ``seq`` when the setting is absent) inside
+        the write transaction.
         """
-        self._seq_counter += 1
-        self._conn.execute(
-            """INSERT INTO archive_settings (key, value) VALUES ('archive_seq_counter', ?)
-               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
-            (str(self._seq_counter),),
-        )
-        self._conn.commit()
-        return self._seq_counter
+        if self._conn is None:
+            raise RuntimeError("ArchiveStore is not initialised")
+        if self._conn.in_transaction:
+            self._conn.commit()
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._conn.execute(
+                "SELECT value FROM archive_settings WHERE key = 'archive_seq_counter'"
+            ).fetchone()
+            current = 0
+            if row is not None:
+                try:
+                    current = int(row["value"] if isinstance(row, sqlite3.Row) else row[0])
+                except (TypeError, ValueError, IndexError):
+                    current = 0
+            if current == 0:
+                max_id = self._conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) FROM archive_index"
+                ).fetchone()[0]
+                file_max = self._max_seq_in_files()
+                current = max(int(max_id or 0), int(file_max or 0))
+            nxt = current + 1
+            self._conn.execute(
+                """INSERT INTO archive_settings (key, value) VALUES ('archive_seq_counter', ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+                (str(nxt),),
+            )
+            self._conn.commit()
+        except Exception:
+            try:
+                self._conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        self._seq_counter = nxt
+        return nxt
 
     # ------------------------------------------------------------------
     # Legacy id map: freeze index -> raw-line identity before rebuilds
