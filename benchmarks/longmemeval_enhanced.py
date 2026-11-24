@@ -38,14 +38,9 @@ ONNX_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 # Module-level store of loaded distractor texts, keyed by file path (E-048 mixed store arm).
 _DISTRACTOR_TEXTS = {}
-_DISTRACTOR_TEXTS_BY_PATH = _DISTRACTOR_TEXTS
-_DISTRACTOR_STORE = _DISTRACTOR_TEXTS
-DISTRACTOR_TEXTS = _DISTRACTOR_TEXTS
 
 # Module-level embed cache, keyed by (text, task), used only for distractor texts.
 _EMBED_CACHE = {}
-EMBED_CACHE = _EMBED_CACHE
-_embed_cache = _EMBED_CACHE
 
 
 def arm_config_from_env(env: dict) -> dict:
@@ -215,9 +210,6 @@ def make_embed_cache_wrapper(original_embed, distractor_texts):
     return wrapped_embed
 
 
-# Aliases for compatibility with alternate naming
-make_embed_cache = make_embed_cache_wrapper
-make_distractor_embed_wrapper = make_embed_cache_wrapper
 
 
 def rescore(query_vec: list[float], candidates: list[dict], floats_by_text: dict, k: int) -> list[dict]:

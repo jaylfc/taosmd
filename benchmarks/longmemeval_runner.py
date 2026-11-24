@@ -27,7 +27,6 @@ from taosmd.archive import ArchiveStore
 from taosmd.memory_extractor import process_conversation_turn
 from taosmd.context_assembler import ContextAssembler
 from taosmd.retrieval import retrieve as _retrieve
-from taosmd.retrieval import _hit_session_date
 from taosmd.vector_memory import VectorMemory
 
 
@@ -112,6 +111,18 @@ def _parse_haystack_date(value: str):
     return datetime.strptime(value, "%Y/%m/%d (%a) %H:%M")
 
 
+def _hit_session_date(hit: dict) -> str | None:
+    """Extract session_date from a hit, tolerating flat or nested metadata."""
+    meta = hit.get("metadata", {}) or {}
+    sd = meta.get("session_date")
+    if sd:
+        return sd
+    inner = meta.get("metadata")
+    if isinstance(inner, dict):
+        return inner.get("session_date")
+    return None
+
+
 def _validate_dates(item: dict, date_frame: str, question_id: str | None = None):
     """Validate that required dates are present and parseable for non-off arms.
 
@@ -120,7 +131,9 @@ def _validate_dates(item: dict, date_frame: str, question_id: str | None = None)
     if date_frame == "off":
         return
 
-    qid = question_id or item.get("question_id") or item.get("question", "unknown")[:50]
+    qid = question_id or item.get("question_id")
+    if not qid:
+        qid = f"<no question_id> {item.get('question', 'unknown')[:50]}"
 
     # question_date required for question/both/labelled
     if date_frame in ("question", "both", "labelled"):
@@ -681,12 +694,18 @@ def _apply_date_framing(
                     pass
         if served_dates:
             latest_dt = max(served_dates)
-            latest_str = latest_dt.strftime("%Y/%m/%d (%a) %H:%M")
             new_results = []
             for _, _, r in dated_results:
                 text = r.get("text", "")
                 sd = _hit_session_date(r)
-                if sd == latest_str:
+                is_latest = False
+                if sd:
+                    try:
+                        if datetime.strptime(sd, "%Y/%m/%d (%a) %H:%M") == latest_dt:
+                            is_latest = True
+                    except ValueError:
+                        pass
+                if sd and is_latest:
                     text = text.replace(
                         f"[Session date: {sd}]",
                         f"[Session date: {sd}, most recent]",
@@ -1000,7 +1019,7 @@ async def run_benchmark(
         question_date = item.get("question_date")
 
         # Validate dates for non-off arms (exits 1 on failure)
-        _validate_dates(item, date_frame, question_id=item.get("question_id") or question[:50])
+        _validate_dates(item, date_frame, question_id=item.get("question_id"))
 
         # Create fresh KG + archive + vector memory per question (isolated test)
         tmp = tempfile.mkdtemp()
