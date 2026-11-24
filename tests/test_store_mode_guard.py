@@ -49,7 +49,8 @@ def test_legacy_marker_without_embedder_upgrades(tmp_path):
     asyncio.run(vm.close())
     vm2 = _build(tmp_path / "vm.db")  # same dense qmd mode, legacy marker present
     row = vm2._conn.execute("SELECT value FROM store_meta WHERE key='mode'").fetchone()
-    assert row["value"] == "late_interaction=0;binary_quant=0;dense_format=f32;embedder=qmd:qmd"
+    # Legacy marker upgraded to the full signature MINUS dense_format (0.4.x can still open it).
+    assert row["value"] == "late_interaction=0;binary_quant=0;embedder=qmd:qmd"
     asyncio.run(vm2.close())
 
 
