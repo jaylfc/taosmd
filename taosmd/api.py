@@ -39,9 +39,21 @@ def _resolve_data_dir(data_dir) -> str:
     if data_dir is not None:
         return os.fspath(data_dir)
     env = os.environ.get("TAOSMD_DATA_DIR")
-    if env:
-        return env
-    return _DEFAULT_DATA_DIR
+    base = env.strip() if (env and env.strip()) else _DEFAULT_DATA_DIR
+    try:
+        cfg_path = Path(base) / "config.json"
+        if cfg_path.exists():
+            raw = json.loads(cfg_path.read_text())
+            if isinstance(raw, dict):
+                for key in ("data_dir", "data_directory", "dataDir"):
+                    val = raw.get(key)
+                    if isinstance(val, str) and val.strip():
+                        target = val.strip()
+                        if os.path.abspath(target) != os.path.abspath(base):
+                            return target
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return base
 
 
 def _load_config(data_dir: str) -> dict:

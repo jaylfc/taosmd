@@ -2093,7 +2093,77 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Claims to pull per batch (default: 100)",
     )
 
+    # ----- data subcommand group -------------------------------------
+    data_p = sub.add_parser("data", help="Inspect or relocate the data directory")
+    data_sub = data_p.add_subparsers(dest="data_cmd", required=True)
+
+    data_status_p = data_sub.add_parser("status", help="Show data dir, store sizes, free space")
+    data_status_p.add_argument("--json", action="store_true", help="Emit JSON")
+    data_status_p.add_argument(
+        "--low-space-threshold-percent", type=float, default=None, dest="low_space_threshold_percent",
+        help="Free-space percent threshold (default 10)",
+    )
+    data_status_p.add_argument(
+        "--low-space-threshold-bytes", type=int, default=None, dest="low_space_threshold_bytes",
+        help="Free-space bytes threshold (default 5 GiB)",
+    )
+
+    data_relocate_p = data_sub.add_parser("relocate", help="Relocate the data directory")
+    data_relocate_p.add_argument("new_dir", nargs="?", default=None, help="New data directory")
+    data_relocate_p.add_argument("--json", action="store_true", help="Emit JSON")
+    data_relocate_p.add_argument(
+        "--confirm-remove-old", action="store_true", dest="confirm_remove_old",
+        help="Remove the old data directory after re-verifying the new copy",
+    )
+
     return parser
+
+
+def _data_status_cmd(args: argparse.Namespace) -> int:
+    from . import data_relocate as _dr  # noqa: PLC0415
+
+    kwargs = {}
+    if getattr(args, "low_space_threshold_percent", None) is not None:
+        kwargs["low_space_threshold_percent"] = args.low_space_threshold_percent
+    if getattr(args, "low_space_threshold_bytes", None) is not None:
+        kwargs["low_space_threshold_bytes"] = args.low_space_threshold_bytes
+    result = _dr.status(data_dir=args.data_dir, **kwargs)
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+    else:
+        print(f"data dir: {result.get('data_dir')}")
+        for name, size in (result.get("store_sizes") or {}).items():
+            print(f"  {name}: {size}")
+        print(f"total: {result.get('total_size')}")
+        print(f"free: {result.get('free_bytes')} ({result.get('free_percent', 0):.1f}%)")
+        print(f"low_space: {result.get('low_space')}")
+    return 0
+
+
+def _data_relocate_cmd(args: argparse.Namespace) -> int:
+    from . import data_relocate as _dr  # noqa: PLC0415
+
+    if args.confirm_remove_old:
+        result = _dr.relocate(
+            confirm_remove_old=True,
+            new_dir=args.new_dir,
+        )
+    else:
+        if not args.new_dir:
+            print("error: new_dir is required", file=sys.stderr)
+            return 2
+        result = _dr.relocate(args.new_dir, data_dir=args.data_dir)
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+    else:
+        print(
+            f"status: {result.get('status')}  "
+            f"{result.get('old_dir')} -> {result.get('new_dir')}"
+        )
+    try:
+        return int(result.get("exit_code", 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2183,6 +2253,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "verify":
         return _verify_cmd(args)
+
+    if args.cmd == "data":
+        if args.data_cmd == "status":
+            return _data_status_cmd(args)
+        if args.data_cmd == "relocate":
+            return _data_relocate_cmd(args)
 
     registry = AgentRegistry(args.data_dir)
 
