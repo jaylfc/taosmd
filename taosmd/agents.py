@@ -156,6 +156,9 @@ class AgentRecord:
 # stranded legacy file exists, which is the intent: durable nagging, no
 # auto-migration.
 _legacy_registry_warned = False
+# Once-per-process guards for non-default data_dir registry upgrade/mismatch.
+_upgrade_copied: set[str] = set()
+_upgrade_warned: set[str] = set()
 
 
 class AgentRegistry:
@@ -180,6 +183,7 @@ class AgentRegistry:
             data_dir = _config._resolve_data_dir(None)
         self.data_dir = Path(data_dir)
         self.registry_path = self.data_dir / "agents.json"
+        self._maybe_upgrade_registry()
         self._warn_if_legacy_registry()
 
     # ----- internal -----------------------------------------------------
@@ -210,6 +214,72 @@ class AgentRegistry:
                 )
         except OSError:
             pass
+
+    def _default_registry_path(self) -> Path:
+        # 0.4 default location; literal per #771 upgrade contract.
+        return Path.home() / ".taosmd" / "agents.json"
+
+    def _maybe_upgrade_registry(self) -> None:
+        """Copy a stranded default-dir registry into a fresh served data_dir.
+
+        After PR #771, registries are per data_dir. When a non-default served
+        data_dir has no agents.json but the canonical default-dir registry
+        exists and resolves to a different file, copy it once (never move) so
+        settings (gates, fanout, stats, librarian config) survive the upgrade.
+        If both exist, prefer the served file and warn once per process. Never
+        merge records silently.
+        """
+        if self._default_resolved:
+            return
+        global _upgrade_copied, _upgrade_warned
+        try:
+            default_path = self._default_registry_path()
+        except OSError:
+            return
+        try:
+            same_path = default_path.resolve() == self.registry_path.resolve()
+        except OSError:
+            same_path = str(default_path) == str(self.registry_path)
+        if same_path or not default_path.exists():
+            return
+
+        # Avoid copying a real user home registry into unrelated pytest tmp dirs.
+        # Upgrade tests opt in explicitly.
+        import os as _os  # noqa: PLC0415
+        if _os.environ.get("PYTEST_CURRENT_TEST") and not _os.environ.get(
+            "TAOSMD_TEST_ALLOW_REGISTRY_UPGRADE"
+        ):
+            return
+
+        served_key = str(self.registry_path)
+        if self.registry_path.exists():
+            if served_key not in _upgrade_warned:
+                _upgrade_warned.add(served_key)
+                logger.warning(
+                    "taosmd: agent registries exist at both %s (active, served data_dir) "
+                    "and %s (default). Using the served registry; the default file was "
+                    "left in place and records were not merged.",
+                    self.registry_path, default_path,
+                )
+            return
+
+        if served_key in _upgrade_copied:
+            return
+        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(default_path, self.registry_path)
+        except OSError as exc:
+            logger.warning(
+                "taosmd: failed to copy default agent registry %s to %s: %s",
+                default_path, self.registry_path, exc,
+            )
+            return
+        _upgrade_copied.add(served_key)
+        logger.info(
+            "taosmd: copied agent registry from default %s to served %s; "
+            "the default file was left in place.",
+            default_path, self.registry_path,
+        )
 
     def _read(self) -> dict:
         if not self.registry_path.exists():
@@ -721,7 +791,7 @@ def effective_fanout(
     Returns:
         Integer K (1, 3, 10, or 20).
     """
-    return _registry().effective_fanout(agent_name, worker_capabilities)
+    return _registry(data_dir).effective_fanout(agent_name, worker_capabilities)
 
 
 __all__ = [

@@ -826,3 +826,183 @@ def test_crystallize_and_reflect_use_served_data_dir(tmp_path, monkeypatch):
         f"reflect must not be skipped for a served-dir agent, got {result!r}"
     )
     spy.assert_called()
+
+
+# --- #771: data_dir pass-through + upgrade -----------------------------------
+
+
+def test_effective_fanout_module_level_respects_data_dir(tmp_path):
+    """(a) Module-level effective_fanout must read the served registry."""
+    from taosmd.agents import effective_fanout
+
+    served = tmp_path / "served"
+    served.mkdir()
+    reg = AgentRegistry(served)
+    reg.register_agent("bob")
+    reg.set_librarian("bob", fanout="high")
+
+    assert effective_fanout("bob", data_dir=str(served)) == 20
+
+
+def test_retrieve_passes_data_dir_to_effective_fanout(tmp_path, monkeypatch):
+    """(b) retrieval.retrieve must pass data_dir through to effective_fanout.
+
+    Mutation: removing data_dir= from retrieval.py's effective_fanout call
+    makes this test fail because the served registry's fanout is ignored.
+    """
+    import asyncio
+    from taosmd import retrieval
+    from taosmd import config as config_mod
+
+    served = tmp_path / "served"
+    default_dir = tmp_path / "default"
+    served.mkdir()
+    default_dir.mkdir()
+
+    # Served registry: bob has high fanout (K=20).
+    served_reg = AgentRegistry(served)
+    served_reg.register_agent("bob")
+    served_reg.set_librarian("bob", fanout="high")
+
+    # Default registry has no bob / low fanout; isolate default resolution.
+    monkeypatch.setattr(config_mod, "_resolve_data_dir", lambda d=None: str(default_dir) if d is None else str(d))
+
+    class ManyHits:
+        def __init__(self):
+            self.calls = []
+
+        async def search(self, query, *, limit=5, hybrid=True, fusion="boost",
+                         project=None, search_agents=None):
+            self.calls.append({"limit": limit})
+            return [
+                {"id": f"v{i}", "text": f"hit {i}", "similarity": 1 - i / 100,
+                 "metadata": {}}
+                for i in range(limit)
+            ]
+
+    vec = ManyHits()
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": vec}, strategy="custom",
+        memory_layers=["vector"], agent="bob", limit=5,
+        data_dir=str(served),
+    ))
+    # effective_fanout for high is 20; fetch_limit = max(limit*3, result_limit)=60
+    # so vector search limit should be 60, proving served registry was read.
+    assert vec.calls, "vector source was not queried"
+    assert vec.calls[0]["limit"] == 60
+    assert len(hits) == 5
+
+
+def test_upgrade_copies_default_registry_to_fresh_served_dir(tmp_path, monkeypatch, caplog):
+    """(c) Upgrade: copy default-dir registry into fresh served dir once."""
+    import json
+    import logging
+    import taosmd.agents as agents_mod
+    from taosmd import config as config_mod
+    from taosmd.agents import ensure_agent, AgentRegistry
+
+    default_dir = tmp_path / "default"
+    served_dir = tmp_path / "served"
+    default_dir.mkdir()
+    served_dir.mkdir()
+
+    default_reg = AgentRegistry(default_dir)
+    default_reg.register_agent("bob")
+    default_reg.set_librarian("bob", tasks={"crystallise": False})
+
+    monkeypatch.setenv("TAOSMD_TEST_ALLOW_REGISTRY_UPGRADE", "1")
+    agents_mod._upgrade_copied.clear()
+    agents_mod._upgrade_warned.clear()
+    monkeypatch.setattr(config_mod, "_resolve_data_dir",
+                        lambda d=None: str(default_dir) if d is None else str(d))
+    monkeypatch.setattr(AgentRegistry, "_default_registry_path",
+                        lambda self: default_dir / "agents.json")
+
+    with caplog.at_level(logging.INFO, logger="taosmd.agents"):
+        rec = ensure_agent("bob", data_dir=str(served_dir))
+
+    tasks = rec.get("librarian", {}).get("tasks", {})
+    assert tasks.get("crystallise") is False
+
+    # Default file unchanged.
+    default_data = json.loads((default_dir / "agents.json").read_text())
+    bob_default = [a for a in default_data["agents"] if a["name"] == "bob"][0]
+    assert bob_default["librarian"]["tasks"]["crystallise"] is False
+
+    # Served file created as a copy.
+    assert (served_dir / "agents.json").exists()
+    served_data = json.loads((served_dir / "agents.json").read_text())
+    bob_served = [a for a in served_data["agents"] if a["name"] == "bob"][0]
+    assert bob_served["librarian"]["tasks"]["crystallise"] is False
+
+    # One INFO line naming both paths.
+    infos = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert any(str(default_dir) in r.message and str(served_dir) in r.message for r in infos)
+
+
+def test_upgrade_both_registries_present_served_wins(tmp_path, monkeypatch, caplog):
+    """(d) Both registries exist: served wins, one WARNING is logged."""
+    import logging
+    import taosmd.agents as agents_mod
+    from taosmd import config as config_mod
+    from taosmd.agents import get_librarian, AgentRegistry
+
+    default_dir = tmp_path / "default"
+    served_dir = tmp_path / "served"
+    default_dir.mkdir()
+    served_dir.mkdir()
+
+    default_reg = AgentRegistry(default_dir)
+    default_reg.register_agent("bob")
+    default_reg.set_librarian("bob", tasks={"crystallise": False})
+
+    served_reg = AgentRegistry(served_dir)
+    served_reg.register_agent("bob")
+    served_reg.set_librarian("bob", tasks={"crystallise": True})
+
+    monkeypatch.setenv("TAOSMD_TEST_ALLOW_REGISTRY_UPGRADE", "1")
+    agents_mod._upgrade_copied.clear()
+    agents_mod._upgrade_warned.clear()
+    monkeypatch.setattr(config_mod, "_resolve_data_dir",
+                        lambda d=None: str(default_dir) if d is None else str(d))
+    monkeypatch.setattr(AgentRegistry, "_default_registry_path",
+                        lambda self: default_dir / "agents.json")
+
+    with caplog.at_level(logging.WARNING, logger="taosmd.agents"):
+        lib = get_librarian("bob", data_dir=str(served_dir))
+
+    assert lib.get("tasks", {}).get("crystallise") is True
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(str(default_dir) in r.message and str(served_dir) in r.message for r in warnings)
+
+
+def test_cli_agent_commands_use_data_dir(tmp_path):
+    """(e) CLI edits the registry under --data-dir and prints the path."""
+    import subprocess
+    import sys
+    import os
+    import json
+
+    served = tmp_path / "served"
+    served.mkdir()
+    env = os.environ.copy()
+    env.pop("TAOSMD_DATA_DIR", None)
+    cmd = [sys.executable, "-m", "taosmd.cli", "--data-dir", str(served),
+           "agent", "add", "bob"]
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert str(served) in r.stdout
+    reg_path = served / "agents.json"
+    assert reg_path.exists()
+    data = json.loads(reg_path.read_text())
+    assert any(a["name"] == "bob" for a in data["agents"])
+
+    # librarian set also uses --data-dir and prints path
+    cmd2 = [sys.executable, "-m", "taosmd.cli", "--data-dir", str(served),
+            "librarian", "set", "bob", "--fanout", "high"]
+    r2 = subprocess.run(cmd2, capture_output=True, text=True, env=env)
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert str(served) in r2.stdout
+    data2 = json.loads(reg_path.read_text())
+    bob = [a for a in data2["agents"] if a["name"] == "bob"][0]
+    assert bob["librarian"]["fanout"]["default"] == "high"
