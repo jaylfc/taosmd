@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .agents import (
     AgentExistsError,
@@ -20,6 +22,68 @@ from .agents import (
     LIBRARIAN_TASKS,
     FANOUT_LEVELS,
 )
+from .migrations import DB_FILES
+
+
+logger = logging.getLogger(__name__)
+
+# Once-per-process guard for the legacy ./data store warning.
+_legacy_data_dir_warned = False
+
+
+def _warn_if_legacy_data_dir(resolved_data_dir: Path) -> None:
+    """Warn (once per process) when a legacy ./data directory contains stores.
+
+    v0.4.0 wrote all CLI stores to $CWD/data/. The current default is
+    ~/.taosmd (or TAOSMD_DATA_DIR). When the user runs the CLI from a
+    directory that still has a ./data tree from a 0.4.0 install, we print
+    one warning listing every legacy store found and the exact migration
+    command. Never auto-move.
+    """
+    global _legacy_data_dir_warned
+    if _legacy_data_dir_warned:
+        return
+
+    legacy_root = Path("data")
+    try:
+        if not legacy_root.exists():
+            return
+        # If ./data IS the resolved dir, no warning needed (explicit --data-dir ./data)
+        if legacy_root.resolve() == resolved_data_dir.resolve():
+            return
+    except OSError:
+        return
+
+    found: list[str] = []
+
+    # Check for DB_FILES entries
+    for logical_name, fname in DB_FILES.items():
+        path = legacy_root / fname
+        if path.exists():
+            found.append(fname)
+
+    # Check for archive/, agent-memory/, agents.json
+    for name in ("archive", "agent-memory", "agents.json"):
+        path = legacy_root / name
+        if path.exists():
+            found.append(name + ("/" if name in ("archive", "agent-memory") else ""))
+
+    # Only warn while the resolved data dir lacks the stores. Once the user
+    # has imported them (taosmd migrate --import-legacy --apply), the warning
+    # stops firing even though the legacy tree is still on disk.
+    missing = [name for name in found if not (resolved_data_dir / name.rstrip("/")).exists()]
+    if not missing:
+        return
+
+    _legacy_data_dir_warned = True
+    logger.warning(
+        "taosmd: found legacy stores in %s: %s. The active data dir is %s. "
+        "Run `taosmd migrate --import-legacy ./data` to copy and verify "
+        "(never moves or deletes the originals).",
+        legacy_root.resolve(),
+        ", ".join(missing),
+        resolved_data_dir,
+    )
 
 
 def _fmt_ts(epoch: int) -> str:
@@ -1235,8 +1299,19 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
     known version. ``--check`` is the deploy pre-flight: it changes nothing and
     exits non-zero when any database has pending work, so a rollout can refuse
     to start against a store it would silently need to upgrade.
+
+    ``--import-legacy SRC`` copy-verifies a legacy 0.4 ``./data`` tree into
+    the data dir. It is a dry run unless ``--apply`` is also given; the source
+    is never modified, moved, or deleted.
     """
     from . import migrations  # noqa: PLC0415
+
+    if args.import_legacy:
+        from .legacy_import import legacy_import  # noqa: PLC0415
+
+        return legacy_import(
+            Path(args.import_legacy), Path(args.data_dir), apply=args.apply
+        )
 
     data_dir = args.data_dir
     if getattr(args, "convert_vectors", False):
@@ -1928,6 +2003,23 @@ def _build_parser() -> argparse.ArgumentParser:
              "converted or already current, 2 refused (nothing touched), 3 "
              "unknown or newer format, 4 failed and restored, 1 unexpected.",
     )
+    migrate_p.add_argument(
+        "--data-dir", default=argparse.SUPPRESS,
+        help="Data dir to import into (default: the resolved data dir). "
+             "Same as the global --data-dir; it never overrides it with None.",
+    )
+    migrate_p.add_argument(
+        "--import-legacy", metavar="SRC",
+        help="Copy-then-verify a legacy 0.4 ./data tree into the data dir. "
+             "Dry run unless --apply is also given; the source is never "
+             "moved, renamed, or deleted.",
+    )
+    migrate_p.add_argument(
+        "--apply", action="store_true",
+        help="With --import-legacy, copy each store into the data dir under "
+             "a temp name, verify it, and only then rename it into place. "
+             "Without it the run is a dry run that changes nothing.",
+    )
 
     # ----- reindex subcommand ------------------------------------------
     reindex_p = sub.add_parser(
@@ -2100,6 +2192,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
+    # Track whether data_dir was explicitly provided (vs default-resolved)
+    explicit_data_dir = args.data_dir is not None
+
     if args.data_dir is None:
         # Resolve the default through the canonical resolver so the CLI
         # operates on the same data dir as the service layer. The old
@@ -2108,6 +2203,11 @@ def main(argv: list[str] | None = None) -> int:
         from .config import _resolve_data_dir  # noqa: PLC0415
 
         args.data_dir = _resolve_data_dir(None)
+
+    # Warn about legacy ./data stores when using the default data dir.
+    # Only warn for default-resolved dirs; explicit --data-dir opts out.
+    if not explicit_data_dir:
+        _warn_if_legacy_data_dir(Path(args.data_dir))
 
     if args.cmd == "config":
         if args.config_cmd == "set-server":

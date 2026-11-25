@@ -158,3 +158,20 @@ since each store builds its own on first open.
 ## Release metadata trailer rule
 
 `scripts/release_meta.py` parses changelog trailer lines with this rule. It normalises each line (NFKC, remove Unicode format/Cf and U+00AD, casefold, strip), then strips leading markup (whitespace, `>`, `#`, `-`, `*`, `+`, `_`, `~`, backticks, `|`, checkboxes, numbered/lettered list markers, `<!--`). A trailer attempt is a remaining line that starts with `migration`/`migrations` or `manual[\W_]*steps?`, optional whitespace, and a colon-like char (`:`, Unicode colon forms after NFKC, or `=`). An exact canonical form parses (`Migration: one-way`, `Migration: reversible`, `Manual-Step: <non-empty text>`); any other trailer attempt refuses with exit 2 naming file, line, and line text. Prose that merely mentions migration (e.g. `migrate`, `migrating`) is ignored. Trailer attempts inside closed ```/~~~ fences are ignored; an unclosed fence refuses. A confusable-key homoglyph followed by a colon-like char refuses. The key must be at the start of the line after list or quote markup is stripped, so `Note: Migration: one-way` is treated as prose and ignored, and a colon or `=` is required after the key, so `Migration - one-way` is ignored.
+
+## Importing a legacy 0.4 `./data` tree
+
+`taosmd migrate --import-legacy SRC [--data-dir DEST] [--apply]` copy-verifies
+a legacy 0.4 data directory into the current data dir. It is a dry run unless
+`--apply` is given, so it lists what would be copied and changes nothing.
+
+Every store is copied into DEST under a temp name and verified before anything
+is renamed into place: SQLite databases via SQLite's online backup API plus
+`PRAGMA integrity_check` and per-table row counts; plain files and directories
+by sha256. Only after every item verifies are the temps renamed into place. On
+any failure only the temp copies this run made are removed and the command
+exits non-zero. The source is never modified, moved, renamed, or deleted.
+
+After a successful import the gate D legacy `./data` warning stops firing for
+that source, because the resolved data dir now holds the stores. The warning
+fires only while the data dir lacks the stores.
