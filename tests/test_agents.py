@@ -446,7 +446,8 @@ def test_fact_extraction_gate_disabled_skips_llm(registry, tmp_path):
     # Patch is_task_enabled to use our tmp registry so it sees "alice"
     import taosmd.memory_extractor as me
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         spy = AsyncMock(return_value=[])
         with patch.object(me, "extract_facts_with_llm", spy):
             # We need a minimal KG stub with add_triple_with_contradiction_check
@@ -477,7 +478,8 @@ def test_fact_extraction_gate_enabled_calls_llm(registry, tmp_path):
 
     import taosmd.memory_extractor as me
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         spy = AsyncMock(return_value=[])
         with patch.object(me, "extract_facts_with_llm", spy):
             kg_stub = AsyncMock()
@@ -497,7 +499,40 @@ def test_fact_extraction_gate_enabled_calls_llm(registry, tmp_path):
     spy.assert_called_once()
 
 
-def test_fact_extraction_gate_none_agent_runs_llm(registry, tmp_path):
+def test_fact_extraction_reads_registry_from_passed_data_dir(tmp_path):
+    """process_conversation_turn must resolve fact_extraction from the passed
+    data_dir, not the canonical registry, so an agent registered only in the
+    passed dir still gets LLM extraction. Mutating the data_dir pass-through
+    away makes the gate read the canonical dir, miss the agent, and skip the
+    LLM call."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import taosmd.memory_extractor as me
+    from taosmd import agents
+
+    data_dir = tmp_path / "served"
+    data_dir.mkdir()
+    agents.register_agent("alice", data_dir=str(data_dir))  # fact_extraction ON
+
+    spy = AsyncMock(return_value=[])
+    with patch.object(me, "extract_facts_with_llm", spy):
+        kg_stub = AsyncMock()
+        kg_stub.add_triple_with_contradiction_check = AsyncMock(
+            return_value={"triple_id": "t1", "contradictions_resolved": 0}
+        )
+        asyncio.run(
+            me.process_conversation_turn(
+                "Alice uses Postgres.",
+                agent_name="alice",
+                kg=kg_stub,
+                data_dir=str(data_dir),
+                llm_url="http://fake:11434",
+                http_client=AsyncMock(),
+                use_llm=True,
+            )
+        )
+    spy.assert_called_once()
     """agent_name=None → anonymous caller; LLM always runs regardless of registry."""
     import asyncio
     from unittest.mock import AsyncMock, patch
@@ -505,7 +540,8 @@ def test_fact_extraction_gate_none_agent_runs_llm(registry, tmp_path):
     import taosmd.memory_extractor as me
 
     # No agent registered at all — anonymous install
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         spy = AsyncMock(return_value=[])
         with patch.object(me, "extract_facts_with_llm", spy):
             kg_stub = AsyncMock()
@@ -542,7 +578,8 @@ def test_crystallize_gate_disabled_returns_skipped(registry, tmp_path):
 
     turns = [{"role": "user", "content": "hello", "timestamp": 1000.0}]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         cs = cr.CrystalStore(db_path=str(tmp_path / "crystals.db"))
         spy = AsyncMock(return_value=("narrative", [], [], []))
         with patch.object(cs, "_llm_crystallize", spy):
@@ -572,7 +609,8 @@ def test_crystallize_gate_enabled_calls_llm(registry, tmp_path):
     turns = [{"role": "user", "content": "hello", "timestamp": 1000.0},
              {"role": "assistant", "content": "world", "timestamp": 1005.0}]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         cs = cr.CrystalStore(db_path=str(tmp_path / "crystals.db"))
         spy = AsyncMock(return_value=("narrative", [], [], []))
         with patch.object(cs, "_llm_crystallize", spy):
@@ -599,7 +637,8 @@ def test_crystallize_gate_none_agent_runs_llm(registry, tmp_path):
     turns = [{"role": "user", "content": "hello", "timestamp": 1000.0},
              {"role": "assistant", "content": "world", "timestamp": 1005.0}]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         cs = cr.CrystalStore(db_path=str(tmp_path / "crystals.db"))
         spy = AsyncMock(return_value=("narrative", [], [], []))
         with patch.object(cs, "_llm_crystallize", spy):
@@ -631,7 +670,8 @@ def test_reflect_gate_disabled_returns_empty(registry, tmp_path):
 
     import taosmd.reflect as rf
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         store = rf.InsightStore(db_path=str(tmp_path / "insights.db"))
         kg_stub = AsyncMock()
         spy = AsyncMock(return_value=None)
@@ -658,7 +698,8 @@ def test_reflect_gate_enabled_calls_synthesize(registry, tmp_path):
         {"subject": "Alice", "predicate": "uses", "object": "Redis", "id": "t2"},
     ]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         store = rf.InsightStore(db_path=str(tmp_path / "insights.db"))
         kg_stub = AsyncMock()
         kg_stub.timeline = AsyncMock(return_value=triples)
@@ -683,7 +724,8 @@ def test_reflect_gate_anonymous_always_runs(registry, tmp_path):
         {"subject": "Alice", "predicate": "uses", "object": "Redis", "id": "t2"},
     ]
 
-    with patch("taosmd.agents.is_task_enabled", side_effect=registry.is_task_enabled):
+    with patch("taosmd.agents.is_task_enabled",
+           side_effect=lambda name, task, data_dir=None: registry.is_task_enabled(name, task)):
         store = rf.InsightStore(db_path=str(tmp_path / "insights.db"))
         kg_stub = AsyncMock()
         kg_stub.timeline = AsyncMock(return_value=triples)
@@ -694,3 +736,273 @@ def test_reflect_gate_anonymous_always_runs(registry, tmp_path):
                 store.reflect(kg=kg_stub, agent_name="")
             )
     spy.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: served data_dir gates crystallise/reflect (the #731 defect)
+# ---------------------------------------------------------------------------
+
+
+def test_crystallize_and_reflect_use_served_data_dir(tmp_path, monkeypatch):
+    """Ingest into a served dir, then crystallize/reflect with that data_dir:
+    the agent must be resolved from the served registry, not the canonical
+    HOME one, so neither task is skipped. Reproduces #731: before the fix,
+    is_task_enabled read the default registry, could not find the agent, and
+    the librarian gates flipped to disabled."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    import taosmd
+    import taosmd.config as config_mod
+    from taosmd.crystallize import CrystalStore
+    from taosmd.reflect import InsightStore
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("TAOSMD_DATA_DIR", raising=False)
+    # A default-resolved fallback write must land in the throwaway HOME, not
+    # the real one; this is what makes the assertion below non-vacuous.
+    monkeypatch.setattr(
+        config_mod, "_DEFAULT_DATA_DIR", str(home / ".taosmd"), raising=False
+    )
+
+    data_dir = tmp_path / "served"
+    data_dir.mkdir()
+
+    asyncio.run(
+        taosmd.ingest(
+            "hello world from the served install", agent="alice",
+            data_dir=str(data_dir),
+        )
+    )
+
+    agents_json = data_dir / "agents.json"
+    assert agents_json.exists(), f"expected {agents_json} to exist"
+    assert "alice" in agents_json.read_text(), "agent alice must be registered"
+
+    turns = [
+        {"role": "user", "content": "hello", "timestamp": 1000.0},
+        {"role": "assistant", "content": "world", "timestamp": 1005.0},
+    ]
+
+    # --- crystallise -------------------------------------------------------
+    cs = CrystalStore(db_path=str(data_dir / "crystals.db"))
+    spy = AsyncMock(return_value=("narrative", [], [], []))
+    with patch.object(cs, "_llm_crystallize", spy):
+        asyncio.run(cs.init())
+        result = asyncio.run(
+            cs.crystallize(
+                session_id="s1",
+                turns=turns,
+                agent_name="alice",
+                data_dir=str(data_dir),
+                llm_url="http://fake:11434",
+                model="test-model",
+            )
+        )
+    assert result.get("skipped") is not True, (
+        f"crystallise must not be skipped for a served-dir agent, got {result!r}"
+    )
+    spy.assert_called_once()
+
+    # --- reflect ----------------------------------------------------------
+    store = InsightStore(db_path=str(data_dir / "insights.db"))
+    kg_stub = AsyncMock()
+    kg_stub.timeline = AsyncMock(return_value=[
+        {"subject": "Alice", "predicate": "uses", "object": "Postgres", "id": "t1"},
+        {"subject": "Alice", "predicate": "uses", "object": "Redis", "id": "t2"},
+    ])
+    spy = AsyncMock(return_value={"insight_text": "pattern", "confidence": 0.9})
+    with patch.object(store, "_synthesize_cluster", spy):
+        asyncio.run(store.init())
+        result = asyncio.run(
+            store.reflect(
+                kg=kg_stub, agent_name="alice", data_dir=str(data_dir),
+                llm_url="http://fake:11434", model="test-model",
+            )
+        )
+    assert result != [], (
+        f"reflect must not be skipped for a served-dir agent, got {result!r}"
+    )
+    spy.assert_called()
+
+
+# --- #771: data_dir pass-through + upgrade -----------------------------------
+
+
+def test_effective_fanout_module_level_respects_data_dir(tmp_path):
+    """(a) Module-level effective_fanout must read the served registry."""
+    from taosmd.agents import effective_fanout
+
+    served = tmp_path / "served"
+    served.mkdir()
+    reg = AgentRegistry(served)
+    reg.register_agent("bob")
+    reg.set_librarian("bob", fanout="high")
+
+    assert effective_fanout("bob", data_dir=str(served)) == 20
+
+
+def test_retrieve_passes_data_dir_to_effective_fanout(tmp_path, monkeypatch):
+    """(b) retrieval.retrieve must pass data_dir through to effective_fanout.
+
+    Mutation: removing data_dir= from retrieval.py's effective_fanout call
+    makes this test fail because the served registry's fanout is ignored.
+    """
+    import asyncio
+    from taosmd import retrieval
+    from taosmd import config as config_mod
+
+    served = tmp_path / "served"
+    default_dir = tmp_path / "default"
+    served.mkdir()
+    default_dir.mkdir()
+
+    # Served registry: bob has high fanout (K=20).
+    served_reg = AgentRegistry(served)
+    served_reg.register_agent("bob")
+    served_reg.set_librarian("bob", fanout="high")
+
+    # Default registry has no bob / low fanout; isolate default resolution.
+    monkeypatch.setattr(config_mod, "_resolve_data_dir", lambda d=None: str(default_dir) if d is None else str(d))
+
+    class ManyHits:
+        def __init__(self):
+            self.calls = []
+
+        async def search(self, query, *, limit=5, hybrid=True, fusion="boost",
+                         project=None, search_agents=None):
+            self.calls.append({"limit": limit})
+            return [
+                {"id": f"v{i}", "text": f"hit {i}", "similarity": 1 - i / 100,
+                 "metadata": {}}
+                for i in range(limit)
+            ]
+
+    vec = ManyHits()
+    hits = asyncio.run(retrieval.retrieve(
+        "q", sources={"vector": vec}, strategy="custom",
+        memory_layers=["vector"], agent="bob", limit=5,
+        data_dir=str(served),
+    ))
+    # effective_fanout for high is 20; fetch_limit = max(limit*3, result_limit)=60
+    # so vector search limit should be 60, proving served registry was read.
+    assert vec.calls, "vector source was not queried"
+    assert vec.calls[0]["limit"] == 60
+    assert len(hits) == 5
+
+
+def test_upgrade_copies_default_registry_to_fresh_served_dir(tmp_path, monkeypatch, caplog):
+    """(c) Upgrade: copy default-dir registry into fresh served dir once."""
+    import json
+    import logging
+    import taosmd.agents as agents_mod
+    from taosmd import config as config_mod
+    from taosmd.agents import ensure_agent, AgentRegistry
+
+    default_dir = tmp_path / "default"
+    served_dir = tmp_path / "served"
+    default_dir.mkdir()
+    served_dir.mkdir()
+
+    default_reg = AgentRegistry(default_dir)
+    default_reg.register_agent("bob")
+    default_reg.set_librarian("bob", tasks={"crystallise": False})
+
+    monkeypatch.setenv("TAOSMD_TEST_ALLOW_REGISTRY_UPGRADE", "1")
+    agents_mod._upgrade_copied.clear()
+    agents_mod._upgrade_warned.clear()
+    monkeypatch.setattr(config_mod, "_resolve_data_dir",
+                        lambda d=None: str(default_dir) if d is None else str(d))
+    monkeypatch.setattr(AgentRegistry, "_default_registry_path",
+                        lambda self: default_dir / "agents.json")
+
+    with caplog.at_level(logging.INFO, logger="taosmd.agents"):
+        rec = ensure_agent("bob", data_dir=str(served_dir))
+
+    tasks = rec.get("librarian", {}).get("tasks", {})
+    assert tasks.get("crystallise") is False
+
+    # Default file unchanged.
+    default_data = json.loads((default_dir / "agents.json").read_text())
+    bob_default = [a for a in default_data["agents"] if a["name"] == "bob"][0]
+    assert bob_default["librarian"]["tasks"]["crystallise"] is False
+
+    # Served file created as a copy.
+    assert (served_dir / "agents.json").exists()
+    served_data = json.loads((served_dir / "agents.json").read_text())
+    bob_served = [a for a in served_data["agents"] if a["name"] == "bob"][0]
+    assert bob_served["librarian"]["tasks"]["crystallise"] is False
+
+    # One INFO line naming both paths.
+    infos = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert any(str(default_dir) in r.message and str(served_dir) in r.message for r in infos)
+
+
+def test_upgrade_both_registries_present_served_wins(tmp_path, monkeypatch, caplog):
+    """(d) Both registries exist: served wins, one WARNING is logged."""
+    import logging
+    import taosmd.agents as agents_mod
+    from taosmd import config as config_mod
+    from taosmd.agents import get_librarian, AgentRegistry
+
+    default_dir = tmp_path / "default"
+    served_dir = tmp_path / "served"
+    default_dir.mkdir()
+    served_dir.mkdir()
+
+    default_reg = AgentRegistry(default_dir)
+    default_reg.register_agent("bob")
+    default_reg.set_librarian("bob", tasks={"crystallise": False})
+
+    served_reg = AgentRegistry(served_dir)
+    served_reg.register_agent("bob")
+    served_reg.set_librarian("bob", tasks={"crystallise": True})
+
+    monkeypatch.setenv("TAOSMD_TEST_ALLOW_REGISTRY_UPGRADE", "1")
+    agents_mod._upgrade_copied.clear()
+    agents_mod._upgrade_warned.clear()
+    monkeypatch.setattr(config_mod, "_resolve_data_dir",
+                        lambda d=None: str(default_dir) if d is None else str(d))
+    monkeypatch.setattr(AgentRegistry, "_default_registry_path",
+                        lambda self: default_dir / "agents.json")
+
+    with caplog.at_level(logging.WARNING, logger="taosmd.agents"):
+        lib = get_librarian("bob", data_dir=str(served_dir))
+
+    assert lib.get("tasks", {}).get("crystallise") is True
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(str(default_dir) in r.message and str(served_dir) in r.message for r in warnings)
+
+
+def test_cli_agent_commands_use_data_dir(tmp_path):
+    """(e) CLI edits the registry under --data-dir and prints the path."""
+    import subprocess
+    import sys
+    import os
+    import json
+
+    served = tmp_path / "served"
+    served.mkdir()
+    env = os.environ.copy()
+    env.pop("TAOSMD_DATA_DIR", None)
+    cmd = [sys.executable, "-m", "taosmd.cli", "--data-dir", str(served),
+           "agent", "add", "bob"]
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert str(served) in r.stdout
+    reg_path = served / "agents.json"
+    assert reg_path.exists()
+    data = json.loads(reg_path.read_text())
+    assert any(a["name"] == "bob" for a in data["agents"])
+
+    # librarian set also uses --data-dir and prints path
+    cmd2 = [sys.executable, "-m", "taosmd.cli", "--data-dir", str(served),
+            "librarian", "set", "bob", "--fanout", "high"]
+    r2 = subprocess.run(cmd2, capture_output=True, text=True, env=env)
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert str(served) in r2.stdout
+    data2 = json.loads(reg_path.read_text())
+    bob = [a for a in data2["agents"] if a["name"] == "bob"][0]
+    assert bob["librarian"]["fanout"]["default"] == "high"

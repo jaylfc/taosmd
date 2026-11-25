@@ -53,13 +53,13 @@ def _agent_add(registry: AgentRegistry, name: str, display_name: str, clobber: b
     try:
         record = registry.register_agent(name, display_name=display_name, clobber=clobber)
     except AgentExistsError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        print("hint: re-run with --clobber to overwrite the existing record.", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr, flush=True)
+        print("hint: re-run with --clobber to overwrite the existing record.", file=sys.stderr, flush=True)
         return 2
     except InvalidAgentNameError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr, flush=True)
         return 2
-    print(f"Registered agent: {record['name']}")
+    print(f"Registered agent: {record['name']}  Registry: {registry.registry_path}", flush=True)
     return 0
 
 
@@ -67,14 +67,15 @@ def _librarian_show(registry: AgentRegistry, name: str, json_out: bool) -> int:
     try:
         lib = registry.get_librarian(name)
     except AgentNotFoundError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr, flush=True)
         return 2
     if json_out:
-        print(json.dumps(lib, indent=2))
+        print(json.dumps(lib, indent=2), flush=True)
         return 0
     enabled = "ON" if lib.get("enabled", True) else "OFF"
-    print(f"Agent:      {name}")
-    print(f"Librarian:  {enabled}")
+    print(f"Agent:      {name}", flush=True)
+    print(f"Registry:   {registry.registry_path}", flush=True)
+    print(f"Librarian:  {enabled}", flush=True)
     print("Tasks:")
     tasks = lib.get("tasks", {})
     for t in LIBRARIAN_TASKS:
@@ -106,12 +107,13 @@ def _librarian_set(
             fanout_auto_scale=fanout_auto_scale,
         )
     except AgentNotFoundError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr, flush=True)
         return 2
     except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr, flush=True)
         return 2
-    print(json.dumps(lib, indent=2))
+    print(f"Registry: {registry.registry_path}", flush=True)
+    print(json.dumps(lib, indent=2), flush=True)
     return 0
 
 
@@ -669,12 +671,13 @@ def _agent_rm(registry: AgentRegistry, name: str, drop_data: bool) -> int:
     try:
         registry.delete_agent(name, drop_data=drop_data)
     except AgentNotFoundError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr, flush=True)
         return 2
     if drop_data:
-        print(f"Removed agent {name!r} and deleted its index files.")
+        print(f"Removed agent {name!r} and deleted its index files.", flush=True)
     else:
-        print(f"Removed agent {name!r}. Index files preserved (use --drop-data to delete).")
+        print(f"Removed agent {name!r}. Index files preserved (use --drop-data to delete).", flush=True)
+    print(f"Registry: {registry.registry_path}", flush=True)
     return 0
 
 
