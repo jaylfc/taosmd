@@ -15,6 +15,7 @@ import pytest
 
 import taosmd
 from taosmd import api as taosmd_api
+from taosmd.agents import update_stats
 
 
 def _patch_embedder(stores: dict) -> None:
@@ -1007,3 +1008,94 @@ def test_stats_includes_categories(isolated_data_dir):
     assert "categories" in out and isinstance(out["categories"], list)
     names = {c["name"] for c in out["categories"]}
     assert names & {"Identity & Preferences", "Work & Learning"}
+
+
+# ---------------------------------------------------------------------------
+# New tests: data_dir routing for agent registry
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_registers_agent_in_given_data_dir(tmp_path, monkeypatch):
+    """ingest must write the agent registry to the given data_dir, not HOME."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    # Ensure TAOSMD_DATA_DIR is not steal the show
+    monkeypatch.delenv("TAOSMD_DATA_DIR", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    asyncio.run(taosmd.ingest("hello", agent="a1", data_dir=str(data_dir)))
+
+    # Registry must be in the given data dir
+    agents_json = data_dir / "agents.json"
+    assert agents_json.exists(), f"expected {agents_json} to exist"
+    assert "a1" in agents_json.read_text(), "agent a1 must be registered"
+
+    # Must NOT have been written to the (monkeypatched) HOME
+    home_taosmd = home / ".taosmd"
+    assert not home_taosmd.exists(), (
+        f"expected {home_taosmd} NOT to exist; agent registry split from data dir"
+    )
+
+
+def test_ingest_batch_registers_agent_in_given_data_dir(tmp_path, monkeypatch):
+    """ingest_batch must write the agent registry to the given data_dir, not HOME."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("TAOSMD_DATA_DIR", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    asyncio.run(
+        taosmd.ingest_batch(
+            [
+                {"text": "first item", "id": "h1"},
+                {"text": "second item", "id": "h2"},
+            ],
+            agent="a2",
+            data_dir=str(data_dir),
+        )
+    )
+
+    # Registry must be in the given data dir
+    agents_json = data_dir / "agents.json"
+    assert agents_json.exists(), f"expected {agents_json} to exist"
+    text = agents_json.read_text()
+    assert "a2" in text, "agent a2 must be registered in batch mode"
+
+    # Must NOT have been written to the (monkeypatched) HOME
+    home_taosmd = home / ".taosmd"
+    assert not home_taosmd.exists(), (
+        f"expected {home_taosmd} NOT to exist; agent registry split from data dir"
+    )
+
+
+def test_update_stats_lands_in_given_data_dir(tmp_path, monkeypatch):
+    """After ingest, update_stats must read the agent's last_ingest_at from the
+    registry in the given data_dir, not from HOME/.taosmd."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("TAOSMD_DATA_DIR", raising=False)
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    # Ingest so an agent record exists
+    asyncio.run(taosmd.ingest("hello", agent="a3", data_dir=str(data_dir)))
+
+    # Now update stats through the module-level API
+    update_stats("a3", last_ingest_at=12345, data_dir=str(data_dir))
+
+    # The registry in the given data dir must reflect the update
+    agents_json = data_dir / "agents.json"
+    assert "a3" in agents_json.read_text(), "agent a3 must be findable"
+    record = json.loads(agents_json.read_text())["agents"]
+    a3_rec = next(a for a in record if a["name"] == "a3")
+    assert a3_rec["last_ingest_at"] == 12345, (
+        f"expected last_ingest_at=12345, got {a3_rec.get('last_ingest_at')}"
+    )
