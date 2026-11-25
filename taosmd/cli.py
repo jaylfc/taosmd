@@ -1313,33 +1313,6 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
             Path(args.import_legacy), Path(args.data_dir), apply=args.apply
         )
 
-    if args.probe:
-        from .legacy_import import store_probe  # noqa: PLC0415
-
-        report = store_probe(Path(args.data_dir))
-        print(f"data dir: {args.data_dir}")
-        if not report["stores"]:
-            print("  no stores found")
-        else:
-            for name, info in report["stores"].items():
-                line = f"  {name:<32} {info.get('size', '-')} bytes"
-                if info.get("kind") == "db":
-                    extra = []
-                    if info.get("integrity_ok") is not None:
-                        extra.append(
-                            "integrity="
-                            + ("ok" if info["integrity_ok"] else info.get("integrity", "?"))
-                        )
-                    if info.get("wal_bytes"):
-                        extra.append(f"wal={info['wal_bytes']}B")
-                    if info.get("hot_journal"):
-                        extra.append("hot-journal")
-                    if extra:
-                        line += "  (" + ", ".join(extra) + ")"
-                print(line)
-            print(f"  total: {report['total_bytes']} bytes")
-        return 0
-
     data_dir = args.data_dir
     if getattr(args, "convert_vectors", False):
         return _convert_vectors_cmd(args)
@@ -2031,8 +2004,9 @@ def _build_parser() -> argparse.ArgumentParser:
              "unknown or newer format, 4 failed and restored, 1 unexpected.",
     )
     migrate_p.add_argument(
-        "--data-dir",
-        help="Data dir to import into (default: the resolved data dir).",
+        "--data-dir", default=argparse.SUPPRESS,
+        help="Data dir to import into (default: the resolved data dir). "
+             "Same as the global --data-dir; it never overrides it with None.",
     )
     migrate_p.add_argument(
         "--import-legacy", metavar="SRC",
@@ -2045,10 +2019,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="With --import-legacy, copy each store into the data dir under "
              "a temp name, verify it, and only then rename it into place. "
              "Without it the run is a dry run that changes nothing.",
-    )
-    migrate_p.add_argument(
-        "--probe", action="store_true",
-        help="Probe the data dir's stores and print their state. Read-only.",
     )
 
     # ----- reindex subcommand ------------------------------------------
