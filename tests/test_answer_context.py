@@ -1015,3 +1015,10 @@ def test_a_standalone_hit_repeating_a_grown_session_line_is_not_printed_twice(mo
     out = _ctx(data_dir, neighbors=0, grow=True)
     assert out["context"].count(SESSIONS["s1"][1][3][1]) == 1
     assert out["sessions_included"] == 1
+
+
+def test_default_budget_tokens_accepts_window_and_used_positionally():
+    assert ac.default_budget_tokens(32768, 22000) == 10256
+    assert ac.default_budget_tokens(32768, 22000, reasoning_reserve=1024) == 9232
+    assert ac.default_budget_tokens(32768, 22000, reasoning_reserve=1536) == 8720
+    assert ac.default_budget_tokens(65536) == 26214

@@ -78,7 +78,6 @@ def estimate_tokens(text: str) -> int:
 
 def default_budget_tokens(
     window_tokens: int,
-    *,
     used_tokens: int = 0,
     answer_reserve: int = 512,
     reasoning_reserve: int = 0,
