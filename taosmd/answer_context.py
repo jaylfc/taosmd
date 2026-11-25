@@ -394,6 +394,7 @@ async def answer_context(
     blocks: list[_Block] = []
     by_session: dict[tuple, _Block] = {}
     seen_turns: dict[tuple, set[int]] = {}
+    turn_by_index: dict[tuple, dict[int, _Turn]] = {}
     expanded = False
     for rank, hit in turn_hits:
         md = _hit_view(hit)[1]
@@ -403,6 +404,9 @@ async def answer_context(
         if pos is None:
             block = _Block(rank)
             block.turns.append(_turn_from_hit(hit))
+            block.windows = [list(block.turns)]
+            block.turn_by_index = {id(t): t for t in block.turns}
+            block.window_hits = [block.turns[0] if block.turns else None]
             blocks.append(block)
             continue
         key = (md.get("agent"), sid)
@@ -410,6 +414,10 @@ async def answer_context(
         if block is None:
             block = by_session[key] = _Block(rank)
             seen_turns[key] = set()
+            turn_by_index[key] = {}
+            block.windows = []
+            block.window_hits = []
+            block.turn_by_index = turn_by_index[key]
             blocks.append(block)
             block.full = [
                 _turn_from_row(r["metadata"].get("role"), r["text"], r["metadata"],
@@ -417,14 +425,25 @@ async def answer_context(
                 for _, r in rows
             ]
         block.rank = min(block.rank, rank)
+        window_turns: list[_Turn] = []
+        hit_turn: _Turn | None = None
         for idx, row in rows[max(0, pos - neighbors): pos + neighbors + 1]:
-            if idx in seen_turns[key]:
-                continue
-            seen_turns[key].add(idx)
-            block.turns.append(_turn_from_row(
-                row["metadata"].get("role"), row["text"], row["metadata"], row["created_at"],
-                vector_id=row["id"]))
-        block.turns.sort(key=lambda t: t.index)
+            if idx not in turn_by_index[key]:
+                turn_by_index[key][idx] = _turn_from_row(
+                    row["metadata"].get("role"), row["text"], row["metadata"], row["created_at"],
+                    vector_id=row["id"])
+            t = turn_by_index[key][idx]
+            window_turns.append(t)
+            if idx == ti and hit_turn is None:
+                hit_turn = t
+            if idx not in seen_turns[key]:
+                seen_turns[key].add(idx)
+                block.turns.append(t)
+        if hit_turn is None and window_turns:
+            hit_turn = window_turns[len(window_turns) // 2]
+        block.windows.append(window_turns)
+        block.window_hits.append(hit_turn)
+        block.turns.sort(key=lambda t: t.index if t.index is not None else 0)
         expanded = expanded or neighbors > 0
 
     # A standalone hit whose line is already inside another block adds nothing.
@@ -445,15 +464,86 @@ async def answer_context(
         return count(_layout(header, candidate, facts_block)) <= available
 
     # Pass 1, coverage: every candidate session gets its window before any
-    # session is grown.
+    # session is grown. A block that does not fit whole is trimmed to the hit
+    # windows that do fit (best hit first), instead of being dropped outright.
     ranked = sorted(blocks, key=lambda b: b.rank)
     chosen: list[_Block] = []
     dropped: list[_Block] = []
     for block in ranked:
         if fits(chosen + [block]):
             chosen.append(block)
-        else:
+            continue
+        windows = getattr(block, "windows", None) or [list(block.turns)]
+        hit_turns = getattr(block, "window_hits", None) or []
+        original_turns = list(block.turns)
+        # standalone / facts blocks: no windows to trim -> drop if it does not fit
+        if block.kind != "session" or not windows:
             dropped.append(block)
+            continue
+        included_ids: set[int] = set()
+        trimmed = False
+        # best hit first
+        for wi, window in enumerate(windows):
+            new_turns = [t for t in window if id(t) not in included_ids]
+            if not new_turns:
+                continue
+            # try the whole window
+            trial_ids = included_ids | {id(t) for t in new_turns}
+            trial_turns = sorted(
+                (t for t in original_turns if id(t) in trial_ids),
+                key=lambda t: (t.index is None, t.index if t.index is not None else 0))
+            block.turns = trial_turns
+            if fits(chosen + [block]):
+                included_ids = trial_ids
+                trimmed = True
+                continue
+            # best hit's window: try the bare hit turn alone
+            if wi == 0:
+                ht = hit_turns[0] if hit_turns else (window[0] if window else None)
+                if ht is not None and id(ht) not in included_ids:
+                    trial_ids2 = included_ids | {id(ht)}
+                    trial_turns2 = sorted(
+                        (t for t in original_turns if id(t) in trial_ids2),
+                        key=lambda t: (t.index is None, t.index if t.index is not None else 0))
+                    block.turns = trial_turns2
+                    if fits(chosen + [block]):
+                        included_ids = trial_ids2
+                        trimmed = True
+                        continue
+                    # bare turn does not fit either: drop the whole session
+                    block.turns = original_turns
+                    dropped.append(block)
+                    trimmed = False
+                    break
+            # subsequent window did not fit: skip it
+            block.turns = sorted(
+                (t for t in original_turns if id(t) in included_ids),
+                key=lambda t: (t.index is None, t.index if t.index is not None else 0))
+        if not trimmed and not included_ids:
+            # nothing fit
+            if block not in dropped:
+                block.turns = original_turns
+                dropped.append(block)
+            continue
+        if not included_ids:
+            block.turns = original_turns
+            if block not in dropped:
+                dropped.append(block)
+            continue
+        # apply included subset
+        block.turns = sorted(
+            (t for t in original_turns if id(t) in included_ids),
+            key=lambda t: (t.index is None, t.index if t.index is not None else 0))
+        chosen.append(block)
+        # report trimmed-away turns in dropped
+        leftover = [t for t in original_turns if id(t) not in included_ids]
+        if leftover:
+            leftover_block = _Block(block.rank)
+            leftover_block.kind = block.kind
+            leftover_block.session_id = None
+            leftover_block.turns = sorted(leftover, key=lambda t: (t.index is None, t.index if t.index is not None else 0))
+            # carry session id via turns (already on turns)
+            dropped.append(leftover_block)
 
     # Pass 2, depth: with what is left, grow sessions to the whole session in
     # rank order. A session that does not fit whole keeps its window.
