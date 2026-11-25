@@ -361,7 +361,7 @@ async def stats(*, agent: str, data_dir=None) -> dict:
         "total_chunks": 0,
     }
     try:
-        record = get_agent(agent)
+        record = get_agent(agent, data_dir=data_dir)
     except AgentNotFoundError:
         return out
     out.update(
