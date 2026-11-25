@@ -97,12 +97,23 @@ def _ingest_sessions(data_dir, agent="a", project=None, sessions=SESSIONS):
         asyncio.run(taosmd.ingest(rows, agent=agent, project=project, data_dir=data_dir))
 
 
+def _row(data_dir, text, agent="a"):
+    """The stored hit whose text is exactly ``text`` (ranking-independent)."""
+    hits = asyncio.run(taosmd_api.search(text, agent=agent, data_dir=data_dir, limit=50))
+    exact = [h for h in hits if h["text"] == text]
+    assert exact, f"no stored row with text {text!r}"
+    return exact[0]
+
+
 def _ranked(monkeypatch, data_dir, texts, agent="a"):
     """Make search return the real hit of each text, in the order given."""
     async def one(t):
-        hits = await taosmd_api.search(t, agent=agent, data_dir=data_dir, limit=1)
-        assert hits and hits[0]["text"] == t
-        return hits[0]
+        # Pick the exact row from a wide result list: ranking depends on the
+        # embedder (CI falls back to a keyword-only one), the text does not.
+        hits = await taosmd_api.search(t, agent=agent, data_dir=data_dir, limit=50)
+        exact = [h for h in hits if h["text"] == t]
+        assert exact, f"no stored row with text {t!r}"
+        return exact[0]
 
     fixed = [asyncio.run(one(t)) for t in texts]
 
@@ -209,7 +220,7 @@ def test_unknown_session_date_header(monkeypatch, data_dir):
 
 def test_undated_session_sorts_before_dated(monkeypatch, data_dir):
     _ingest_sessions(data_dir)
-    hit = asyncio.run(taosmd_api.search(SESSIONS["s1"][1][0][1], agent="a", data_dir=data_dir, limit=1))[0]
+    hit = _row(data_dir, SESSIONS["s1"][1][0][1])
 
     async def fake_search(query, **kw):
         return [hit, {"text": "floating", "source": "vector", "timestamp": 0,
@@ -222,7 +233,7 @@ def test_undated_session_sorts_before_dated(monkeypatch, data_dir):
 
 def test_facts_excluded_by_default_and_appended_on_request(monkeypatch, data_dir):
     _ingest_sessions(data_dir)
-    turn = asyncio.run(taosmd_api.search(SESSIONS["s1"][1][0][1], agent="a", data_dir=data_dir, limit=1))[0]
+    turn = _row(data_dir, SESSIONS["s1"][1][0][1])
     fact = {"text": "Rex is_a dog", "source": "kg", "timestamp": 0, "confidence": 1.0, "metadata": {}}
 
     async def fake_search(query, **kw):
@@ -1003,8 +1014,7 @@ def test_is_abstention_matches_the_longmemeval_runner_list():
 
 def test_a_standalone_hit_repeating_a_grown_session_line_is_not_printed_twice(monkeypatch, data_dir):
     _ingest_sessions(data_dir, sessions={"s1": SESSIONS["s1"]})
-    session_hit = asyncio.run(taosmd_api.search(
-        SESSIONS["s1"][1][0][1], agent="a", data_dir=data_dir, limit=1))[0]
+    session_hit = _row(data_dir, SESSIONS["s1"][1][0][1])
     twin = {"text": SESSIONS["s1"][1][3][1], "source": "vector", "timestamp": 0, "confidence": 0.4,
             "metadata": {"role": "assistant"}}   # same text as turn 3, but with no session info
 
