@@ -250,12 +250,15 @@ def test_facts_excluded_by_default_and_appended_on_request(monkeypatch, data_dir
 def test_rows_without_session_fall_back_to_the_hit_alone(data_dir):
     """Data written before sessions were recorded: no neighbours, expanded False."""
     asyncio.run(taosmd.ingest(
-        [{"role": "user", "content": "old row one"}, {"role": "user", "content": "old row two"}],
+        [{"role": "user", "content": "zebra crossing paint"},
+         {"role": "user", "content": "violin lesson plan"}],
         agent="a", data_dir=data_dir))
+    # The two rows share no word, so the query matches exactly one of them
+    # whatever the ranking backend (CI has no embedder model).
     out = asyncio.run(taosmd.answer_context(
-        "old row one", agent="a", data_dir=data_dir, budget_tokens=100_000, now=NOW, limit=1))
-    assert "old row one" in out["context"]
-    assert "old row two" not in out["context"]
+        "zebra crossing paint", agent="a", data_dir=data_dir, budget_tokens=100_000, now=NOW, limit=1))
+    assert "zebra crossing paint" in out["context"]
+    assert "violin lesson plan" not in out["context"]
     assert out["expanded"] is False
 
 
