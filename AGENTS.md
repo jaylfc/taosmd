@@ -121,6 +121,20 @@ await kg.add_triple("User", "works on", "taOS project")
 await vmem.add("User is building taOS, a personal AI operating system on Orange Pi hardware")
 ```
 
+### Answering from memory in one call
+
+`answer_context` returns the context to answer from (dated session blocks, oldest first, inside a token budget, nothing cut mid-text; every candidate session gets its matching turns first, then spare budget grows sessions to the whole session) plus the instruction to give the reader. It scopes and ranks exactly like `search`. Also `POST /answer-context` and the MCP tool `memory_answer_context`.
+
+```python
+from taosmd import answer_context, default_budget_tokens
+
+budget = default_budget_tokens(window_tokens=32768, used_tokens=used_by_prompt_and_chat)
+r = await answer_context(question, agent="assistant", budget_tokens=budget)
+# answer from r["context"] following r["guidance"]; r["sessions_dropped"] tells you what did not fit
+```
+
+To get neighbours and session dates for new turns, ingest them with `session_id`, `turn_index` and `session_date` set.
+
 ### 3. Search before answering
 
 Before answering any question about the user's history, preferences, or prior work:

@@ -111,6 +111,7 @@ def test_registers_full_tool_set(server):
     assert names == {
         "memory_ingest",
         "memory_search",
+        "memory_answer_context",
         "memory_list_projects",
         "memory_list_collections",
         "memory_list_shelves",

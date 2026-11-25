@@ -138,6 +138,20 @@ async def search(query: str, *, agent: str, data_dir=None, limit: int = 5, **opt
     return await _api.search(query, agent=agent, data_dir=data_dir, limit=limit, **opts)
 
 
+async def answer_context(query: str, *, agent: str, data_dir=None, **opts) -> dict:
+    """Build the dated, budgeted context an agent answers ``query`` from.
+
+    Thin wrapper over :func:`taosmd.answer_context.answer_context`; scoping and
+    access are those of :func:`search`. Forwarded to
+    :class:`~taosmd.remote.RemoteClient` when a server URL is configured.
+    """
+    remote = _get_remote(data_dir)
+    if remote is not None:
+        return await remote.answer_context(query, agent, **opts)
+    from .answer_context import answer_context as _answer_context  # noqa: PLC0415
+    return await _answer_context(query, agent=agent, data_dir=data_dir, **opts)
+
+
 async def list_projects(*, data_dir=None) -> list[dict]:
     """List projects that have stored memories.
 
