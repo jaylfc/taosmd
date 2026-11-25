@@ -271,7 +271,12 @@ async def ingest(transcript, *, agent: str, project: str | None = None, data_dir
         )
         archived += 1
 
-        text = raw_text.strip()
+        try:
+            from taosmd.hooks.parser import _cap_field as _cap_index_field
+            indexed_text, _indexed_truncated = _cap_index_field(raw_text)
+        except Exception:
+            indexed_text, _indexed_truncated = raw_text, False
+        text = indexed_text.strip()
         if not text:
             continue
 
@@ -383,22 +388,52 @@ async def ingest_batch(
         raw_text = item["text"]
         sid = item.get("id")
 
-        # Archive every item (zero-loss), but skip re-archiving duplicate ids
+        # Archive every item (zero-loss), but skip re-archiving duplicate ids.
+        # The archive keeps the FULL field text; the (possibly capped) copy
+        # used for indexing/search is handled separately below.
         if not (sid and sid in seen):
             user_md = dict(item.get("metadata") or {})
             if sid:
                 user_md["source_id"] = sid
+            full_text = (
+                item.get("archive_text")
+                or item.get("full_text")
+                or item.get("raw_text")
+                or item.get("original_text")
+                or item.get("content")
+                or raw_text
+            )
+            if not isinstance(full_text, str):
+                full_text = raw_text
             span_id = await stores["archive"].record(
                 "conversation",
-                {"content": raw_text, "metadata": user_md},
+                {"content": full_text, "metadata": user_md},
                 agent_name=agent,
-                summary=raw_text[:80],
+                summary=full_text[:80],
                 project=project,
             )
         else:
             span_id = None
 
-        text = raw_text.strip()
+        # Indexed copy: prefer an explicitly provided capped copy, else cap the
+        # full text to _MAX_FIELD_BYTES (8 KB) for search/indexing only.
+        indexed_candidate = (
+            item.get("indexed_text")
+            or item.get("index_text")
+            or item.get("search_text")
+            or item.get("text_indexed")
+            or item.get("capped_text")
+            or raw_text
+        )
+        if not isinstance(indexed_candidate, str):
+            indexed_candidate = raw_text
+        try:
+            from taosmd.hooks.parser import _cap_field as _cap_index_field
+            indexed_text, _indexed_truncated = _cap_index_field(indexed_candidate)
+        except Exception:
+            indexed_text = indexed_candidate
+            _indexed_truncated = False
+        text = indexed_text.strip()
         if not text:
             # Empty/whitespace items: add sid to seen so they won't be
             # re-archived on resend, then skip indexing.
@@ -414,6 +449,8 @@ async def ingest_batch(
         user_md = dict(item.get("metadata") or {})
         if sid:
             user_md["source_id"] = sid
+        if _indexed_truncated:
+            user_md["truncated"] = True
         meta: dict = {"agent": agent, "metadata": user_md}
         if project:
             meta["project"] = project

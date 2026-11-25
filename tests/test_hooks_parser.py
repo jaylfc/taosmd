@@ -148,16 +148,15 @@ def test_byte_capping():
     assert len(items) == 1
     item = items[0]
 
-    # Check the text field is <= 8192 bytes
-    encoded_text = item["text"].encode("utf-8")
-    assert len(encoded_text) <= 8192, \
-        f"Text field exceeds 8KB: {len(encoded_text)} bytes"
+    # Full field text is preserved on the archive copy
+    assert len(item["text"].encode("utf-8")) > 8192
 
-    # Check it decodes cleanly
-    decoded = encoded_text.decode("utf-8")
-    assert decoded == item["text"], "Text doesn't round-trip cleanly"
-
-    # Check truncated flag
+    # Indexed copy is capped and flagged
+    encoded_indexed = item["indexed_text"].encode("utf-8")
+    assert len(encoded_indexed) <= 8192, \
+        f"Indexed field exceeds 8KB: {len(encoded_indexed)} bytes"
+    decoded = encoded_indexed.decode("utf-8")
+    assert decoded == item["indexed_text"], "Indexed text doesn't round-trip cleanly"
     assert item["metadata"]["truncated"], \
         "Truncated should be True for oversized field"
 
@@ -386,8 +385,11 @@ def test_truncated_flag():
     assert items is not None
     assert len(items) == 1
 
-    # The text field should be capped
-    assert len(items[0]["text"]) < len(long_content)
+    # The archive text is preserved in full
+    assert len(items[0]["text"]) == len(long_content)
+
+    # The indexed copy is capped
+    assert len(items[0]["indexed_text"]) < len(long_content)
 
     # Check metadata has truncated flag
     assert "truncated" in items[0]["metadata"]

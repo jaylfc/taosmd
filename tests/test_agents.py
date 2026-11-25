@@ -130,22 +130,30 @@ def test_get_agent_missing_raises(registry):
 # --- delete -----------------------------------------------------------------
 
 
-def test_delete_agent_keeps_data_by_default(registry, tmp_path):
+def test_delete_agent_archives_data_by_default(registry, tmp_path):
     registry.register_agent("alice")
     agent_dir = tmp_path / "agent-memory" / "alice"
     (agent_dir / "marker.txt").write_text("hello")
     registry.delete_agent("alice")
     assert registry.agent_exists("alice") is False
-    # Index files preserved unless drop_data=True
-    assert (agent_dir / "marker.txt").exists()
+    # Index files moved to archived-agents, not deleted
+    assert not agent_dir.exists()
+    archived_root = tmp_path / "archived-agents"
+    assert archived_root.exists()
+    archived_dirs = list(archived_root.iterdir())
+    assert len(archived_dirs) == 1
+    assert (archived_dirs[0] / "marker.txt").read_text() == "hello"
 
 
-def test_delete_agent_drop_data_removes_dir(registry, tmp_path):
+def test_delete_agent_wipe_removes_dir(registry, tmp_path):
     registry.register_agent("alice")
     agent_dir = tmp_path / "agent-memory" / "alice"
     (agent_dir / "marker.txt").write_text("hello")
-    registry.delete_agent("alice", drop_data=True)
+    registry.delete_agent("alice", wipe=True)
     assert not agent_dir.exists()
+    archived_root = tmp_path / "archived-agents"
+    if archived_root.exists():
+        assert not any(p.is_dir() for p in archived_root.iterdir())
 
 
 def test_delete_missing_raises(registry):
