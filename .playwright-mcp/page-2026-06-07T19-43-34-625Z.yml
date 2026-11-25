@@ -1,0 +1,29 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: taOSmd
+    - generic [ref=e6]: memory inspector
+    - generic [ref=e7]: checking…
+  - generic [ref=e8]:
+    - tablist "Views" [ref=e9]:
+      - tab "Memory" [selected] [ref=e10] [cursor=pointer]
+      - tab "Pending" [ref=e11] [cursor=pointer]
+      - tab "A2A channels" [ref=e12] [cursor=pointer]
+    - main [ref=e13]:
+      - generic [ref=e14]:
+        - generic [ref=e15]:
+          - heading "Memory" [level=1] [ref=e16]
+          - paragraph [ref=e17]: Search what this agent remembers.
+        - generic [ref=e19]:
+          - generic [ref=e21]:
+            - generic [ref=e22]: Agent
+            - textbox "Agent" [ref=e23]:
+              - /placeholder: default
+              - text: default
+          - generic [ref=e25]:
+            - generic [ref=e26]: Query
+            - textbox "Query" [ref=e27]:
+              - /placeholder: what do you want to recall?
+          - button "Search" [disabled] [ref=e28]
+        - generic [ref=e29]:
+          - paragraph [ref=e30]: Search this agent's memory
+          - paragraph [ref=e31]: Try a question you've told it before, like "What's my preferred stack?" or "When did we discuss X?"

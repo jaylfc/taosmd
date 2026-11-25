@@ -68,7 +68,11 @@ def _warn_if_legacy_data_dir(resolved_data_dir: Path) -> None:
         if path.exists():
             found.append(name + ("/" if name in ("archive", "agent-memory") else ""))
 
-    if not found:
+    # Only warn while the resolved data dir lacks the stores. Once the user
+    # has imported them (taosmd migrate --import-legacy --apply), the warning
+    # stops firing even though the legacy tree is still on disk.
+    missing = [name for name in found if not (resolved_data_dir / name.rstrip("/")).exists()]
+    if not missing:
         return
 
     _legacy_data_dir_warned = True
@@ -77,7 +81,7 @@ def _warn_if_legacy_data_dir(resolved_data_dir: Path) -> None:
         "Run `taosmd migrate --import-legacy ./data` to copy and verify "
         "(never moves or deletes the originals).",
         legacy_root.resolve(),
-        ", ".join(found),
+        ", ".join(missing),
         resolved_data_dir,
     )
 
@@ -1295,8 +1299,46 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
     known version. ``--check`` is the deploy pre-flight: it changes nothing and
     exits non-zero when any database has pending work, so a rollout can refuse
     to start against a store it would silently need to upgrade.
+
+    ``--import-legacy SRC`` copy-verifies a legacy 0.4 ``./data`` tree into
+    the data dir. It is a dry run unless ``--apply`` is also given; the source
+    is never modified, moved, or deleted.
     """
     from . import migrations  # noqa: PLC0415
+
+    if args.import_legacy:
+        from .legacy_import import legacy_import  # noqa: PLC0415
+
+        return legacy_import(
+            Path(args.import_legacy), Path(args.data_dir), apply=args.apply
+        )
+
+    if args.probe:
+        from .legacy_import import store_probe  # noqa: PLC0415
+
+        report = store_probe(Path(args.data_dir))
+        print(f"data dir: {args.data_dir}")
+        if not report["stores"]:
+            print("  no stores found")
+        else:
+            for name, info in report["stores"].items():
+                line = f"  {name:<32} {info.get('size', '-')} bytes"
+                if info.get("kind") == "db":
+                    extra = []
+                    if info.get("integrity_ok") is not None:
+                        extra.append(
+                            "integrity="
+                            + ("ok" if info["integrity_ok"] else info.get("integrity", "?"))
+                        )
+                    if info.get("wal_bytes"):
+                        extra.append(f"wal={info['wal_bytes']}B")
+                    if info.get("hot_journal"):
+                        extra.append("hot-journal")
+                    if extra:
+                        line += "  (" + ", ".join(extra) + ")"
+                print(line)
+            print(f"  total: {report['total_bytes']} bytes")
+        return 0
 
     data_dir = args.data_dir
     if getattr(args, "convert_vectors", False):
@@ -1987,6 +2029,26 @@ def _build_parser() -> argparse.ArgumentParser:
              "read the store afterwards (the backup is kept). Exit codes: 0 "
              "converted or already current, 2 refused (nothing touched), 3 "
              "unknown or newer format, 4 failed and restored, 1 unexpected.",
+    )
+    migrate_p.add_argument(
+        "--data-dir",
+        help="Data dir to import into (default: the resolved data dir).",
+    )
+    migrate_p.add_argument(
+        "--import-legacy", metavar="SRC",
+        help="Copy-then-verify a legacy 0.4 ./data tree into the data dir. "
+             "Dry run unless --apply is also given; the source is never "
+             "moved, renamed, or deleted.",
+    )
+    migrate_p.add_argument(
+        "--apply", action="store_true",
+        help="With --import-legacy, copy each store into the data dir under "
+             "a temp name, verify it, and only then rename it into place. "
+             "Without it the run is a dry run that changes nothing.",
+    )
+    migrate_p.add_argument(
+        "--probe", action="store_true",
+        help="Probe the data dir's stores and print their state. Read-only.",
     )
 
     # ----- reindex subcommand ------------------------------------------

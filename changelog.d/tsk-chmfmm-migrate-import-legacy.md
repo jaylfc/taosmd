@@ -1,0 +1,2 @@
+### Added
+- `taosmd migrate --import-legacy SRC [--data-dir DEST] [--apply]`: copy-then-verify a legacy 0.4 `./data` tree into the data dir. Dry run unless `--apply`; databases are copied with SQLite's online backup API and verified (`PRAGMA integrity_check` plus per-table row counts), plain files by sha256, and every temp is renamed into place only after all checks pass. The source is never moved, renamed, or deleted, and the gate D legacy `./data` warning stops firing once the data dir holds the stores.

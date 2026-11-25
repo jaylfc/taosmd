@@ -186,3 +186,27 @@ def test_legacy_cwd_data_dir_lists_all_db_files(monkeypatch, tmp_path, caplog):
     for fname in ("vector-memory.db", "knowledge-graph.db", "claims.db", "archive-index.db"):
         assert fname in msg, f"missing {fname} in warning: {msg}"
     assert "taosmd migrate --import-legacy ./data" in msg
+
+
+def test_legacy_cwd_data_dir_no_warn_with_explicit_data_dir(monkeypatch, tmp_path, caplog):
+    """Explicit --data-dir opts out of the warning even when ./data holds stores.
+
+    Pins the `if not explicit_data_dir:` opt-out at cli.py:2024: flipping it
+    to `if True:` must make this test fail.
+    """
+    _reset_warnings(monkeypatch)
+
+    monkeypatch.chdir(tmp_path)
+    legacy = tmp_path / "data"
+    legacy.mkdir()
+    (legacy / "vector-memory.db").write_text("")
+
+    # Explicit data dir somewhere other than ./data: no warning.
+    real = tmp_path / "real-data"
+    real.mkdir()
+    with caplog.at_level(logging.WARNING, logger="taosmd.cli"):
+        rc = cli.main(["--data-dir", str(real), "agent", "list"])
+
+    assert rc == 0
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not warnings, "explicit --data-dir must not warn about ./data"
