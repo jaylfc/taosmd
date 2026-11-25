@@ -16,6 +16,8 @@ import time
 
 import pytest
 
+from taosmd import agents
+
 from taosmd import api as taosmd_api
 from taosmd import config
 from taosmd.cli import main
@@ -38,7 +40,16 @@ def _fake_embed(vmem: VectorMemory) -> None:
 
 
 @pytest.fixture
-def stores(tmp_path):
+def stores(tmp_path, monkeypatch):
+    # The extraction gate reads the agent registry, and an unregistered agent
+    # gets the regex path by design. Register the test agents in an isolated
+    # data dir, so the LLM-mode cases never depend on another test having
+    # registered them in a shared default registry.
+    data_dir = tmp_path / "taosmd-data"
+    data_dir.mkdir()
+    monkeypatch.setenv("TAOSMD_DATA_DIR", str(data_dir))
+    for name in ("agent-a", "agent-b"):
+        agents.register_agent(name, data_dir=str(data_dir))
     vmem = VectorMemory(db_path=str(tmp_path / "vec.db"), embed_mode="onnx")
     _run(vmem.init())
     _fake_embed(vmem)
