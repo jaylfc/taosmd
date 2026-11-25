@@ -160,17 +160,32 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
         )
 
     @mcp.tool()
-    async def memory_ingest(text: str, agent: str, project: str | None = None) -> dict:
+    async def memory_ingest(
+        text: str,
+        agent: str,
+        project: str | None = None,
+        role: str | None = None,
+        session_id: str | None = None,
+        turn_index: int | None = None,
+        session_date: str | None = None,
+    ) -> dict:
         """Store a transcript or note in an agent's long-term memory.
 
         Shelves ``text`` and embeds it so it can be retrieved later with
         ``memory_search``. ``agent`` scopes the write to one agent's memory.
         Optional ``project`` tags the memory with a project id so agents
         working on the same project can share it (see ``memory_search``).
+        Optional ``role``, ``session_id``, ``turn_index`` and ``session_date``
+        place the turn in its session so ``memory_answer_context`` can show it
+        with its neighbours and date.
         Returns ``{"archived", "agent", "project", "data_dir"}``.
         """
         opts = {"project": project} if project else {}
-        return await _dispatch(service.ingest(text, agent=agent, data_dir=data_dir, **opts))
+        fields = {k: v for k, v in (("role", role), ("session_id", session_id),
+                                    ("turn_index", turn_index), ("session_date", session_date))
+                  if v is not None}
+        transcript = {"role": "unknown", "content": text, **fields} if fields else text
+        return await _dispatch(service.ingest(transcript, agent=agent, data_dir=data_dir, **opts))
 
     @mcp.tool()
     async def memory_search(
@@ -202,6 +217,48 @@ def build_server(data_dir=None, *, runner: _ServiceLoop | None = None):
         return await _dispatch(
             service.search(query, agent=agent, data_dir=data_dir, limit=limit, **opts)
         )
+
+    @mcp.tool()
+    async def memory_answer_context(
+        query: str,
+        agent: str,
+        budget_tokens: int,
+        project: str | None = None,
+        also_include: list[str] | None = None,
+        collection: str | None = None,
+        limit: int | None = None,
+        neighbors: int = 2,
+        now: str | None = None,
+        include_facts: bool = False,
+    ) -> dict:
+        """Build the context to answer ``query`` from, inside a token budget.
+
+        Like ``memory_search`` (same scoping and grants) but returns one
+        answer-ready string: ``Current date:`` then dated session blocks,
+        oldest first, each turn whole and in order. Every candidate session
+        first gets its matching turns with ``neighbors`` turns either side;
+        budget left over then grows sessions to the whole session, best
+        match first. ``budget_tokens`` is the evidence budget for the returned
+        string (see ``default_budget_tokens``). A block that does not fit is
+        dropped whole, never cut. Returns ``{"context", "guidance",
+        "sessions_included", "sessions_dropped", "hits_total", "tokens_used",
+        "budget_available", "expanded"}``; answer from ``context`` following
+        ``guidance``.
+        """
+        opts: dict = {}
+        if project:
+            opts["project"] = project
+        if also_include:
+            opts["also_include"] = also_include
+        if collection:
+            opts["collections"] = [collection]
+        if limit is not None:
+            opts["limit"] = limit
+        if now is not None:
+            opts["now"] = now
+        return await _dispatch(service.answer_context(
+            query, agent=agent, data_dir=data_dir, budget_tokens=budget_tokens,
+            neighbors=neighbors, include_facts=include_facts, **opts))
 
     @mcp.tool()
     async def memory_list_projects() -> list[dict]:

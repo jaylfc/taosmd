@@ -494,12 +494,10 @@ def test_status_all_skips_absent_databases(tmp_path):
     assert all(r["current"] is False for r in rows)
 
 
-def test_status_all_opens_databases_via_the_shared_db_helper(tmp_path):
-    """``status_all`` must route through ``_db.connect`` so the connection
-    picks up the package-wide WAL mode and busy timeout that every other
-    store path receives. The fixture starts as a bare ``sqlite3.connect``
-    on a fresh file so the journal mode is ``delete``; only ``status_all``
-    can flip it to ``wal`` by re-opening the file via ``_db.connect``.
+def test_status_all_does_not_change_the_journal_mode(tmp_path):
+    """``status_all`` only reports, so it must not flip a rollback-journal
+    database to WAL (which writes to the file and creates sidecars). The write
+    paths (``migrate_all`` and the stores) still go through ``_db.connect``.
     """
     from taosmd.archive import INDEX_SCHEMA
 
@@ -509,17 +507,12 @@ def test_status_all_opens_databases_via_the_shared_db_helper(tmp_path):
     conn.commit()
     conn.close()
 
-    mode_before = sqlite3.connect(path).execute("PRAGMA journal_mode").fetchone()[0]
-    assert mode_before.lower() == "delete", (
-        "fixture must start in rollback-journal mode so only status_all can move it"
-    )
-
     rows = [r for r in migrations.status_all(tmp_path) if r["exists"]]
     assert len(rows) == 1
 
     mode_after = sqlite3.connect(path).execute("PRAGMA journal_mode").fetchone()[0]
-    assert mode_after.lower() == "wal", (
-        f"status_all must open the database via _db.connect, but journal_mode={mode_after!r}"
+    assert mode_after.lower() == "delete", (
+        f"status_all must not modify the database, but journal_mode={mode_after!r}"
     )
 
 

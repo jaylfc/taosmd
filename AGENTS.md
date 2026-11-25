@@ -109,6 +109,10 @@ await process_conversation_turn(
 )
 ```
 
+Contradictions: a new fact that conflicts with a stored one on a singular predicate (`is_a`, `lives_in`, `works_on`, ...) is handled by where the fact came from. Regex-extracted facts never replace the old fact on their own: the conflict is queued as a pending decision and both triples stay as they were until someone runs `taosmd review`. LLM-extracted facts still invalidate the old triple. Pass `auto_resolve_contradictions=True` to force that for every fact, or `False` to keep both facts (the new one is written, nothing is invalidated, nothing is queued). Either way only the knowledge graph changes: a contradiction never hides vector rows, and `vmem=` is accepted but no longer used for that.
+
+To retire a stale memory on purpose, use `taosmd supersede --agent NAME --match "text of the old turn"` (12+ characters, that agent's rows only, refused above 20 matches unless `--force`). Hides made through `taosmd supersede` and `VectorMemory.supersede` write an audit row; shelf archive, collection reindex and sync merge are separate paths that do not (shelf and collection hides carry a `hidden_by` marker instead). `taosmd supersede --list-hidden [--agent NAME] [--json]` shows every hidden row regardless of how it was hidden, with the reason when one is known (`unknown (before audit log)` otherwise), and `taosmd supersede --restore ID [ID ...]` or `--restore-all --since 2026-11-01 [--agent NAME]` brings rows back. Nothing is ever deleted.
+
 For explicit facts you learn, store them directly:
 
 ```python
@@ -116,6 +120,20 @@ await kg.add_triple("User", "prefers", "dark mode")
 await kg.add_triple("User", "works on", "taOS project")
 await vmem.add("User is building taOS, a personal AI operating system on Orange Pi hardware")
 ```
+
+### Answering from memory in one call
+
+`answer_context` returns the context to answer from (dated session blocks, oldest first, inside a token budget, nothing cut mid-text; every candidate session gets its matching turns first, then spare budget grows sessions to the whole session) plus the instruction to give the reader. It scopes and ranks exactly like `search`. Also `POST /answer-context` and the MCP tool `memory_answer_context`.
+
+```python
+from taosmd import answer_context, default_budget_tokens
+
+budget = default_budget_tokens(window_tokens=32768, used_tokens=used_by_prompt_and_chat)
+r = await answer_context(question, agent="assistant", budget_tokens=budget)
+# answer from r["context"] following r["guidance"]; r["sessions_dropped"] tells you what did not fit
+```
+
+To get neighbours and session dates for new turns, ingest them with `session_id`, `turn_index` and `session_date` set.
 
 ### 3. Search before answering
 

@@ -441,7 +441,7 @@ You can set the live controls three ways: the dashboard Settings panel (presets 
 
 | Control | Default | What it does | When to turn it on, and the trade-off | Resource cost |
 | --- | --- | --- | --- | --- |
-| `embedder` | `arctic-embed-s` | Which ONNX dense embedder backs retrieval, set at setup (`arctic-embed-s` or `minilm-onnx`). | `arctic-embed-s` scores +0.057 judged retrieval over MiniLM at the same 384 dims and latency. MiniLM is the model the 97.0% Recall@5 headline was measured on; on that same LongMemEval-S Recall@5 run arctic-embed-s scores 95.6% (478/500 vs 485/500, research report N-031). | A one-time model fetch; changing it re-embeds the whole store. |
+| `embedder` | `arctic-embed-s` | Which ONNX dense embedder backs retrieval, set at setup (`arctic-embed-s`, `minilm-onnx` or `mdbr-leaf-ir`). | `arctic-embed-s` scores +0.057 judged retrieval over MiniLM at the same 384 dims and latency. MiniLM is the model the 97.0% Recall@5 headline was measured on; on that same LongMemEval-S Recall@5 run arctic-embed-s scores 95.6% (478/500 vs 485/500, research report N-031). | A one-time model fetch; changing it re-embeds the whole store. |
 | `binary_quant` | `off` | Stores 1 bit per dimension instead of full-precision floats. | 32x smaller vector footprint, recall-neutral; for SBC and low-memory tiers. | Re-embed to apply; then 32x smaller vectors and cheaper CPU distance. |
 | `late_interaction` | `off` | Token-level MaxSim scoring; the store is built with per-token vectors. | Lifts evidence recall from 0.64 to 0.85 on LoCoMo, CPU-only, with no GPU or reranker. | Re-index to apply; then about 110 ms per query on a 16-core CPU. |
 
@@ -616,7 +616,7 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 - **Dependency-aware task graph**, `taosmd tasks` gives multi-agent teams a ready queue (open tasks with no open blockers) and a `prime` briefing endpoint for session handoffs; every mutation is an append-only archive event, so the task tables are replayable history (concept credit: [beads](https://github.com/gastownhall/beads))
 - **Coordination is part of the memory, not bolted on**, we are not aware of another local-first memory system that ships an auditable comms bus and a dependency-aware task graph inside the memory server itself. Both are projections of the same zero-loss archive, so who said what and who did what are reconstructable from the source of truth.
 - **Temporal facts**, validity windows, point-in-time queries
-- **Contradiction detection**, corrected facts supersede across both the typed knowledge graph (via `valid_to` invalidation) and the vector recall layer (matching chunks soft-hidden, not deleted); recall returns only the active fact
+- **Contradiction detection**, a conflicting fact on a singular predicate invalidates the old triple in the typed knowledge graph (`valid_to`), except for regex-extracted facts, which are queued for `taosmd review` instead. A contradiction never hides vector rows; an explicit `taosmd supersede` soft-hides one agent's matching chunks (audited, nothing deleted) and `taosmd supersede --list-hidden` / `--restore` bring them back
 - **Provable Memory (recall gate on by default)**, because the archive keeps every source span, taOSmd can verify each extracted fact against the spans it came from, mark it supported or unsupported, and demote (never delete) the unsupported ones at recall. The `prefer_verified` gate ships on by default (a full tri-judge confirm eliminated served-hallucination at no accuracy cost) and is a safe no-op until you run the verify-pass. That makes the extraction-hallucination rate a measurable, standing number: 18.8% of regex-extracted facts on LoCoMo were not fully supported by their source, cross-family verified. Extraction-based systems that discard the source cannot measure this; we can ([methodology](docs/research-report.md))
 - **Zero-loss archive**, append-only, read-only transcript of the full picture (user + agent messages, tool calls and results, decisions, errors, plus opt-in user activity); the librarian derives memory from it, never over it
 - **Intent-aware retrieval**, routes queries to optimal memory layer
@@ -625,7 +625,8 @@ The `RemoteClient` class (`taosmd.remote`) mirrors the same async interface as t
 
 ## Embedding Model
 
-Two ONNX embedders are supported, both 384-dimensional and CPU-fast. Neither is bundled (size); each is fetched on setup.
+Three ONNX embedders are supported, all CPU-fast. None is bundled (size); each
+is fetched on setup.
 
 **`snowflake-arctic-embed-s`** is the dense default for fresh low-tier installs. It scores +0.057 judged retrieval quality on the full 1540-QA LoCoMo set (0.730 vs 0.674 for MiniLM) at the same dimensions and latency, so it is a free upgrade for the low-end tier. It uses an asymmetric query prefix and CLS pooling, both handled automatically. Fetch it:
 
@@ -645,6 +646,35 @@ model.save('models/minilm-onnx')
 ```
 
 Or download directly from [HuggingFace](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2).
+
+**`MongoDB/mdbr-leaf-ir`** is selectable but not the default. It is a 22.6M-param,
+Apache-2.0 sentence-transformers model (22.6M params, 768-d output) whose model
+card ("Sentence Transformers" quickstart / `config_sentence_transformers.json`
+prompts) uses query prefix ``Represent this sentence for searching relevant
+passages: `` and no document prefix, with mean pooling. It is handled
+automatically when the model directory is named `mdbr-leaf-ir`.
+
+IMPORTANT: its official `onnx/model.onnx` omits the 384->768 Dense layer after
+pooling, so the graph exposes no `sentence_embedding` output and taOSmd will
+refuse to load it (silent wrong-embedder protection). Produce a Dense-inclusive
+ONNX export that exposes `sentence_embedding`, for example with the full
+sentence-transformers pipeline:
+
+```bash
+pip install sentence-transformers
+python -c "
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer('MongoDB/mdbr-leaf-ir')
+model.save('models/mdbr-leaf-ir')
+"
+```
+
+or with `optimum-cli export onnx` over the complete model (Transformer +
+Pooling + Dense + Normalize). Then fetch:
+
+```bash
+hf download MongoDB/mdbr-leaf-ir --include "onnx/model.onnx" "*.json" "tokenizer*" --local-dir models/mdbr-leaf-ir
+```
 
 ## Embedding Speed
 
@@ -849,6 +879,10 @@ taosmd reconcile --check          # dry-run: report missing counts without modif
 ```
 
 `--check` exits non-zero when any turn is missing, so you can run it from a cron health-check. The repair path re-adds only turns that are genuinely absent; it never resurrects turns that were intentionally superseded by a correction. Safe to run after a crash or periodically via cron.
+
+### Hidden rows: list and restore
+
+`taosmd supersede --agent NAME --match "text"` soft-hides one agent's vector rows containing the text (12+ characters, refused above 20 matches unless `--force`). Each hide is written to an audit table. `taosmd supersede --list-hidden [--agent NAME] [--json]` shows every hidden row with its reason (`unknown (before audit log)` for rows hidden by older versions), and `taosmd supersede --restore ID [ID ...]` or `--restore-all --since DATE [--agent NAME]` makes them searchable again. Nothing is deleted.
 
 ### Install the taOSmd-a2a skill
 

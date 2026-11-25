@@ -99,6 +99,16 @@ Endpoints
                            content to the search (grants enforced per requesting agent;
                            collection hits carry ``collection_id``/``file_path``/``source``
                            metadata); ``collections_only`` restricts to them.
+``POST /answer-context``   ``{"query", "agent", "budget_tokens", "limit"?, "project"?, "also_include"?, "mode"?, "collection"?, "collections"?: [...], "collections_only"?, "now"?, "neighbors"?, "include_facts"?}``
+                           -> ``{"context", "guidance", "sessions_included", "sessions_dropped",
+                           "hits_total", "tokens_used", "budget_available", "expanded"}``.
+                           The context an agent answers from: ``Current date:`` line, then dated
+                           session blocks oldest first, each turn kept whole and in order, inside
+                           ``budget_tokens`` (a block that does not fit is dropped, never cut).
+                           Same auth, token binding, scoping and grants as ``/search``.
+                           ``/ingest`` also takes optional ``role``, ``session_id``,
+                           ``turn_index`` and ``session_date`` so a turn can be placed in its
+                           session.
 ``GET  /search?q=&agent=&limit=&project=&also_include=a,b&mode=bm25&collection=&collections=a,b&collections_only=true``  -> ``{"hits": [...]}``
 ``GET  /projects``                                         -> ``{"projects": [...]}``
 ``GET  /shelves?project=``                                 -> ``{"shelves": [...]}``
@@ -1328,6 +1338,8 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                     self._handle_search_get(query)
                 elif method == "POST" and path == "/search":
                     self._handle_search_post()
+                elif method == "POST" and path == "/answer-context":
+                    self._handle_answer_context_post()
                 elif method == "POST" and path == "/ingest":
                     self._handle_ingest()
                 elif method == "POST" and path == "/ingest/batch":
@@ -1556,7 +1568,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             if not ok:
                 return
             opts = {"project": project} if project else {}
-            result = runner.run(service.ingest(text, agent=agent, data_dir=data_dir, **opts))
+            # Optional session structure, so /answer-context can rebuild the
+            # turn's neighbours and date the session. Plain text stays plain.
+            turn_fields = {k: body[k] for k in ("role", "session_id", "turn_index", "session_date")
+                           if body.get(k) is not None}
+            transcript = {"role": "unknown", "content": text, **turn_fields} if turn_fields else text
+            result = runner.run(service.ingest(transcript, agent=agent, data_dir=data_dir, **opts))
             self._send_json(200, result)
 
         def _handle_ingest_batch(self) -> None:
@@ -1633,8 +1650,15 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
             self._do_search(query, agent, limit, project, also_include, mode,
                             collections, collection, collections_only)
 
-        def _do_search(self, query, agent, limit, project=None, also_include=None, mode=None,
-                       collections=None, collection=None, collections_only=False) -> None:
+        def _search_scope_opts(self, query, agent, limit, project=None, also_include=None,
+                               mode=None, collections=None, collection=None,
+                               collections_only=False):
+            """Validate the fields every search-shaped route shares and build the
+            scoping options for ``service``. Returns ``(limit_or_None, opts)``.
+
+            One place, so ``/search`` and ``/answer-context`` cannot accept or
+            reject different input. ``limit=None`` stays ``None``.
+            """
             if not isinstance(query, str) or not query:
                 raise _BadRequest("'query' (non-empty string) is required")
             if not isinstance(agent, str) or not agent:
@@ -1645,10 +1669,12 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 isinstance(also_include, list) and all(isinstance(s, str) for s in also_include)
             ):
                 raise _BadRequest("'also_include' must be a list of strings when provided")
-            try:
-                limit_i = int(limit)
-            except (TypeError, ValueError) as exc:
-                raise _BadRequest("'limit' must be an integer") from exc
+            limit_i = None
+            if limit is not None:
+                try:
+                    limit_i = int(limit)
+                except (TypeError, ValueError) as exc:
+                    raise _BadRequest("'limit' must be an integer") from exc
             if mode is not None and not isinstance(mode, str):
                 raise _BadRequest("'mode' must be a string when provided")
             if collection is not None and not isinstance(collection, str):
@@ -1671,10 +1697,57 @@ def _make_handler(data_dir, runner: _ServiceLoop, verifier=None,
                 opts["collections"] = all_collections
             if collections_only:
                 opts["collections_only"] = True
+            return limit_i, opts
+
+        def _do_search(self, query, agent, limit, project=None, also_include=None, mode=None,
+                       collections=None, collection=None, collections_only=False) -> None:
+            limit_i, opts = self._search_scope_opts(
+                query, agent, limit, project, also_include, mode,
+                collections, collection, collections_only)
+            if limit_i is None:
+                raise _BadRequest("'limit' must be an integer")
             hits = runner.run(
                 service.search(query, agent=agent, data_dir=data_dir, limit=limit_i, **opts)
             )
             self._send_json(200, {"hits": hits})
+
+        def _handle_answer_context_post(self) -> None:
+            body = self._read_json_body()
+            query = body.get("query")
+            agent = body.get("agent")
+            project, ok = self._apply_token_binding(agent, body.get("project"))
+            if not ok:
+                return
+            limit_i, opts = self._search_scope_opts(
+                query, agent, body.get("limit"), project, body.get("also_include"),
+                body.get("mode"), body.get("collections"), body.get("collection"),
+                body.get("collections_only", False))
+            budget = body.get("budget_tokens")
+            if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
+                raise _BadRequest("'budget_tokens' (non-negative integer) is required")
+            for name in ("reasoning_reserve", "answer_reserve"):
+                if name in body:
+                    raise _BadRequest(
+                        f"'{name}' is not a parameter: 'budget_tokens' is the evidence "
+                        "budget, so subtract reserves before calling (default_budget_tokens)")
+            if "neighbors" in body:
+                if isinstance(body["neighbors"], bool) or not isinstance(body["neighbors"], int) \
+                        or body["neighbors"] < 0:
+                    raise _BadRequest("'neighbors' must be a non-negative integer")
+                opts["neighbors"] = body["neighbors"]
+            if limit_i is not None:
+                opts["limit"] = limit_i
+            if "include_facts" in body:
+                if not isinstance(body["include_facts"], bool):
+                    raise _BadRequest("'include_facts' must be a boolean")
+                opts["include_facts"] = body["include_facts"]
+            if body.get("now") is not None:
+                if isinstance(body["now"], bool) or not isinstance(body["now"], (int, float, str)):
+                    raise _BadRequest("'now' must be a date string or unix seconds")
+                opts["now"] = body["now"]
+            result = runner.run(service.answer_context(
+                query, agent=agent, data_dir=data_dir, budget_tokens=budget, **opts))
+            self._send_json(200, result)
 
         def _handle_list_projects(self) -> None:
             projects = runner.run(service.list_projects(data_dir=data_dir))
@@ -3467,7 +3540,7 @@ def serve(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, data_dir=None) -> 
     print(f"taosmd HTTP API listening on http://{bound_host}:{bound_port} ({where})")
     print(f"A2A registry auth mode: {mode}")
     print(f"Inspection UI (read-only): http://{bound_host}:{bound_port}/")
-    print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, "
+    print("Endpoints: GET /health, GET /version, POST /ingest, POST /ingest/batch, GET|POST /search, POST /answer-context, "
           "GET /projects, GET /shelves, "
           "GET /pending, POST /pending/resolve, "
           "POST /a2a/send, GET /a2a/messages, GET /a2a/mentions, GET /a2a/stream, "

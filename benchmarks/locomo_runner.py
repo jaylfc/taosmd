@@ -61,6 +61,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from taosmd.vector_memory import VectorMemory  # noqa: E402
 from taosmd.retrieval import retrieve  # noqa: E402
 from taosmd.llm_rerank import llm_listwise_rerank  # noqa: E402
+from taosmd import api as _api  # noqa: E402
+from taosmd.answer_context import answer_context as _answer_context  # noqa: E402
+from benchmarks.product_context import (  # noqa: E402
+    PRODUCT_AGENT,
+    DEFAULT_READER_OVERHEAD,
+    PRODUCT_PROMPT,
+    check_ingest,
+    count_in,
+    new_product_dir,
+    product_environment,
+    require_healthy,
+    product_meta as _product_meta,
+    reader_ctx_problem,
+    refuse,
+    release_product_stores,
+    resolve_context_mode,
+)
 from bench_checkpoint import (  # noqa: E402
     append_conversation,
     config_hash,
@@ -271,7 +288,8 @@ async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
                            force_empty_think: bool = False,
                            repeat_penalty: float | None = None,
                            num_predict: int | None = None,
-                           stop: list[str] | None = None) -> str:
+                           stop: list[str] | None = None,
+                           num_ctx: int | None = None) -> str:
     # Four thinking-suppression modes — choose one per generator:
     #
     #   default (no flag): passes think=false in JSON. Works on qwen3.5:9b
@@ -311,6 +329,8 @@ async def _ollama_generate(client: httpx.AsyncClient, url: str, model: str,
         options["num_predict"] = num_predict
     if stop:
         options["stop"] = stop
+    if num_ctx:
+        options["num_ctx"] = num_ctx
     payload = {"model": model, "prompt": payload_prompt, "stream": False,
                "options": options}
     if force_empty_think or (not thinking_mode and not no_think_prefix):
@@ -380,7 +400,8 @@ async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: st
                     force_empty_think: bool = False,
                     repeat_penalty: float | None = None,
                     num_predict: int | None = None,
-                    stop: list[str] | None = None) -> str:
+                    stop: list[str] | None = None,
+                    num_ctx: int | None = None) -> str:
     """Dispatch a generation call to the configured backend.
 
     ``backend`` is either ``"ollama"`` (default — POSTs to ``{url}/api/generate``)
@@ -392,6 +413,8 @@ async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: st
     (see ``_ollama_generate``); it takes precedence over ``no_think_prefix``.
     ``repeat_penalty`` / ``num_predict`` / ``stop`` are optional decoding levers
     (all None -> untouched backend defaults) forwarded to whichever backend runs.
+    ``num_ctx`` sets the Ollama context window for the call (None leaves
+    Ollama's default); llama-server's window is fixed by its own ``-c``.
     """
     if backend == "llama-server":
         return await _llama_server_generate(
@@ -413,12 +436,13 @@ async def _generate(backend: str, client: httpx.AsyncClient, url: str, model: st
         repeat_penalty=repeat_penalty,
         num_predict=num_predict,
         stop=stop,
+        num_ctx=num_ctx,
     )
 
 
 async def _judge(client: httpx.AsyncClient, url: str, model: str,
                  question: str, reference: str, predicted: str,
-                 backend: str = "ollama") -> float:
+                 backend: str = "ollama", raise_on_error: bool = False) -> float:
     try:
         reply = await _generate(
             backend, client, url, model,
@@ -426,6 +450,8 @@ async def _judge(client: httpx.AsyncClient, url: str, model: str,
             temperature=0.0,
         )
     except Exception:
+        if raise_on_error:
+            raise  # a failed judge call is not a verdict of 0
         return 0.0
     head = reply.strip().upper().split()
     return 1.0 if head and head[0].startswith("YES") else 0.0
@@ -1044,6 +1070,166 @@ async def _retrieve(
              "score": h.get("rrf_score", h.get("source_score", 0.0))} for h in hits]
 
 
+def _locomo_session_date(session_key: str, dt: str) -> str:
+    """ISO form of a LoCoMo session timestamp. Refuses an unreadable one: a
+    session with no date would be dated by its ingest time in the context."""
+    parsed = _parse_locomo_dt(dt)
+    if parsed is None:
+        raise ValueError(f"cannot read the date of {session_key}: {dt!r}")
+    return parsed.isoformat()
+
+
+async def _ingest_conversation_product(conv: dict, data_dir: str) -> tuple[int, float, dict]:
+    """Ingest one conversation through the normal product ingest path.
+
+    One call per session; every turn carries its session id (the LoCoMo
+    session key), its position in the session and the session's own date. The
+    speaker is the role. Returns ``(turns_added, elapsed_s, info)`` where
+    ``info["evidence"]`` maps a dataset ``dia_id`` to ``(session_id,
+    turn_index)`` and ``info["now"]`` is the date of the last session.
+    """
+    conversation = conv.get("conversation", conv)
+    t0 = time.time()
+    added = 0
+    evidence: dict[str, tuple[str, int]] = {}
+    last = None
+    for session_key, dt in _session_keys(conversation):
+        session_date = _locomo_session_date(session_key, dt)
+        last = max(last, session_date) if last else session_date
+        rows = []
+        for ti, turn in enumerate(conversation.get(session_key) or []):
+            text = (turn.get("text") or "").strip()
+            if not text:
+                continue
+            rows.append({
+                "role": turn.get("speaker", "") or "unknown",
+                "content": text,
+                "session_id": session_key,
+                "turn_index": ti,
+                "session_date": session_date,
+            })
+            if turn.get("dia_id"):
+                evidence[turn["dia_id"]] = (session_key, ti)
+        if rows:
+            check_ingest(
+                await _api.ingest(rows, agent=PRODUCT_AGENT, data_dir=data_dir),
+                f"{conv.get('sample_id', 'conversation')} {session_key}",
+            )
+            added += len(rows)
+    return added, time.time() - t0, {"evidence": evidence, "now": last}
+
+
+async def _process_qa_product(
+    qa: dict,
+    conv_id: str,
+    data_dir: str,
+    info: dict,
+    client: httpx.AsyncClient,
+    gen_url: str,
+    model: str,
+    *,
+    reader_ctx_tokens: int,
+    reader_overhead_tokens: int,
+    answer_limit: int | None,
+    answer_neighbors: int | None,
+    llm_backend: str = "ollama",
+    thinking_mode: bool = False,
+    no_think_prefix: bool = False,
+    force_empty_think: bool = False,
+    gen_temp: float = 0.2,
+    inline_judge: bool = True,
+    repeat_penalty: float | None = None,
+    num_predict: int | None = None,
+    stop: list[str] | None = None,
+) -> dict | None:
+    """Answer one QA from ``taosmd.answer_context`` and nothing else.
+
+    The context is passed whole (no character cut), the guidance text is the
+    instruction, and the Ollama window is the evidence budget plus
+    ``reader_overhead_tokens`` (guidance, question, answer, template), since
+    the budget bounds only the context string. There is no verify pass, as in
+    production.
+    """
+    if "answer" not in qa:
+        return None
+    question = qa["question"]
+    reference = str(qa["answer"])
+    evidence = qa.get("evidence", []) or []
+
+    opts = {}
+    if answer_limit is not None:
+        opts["limit"] = answer_limit
+    if answer_neighbors is not None:
+        opts["neighbors"] = answer_neighbors
+    t0 = time.time()
+    res = await _answer_context(
+        question, agent=PRODUCT_AGENT, data_dir=data_dir,
+        budget_tokens=reader_ctx_tokens, now=info.get("now"), **opts,
+    )
+    retrieval_ms = (time.time() - t0) * 1000.0
+
+    t1 = time.time()
+    predicted = await _generate(
+        llm_backend, client, gen_url, model,
+        PRODUCT_PROMPT.format(guidance=res["guidance"], context=res["context"], question=question),
+        temperature=gen_temp,
+        thinking_mode=thinking_mode,
+        no_think_prefix=no_think_prefix,
+        force_empty_think=force_empty_think,
+        repeat_penalty=repeat_penalty,
+        num_predict=num_predict,
+        stop=stop,
+        num_ctx=reader_ctx_tokens + reader_overhead_tokens,
+    )
+    gen_ms = (time.time() - t1) * 1000.0
+    judge = (
+        await _judge(client, gen_url, model, question, reference, predicted,
+                     backend=llm_backend, raise_on_error=True)
+        if inline_judge else 0.0
+    )
+    wanted = {info["evidence"][e] for e in evidence if e in info["evidence"]}
+    return {
+        "conversation_id": conv_id,
+        "question": question,
+        "reference": reference,
+        "predicted": predicted,
+        "category": int(qa.get("category", 0)),
+        "f1": round(_f1(predicted, reference), 4),
+        "bleu1": round(_bleu1(predicted, reference), 4),
+        "judge": round(judge, 4),
+        "retrieval_ms": round(retrieval_ms, 2),
+        "gen_ms": round(gen_ms, 2),
+        "context_chars": len(res["context"]),
+        "evidence_hits": count_in(res["included"], wanted),
+        "evidence_dropped": count_in(res["dropped"], wanted),
+        "evidence_total": len(evidence),
+        "empty_retry_fired": 0,
+        "empty_retry_still_empty": 0,
+        "product": _product_meta(res),
+    }
+
+
+#: Legacy levers that product mode does not use. Setting one with --context
+#: product is refused, so two arms never look different while being one run.
+_PRODUCT_INCOMPATIBLE = (
+    "full_context", "llm_query_expansion", "multihop_decompose", "hyde", "few_shot",
+    "cove", "llm_rerank", "emem_edu", "multi_level_retrieval", "timeline_format",
+    "anti_hedge_prompt", "empty_retry",
+)
+
+
+def _check_product_args(args) -> None:
+    problems = reader_ctx_problem(getattr(args, "reader_ctx_tokens", None))
+    for name in _PRODUCT_INCOMPATIBLE:
+        if getattr(args, name, False):
+            problems.append(f"--{name.replace('_', '-')} does not apply with --context product")
+    if getattr(args, "adjacent_turns", 0):
+        problems.append("--adjacent-turns does not apply (use --answer-neighbors)")
+    if getattr(args, "temporal_boost", 0.0):
+        problems.append("--temporal-boost does not apply with --context product")
+    refuse(problems)
+
+
 async def _process_qa(
     qa: dict,
     conv_id: str,
@@ -1483,6 +1669,18 @@ async def run(args: argparse.Namespace) -> int:
         return 2
     conversations = json.loads(dataset_path.read_text())[: args.conversations]
 
+    context_mode = resolve_context_mode(args)
+    product = context_mode == "product"
+    reader_ctx_tokens = getattr(args, "reader_ctx_tokens", None)
+    reader_overhead = getattr(args, "reader_overhead_tokens", None)
+    if reader_overhead is None:
+        reader_overhead = DEFAULT_READER_OVERHEAD
+    answer_limit = getattr(args, "answer_limit", None)
+    answer_neighbors = getattr(args, "answer_neighbors", None)
+    product_env = None
+    if product:
+        _check_product_args(args)
+
     if args.category == "all":
         include_cats = {1, 2, 3, 4}
         if args.include_adversarial:
@@ -1500,7 +1698,9 @@ async def run(args: argparse.Namespace) -> int:
 
     # Initialise reranker once (shared across all QAs).
     try:
-        reranker = _load_reranker(args.reranker)
+        # Product mode retrieves through search (recipe + controls), so the
+        # runner's own reranker is never used.
+        reranker = None if product else _load_reranker(args.reranker)
     except (FileNotFoundError, NotImplementedError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -1570,6 +1770,15 @@ async def run(args: argparse.Namespace) -> int:
         "dataset": str(dataset_path),
         "concurrency": max(1, int(args.concurrency)),
     }
+    if product:
+        # Only in product mode, so a legacy run's config hash is unchanged.
+        meta_for_hash.update({
+            "context_mode": "product",
+            "reader_ctx_tokens": reader_ctx_tokens,
+            "reader_overhead_tokens": reader_overhead,
+            "answer_limit": answer_limit,
+            "answer_neighbors": answer_neighbors,
+        })
     cfg_hash = config_hash(meta_for_hash)
 
     results: list[dict] = []
@@ -1618,42 +1827,61 @@ async def run(args: argparse.Namespace) -> int:
         nonlocal total_seen, failed_qa
         async with sem:
             try:
-                outcome = await _process_qa(
-                    qa, conv_id, vmem, client,
-                    args.ollama_url, args.model, args.top_k, args.strategy,
-                    retrieval_top_k=retrieval_top_k,
-                    context_format=args.context_format,
-                    adjacent_turns=args.adjacent_turns,
-                    llm_query_expansion=args.llm_query_expansion,
-                    reranker=reranker,
-                    multihop_decompose=args.multihop_decompose,
-                    full_context=args.full_context,
-                    thinking_mode=args.thinking_mode,
-                    no_think_prefix=args.no_think_prefix,
-                    temporal_boost=args.temporal_boost,
-                    fusion=args.fusion,
-                    hyde=args.hyde,
-                    few_shot=args.few_shot,
-                    turn_index=turn_index,
-                    llm_backend=args.llm_backend,
-                    llama_server_url=args.llm_server_url,
-                    cove=args.cove,
-                    llm_rerank=args.llm_rerank,
-                    llm_rerank_model=args.llm_rerank_model,
-                    llm_rerank_top_k=args.llm_rerank_top_k,
-                    gen_temp=args.gen_temp,
-                    expansion_model=args.expansion_model,
-                    emem_edu_filter=(args.emem_edu and not args.emem_edu_no_filter),
-                    emem_edu_filter_model=args.emem_edu_filter_model or args.emem_edu_extract_model,
-                    inline_judge=not args.no_inline_judge,
-                    repeat_penalty=args.repeat_penalty,
-                    num_predict=args.num_predict,
-                    stop=stop_list,
-                    anti_hedge=args.anti_hedge_prompt,
-                    empty_retry=args.empty_retry,
-                    force_empty_think=args.force_empty_think,
-                    timeline_format=args.timeline_format,
-                )
+                if product:
+                    gen_url = args.llm_server_url if args.llm_backend == "llama-server" else args.ollama_url
+                    outcome = await _process_qa_product(
+                        qa, conv_id, vmem, turn_index, client, gen_url, args.model,
+                        reader_ctx_tokens=reader_ctx_tokens,
+                        reader_overhead_tokens=reader_overhead,
+                        answer_limit=answer_limit,
+                        answer_neighbors=answer_neighbors,
+                        llm_backend=args.llm_backend,
+                        thinking_mode=args.thinking_mode,
+                        no_think_prefix=args.no_think_prefix,
+                        force_empty_think=args.force_empty_think,
+                        gen_temp=args.gen_temp,
+                        inline_judge=not args.no_inline_judge,
+                        repeat_penalty=args.repeat_penalty,
+                        num_predict=args.num_predict,
+                        stop=stop_list,
+                    )
+                else:
+                    outcome = await _process_qa(
+                        qa, conv_id, vmem, client,
+                        args.ollama_url, args.model, args.top_k, args.strategy,
+                        retrieval_top_k=retrieval_top_k,
+                        context_format=args.context_format,
+                        adjacent_turns=args.adjacent_turns,
+                        llm_query_expansion=args.llm_query_expansion,
+                        reranker=reranker,
+                        multihop_decompose=args.multihop_decompose,
+                        full_context=args.full_context,
+                        thinking_mode=args.thinking_mode,
+                        no_think_prefix=args.no_think_prefix,
+                        temporal_boost=args.temporal_boost,
+                        fusion=args.fusion,
+                        hyde=args.hyde,
+                        few_shot=args.few_shot,
+                        turn_index=turn_index,
+                        llm_backend=args.llm_backend,
+                        llama_server_url=args.llm_server_url,
+                        cove=args.cove,
+                        llm_rerank=args.llm_rerank,
+                        llm_rerank_model=args.llm_rerank_model,
+                        llm_rerank_top_k=args.llm_rerank_top_k,
+                        gen_temp=args.gen_temp,
+                        expansion_model=args.expansion_model,
+                        emem_edu_filter=(args.emem_edu and not args.emem_edu_no_filter),
+                        emem_edu_filter_model=args.emem_edu_filter_model or args.emem_edu_extract_model,
+                        inline_judge=not args.no_inline_judge,
+                        repeat_penalty=args.repeat_penalty,
+                        num_predict=args.num_predict,
+                        stop=stop_list,
+                        anti_hedge=args.anti_hedge_prompt,
+                        empty_retry=args.empty_retry,
+                        force_empty_think=args.force_empty_think,
+                        timeline_format=args.timeline_format,
+                    )
             except Exception as e:
                 async with progress_lock:
                     failed_qa += 1
@@ -1692,44 +1920,54 @@ async def run(args: argparse.Namespace) -> int:
                 )
                 return 3
 
-            tmp = tempfile.mkdtemp(prefix=f"locomo_{conv_id}_")
-            vmem = VectorMemory(
-                db_path=os.path.join(tmp, "vmem.db"),
-                qmd_url=args.qmd_url,
-                embed_mode=args.embed_mode,
-                onnx_path=args.onnx_path,
-                binary_quant=args.binary_quant,
-                late_interaction=args.late_interaction,
-                colbert_model=getattr(args, "colbert_model", ""),
-            )
-            await vmem.init(http_client=client)
-            kg = None
-            if args.emem_edu and args.emem_edu_pass2_events:
-                from taosmd.knowledge_graph import TemporalKnowledgeGraph
-                kg = TemporalKnowledgeGraph(db_path=os.path.join(tmp, "kg.db"))
-                await kg.init()
-            added, ingest_s, turn_index = await _ingest_conversation(
-                vmem, conv, multi_level=args.multi_level_retrieval,
-                emem_edu=args.emem_edu,
-                emem_edu_extract_model=args.emem_edu_extract_model,
-                ollama_url=args.ollama_url,
-                http_client=client,
-                emem_edu_pass2_events=args.emem_edu_pass2_events,
-                emem_edu_pass2_model=args.emem_edu_pass2_model or args.emem_edu_extract_model,
-                kg=kg,
-            )
-            unit = "EDUs" if args.emem_edu else "turns"
-            if kg is not None:
-                kg_stats = await kg.stats()
-                print(
-                    f"[{conv_id}] ingested {added} {unit} in {ingest_s:.1f}s  "
-                    f"(pass2: {kg_stats['active_triples']} active triples, "
-                    f"{kg_stats['entities']} entities)",
-                    flush=True,
-                )
-                await kg.close()
+            if product:
+                tmp = new_product_dir()
+                added, ingest_s, turn_index = await _ingest_conversation_product(conv, tmp)
+                if product_env is None:
+                    product_env = await product_environment(tmp)
+                    print(f"  product environment: {product_env}", flush=True)
+                    require_healthy(product_env)
+                vmem = tmp  # the data dir; _guarded hands it to _process_qa_product
+                print(f"[{conv_id}] ingested {added} turns in {ingest_s:.1f}s (product)", flush=True)
             else:
-                print(f"[{conv_id}] ingested {added} {unit} in {ingest_s:.1f}s", flush=True)
+                tmp = tempfile.mkdtemp(prefix=f"locomo_{conv_id}_")
+                vmem = VectorMemory(
+                    db_path=os.path.join(tmp, "vmem.db"),
+                    qmd_url=args.qmd_url,
+                    embed_mode=args.embed_mode,
+                    onnx_path=args.onnx_path,
+                    binary_quant=args.binary_quant,
+                    late_interaction=args.late_interaction,
+                    colbert_model=getattr(args, "colbert_model", ""),
+                )
+                await vmem.init(http_client=client)
+                kg = None
+                if args.emem_edu and args.emem_edu_pass2_events:
+                    from taosmd.knowledge_graph import TemporalKnowledgeGraph
+                    kg = TemporalKnowledgeGraph(db_path=os.path.join(tmp, "kg.db"))
+                    await kg.init()
+                added, ingest_s, turn_index = await _ingest_conversation(
+                    vmem, conv, multi_level=args.multi_level_retrieval,
+                    emem_edu=args.emem_edu,
+                    emem_edu_extract_model=args.emem_edu_extract_model,
+                    ollama_url=args.ollama_url,
+                    http_client=client,
+                    emem_edu_pass2_events=args.emem_edu_pass2_events,
+                    emem_edu_pass2_model=args.emem_edu_pass2_model or args.emem_edu_extract_model,
+                    kg=kg,
+                )
+                unit = "EDUs" if args.emem_edu else "turns"
+                if kg is not None:
+                    kg_stats = await kg.stats()
+                    print(
+                        f"[{conv_id}] ingested {added} {unit} in {ingest_s:.1f}s  "
+                        f"(pass2: {kg_stats['active_triples']} active triples, "
+                        f"{kg_stats['entities']} entities)",
+                        flush=True,
+                    )
+                    await kg.close()
+                else:
+                    print(f"[{conv_id}] ingested {added} {unit} in {ingest_s:.1f}s", flush=True)
 
             # Pick eligible QAs up-front. --per-conv-limit caps QAs per
             # conversation (for balanced sampling); --limit is the global cap.
@@ -1753,7 +1991,10 @@ async def run(args: argparse.Namespace) -> int:
                         continue
                     results.append(outcome)
                     conv_rows.append(outcome)
-            await vmem.close()
+            if product:
+                await release_product_stores(vmem)
+            else:
+                await vmem.close()
 
             # Append this conversation to the sidecar after vmem is closed.
             if use_ckpt:
@@ -1810,6 +2051,11 @@ async def run(args: argparse.Namespace) -> int:
         "concurrency": meta_for_hash["concurrency"],
         "failed_qa": failed_qa,
     }
+    if product:
+        meta.update({k: meta_for_hash[k] for k in (
+            "context_mode", "reader_ctx_tokens", "reader_overhead_tokens", "answer_limit",
+            "answer_neighbors")})
+        meta["product_environment"] = product_env
 
     out_path.write_text(json.dumps(
         {"meta": meta, "by_category": by_category, "overall": overall, "results": results},
@@ -2122,6 +2368,27 @@ def _build_parser() -> argparse.ArgumentParser:
                         "--emem-edu-extract-model. Set explicitly to use a "
                         "different model for pass-2 than pass-1 extraction.")
     p.add_argument("--strategy", choices=["vector-only", "full"], default="vector-only")
+    p.add_argument("--context", choices=["legacy", "product"], default=None,
+                   help="'legacy' (default; or env TAOSMD_CONTEXT_MODE) builds the "
+                        "context the runner always built. 'product' ingests each "
+                        "conversation through taosmd.ingest and builds the context "
+                        "only with taosmd.answer_context: no character cut, the "
+                        "guidance text is the instruction, no verify pass. Needs "
+                        "--reader-ctx-tokens.")
+    p.add_argument("--reader-ctx-tokens", type=int, default=None,
+                   help="Evidence budget in tokens: passed as budget_tokens to "
+                        "answer_context (the most the context string may take). The "
+                        "Ollama num_ctx is this plus --reader-overhead-tokens. "
+                        "Required with --context product.")
+    p.add_argument("--reader-overhead-tokens", type=int, default=None,
+                   help="Product mode: tokens added to --reader-ctx-tokens for the "
+                        "guidance, question, answer and template when sizing num_ctx "
+                        "(default 1536).")
+    p.add_argument("--answer-limit", type=int, default=None,
+                   help="Product mode: hits fetched per question (default: the product default).")
+    p.add_argument("--answer-neighbors", type=int, default=None,
+                   help="Product mode: neighbouring turns either side of each hit "
+                        "(default: the product default).")
     p.add_argument("--out", default=None)
     p.add_argument("--run-id", default=None)
     p.add_argument(

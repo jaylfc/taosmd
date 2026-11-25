@@ -12,7 +12,6 @@ import json
 import logging
 import math
 import os
-import shutil
 import sqlite3
 import time
 from pathlib import Path
@@ -40,11 +39,35 @@ CREATE TABLE IF NOT EXISTS vector_memory (
     valid_to REAL
 );
 CREATE INDEX IF NOT EXISTS idx_vm_created ON vector_memory(created_at DESC);
+CREATE TABLE IF NOT EXISTS supersede_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_id INTEGER NOT NULL,
+    at REAL NOT NULL,
+    reason TEXT NOT NULL,
+    ref TEXT NOT NULL DEFAULT '',
+    caller TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_supersede_audit_row ON supersede_audit(row_id);
 CREATE TABLE IF NOT EXISTS store_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 """
+
+
+class SupersedeRefused(ValueError):
+    """Raised when a bulk supersede is refused by a safety guard.
+
+    Nothing is hidden when this is raised. Pass ``force=True`` to override
+    the guard on purpose.
+    """
+
+
+# A needle shorter than this is too likely to match unrelated text.
+MIN_SUPERSEDE_NEEDLE = 12
+# More matches than this is almost certainly not one corrected fact.
+DEFAULT_SUPERSEDE_MAX_ROWS = 20
+UNKNOWN_HIDE_REASON = "unknown (before audit log)"
 
 
 class StoreModeMismatch(Exception):
@@ -127,14 +150,18 @@ def pack_sign_bits(embedding: list[float]) -> str:
 # Query-time prefix for arctic-embed (asymmetric: queries only, no doc prefix).
 _ARCTIC_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
+# Query-time prefix for mdbr-leaf-ir (asymmetric: queries only, no doc prefix).
+_LEAF_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
 
 def _onnx_apply_prefix(onnx_path, text: str, task: str) -> str:
     """Apply a model-specific input prefix to ONNX embed text.
 
     Asymmetric embedders need the right prefix or retrieval silently
     degrades. nomic-embed prefixes both queries and documents with the
-    task name; arctic-embed prefixes only the query. MiniLM and anything
-    else gets no prefix. Detection is by model directory name.
+    task name; arctic-embed and mdbr-leaf-ir prefix only the query.
+    MiniLM and anything else gets no prefix. Detection is by model
+    directory name.
     """
     # Env override (E-010 bake-off: let any model set its prefixes explicitly,
     # independent of pooling and of directory-name detection). Active when
@@ -148,6 +175,10 @@ def _onnx_apply_prefix(onnx_path, text: str, task: str) -> str:
         return f"{task}: {text}"
     if "arctic" in path and task == "search_query":
         return f"{_ARCTIC_QUERY_PREFIX}{text}"
+    if "mdbr-leaf-ir" in path:
+        if task == "search_query":
+            return f"{_LEAF_QUERY_PREFIX}{text}"
+        return text
     return text
 
 
@@ -155,8 +186,9 @@ def _onnx_pooling_mode(onnx_path) -> str:
     """Pooling mode for an ONNX embedder: "cls" or "mean".
 
     arctic-embed pools the CLS token (its 1_Pooling config sets
-    pooling_mode_cls_token true, mean false); the MiniLM default and
-    everything else mean-pool over the attention mask.
+    pooling_mode_cls_token true, mean false); mdbr-leaf-ir mean-pools
+    (pooling_mode_mean_tokens true); the MiniLM default and everything
+    else mean-pool over the attention mask.
     """
     pm = os.environ.get("TAOSMD_ONNX_POOLING")
     if pm in ("cls", "mean"):
@@ -164,6 +196,8 @@ def _onnx_pooling_mode(onnx_path) -> str:
     path = str(onnx_path).lower() if onnx_path else ""
     if "arctic" in path:
         return "cls"
+    if "mdbr-leaf-ir" in path:
+        return "mean"
     return "mean"
 
 
@@ -224,6 +258,92 @@ def _onnx_feed(session, inputs: dict) -> dict:
             continue
         feed[name] = np.zeros((0, *rest), dtype=np.dtype(np_dtype))
     return feed
+
+
+class _OnnxEmbedderConfigError(RuntimeError):
+    """An ONNX embedder's files/graph are configured so loading it would serve
+    a different embedding than the model documents. Never falls back to a
+    different embedder or to pooling; the caller must re-export or re-point."""
+
+
+def _onnx_dense_head_config(model_dir: str) -> dict | None:
+    """Return the Dense module config if modules.json lists a Dense head.
+
+    sentence-transformers lays each module out under its own directory
+    (``<model_dir>/<path>/config.json``). Returns None when modules.json is
+    absent, unreadable, or lists no ``sentence_transformers.models.Dense``
+    module; returns an empty dict when the Dense module is listed but its
+    config file is missing or unreadable.
+    """
+    modules_file = Path(model_dir) / "modules.json"
+    if not modules_file.exists():
+        return None
+    try:
+        modules = json.loads(modules_file.read_text())
+    except (OSError, ValueError):
+        return None
+    dense_path = None
+    for module in modules:
+        if module.get("type") == "sentence_transformers.models.Dense":
+            dense_path = module.get("path")
+            break
+    if not dense_path:
+        return None
+    config_file = Path(model_dir) / dense_path / "config.json"
+    if not config_file.exists():
+        return {}
+    try:
+        return json.loads(config_file.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _onnx_require_sentence_embedding(model_dir: str, session) -> None:
+    """Refuse an ONNX export that drops a sentence_transformers Dense head.
+
+    A sentence-transformers model whose modules.json lists a Dense module but
+    whose ONNX graph exposes no ``sentence_embedding`` output has had its
+    projection head stripped. Mean-pooling the backbone output would silently
+    produce a different (lower-dimensional) embedding, so raise here and name
+    the fix rather than fall back to pooling.
+    """
+    dense_cfg = _onnx_dense_head_config(model_dir)
+    if dense_cfg is None:
+        return
+    output_names = [o.name for o in session.get_outputs()]
+    if "sentence_embedding" in output_names:
+        return
+    raise _OnnxEmbedderConfigError(
+        f"ONNX embedder at {model_dir} exports a sentence_transformers Dense "
+        f"head (modules.json lists sentence_transformers.models.Dense) but "
+        f"its graph exposes no 'sentence_embedding' output, so the Dense "
+        f"projection was dropped from the export. Mean-pooling the backbone "
+        f"output would silently produce a different embedding. Re-export with "
+        f"the full pipeline so the graph exposes 'sentence_embedding', e.g. "
+        f"`sentence-transformers SentenceTransformer.save()` or "
+        f"`optimum-cli export onnx` with the complete model, then point "
+        f"onnx_path at that dir."
+    )
+
+
+def _onnx_declared_output_dim(model_dir: str) -> int | None:
+    """Output dimension declared by config_sentence_transformers.json or the
+    Dense module config, else None. The Dense config out_features takes
+    precedence since it is the projection head that sets the embedding size.
+    """
+    dim = None
+    st_cfg = Path(model_dir) / "config_sentence_transformers.json"
+    if st_cfg.exists():
+        try:
+            data = json.loads(st_cfg.read_text())
+        except (OSError, ValueError):
+            data = {}
+        if data.get("output_dim"):
+            dim = int(data["output_dim"])
+    dense_cfg = _onnx_dense_head_config(model_dir)
+    if isinstance(dense_cfg, dict) and dense_cfg.get("out_features"):
+        dim = int(dense_cfg["out_features"])
+    return dim or None
 
 
 class VectorMemory:
@@ -308,9 +428,15 @@ class VectorMemory:
         # before any query, so a legacy table has gained `valid_to` (and its
         # index) by the time the first SELECT touches it.
         migrations.migrate(self._conn, "vector_memory")
-        self._migrate_dense_to_f32()
         self._check_store_mode()
         self._conn.commit()
+        # Legacy JSON stores are served as-is: nothing is converted on open.
+        if self._store_is_legacy():
+            logger.info(
+                "vector store %s holds legacy JSON vectors; serving it as-is "
+                "(no conversion on open) so older releases can still read it",
+                self._db_path,
+            )
         # QMD embed mode talks to a remote QMD server over HTTP. When the
         # caller does not hand in a client, create and own one so _embed_qmd
         # has something to POST to; otherwise add() fails for every chunk and
@@ -411,6 +537,11 @@ class VectorMemory:
                     providers=["CPUExecutionProvider"],
                 )
                 self._onnx_tokenizer = AutoTokenizer.from_pretrained(model_dir)
+                # Refuse an export that drops a sentence_transformers Dense
+                # head: mean-pooling the backbone would silently serve a
+                # different embedding. This raises (propagates out of init)
+                # rather than falling back to a different embedder.
+                _onnx_require_sentence_embedding(model_dir, self._onnx_session)
                 # Load-time probe: drive the graph once with an empty media
                 # input. A model we cannot drive (e.g. one whose graph has a
                 # declared input this embedder cannot populate) must fail loud
@@ -435,7 +566,22 @@ class VectorMemory:
                         f"ONNX embedder {model_file} cannot be driven; "
                         f"unfed graph inputs: {unfed}"
                     )
+                # The Dense/Normalize head declares the embedding size; reject
+                # a graph whose first embedding does not match it.
+                declared_dim = _onnx_declared_output_dim(model_dir)
+                if declared_dim is not None and len(probe_vec) != declared_dim:
+                    raise _OnnxEmbedderConfigError(
+                        f"ONNX embedder at {model_dir} declares a {declared_dim}-dim "
+                        f"output but its first embedding is {len(probe_vec)}-dim. "
+                        f"The exported graph does not match the model's Dense/"
+                        f"Normalize head; re-export with the full pipeline "
+                        f"exposing 'sentence_embedding'."
+                    )
                 logger.info("Loaded ONNX embedding model from %s", model_file)
+            except _OnnxEmbedderConfigError:
+                # A misconfigured export must not silently fall back to a
+                # different embedder (that would serve wrong vectors); propagate.
+                raise
             except Exception as e:
                 # Loud and actionable: a silent embedder swap corrupts retrieval.
                 # The store's vectors are tied to the embedder that wrote them, so
@@ -455,22 +601,66 @@ class VectorMemory:
     def _store_mode_signature(self) -> str:
         """The storage-format and vector-space mode of this instance.
 
-        Two kinds of dimension belong here. Format: late_interaction (per-token
-        matrix vs single pooled vector), binary_quant (packed bits vs float),
-        and dense_format (JSON vs base64 float32). Space: the embedder identity,
-        because two embedders (e.g. MiniLM vs arctic-embed) produce vectors in
-        incompatible spaces even at the same dim, so a stored MiniLM vector is
-        meaningless to an arctic query and the store must be re-embedded on a
-        switch. embed_mode (qmd/local/onnx) is NOT included: those are
-        transports for the same model, interoperable.
+        Format: late_interaction (per-token matrix vs single pooled vector),
+        binary_quant (packed bits vs float), and dense_format (JSON vs base64
+        float32). Space: the embedder identity, because two embedders (e.g.
+        MiniLM vs arctic-embed) produce vectors in incompatible spaces even at
+        the same dim, so a stored MiniLM vector is meaningless to an arctic
+        query and the store must be re-embedded on a switch. embed_mode
+        (qmd/local/onnx) is NOT included: those are transports for the same
+        model, interoperable.
+
+        ``dense_format=f32`` is only reported when the recorded marker already
+        carries it (a converted store) or the store is fresh. A legacy marker
+        (no ``dense_format``) yields the full signature minus ``dense_format``
+        so 0.4.x can still open the store.
         """
-        dense_fmt = "f32" if not self.binary_quant and not self.late_interaction else "none"
-        return (
-            f"late_interaction={int(self.late_interaction)};"
-            f"binary_quant={int(self.binary_quant)};"
-            f"dense_format={dense_fmt};"
-            f"embedder={self._embedder_identity()}"
-        )
+        parts = [
+            f"late_interaction={int(self.late_interaction)}",
+            f"binary_quant={int(self.binary_quant)}",
+        ]
+        dense_fmt = self._dense_format()
+        if dense_fmt is not None:
+            parts.append(f"dense_format={dense_fmt}")
+        parts.append(f"embedder={self._embedder_identity()}")
+        return ";".join(parts)
+
+    def _dense_format(self) -> str | None:
+        """The ``dense_format`` component of this store's signature, or None to
+        omit it.
+
+        A recorded marker is echoed: whatever it says about dense_format (f32
+        for a converted store, none for a binary_quant or late_interaction store
+        written by 0.5.x) is kept, and a marker without the key stays without
+        it, so 0.4.x can still open the store. Only a store with no marker
+        decides: binary_quant and late_interaction stores are ``none``, a fresh
+        dense store is ``f32``, and a dense store that already holds rows (a
+        pre-marker legacy store) omits the key and stays JSON.
+        """
+        row = self._conn.execute(
+            "SELECT value FROM store_meta WHERE key = 'mode'"
+        ).fetchone()
+        if row is not None:
+            return self._parse_mode(row["value"]).get("dense_format")
+        if self.binary_quant or self.late_interaction:
+            return "none"
+        has_rows = self._conn.execute(
+            "SELECT 1 FROM vector_memory LIMIT 1"
+        ).fetchone() is not None
+        return None if has_rows else "f32"
+
+    def _store_is_legacy(self) -> bool:
+        """True for a dense store whose recorded marker lacks dense_format, i.e.
+        one that holds JSON vectors and is served (and appended to) in that
+        format. Never true for binary_quant or late_interaction stores."""
+        if self.binary_quant or self.late_interaction:
+            return False
+        row = self._conn.execute(
+            "SELECT value FROM store_meta WHERE key = 'mode'"
+        ).fetchone()
+        if row is None:
+            return False
+        return "dense_format" not in self._parse_mode(row["value"])
 
     def _embedder_identity(self) -> str:
         """A stable name for the embedding model, machine-path independent.
@@ -497,133 +687,6 @@ class VectorMemory:
                 k, v = part.split("=", 1)
                 out[k] = v
         return out
-
-    def _migrate_dense_to_f32(self) -> None:
-        """Migrate dense embeddings from JSON to base64 little-endian float32.
-
-        Runs on init for dense stores (not binary_quant, not late_interaction)
-        whose recorded marker lacks dense_format (or has no marker but has rows).
-        Conversion happens in a single transaction: all rows JSON -> f32 base64,
-        then the new marker with dense_format=f32 is written. On any exception,
-        the transaction rolls back, the error is logged, and the exception is
-        re-raised. The store remains in its original JSON state.
-        """
-        # Only applies to dense stores
-        if self.binary_quant or self.late_interaction:
-            return
-
-        current_sig = self._store_mode_signature()
-
-        row = self._conn.execute(
-            "SELECT value FROM store_meta WHERE key = 'mode'"
-        ).fetchone()
-        recorded = row["value"] if row else None
-
-        # If a marker is recorded, check for conflicts with current signature
-        # BEFORE migrating. Component-wise comparison over keys the recorded
-        # marker carries, exactly as _check_store_mode does. Any conflict means
-        # the store is incompatible; return without migrating so _check_store_mode
-        # raises StoreModeMismatch and the store is left byte-identical.
-        if recorded is not None:
-            rec = self._parse_mode(recorded)
-            cur = self._parse_mode(self._store_mode_signature())
-            conflict = {k: v for k, v in rec.items() if cur.get(k) != v}
-            if conflict:
-                return
-
-        # Check if migration is needed
-        needs_migration = False
-        if recorded is not None:
-            rec = self._parse_mode(recorded)
-            # Migration needed if recorded marker lacks dense_format key
-            if "dense_format" not in rec:
-                needs_migration = True
-        else:
-            # No marker: check if there are any rows (legacy store)
-            has_rows = self._conn.execute(
-                "SELECT 1 FROM vector_memory LIMIT 1"
-            ).fetchone() is not None
-            if has_rows:
-                needs_migration = True
-
-        if not needs_migration:
-            return
-
-        logger.info("Migrating dense embeddings from JSON to base64 float32 at %s", self._db_path)
-
-        try:
-            # Start transaction
-            self._conn.execute("BEGIN IMMEDIATE")
-
-            # Fetch all rows that need migration (JSON format starts with '[')
-            rows = self._conn.execute(
-                "SELECT id, embedding FROM vector_memory WHERE embedding LIKE '[%'"
-            ).fetchall()
-
-            if rows:
-                # Convert each row
-                updates = []
-                for row in rows:
-                    try:
-                        vec = json.loads(row["embedding"])
-                        # Convert to base64 little-endian float32
-                        arr = np.asarray(vec, dtype="<f4")
-                        f32_b64 = base64.b64encode(arr.tobytes()).decode("ascii")
-                        updates.append((f32_b64, row["id"]))
-                    except (json.JSONDecodeError, TypeError, ValueError) as e:
-                        # Rollback on any parse failure
-                        self._conn.execute("ROLLBACK")
-                        logger.error("Migration failed at row %s: %s", row["id"], e)
-                        raise RuntimeError(f"Failed to parse embedding for row {row['id']}: {e}") from e
-
-                # Batch update all rows
-                self._conn.executemany(
-                    "UPDATE vector_memory SET embedding = ? WHERE id = ?",
-                    updates,
-                )
-
-            # Write the new marker with dense_format=f32
-            self._conn.execute(
-                "INSERT OR REPLACE INTO store_meta (key, value) VALUES ('mode', ?)",
-                (current_sig,),
-            )
-
-            self._conn.execute("COMMIT")
-            logger.info("Migrated %d dense embeddings to base64 float32", len(rows))
-
-            # VACUUM if free disk space >= 2x db file size
-            self._maybe_vacuum_after_migration()
-
-        except Exception:
-            # Ensure rollback on any exception
-            try:
-                self._conn.execute("ROLLBACK")
-            except Exception:
-                pass
-            logger.exception("Dense->f32 migration failed, rolled back")
-            raise
-
-    def _maybe_vacuum_after_migration(self) -> None:
-        """Run VACUUM after migration if free disk space >= 2x db file size.
-
-        VACUUM failure is logged but does not fail init.
-        """
-        try:
-            db_path = Path(self._db_path)
-            if not db_path.exists():
-                return
-            db_size = db_path.stat().st_size
-            free_space = shutil.disk_usage(db_path.parent).free
-            if free_space >= 2 * db_size:
-                logger.info("Running VACUUM after migration (free space %.1fx db size)", free_space / db_size)
-                self._conn.execute("VACUUM")
-            else:
-                logger.info(
-                    "Skipping VACUUM after migration: free space %.1fx db size (need >= 2x), space will be reclaimed later",
-                    free_space / db_size,
-                )
-        except Exception as e:
-            logger.warning("VACUUM after migration failed (non-fatal): %s", e)
 
     def _check_store_mode(self) -> None:
         """Refuse to open a store in a different format or vector space than it
@@ -949,6 +1012,9 @@ class VectorMemory:
             # Dense mode stores the float vector as base64 little-endian float32.
             if self.binary_quant:
                 embedding_text = pack_sign_bits(embedding)
+            elif self._store_is_legacy():
+                # Legacy JSON store: keep writing JSON so 0.4.x can still read it.
+                embedding_text = json.dumps(embedding)
             else:
                 arr = np.asarray(embedding, dtype="<f4")
                 embedding_text = base64.b64encode(arr.tobytes()).decode("ascii")
@@ -968,6 +1034,7 @@ class VectorMemory:
         search_agents: list[str] | None = None,
         now: float | None = None,
         include_expired: bool = False,
+        session_ids: set | None = None,
     ):
         """Fetch active (non-superseded) rows, scoped by project/agent.
 
@@ -1032,6 +1099,11 @@ class VectorMemory:
                             row["id"],
                         )
 
+            if session_ids is not None:
+                sid = meta.get("session_id")
+                if not isinstance(sid, (str, int)) or sid not in session_ids:
+                    continue
+
             if project is not None or search_agents is not None:
                 # Project filter: skip rows positively tagged with a different
                 # project. Untagged (pre-project) rows are kept so existing
@@ -1047,6 +1119,41 @@ class VectorMemory:
 
             filtered.append(row)
         return filtered
+
+    def get_session_rows(
+        self,
+        session_ids,
+        *,
+        project: str | None = None,
+        search_agents: list[str] | None = None,
+    ) -> list[dict]:
+        """Active rows that belong to any of ``session_ids``, scoped like search.
+
+        Goes through :meth:`_load_active_rows`, so project, agent, TTL and
+        supersede rules are exactly the ones recall applies. Rows written
+        before sessions were recorded carry no ``session_id`` and never match.
+        Returns ``{"id", "text", "metadata", "created_at"}`` dicts.
+        """
+        ids = set(session_ids)
+        if not ids:
+            return []
+        # upgrade-path: this scans every active row (the same full scan search
+        # does); index session_id if stores with many sessions make it slow.
+        out = []
+        for row in self._load_active_rows(
+            project=project, search_agents=search_agents, session_ids=ids
+        ):
+            try:
+                meta = json.loads(row["metadata_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            out.append({
+                "id": row["id"],
+                "text": row["text"],
+                "metadata": meta,
+                "created_at": row["created_at"],
+            })
+        return out
 
     def existing_source_ids(self, agent: str | None = None) -> set[str]:
         """Return the user-metadata ``source_id`` values already stored.
@@ -1527,7 +1634,31 @@ class VectorMemory:
         """Overall vector-memory statistics."""
         return {"count": await self.count()}
 
-    async def supersede(self, row_id: int, ended_at: float | None = None) -> bool:
+    def _audit(self, row_id: int, reason: str, ref: str, caller: str, at: float) -> None:
+        self._conn.execute(
+            "INSERT INTO supersede_audit (row_id, at, reason, ref, caller) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (row_id, at, reason, ref or "", caller or ""),
+        )
+
+    @staticmethod
+    def _row_agent(metadata_json: str) -> str | None:
+        try:
+            agent = json.loads(metadata_json).get("agent")
+        except (ValueError, AttributeError):
+            return None
+        return agent if isinstance(agent, str) else None
+
+    async def supersede(
+        self,
+        row_id: int,
+        ended_at: float | None = None,
+        *,
+        agent: str | None = None,
+        reason: str = "explicit",
+        ref: str = "",
+        caller: str = "",
+    ) -> bool:
         """Soft-hide a single vector row from active recall.
 
         Sets ``valid_to`` on the row so ``search()`` (and the adjacent-neighbour
@@ -1537,45 +1668,197 @@ class VectorMemory:
         deleted. The append-only archive entry is likewise untouched, so
         zero-loss is preserved.
 
+        ``agent`` (optional) scopes the hide: when given, a row whose metadata
+        agent is not that agent is left alone and False is returned. Every hide
+        writes a ``supersede_audit`` row (``reason``, ``ref``, ``caller``);
+        :meth:`restore` undoes it.
+
         Already-superseded rows are left as-is (the guard mirrors the KG's
         ``valid_to IS NULL`` condition). Returns True if a row was affected.
         """
         end = ended_at if ended_at is not None else time.time()
+        if agent is not None:
+            row = self._conn.execute(
+                "SELECT metadata_json FROM vector_memory WHERE id = ?", (row_id,)
+            ).fetchone()
+            if row is None or self._row_agent(row["metadata_json"]) != agent:
+                return False
         cursor = self._conn.execute(
             "UPDATE vector_memory SET valid_to = ? WHERE id = ? AND valid_to IS NULL",
             (end, row_id),
         )
-        self._conn.commit()
         if cursor.rowcount > 0:
+            self._audit(row_id, reason, ref, caller, time.time())
             self._bm25_dirty = True  # active corpus changed; invalidate BM25 cache
+        self._conn.commit()
         return cursor.rowcount > 0
 
-    async def supersede_matching(self, text_or_substring: str, ended_at: float | None = None) -> int:
-        """Soft-hide every active row whose stored text contains the substring.
+    async def supersede_matching(
+        self,
+        text_or_substring: str,
+        ended_at: float | None = None,
+        *,
+        agent: str | None = None,
+        force: bool = False,
+        max_rows: int = DEFAULT_SUPERSEDE_MAX_ROWS,
+        caller: str = "",
+    ) -> list[int]:
+        """Soft-hide one agent's active rows whose text contains the substring.
 
-        Used to wire corrections by content: when a fact is corrected, the
-        chunk(s) still carrying the *old* value are excluded from active recall
-        so the stale fact stops resurfacing in vector search too. As with
-        :meth:`supersede`, the raw rows are retained (zero-loss); only their
-        ``valid_to`` is stamped. Matching is a plain case-sensitive substring
-        test on the stored (already secret-redacted) text. An empty/blank
-        ``text_or_substring`` is a no-op (returns 0) so a missing correction
-        value can never sweep the whole store. Returns the number of rows
-        superseded.
+        This is an explicit, caller-driven correction; the automatic
+        contradiction path never uses it. Guards, all lifted by ``force=True``:
+
+          * ``agent`` is required. Only rows whose metadata agent equals it are
+            considered (rows with no agent tag are never matched).
+          * the stripped needle must be at least 12 characters;
+          * the needle must match no more than ``max_rows`` (default 20) rows.
+
+        A refused call raises :class:`SupersedeRefused` and hides nothing.
+        With ``force=True`` and no ``agent`` the match is store-wide. A blank
+        needle is always a no-op. Matching is a case-sensitive substring test on
+        the stored text. Raw rows are retained (zero-loss) and each hide writes
+        a ``substring`` audit row. Returns the ids hidden (empty list if none).
         """
         needle = (text_or_substring or "").strip()
         if not needle:
-            return 0
+            return []
+        if not force:
+            if agent is None:
+                raise SupersedeRefused(
+                    "supersede_matching needs an agent scope (or force=True)")
+            if len(needle) < MIN_SUPERSEDE_NEEDLE:
+                raise SupersedeRefused(
+                    f"needle is shorter than {MIN_SUPERSEDE_NEEDLE} characters "
+                    "(pass force=True to override)")
+        sql = "SELECT id FROM vector_memory WHERE valid_to IS NULL AND instr(text, ?) > 0"
+        params: list = [text_or_substring]
+        if agent is not None:
+            sql += " AND json_extract(metadata_json, '$.agent') = ?"
+            params.append(agent)
+        ids = [r["id"] for r in self._conn.execute(sql, params).fetchall()]
+        if not force and len(ids) > max_rows:
+            raise SupersedeRefused(
+                f"needle matches {len(ids)} rows, more than the cap of {max_rows} "
+                "(pass force=True or a larger max_rows to override)")
+        if not ids:
+            return []
         end = ended_at if ended_at is not None else time.time()
-        cursor = self._conn.execute(
-            "UPDATE vector_memory SET valid_to = ? "
-            "WHERE valid_to IS NULL AND instr(text, ?) > 0",
-            (end, text_or_substring),
-        )
+        now = time.time()
+        for rid in ids:
+            self._conn.execute(
+                "UPDATE vector_memory SET valid_to = ? WHERE id = ? AND valid_to IS NULL",
+                (end, rid),
+            )
+            self._audit(rid, "substring", needle, caller, now)
         self._conn.commit()
-        if cursor.rowcount > 0:
-            self._bm25_dirty = True  # active corpus changed; invalidate BM25 cache
-        return cursor.rowcount
+        self._bm25_dirty = True  # active corpus changed; invalidate BM25 cache
+        return ids
+
+    async def list_hidden(self, agent: str | None = None) -> list[dict]:
+        """List soft-hidden rows (``valid_to`` set), oldest id first.
+
+        Each item has ``id``, ``agent``, ``text`` (first 80 characters),
+        ``valid_to`` and ``reason``: the latest audit reason, or the row's
+        ``hidden_by`` marker (shelf archive, collection reindex), or
+        ``"unknown (before audit log)"`` for rows hidden before the audit table
+        existed. ``agent`` filters by the row's metadata agent.
+        """
+        rows = self._conn.execute(
+            "SELECT id, text, metadata_json, valid_to FROM vector_memory "
+            "WHERE valid_to IS NOT NULL ORDER BY id"
+        ).fetchall()
+        out = []
+        for row in rows:
+            row_agent = self._row_agent(row["metadata_json"])
+            if agent is not None and row_agent != agent:
+                continue
+            last = self._conn.execute(
+                "SELECT reason FROM supersede_audit WHERE row_id = ? "
+                "ORDER BY id DESC LIMIT 1", (row["id"],),
+            ).fetchone()
+            reason = UNKNOWN_HIDE_REASON
+            if last is not None and last["reason"] != "restored":
+                reason = last["reason"]
+            else:
+                try:
+                    marker = json.loads(row["metadata_json"]).get("hidden_by")
+                except (ValueError, AttributeError):
+                    marker = None
+                if marker:
+                    reason = f"hidden_by {marker}"
+            out.append({
+                "id": row["id"],
+                "agent": row_agent,
+                "text": row["text"][:80],
+                "valid_to": row["valid_to"],
+                "reason": reason,
+            })
+        return out
+
+    def _restore_rows(self, rows, caller: str) -> list[int]:
+        restored = []
+        now = time.time()
+        for row in rows:
+            try:
+                meta = json.loads(row["metadata_json"])
+            except ValueError:
+                meta = {}
+            marker = meta.pop("hidden_by", None) if isinstance(meta, dict) else None
+            self._conn.execute(
+                "UPDATE vector_memory SET valid_to = NULL, metadata_json = ? WHERE id = ?",
+                (json.dumps(meta) if isinstance(meta, dict) else row["metadata_json"],
+                 row["id"]),
+            )
+            self._audit(row["id"], "restored", str(marker or ""), caller, now)
+            restored.append(row["id"])
+        if restored:
+            self._conn.commit()
+            self._bm25_dirty = True
+        return restored
+
+    async def restore(self, row_ids: list[int], *, caller: str = "") -> list[int]:
+        """Make hidden rows visible again. Never deletes; always allowed.
+
+        Clears ``valid_to`` (and any ``hidden_by`` marker) and writes a
+        ``restored`` audit row. Ids that are unknown or already visible are
+        skipped. Returns the ids actually restored.
+        """
+        rows = []
+        for rid in row_ids:
+            row = self._conn.execute(
+                "SELECT id, metadata_json FROM vector_memory "
+                "WHERE id = ? AND valid_to IS NOT NULL", (rid,),
+            ).fetchone()
+            if row is not None:
+                rows.append(row)
+        return self._restore_rows(rows, caller)
+
+    async def restore_all(
+        self, *, since: str | float, agent: str | None = None, caller: str = "",
+    ) -> list[int]:
+        """Restore every row hidden at or after ``since``.
+
+        ``since`` is an ISO date or datetime (naive values are read as UTC) or a
+        float epoch. ``agent`` restricts it to one agent's rows. Returns the ids
+        restored.
+        """
+        if isinstance(since, (int, float)):
+            cutoff = float(since)
+        else:
+            from datetime import datetime, timezone  # noqa: PLC0415
+
+            dt = datetime.fromisoformat(str(since))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            cutoff = dt.timestamp()
+        rows = [
+            r for r in self._conn.execute(
+                "SELECT id, metadata_json FROM vector_memory "
+                "WHERE valid_to IS NOT NULL AND valid_to >= ? ORDER BY id", (cutoff,),
+            ).fetchall()
+            if agent is None or self._row_agent(r["metadata_json"]) == agent
+        ]
+        return self._restore_rows(rows, caller)
 
     async def iter_entries(
         self,

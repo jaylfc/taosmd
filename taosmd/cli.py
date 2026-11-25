@@ -1106,6 +1106,61 @@ def _collections_cmd(args: argparse.Namespace) -> int:
     return 1
 
 
+def _supersede_cmd(args) -> int:
+    import asyncio  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+    from datetime import datetime  # noqa: PLC0415
+    from . import service  # noqa: PLC0415
+    from .vector_memory import SupersedeRefused  # noqa: PLC0415
+
+    modes = [bool(args.match), args.list_hidden, args.restore is not None,
+             args.restore_all]
+    if sum(modes) != 1:
+        print("error: give exactly one of --match, --list-hidden, --restore, "
+              "--restore-all", file=sys.stderr)
+        return 2
+
+    if args.list_hidden:
+        rows = asyncio.run(service.list_hidden(agent=args.agent, data_dir=args.data_dir))
+        if args.json:
+            print(_json.dumps(rows, indent=2))
+        else:
+            for r in rows:
+                when = datetime.fromtimestamp(r["valid_to"]).isoformat(timespec="seconds")
+                text = r["text"].replace("\n", " ")
+                print(f"{r['id']}\t{r['agent'] or '-'}\t{when}\t{r['reason']}\t{text}")
+            if not rows:
+                print("no hidden rows")
+        return 0
+
+    if args.restore is not None or args.restore_all:
+        if args.restore_all and not args.since:
+            print("error: --restore-all requires --since <ISO date>", file=sys.stderr)
+            return 2
+        try:
+            result = asyncio.run(service.restore_hidden(
+                args.restore, since=None if args.restore else args.since,
+                agent=args.agent, data_dir=args.data_dir))
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"restored {result['restored']} row(s)")
+        return 0
+
+    if not args.agent and not args.force:
+        print("error: --match needs --agent (or --force for a store-wide match)",
+              file=sys.stderr)
+        return 2
+    try:
+        result = asyncio.run(service.supersede(
+            args.match, agent=args.agent, force=args.force, data_dir=args.data_dir))
+    except SupersedeRefused as exc:
+        print(f"error: refused: {exc}", file=sys.stderr)
+        return 2
+    print(f"superseded {result['superseded']} chunk(s) matching {result['match']!r}")
+    return 0
+
+
 def _reconcile_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd reconcile``: compare archive to vector store and repair gaps."""
     import asyncio  # noqa: PLC0415
@@ -1152,6 +1207,27 @@ def _reconcile_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _migrate_probe(data_dir, as_json: bool) -> int:
+    """Print the read-only store format probe; the exit code is its overall state."""
+    from . import store_probe  # noqa: PLC0415
+
+    report = store_probe.probe_store(data_dir)
+    if as_json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(f"data dir: {report.data_dir}")
+        print(f"state: {report.state.value} (exit {report.exit_code})")
+        width = max((len(d.db) for d in report.databases), default=0)
+        for d in report.databases:
+            version = "-" if d.user_version is None else str(d.user_version)
+            latest = "-" if d.latest is None else str(d.latest)
+            line = f"  {d.db:<{width}}  {d.state.value:<11} version {version:>3} of {latest:<3}"
+            if d.reason:
+                line += f"  {d.reason}"
+            print(line)
+    return report.exit_code
+
+
 def _migrate_cmd(args: argparse.Namespace) -> int:
     """Handle ``taosmd migrate``: report or apply pending schema migrations.
 
@@ -1163,6 +1239,10 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
     from . import migrations  # noqa: PLC0415
 
     data_dir = args.data_dir
+    if getattr(args, "convert_vectors", False):
+        return _convert_vectors_cmd(args)
+    if args.probe:
+        return _migrate_probe(data_dir, args.json)
     rows = migrations.status_all(data_dir)
 
     if args.status or args.check:
@@ -1218,6 +1298,36 @@ def _migrate_cmd(args: argparse.Namespace) -> int:
         else:
             print(f"  {res.db}: already at version {res.to_version}")
     return 0
+
+
+def _convert_vectors_cmd(args: argparse.Namespace) -> int:
+    """Handle ``taosmd migrate --convert-vectors``: guarded float32 conversion.
+
+    Exit codes: 0 converted or already current, 2 refused (nothing touched),
+    3 unknown or newer store format, 4 failed and restored, 1 unexpected.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from .store_convert import convert_dense_store  # noqa: PLC0415
+
+    if args.status or args.check or args.probe:
+        print(
+            "--convert-vectors cannot be combined with --status, --check or --probe "
+            "(they are read-only; nothing was changed)",
+            file=sys.stderr,
+        )
+        return 2
+    db_path = Path(args.data_dir) / "vector-memory.db"
+    result = convert_dense_store(db_path)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(result.message)
+        if result.backup_path:
+            print(f"backup: {result.backup_path}")
+        for rid, reason in result.malformed:
+            print(f"  left unchanged: row {rid}: {reason}")
+    return result.exit_code
 
 
 def _reindex_cmd(args: argparse.Namespace) -> int:
@@ -1533,16 +1643,41 @@ def _build_parser() -> argparse.ArgumentParser:
     # ----- supersede subcommand (retire stale chunks from vector recall) -
     supersede_p = sub.add_parser(
         "supersede",
-        help="Soft-hide vector chunk(s) whose text contains --match from active "
-             "recall (zero-loss: raw rows are retained, only excluded from search)",
+        help="Soft-hide one agent's vector chunk(s) whose text contains --match "
+             "from active recall, or list/restore hidden rows (zero-loss: raw "
+             "rows are retained, only excluded from search)",
     )
     supersede_p.add_argument(
         "--agent", default=None,
-        help="Agent name (accepted for symmetry; the vector store is per data dir)",
+        help="Agent scope: required with --match; filters --list-hidden and --restore-all",
     )
     supersede_p.add_argument(
-        "--match", required=True,
-        help="Substring; every active chunk whose stored text contains it is superseded",
+        "--match", default=None,
+        help="Substring (12+ characters); that agent's active chunks containing it "
+             "are superseded. Refused if it matches more than 20 rows",
+    )
+    supersede_p.add_argument(
+        "--force", action="store_true",
+        help="Override the guards: allow a short needle, more than 20 matches, "
+             "or no --agent (store-wide)",
+    )
+    supersede_p.add_argument(
+        "--list-hidden", action="store_true",
+        help="List hidden rows (id, agent, text, valid_to, reason)",
+    )
+    supersede_p.add_argument(
+        "--json", action="store_true", help="With --list-hidden: print JSON",
+    )
+    supersede_p.add_argument(
+        "--restore", type=int, nargs="+", metavar="ID", default=None,
+        help="Make the given hidden row id(s) visible again",
+    )
+    supersede_p.add_argument(
+        "--restore-all", action="store_true",
+        help="Restore every row hidden since --since (optionally only --agent)",
+    )
+    supersede_p.add_argument(
+        "--since", default=None, help="ISO date for --restore-all (naive = UTC)",
     )
 
     # ----- config subcommand (server URL + token + show) ----------------
@@ -1772,8 +1907,26 @@ def _build_parser() -> argparse.ArgumentParser:
              "non-zero if any database has pending migrations.",
     )
     migrate_p.add_argument(
+        "--probe", action="store_true",
+        help="Read-only store format probe: opens every database immutable, "
+             "creates no -wal/-shm files, changes nothing. Exit code: "
+             "0 current, 10 old (a schema step or the float32 vector "
+             "conversion is pending), 11 unknown (unreadable, live writer or "
+             "uncheckpointed WAL, or rows contradicting the marker), 12 newer "
+             "than this build. The worst state across databases wins.",
+    )
+    migrate_p.add_argument(
         "--json", action="store_true",
-        help="With --status/--check, emit machine-readable JSON.",
+        help="With --status/--check/--probe/--convert-vectors, emit machine-readable JSON.",
+    )
+    migrate_p.add_argument(
+        "--convert-vectors", action="store_true",
+        help="Convert the vector store's dense embeddings from JSON text to "
+             "float32 after a verified backup, with post-checks and automatic "
+             "rollback. One-way: releases that only read JSON vectors cannot "
+             "read the store afterwards (the backup is kept). Exit codes: 0 "
+             "converted or already current, 2 refused (nothing touched), 3 "
+             "unknown or newer format, 4 failed and restored, 1 unexpected.",
     )
 
     # ----- reindex subcommand ------------------------------------------
@@ -2008,13 +2161,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     if args.cmd == "supersede":
-        import asyncio  # noqa: PLC0415
-        from . import service  # noqa: PLC0415
-        result = asyncio.run(
-            service.supersede(args.match, agent=args.agent, data_dir=args.data_dir)
-        )
-        print(f"superseded {result['superseded']} chunk(s) matching {result['match']!r}")
-        return 0
+        return _supersede_cmd(args)
 
     if args.cmd == "reconcile":
         return _reconcile_cmd(args)
