@@ -1,0 +1,1 @@
+The publish workflow now stamps the 0.5.N version from scripts/release_version.py before building, and refuses a GitHub release whose tag does not match that version. Before this, a release built whatever version was hard-coded in pyproject.toml.
