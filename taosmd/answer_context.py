@@ -429,7 +429,7 @@ async def answer_context(
         expanded = expanded or neighbors > 0
 
     # A standalone hit whose line is already inside another block adds nothing.
-    in_sessions = {t.line() for b in by_session.values() for t in (b.full or b.turns)}
+    in_sessions = {t.line() for b in by_session.values() for t in b.turns}
     blocks = [b for b in blocks
               if b in by_session.values() or any(t.line() not in in_sessions for t in b.turns)]
 
@@ -470,6 +470,13 @@ async def answer_context(
     for block in chosen:
         if block.full is not None and len(block.full) == len(block.turns):
             block.whole = True
+
+    # A standalone block whose lines all ended up inside a session block (a
+    # session grown in pass 2) is a repeat of text already in the context.
+    shown = {t.line() for b in chosen if b.full is not None for t in b.turns}
+    chosen = [b for b in chosen
+              if b.full is not None or b.kind == "facts"
+              or any(t.line() not in shown for t in b.turns)]
 
     if chosen:
         context = _layout(header, chosen, facts_block)

@@ -999,3 +999,19 @@ def test_is_abstention_matches_the_longmemeval_runner_list():
     src = (Path(__file__).resolve().parent.parent / "benchmarks" / "longmemeval_runner.py").read_text()
     for phrase in ac._ABSTENTION_PHRASES:
         assert f'"{phrase}"' in src
+
+
+def test_a_standalone_hit_repeating_a_grown_session_line_is_not_printed_twice(monkeypatch, data_dir):
+    _ingest_sessions(data_dir, sessions={"s1": SESSIONS["s1"]})
+    session_hit = asyncio.run(taosmd_api.search(
+        SESSIONS["s1"][1][0][1], agent="a", data_dir=data_dir, limit=1))[0]
+    twin = {"text": SESSIONS["s1"][1][3][1], "source": "vector", "timestamp": 0, "confidence": 0.4,
+            "metadata": {"role": "assistant"}}   # same text as turn 3, but with no session info
+
+    async def fake_search(query, **kw):
+        return [session_hit, twin]
+
+    monkeypatch.setattr(ac._api, "search", fake_search)
+    out = _ctx(data_dir, neighbors=0, grow=True)
+    assert out["context"].count(SESSIONS["s1"][1][3][1]) == 1
+    assert out["sessions_included"] == 1
