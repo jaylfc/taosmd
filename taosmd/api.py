@@ -169,6 +169,7 @@ async def _ensure_stores(data_dir=None) -> dict:
             onnx_path=onnx_path or "",
             late_interaction=bool(vm_cfg.get("late_interaction", False)),
             colbert_model=vm_cfg.get("colbert_model", "") or "",
+            data_dir=str(path),
         )
         await vmem.init()
         kg = TemporalKnowledgeGraph(db_path=str(path / "knowledge-graph.db"))

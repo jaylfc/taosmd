@@ -59,6 +59,8 @@ _MODEL_ROLES: tuple[str, ...] = (
     "query_expansion",
     "cross_encoder_path",
     "cross_encoder_provider",
+    "embedder_provider",
+    "embedder_gpu_mem_mb",
 )
 # Whether A2A registry auth runs in enforce mode (True) or verify-and-warn mode (False).
 _A2A_AUTH_ENFORCE_KEY = "a2a_auth_enforce"
@@ -201,6 +203,8 @@ def get_model_role(role: str, data_dir=None) -> str | None:
     val = section.get(role)
     if isinstance(val, str) and val.strip():
         return val.strip()
+    if isinstance(val, int) and not isinstance(val, bool):
+        return str(val)
     return None
 
 
