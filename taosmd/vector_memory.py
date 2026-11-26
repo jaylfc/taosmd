@@ -364,10 +364,12 @@ class VectorMemory:
         binary_quant: bool = False,
         late_interaction: bool = False,
         colbert_model: str = "",
+        data_dir: str | Path | None = None,
     ):
         self._db_path = str(db_path)
         self._qmd_url = qmd_url
         self._onnx_path = onnx_path
+        self._data_dir = str(data_dir) if data_dir is not None else None
         # When a ColBERT model is specified, route through the local (sentence-
         # transformers) embed path and enable late-interaction MaxSim scoring.
         self._colbert_model = colbert_model
@@ -532,9 +534,46 @@ class VectorMemory:
                         f"{model_file} is a Git LFS pointer, not an ONNX model: "
                         "re-download the real file (hf download <repo> onnx/model.onnx, without --include)"
                     )
+                # Resolve embedder provider and GPU memory limit from config
+                from . import generator_profiles as _gp
+                provider = _gp.resolve_model(
+                    "embedder_provider", fallback="CPUExecutionProvider", data_dir=self._data_dir
+                )
+                gpu_mem_mb = _gp.resolve_model(
+                    "embedder_gpu_mem_mb", fallback=None, data_dir=self._data_dir
+                )
+                if gpu_mem_mb is not None:
+                    try:
+                        gpu_mem_mb = int(gpu_mem_mb)
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "Invalid embedder_gpu_mem_mb value %r, ignoring", gpu_mem_mb
+                        )
+                        gpu_mem_mb = None
+
+                # Build providers list: if provider is not CPU and is available,
+                # use it with GPU memory limit (if set) and fall back to CPU.
+                # Otherwise use CPU only. Never raise for unavailable provider.
+                if provider != "CPUExecutionProvider":
+                    available = ort.get_available_providers()
+                    if provider in available:
+                        providers = [provider]
+                        if gpu_mem_mb is not None:
+                            providers[0] = (provider, {"gpu_mem_limit": gpu_mem_mb * 1024 * 1024})
+                        providers.append("CPUExecutionProvider")
+                    else:
+                        logger.warning(
+                            "Configured ONNX provider %r not available (available: %s). "
+                            "Falling back to CPUExecutionProvider.",
+                            provider, available,
+                        )
+                        providers = ["CPUExecutionProvider"]
+                else:
+                    providers = ["CPUExecutionProvider"]
+
                 self._onnx_session = ort.InferenceSession(
                     model_file,
-                    providers=["CPUExecutionProvider"],
+                    providers=providers,
                 )
                 self._onnx_tokenizer = AutoTokenizer.from_pretrained(model_dir)
                 # Refuse an export that drops a sentence_transformers Dense
