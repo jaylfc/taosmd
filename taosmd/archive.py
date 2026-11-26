@@ -12,6 +12,7 @@ Storage: data/archive/YYYY/MM/DD.jsonl (one JSON line per event, gzipped after d
 from __future__ import annotations
 
 import copy
+import fcntl
 import gzip
 import hashlib
 import json
@@ -134,9 +135,14 @@ class ArchiveStore:
         self,
         archive_dir: str | Path = "data/archive",
         index_path: str | Path = "data/archive-index.db",
+        *,
+        write: bool = True,
     ):
         self._archive_dir = Path(archive_dir)
         self._index_path = str(index_path)
+        self._write = write
+        self._lock_fd: int | None = None
+        self._lock_holder_pid: int | None = None
         self._conn: sqlite3.Connection | None = None
         self._current_file: Any = None
         self._current_date: str = ""
@@ -158,8 +164,82 @@ class ArchiveStore:
         self._legacy_map_watermark: int = 0
         self._warned_files: set[str] = set()
 
-    async def init(self) -> None:
+    def _acquire_lock(self) -> None:
+        """Acquire an exclusive advisory lock on the archive directory.
+
+        On POSIX, uses ``fcntl.flock`` on a lock file inside the archive directory.
+        If another process already holds the lock, raises ``RuntimeError`` naming
+        the holder's pid.  Non-POSIX systems fall back to a no-op (no locking).
+
+        The lock file ``.archive-lock`` stores the pid of the holding process.
+        Re-entry by the same process is allowed (idempotent).
+        """
         self._archive_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self._archive_dir / ".archive-lock"
+        our_pid = os.getpid()
+
+        # Read existing lock pid if the file exists
+        existing_pid = None
+        try:
+            if lock_path.exists():
+                existing_pid = int(lock_path.read_text().strip())
+        except (ValueError, OSError):
+            existing_pid = None
+
+        # Same process already holds the lock → allow re-entry (idempotent)
+        if existing_pid == our_pid:
+            # Open the lock file and keep it as our fd (non-blocking check)
+            try:
+                fd = os.open(str(lock_path), os.O_RDONLY)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._lock_fd = fd
+                self._lock_holder_pid = our_pid
+            except OSError:
+                pass
+            return
+
+        # Different process or fresh lock: try to acquire exclusively (non-blocking)
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Write our pid so other processes can detect us
+            os.write(fd, str(our_pid).encode())
+            self._lock_fd = fd
+            self._lock_holder_pid = our_pid
+        except OSError:
+            if fd is not None:
+                os.close(fd)
+            raise RuntimeError(
+                f"Another process (pid={existing_pid or 'unknown'}) holds the archive write lock "
+                f"in {self._archive_dir}. "
+                f"Wait for it to close or use the HTTP client for writes."
+            )
+
+    def _release_lock(self) -> None:
+        """Release the exclusive advisory lock."""
+        if self._lock_fd is not None:
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self._lock_fd)
+            self._lock_fd = None
+            self._lock_holder_pid = None
+        else:
+            # Lock was acquired by reading the existing pid from the lock file.
+            # Remove the pid from the lock file so other processes can acquire it.
+            lock_path = self._archive_dir / ".archive-lock"
+            try:
+                lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    async def init(self) -> None:
+        if self._write:
+            self._archive_dir.mkdir(parents=True, exist_ok=True)
+            self._acquire_lock()
+        else:
+            self._archive_dir.mkdir(parents=True, exist_ok=True)
+        self._index_path_str = str(self._index_path)
         Path(self._index_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = _db.connect(self._index_path)
         self._conn.row_factory = sqlite3.Row
@@ -193,6 +273,7 @@ class ArchiveStore:
         if self._conn:
             self._conn.close()
             self._conn = None
+        self._release_lock()
 
     # ------------------------------------------------------------------
     # Settings
